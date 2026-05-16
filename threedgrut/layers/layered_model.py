@@ -160,6 +160,22 @@ class LayeredGaussians(nn.Module):
     # forward attribute reads and Parameter writes through to that layer so the
     # existing Trainer + MCMCStrategy + renderer code paths continue working.
 
+    def forward(self, *args, **kwargs):
+        """Forward the render call to the single bg layer in single-layer mode.
+
+        `nn.Module.__call__` resolves `forward` via class-level lookup, which
+        bypasses our `__getattr__` bridge entirely. Define forward explicitly
+        so `self.model(batch, train=True, frame_id=...)` works in single-bg
+        T1.1 mode. Multi-layer mode lands in T2 with a fused-view forward.
+        """
+        bg = self._single_bg_layer()
+        if bg is None:
+            raise NotImplementedError(
+                "LayeredGaussians.forward only defined for single-bg-layer mode "
+                "(T1.1 scope). Multi-layer fused-view forward lands in T2."
+            )
+        return bg(*args, **kwargs)
+
     def _single_bg_layer(self):
         """Return the bg layer iff this is a single-bg-layer setup, else None."""
         modules = self.__dict__.get("_modules", {})
