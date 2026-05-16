@@ -184,8 +184,28 @@ class Trainer3DGRUT:
         self.scene_bbox = scene_bbox
 
     def init_model(self, conf: DictConfig, scene_extent=None) -> None:
-        """Initializes the gaussian model and the optix context"""
-        self.model = MixtureOfGaussians(conf, scene_extent=scene_extent)
+        """Initializes the gaussian model and the optix context.
+
+        When conf.use_layered_model is True, instantiates a LayeredGaussians
+        container with a single background layer (T1.1 default). Multi-layer
+        configs land in T1.2 via conf.layers.enabled.
+        """
+        if conf.get("use_layered_model", False):
+            from threedgrut.layers.layered_model import LayeredGaussians
+            from threedgrut.layers.layer_spec import LayerSpec
+
+            # T1.1: hardcoded single background layer. T1.2 reads conf.layers.enabled.
+            specs = [
+                LayerSpec(
+                    name="background",
+                    layer_id=0,
+                    max_n_particles=conf.get("max_n_gaussians", 1_000_000),
+                )
+            ]
+            self.model = LayeredGaussians(conf, specs=specs, scene_extent=scene_extent)
+            logger.info("🔆 Using LayeredGaussians (single 'background' layer)")
+        else:
+            self.model = MixtureOfGaussians(conf, scene_extent=scene_extent)
 
     def init_densification_and_pruning_strategy(self, conf: DictConfig) -> None:
         """Set pre-train / post-train iteration logic. i.e. densification and pruning"""
@@ -854,7 +874,19 @@ class Trainer3DGRUT:
         """
         global_step = self.global_step
         out_dir = self.tracking.output_dir
-        parameters = self.model.get_model_parameters()
+        model_params = self.model.get_model_parameters()
+
+        # LayeredGaussians emits {"gaussians_nodes": {...}, "scene_extent": ...}
+        # which we wrap under "model" to match the NRE on-disk schema:
+        #     ckpt["model"]["gaussians_nodes"]["<layer>"]["positions"]
+        # MixtureOfGaussians emits a flat dict (positions/rotation/.../optimizer
+        # at top level) which we keep verbatim for v1 backwards-compat.
+        from threedgrut.layers.layered_model import LayeredGaussians
+
+        if isinstance(self.model, LayeredGaussians):
+            parameters = {"model": model_params}
+        else:
+            parameters = model_params
         parameters |= {"global_step": self.global_step, "epoch": self.n_epochs - 1}
 
         strategy_parameters = self.strategy.get_strategy_parameters()
