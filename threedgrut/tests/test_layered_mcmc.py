@@ -25,6 +25,7 @@ def real_conf():
         return compose(config_name="apps/ncore_3dgut_mcmc")
 
 
+# --- T2.1: _get_add_cap hook ---
 def test_mcmc_get_add_cap_defaults_to_conf(real_conf):
     """T2.1: MCMCStrategy._get_add_cap() returns conf.strategy.add.max_n_gaussians by default.
 
@@ -37,6 +38,9 @@ def test_mcmc_get_add_cap_defaults_to_conf(real_conf):
     assert strat._get_add_cap() == real_conf.strategy.add.max_n_gaussians
 
 
+
+
+# --- T2.2: LayeredMCMCStrategy sub-strategy array ---
 def test_layered_mcmc_holds_sub_strategy_per_particle_layer(real_conf):
     """T2.2: each is_particle_layer=True layer gets one MCMCStrategy; non-particle layers skipped."""
     from threedgrut.layers.layer_spec import LayerSpec
@@ -98,6 +102,8 @@ def test_layered_mcmc_single_bg_uses_one_sub_strategy(real_conf):
     assert strat.sub_strategies["background"].model is model.layers["background"]
 
 
+
+# --- T2.3: yaml inheritance ---
 def test_layered_mcmc_yaml_inherits_mcmc_defaults():
     """T2.3: layered_mcmc.yaml inherits mcmc.yaml; only `method` differs."""
     with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
@@ -118,10 +124,21 @@ def test_layered_mcmc_yaml_inherits_mcmc_defaults():
     assert cfg_mcmc.strategy.perturb.noise_lr == cfg_layered.strategy.perturb.noise_lr
 
 
-def test_no_cross_layer_migration_after_post_optimizer_step(real_conf):
-    """T2.4: sub.model identity remains pinned to its layer's MoG; structural
-    guarantee that LayeredMCMCStrategy cannot migrate particles across layers
-    (each sub operates on its own MoG, no shared param tensors).
+
+# --- T2.4: invariants ---
+def test_no_cross_layer_migration_structural(real_conf):
+    """T2.4: structural identity check — sub.model is pinned to its layer's MoG.
+
+    This is a *structural identity* verification only: it asserts that each
+    sub-strategy's .model reference points to the correct per-layer
+    MixtureOfGaussians, which is the architectural guarantee that MCMC
+    operations cannot migrate particles across layers.
+
+    NOTE: this test does NOT call post_optimizer_step() and therefore does
+    NOT dynamically verify relocate/add/perturb behaviour. That dynamic
+    verification (running actual MCMC steps and checking no particle crosses
+    a layer boundary) requires a CUDA environment and is deferred to the A800
+    controller batch at the end of Stage 2.
     """
     from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.layer_spec import LayerSpec

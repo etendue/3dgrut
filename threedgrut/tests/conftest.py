@@ -139,6 +139,28 @@ import threedgrut.strategy.mcmc as _mcmc_mod  # noqa: E402
 
 _mcmc_mod.load_mcmc_plugin = lambda: None  # no-op: skip CUDA JIT
 
+# Capture the real __init__ BEFORE overwriting it so a future test that needs
+# the real CUDA-initializing MCMCStrategy.__init__ can restore it via
+# monkeypatch.  Import _original_init from this module to use it:
+#
+#     from threedgrut.tests.conftest import _original_init
+#
+# WARNING — how to restore the real CUDA __init__ in a future test:
+#
+#     If a future test needs the real CUDA-initializing MCMCStrategy.__init__,
+#     restore it inside the test via monkeypatch:
+#
+#         from threedgrut.tests.conftest import _original_init
+#         from threedgrut.strategy.mcmc import MCMCStrategy
+#
+#         def test_real_init(monkeypatch):
+#             monkeypatch.setattr(MCMCStrategy, "__init__", _original_init)
+#             ...
+#
+#     (_original_init is captured below, before the module-level patch fires,
+#     so it always refers to the unpatched version from the real source file.)
+_original_init = _mcmc_mod.MCMCStrategy.__init__
+
 
 def _mcmc_init_no_cuda(self, config, model):
     """Drop-in __init__ that skips load_mcmc_plugin() and CUDA binoms tensor."""
