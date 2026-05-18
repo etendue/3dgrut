@@ -466,7 +466,6 @@ flowchart TB
 | get_layer_mask 是完备分区（union=all, intersection=∅, dtype=bool） | T2.5 ✅ | `test_get_layer_mask_partitions_two_layers` (Mac, d4841df) |
 | get_layer_mask 对未知/非粒子层名抛 ValueError("unknown layer") | T2.5 ✅ | `test_get_layer_mask_unknown_name_raises` (Mac, d4841df) |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
-| 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | Dynamic 粒子随 GT pose 正确移动 | T4.5 | mock 单 track，frame 0/N-1 两端 world 位置匹配 |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 

@@ -972,3 +972,34 @@ T2.4 代码审查遗留修复：
 ---
 
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
+
+---
+
+## 6. Stage 2 Retrospective
+
+### 设计偏差与教训
+
+| 项 | 计划 | 实际 | 教训 |
+|---|---|---|---|
+| LayeredMCMC 实现路线 | `_select_indices` 钩子 + 上下文切换 | **sub-strategy 数组** (BaseStrategy 子类，持 dict[str → MCMCStrategy]) | Stage 1 每层独立 MoG + optimizer 后，sub-strategy 比 hook 重构更轻、byte-identical 自动成立 |
+| 文档同步时机 | Task 6 批量做 | 每个 T2.x 顺手做（CLAUDE.md 规则） | 项目规则优先于 plan 设计 |
+| Mac CPU 测试基础设施 | minimal sys.modules stub | 完整 stub + monkey-patch MCMCStrategy.__init__ + conftest.py 集中 | 让 Stage 1 测试也获得了独立可运行性（bonus） |
+
+### Stage 2 出口指标
+
+| 指标 | 达成 |
+|---|---|
+| 5 code tasks (T2.1-T2.5) 全完成 | ✅ |
+| Mac CPU 测试 | 33/33 PASS (Stage 1: 17 + Stage 2: 13 incl. v1_ckpt_compat 3) |
+| Stage 1 测试独立可运行性 | ✅ (T2.4 conftest.py 迁移) |
+| A800 byte-identical 回归 | ⏸ controller 待跑 |
+
+### 已记录的 tech debt（Stage 3 可顺手处理）
+
+1. `test_get_layer_mask_unknown_name_raises` 未覆盖"已注册非粒子层"用例（如 `sky_envmap`）；当前仅测 `"nonexistent"` 完全未注册路径。
+2. `MixtureOfGaussians.num_gaussians` (property, model.py:53) 不做 `None` 检查，与 `model.py:850` 的 `if self.positions is not None` 分支不一致；当前测试路径不会触发，可作为一致性 patch 补。
+3. `fused_view(frame_id, training=True/False)` 语义在 T4.3 wire dynamic pose 时需确认（推理时是否走不同变换？）。
+
+### Stage 3 / 4 解锁
+
+Stage 2 完成后，Stage 3 (Road) 和 Stage 4 (DynamicRigid) 可并行：它们只往 `LayeredGaussians.layers[name]` 塞数据，不再触碰 MCMC。
