@@ -39,8 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T2.3 configs/strategy/layered_mcmc.yaml ✅]
-    [T2.4 单测 test_layered_mcmc]
     [T2.5 LayeredGaussians.fused_view 多层路径]
     [T3.1 datasetNcore 加载 aux mask]
     [T3.2 datasetNcore 暴露 road LiDAR]
@@ -77,17 +75,18 @@ kanban
     [T2.1 MCMCStrategy 抽 _get_add_cap 钩子 ✅]
     [T2.2 LayeredMCMCStrategy 子类 ✅]
     [T2.3 configs/strategy/layered_mcmc.yaml ✅]
+    [T2.4 单测 test_layered_mcmc ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 24 | T2.4+ / T3.x / T4.x / T5.x / T6.x / T7.x |
+| Backlog ⬜ | 23 | T2.5+ / T3.x / T4.x / T5.x / T6.x / T7.x |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 9 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1, T2.2, T2.3 |
+| Done ✅ | 10 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1, T2.2, T2.3, T2.4 |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -104,7 +103,7 @@ kanban
 | **T2.1** | 2 | MCMCStrategy 抽 `_get_add_cap()` 钩子 | 0.5 | ✅ | MOD `strategy/mcmc.py` · NEW `tests/test_layered_mcmc.py` (62fc509) |
 | **T2.2** | 2 | LayeredMCMCStrategy 子类 | 1 | ✅ | NEW `strategy/layered_mcmc.py` · MOD `trainer.py` · MOD `tests/test_layered_mcmc.py` (7ad883b) |
 | **T2.3** | 2 | configs/strategy/layered_mcmc.yaml | 0.5 | ✅ | NEW `configs/strategy/layered_mcmc.yaml` · MOD `trainer.py` (1a0d275) |
-| **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ⬜ | NEW tests |
+| **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ✅ | NEW `conftest.py` (I-1 fix) · 8 tests total (51540a8 / 04c9174) |
 | **T2.5** | 2 | LayeredGaussians.fused_view(frame_id) 多层路径 | 1 | ⬜ | MOD `layered_model.py` (T1.5 单层桥之外的多层 forward) |
 | **T3.1** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
 | **T3.2** | 3 | datasetNcore.py 暴露 road LiDAR 点 | 1 | ⬜ | MOD 同上 |
@@ -136,7 +135,7 @@ kanban
 |---|---|---:|---|
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
-| 2 | Layered MCMC | 3/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) |
+| 2 | Layered MCMC | 4/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) |
 | 3 | Road 层 | 0/5 ⬜ | — |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
@@ -160,7 +159,7 @@ flowchart LR
     T21["T2.1 ✅<br/>_get_add_cap 钩子"]:::done
     T22["T2.2 ✅<br/>LayeredMCMC"]:::done
     T23["T2.3 ✅<br/>yaml 配置 (1a0d275)"]:::done
-    T24["T2.4<br/>单测"]:::todo
+    T24["T2.4 ✅<br/>单测 (51540a8/04c9174)"]:::done
     T25["T2.5<br/>多层 fused_view"]:::todo
 
     %% Stage 3
@@ -911,4 +910,30 @@ LayeredMCMCStrategy sub-strategy 数组实现：
 | yaml 继承方案 | Hydra `defaults: [mcmc, _self_]` group-defaults（DRY，无 full copy） |
 | A800 byte-identical 回归 | **Deferred** (controller batch, Stage 2 末尾) |
 
-> 文档结束。当前应优先处理：**T2.4 / T3.1 并行**（T2.4 是单测补全，T3.1 是数据加载器，二者无依赖）。
+### T2.4 ✅ (2026-05-18, commit 51540a8 + 04c9174)
+
+conftest.py 迁移 (I-1 fix) + T2.4 不变量测试 + T2.2/T2.3 代码审查遗留修复：
+
+**I-1 fix: 将 sys.modules stubs 迁移到 conftest.py**
+- 原先 `_install_stubs()` 和 `MCMCStrategy.__init__` no-CUDA 补丁在 `test_layered_mcmc.py` 模块顶层，Stage 1 测试（`test_layered_gaussians.py`）单独运行时因 collect order 依赖失败（ModuleNotFoundError: ncore）。
+- 新建 `threedgrut/tests/conftest.py`：pytest 在收集该目录任何测试文件之前自动加载 conftest.py，保证 stubs 无条件安装。
+- **验证**：`pytest threedgrut/tests/test_layered_gaussians.py -v` 单独运行：9/9 PASS ✅
+
+**T2.4 新增测试（3 个）**
+- `test_no_cross_layer_migration_after_post_optimizer_step`：结构性验证 sub.model 与各层 MoG 的 identity 绑定（2 层 bg+road，各 100/50 粒子）
+- `test_init_densification_buffer_dispatches_to_all_subs`：monkeypatch call_log 验证广播到所有 sub-strategy
+- `test_make_sub_conf_does_not_mutate_parent`（T2.2 M-2 遗留）：独立 conf 返回，不影响父 conf
+
+**代码审查遗留修复**
+- M-1：将 `test_layered_mcmc_single_bg_equivalent_to_v1` 重命名为 `test_layered_mcmc_single_bg_uses_one_sub_strategy`，docstring 明确"仅结构性，非 byte-identical 训练输出"；同步更新 `layered_mcmc.py` 模块 docstring 中的引用
+- M-3：`layered_mcmc.py` 类型注解从 `List[LayerSpec]` / `Optional[dict]` 改为 `list[LayerSpec]` / `dict | None`（移除 `typing.List`/`Optional` 导入）
+- M-4：`test_layered_mcmc_yaml_inherits_mcmc_defaults` 函数体内重复的 `import os` 和 `from hydra import compose, initialize_config_dir` 已删除，改用模块级 `_CONFIG_DIR` 常量
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest threedgrut/tests/test_layered_gaussians.py` 单独运行 | **9/9 PASS** ✅（I-1 修复证明） |
+| `pytest threedgrut/tests/test_layer_spec_registry.py` 单独运行 | **9/9 PASS** ✅ |
+| `pytest threedgrut/tests/test_layered_mcmc.py` 测试数 | **8 个**（T2.1×1 + T2.2×3 + T2.3×1 + T2.4×3） |
+| `pytest threedgrut/tests/` 全套 | **29/29 PASS** ✅ (0.52s) |
+
+> 文档结束。当前应优先处理：**T2.5 / T3.1 并行**（T2.5 是多层 fused_view，T3.1 是数据加载器，二者无依赖）。

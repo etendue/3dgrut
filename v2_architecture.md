@@ -134,7 +134,7 @@ flowchart TD
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
 | **dynamic_mask.py** | — | **新增 cuboid → 像素 mask 投影** | T4.4 | `threedgrut/layers/dynamic_mask.py` |
 | `MCMCStrategy` | 全局 relocate/add | 抽基类 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ | `threedgrut/strategy/mcmc.py` |
-| **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b)** | T2.2 ✅ / T2.3 ✅ | `threedgrut/strategy/layered_mcmc.py` |
+| **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b / 04c9174)** | T2.2 ✅ / T2.3 ✅ / T2.4 ✅ | `threedgrut/strategy/layered_mcmc.py` |
 | **SkyEnvmap** | — | **新增 cubemap (nvdiffrast) 或 MLP** | T5.1 / T5.2 | `threedgrut/correction/sky_envmap.py` |
 | **ExposureModel** | — | **新增 per-camera affine** | T6.1 | `threedgrut/correction/exposure.py` |
 | `datasetNcore.py` | RGB + ego_mask | 加 sky/road/dyn mask + road LiDAR + tracks | T3.1 / T3.2 / T4.1 | `threedgrut/datasets/datasetNcore.py` |
@@ -413,7 +413,8 @@ flowchart TB
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T7.1 |
 | `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ (+3 contract test) |
 | `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (新建，9 测试，Mac 本地可跑无 torch 依赖) |
-| `threedgrut/tests/test_layered_mcmc.py` | T2.1 ✅ (62fc509) · T2.2 ✅ (7ad883b, 4 tests) · T2.3 ✅ (1a0d275, 5 tests) · T2.4 (remaining) |
+| `threedgrut/tests/test_layered_mcmc.py` | T2.1 ✅ (62fc509) · T2.2 ✅ (7ad883b, 4 tests) · T2.3 ✅ (1a0d275, 5 tests) · T2.4 ✅ (51540a8/04c9174, 8 tests) |
+| `threedgrut/tests/conftest.py` | T2.4 ✅ (51540a8) — sys.modules stubs + MCMCStrategy no-CUDA patch (I-1 fix; moved from test_layered_mcmc.py) |
 | `threedgrut/tests/test_road_init.py` | T3.5 |
 | `threedgrut/tests/test_dynamic_rigid_init.py` | T4.5 |
 | `threedgrut/tests/test_sky_envmap.py` | T5.4 |
@@ -455,8 +456,12 @@ flowchart TB
 | `MCMCStrategy._get_add_cap()` 默认等于 conf 值 | T2.1 ✅ | `test_mcmc_get_add_cap_defaults_to_conf` (Mac, 62fc509) |
 | LayeredMCMC sub_strategies 仅含粒子层 | T2.2 ✅ | `test_layered_mcmc_holds_sub_strategy_per_particle_layer` (Mac, 7ad883b) |
 | LayeredMCMC 每层 cap = spec.max_n_particles | T2.2 ✅ | `test_layered_mcmc_sub_uses_per_layer_cap` (Mac, 7ad883b) |
-| LayeredMCMC 单层时 ≡ v1 MCMCStrategy (sub.model is layer MoG) | T2.2 ✅ | `test_layered_mcmc_single_bg_equivalent_to_v1` (Mac, 7ad883b) |
-| 训练全程无跨层迁移 | T2.4 | relocate 1000 步后所有粒子的 layer 归属不变 |
+| LayeredMCMC 单层时 ≡ v1 MCMCStrategy (sub.model is layer MoG, 结构性) | T2.2 ✅ | `test_layered_mcmc_single_bg_uses_one_sub_strategy` (Mac, 7ad883b, renamed 04c9174) |
+| sub.model 与各层 MoG identity 绑定（跨层无迁移结构性保证） | T2.4 ✅ | `test_no_cross_layer_migration_after_post_optimizer_step` (Mac, 04c9174) |
+| init_densification_buffer 广播到所有 sub-strategy | T2.4 ✅ | `test_init_densification_buffer_dispatches_to_all_subs` (Mac, 04c9174) |
+| _make_sub_conf 不改变父 conf | T2.4 ✅ (M-2 carry-over) | `test_make_sub_conf_does_not_mutate_parent` (Mac, 04c9174) |
+| Stage 1 测试单独运行不依赖 test_layered_mcmc.py 的 collect order | T2.4 ✅ (I-1 fix) | conftest.py stubs (51540a8); pytest test_layered_gaussians.py 9/9 PASS standalone |
+| 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | Dynamic 粒子随 GT pose 正确移动 | T4.5 | mock 单 track，frame 0/N-1 两端 world 位置匹配 |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
