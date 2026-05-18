@@ -134,7 +134,7 @@ flowchart TD
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
 | **dynamic_mask.py** | — | **新增 cuboid → 像素 mask 投影** | T4.4 | `threedgrut/layers/dynamic_mask.py` |
 | `MCMCStrategy` | 全局 relocate/add | 抽基类 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ | `threedgrut/strategy/mcmc.py` |
-| **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b)** | T2.2 ✅ / T2.3 | `threedgrut/strategy/layered_mcmc.py` |
+| **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b)** | T2.2 ✅ / T2.3 ✅ | `threedgrut/strategy/layered_mcmc.py` |
 | **SkyEnvmap** | — | **新增 cubemap (nvdiffrast) 或 MLP** | T5.1 / T5.2 | `threedgrut/correction/sky_envmap.py` |
 | **ExposureModel** | — | **新增 per-camera affine** | T6.1 | `threedgrut/correction/exposure.py` |
 | `datasetNcore.py` | RGB + ego_mask | 加 sky/road/dyn mask + road LiDAR + tracks | T3.1 / T3.2 / T4.1 | `threedgrut/datasets/datasetNcore.py` |
@@ -237,7 +237,7 @@ sequenceDiagram
 | 色彩校正 | n/a | per-camera affine | **T6.2** |
 | Loss | 全图均匀 | region-weighted | **T3.4** |
 | Dynamic mask | n/a | cuboid 投影到像素平面 | **T4.4** |
-| MCMC 致密化 | 全局 cap | per-layer cap + 跨层无迁移 | **T2.1 / T2.2 / T2.3** |
+| MCMC 致密化 | 全局 cap | per-layer cap + 跨层无迁移 | **T2.1 ✅ / T2.2 ✅ / T2.3 ✅** |
 | Optimizer | 单 Adam | + 独立 exposure optimizer | **T6.2** |
 
 ---
@@ -409,11 +409,11 @@ flowchart TB
 | `threedgrut/correction/__init__.py` | T5.2 / T6.1 |
 | `threedgrut/correction/sky_envmap.py` | T5.2 |
 | `threedgrut/correction/exposure.py` | T6.1 |
-| `configs/strategy/layered_mcmc.yaml` | T2.3 |
+| `configs/strategy/layered_mcmc.yaml` | T2.3 ✅ (1a0d275) — Hydra `defaults:[mcmc,_self_]` 继承，仅改 method |
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T7.1 |
 | `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ (+3 contract test) |
 | `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (新建，9 测试，Mac 本地可跑无 torch 依赖) |
-| `threedgrut/tests/test_layered_mcmc.py` | T2.1 ✅ (62fc509) · T2.2 ✅ (7ad883b, 4 tests) · T2.4 (remaining) |
+| `threedgrut/tests/test_layered_mcmc.py` | T2.1 ✅ (62fc509) · T2.2 ✅ (7ad883b, 4 tests) · T2.3 ✅ (1a0d275, 5 tests) · T2.4 (remaining) |
 | `threedgrut/tests/test_road_init.py` | T3.5 |
 | `threedgrut/tests/test_dynamic_rigid_init.py` | T4.5 |
 | `threedgrut/tests/test_sky_envmap.py` | T5.4 |
@@ -425,7 +425,7 @@ flowchart TB
 | 文件 | 改动点 | 任务 |
 |---|---|---|
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
-| `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case（T2.2 ✅）；后续：layered loss / sky blend / exposure / per-frame pose | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T3.4 / T4.3 / T5.3 / T6.2 |
+| `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case（T2.2 ✅）；T2.3 ✅ 去除重复 `specs_from_config` 调用，改用 `self.model.specs`；后续：layered loss / sky blend / exposure / per-frame pose | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 / T4.3 / T5.3 / T6.2 |
 | `configs/base_gs.yaml` | 加 `use_layered_model: false` + `layers.enabled: [background]` 默认 | T1.2 ✅ |
 | `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ |
 | `threedgrut/datasets/datasetNcore.py` | aux mask + road_lidar + tracks | T3.1 / T3.2 / T4.1 |

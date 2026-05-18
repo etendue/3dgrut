@@ -39,7 +39,7 @@
 ```mermaid
 kanban
   Backlog
-    [T2.3 configs/strategy/layered_mcmc.yaml]
+    [T2.3 configs/strategy/layered_mcmc.yaml ✅]
     [T2.4 单测 test_layered_mcmc]
     [T2.5 LayeredGaussians.fused_view 多层路径]
     [T3.1 datasetNcore 加载 aux mask]
@@ -76,17 +76,18 @@ kanban
     [T1.5 Trainer 集成 use_layered_model flag ✅]
     [T2.1 MCMCStrategy 抽 _get_add_cap 钩子 ✅]
     [T2.2 LayeredMCMCStrategy 子类 ✅]
+    [T2.3 configs/strategy/layered_mcmc.yaml ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 25 | T2.3+ / T3.x / T4.x / T5.x / T6.x / T7.x |
+| Backlog ⬜ | 24 | T2.4+ / T3.x / T4.x / T5.x / T6.x / T7.x |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 8 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1, T2.2 |
+| Done ✅ | 9 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1, T2.2, T2.3 |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -102,7 +103,7 @@ kanban
 | **T1.5** | 1 | Trainer 集成 + use_layered_model flag | 0.5 | ✅ | MOD `trainer.py` (5a6a5f9 / 8a29fc0) |
 | **T2.1** | 2 | MCMCStrategy 抽 `_get_add_cap()` 钩子 | 0.5 | ✅ | MOD `strategy/mcmc.py` · NEW `tests/test_layered_mcmc.py` (62fc509) |
 | **T2.2** | 2 | LayeredMCMCStrategy 子类 | 1 | ✅ | NEW `strategy/layered_mcmc.py` · MOD `trainer.py` · MOD `tests/test_layered_mcmc.py` (7ad883b) |
-| **T2.3** | 2 | configs/strategy/layered_mcmc.yaml | 0.5 | ⬜ | NEW yaml |
+| **T2.3** | 2 | configs/strategy/layered_mcmc.yaml | 0.5 | ✅ | NEW `configs/strategy/layered_mcmc.yaml` · MOD `trainer.py` (1a0d275) |
 | **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ⬜ | NEW tests |
 | **T2.5** | 2 | LayeredGaussians.fused_view(frame_id) 多层路径 | 1 | ⬜ | MOD `layered_model.py` (T1.5 单层桥之外的多层 forward) |
 | **T3.1** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
@@ -135,7 +136,7 @@ kanban
 |---|---|---:|---|
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
-| 2 | Layered MCMC | 2/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) |
+| 2 | Layered MCMC | 3/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) |
 | 3 | Road 层 | 0/5 ⬜ | — |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
@@ -158,7 +159,7 @@ flowchart LR
     %% Stage 2
     T21["T2.1 ✅<br/>_get_add_cap 钩子"]:::done
     T22["T2.2 ✅<br/>LayeredMCMC"]:::done
-    T23["T2.3<br/>yaml 配置"]:::todo
+    T23["T2.3 ✅<br/>yaml 配置 (1a0d275)"]:::done
     T24["T2.4<br/>单测"]:::todo
     T25["T2.5<br/>多层 fused_view"]:::todo
 
@@ -895,4 +896,19 @@ LayeredMCMCStrategy sub-strategy 数组实现：
 
 ---
 
-> 文档结束。当前应优先处理：**T2.3 / T3.1 并行**（T2.3 是 yaml 配置，T3.1 是数据加载器，二者无依赖）。
+### T2.3 ✅ (2026-05-18, commit 1a0d275)
+
+`configs/strategy/layered_mcmc.yaml` 创建 + trainer `specs_from_config` 重复调用修复（I-2）：
+
+- `configs/strategy/layered_mcmc.yaml`（新建）：Hydra group-defaults `[mcmc, _self_]` 继承 mcmc.yaml 全部超参（binom_n_max=51、relocate/add/perturb 各段）；只覆写 `method: LayeredMCMCStrategy`。首次尝试 `defaults: - mcmc - _self_` 即成功（Hydra 1.3 group-defaults 支持），无需 full copy 降级。
+- `threedgrut/trainer.py` `case "LayeredMCMCStrategy"`：移除 `from threedgrut.layers.registry import specs_from_config` 懒导入及 `specs = specs_from_config(conf)` 调用；改为直接使用 `self.model.specs`（`LayeredGaussians.__init__` 已在 `object.__setattr__(self, "specs", list(specs))` 存储完全相同的列表）。
+- `threedgrut/tests/test_layered_mcmc.py`：追加 `test_layered_mcmc_yaml_inherits_mcmc_defaults`（T2.3），通过 `initialize_config_dir` + compose 验证 yaml 继承正确、三个超参与 mcmc.yaml 保持一致。
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_layered_mcmc.py` | **5/5 PASS** (Mac CPU, 0.54s) |
+| `pytest threedgrut/tests/` (全套) | **26/26 PASS** (Mac CPU, 1.14s) |
+| yaml 继承方案 | Hydra `defaults: [mcmc, _self_]` group-defaults（DRY，无 full copy） |
+| A800 byte-identical 回归 | **Deferred** (controller batch, Stage 2 末尾) |
+
+> 文档结束。当前应优先处理：**T2.4 / T3.1 并行**（T2.4 是单测补全，T3.1 是数据加载器，二者无依赖）。
