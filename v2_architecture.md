@@ -457,6 +457,7 @@ flowchart TB
 | LayeredMCMC sub_strategies 仅含粒子层 | T2.2 ✅ | `test_layered_mcmc_holds_sub_strategy_per_particle_layer` (Mac, 7ad883b) |
 | LayeredMCMC 每层 cap = spec.max_n_particles | T2.2 ✅ | `test_layered_mcmc_sub_uses_per_layer_cap` (Mac, 7ad883b) |
 | LayeredMCMC 单层时 ≡ v1 MCMCStrategy (sub.model is layer MoG, 结构性) | T2.2 ✅ | `test_layered_mcmc_single_bg_uses_one_sub_strategy` (Mac, 7ad883b, renamed 04c9174) |
+| LayeredMCMC + v1 ckpt resume 端到端 byte-identical PSNR | Stage 2 出口 ✅ | A800 1k step 验证 24.123 dB（2026-05-18, df1e87d）；8 帧序列与 T1.2 baseline 完全一致 |
 | sub.model 与各层 MoG identity 绑定（跨层无迁移结构性保证） | T2.4 ✅ | `test_no_cross_layer_migration_structural` (Mac, 04c9174) |
 | init_densification_buffer 广播到所有 sub-strategy | T2.4 ✅ | `test_init_densification_buffer_dispatches_to_all_subs` (Mac, 04c9174) |
 | _make_sub_conf 不改变父 conf | T2.4 ✅ (M-2 carry-over) | `test_make_sub_conf_does_not_mutate_parent` (Mac, 04c9174) |

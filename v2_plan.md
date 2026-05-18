@@ -725,11 +725,12 @@ flowchart LR
     class Edit,Test,Commit,Rsync,SSH,Env,Cd,Run step
 ```
 
-**A800 已知 caveats（T0.1 已踩坑）**：
+**A800 已知 caveats（T0.1 / Stage 2 已踩坑）**：
 1. GPU 共享：两张 A800 各被外部进程占 ~57 GiB，可用 ~22 GiB/卡 → `CUDA_VISIBLE_DEVICES=1` + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 2. CUDA kernel 首次编译 ~3 min（缓存在 `/root/.cache/torch_extensions/py311_cu118/`）
 3. 多相机必须显式 `dataset.camera_ids=[...]`
 4. 数据路径 `/root/work/yusun/ncore-nurec/data/ncore/clips/...`（NFS）
+5. **SSH non-interactive shell 不继承 conda PATH**：跑 train.py / pytest 必须 `export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH`（slangc 在 env 内），仅设 `CUDA_VISIBLE_DEVICES` 会触发 `FileNotFoundError: 'slangc'`
 
 ---
 
@@ -992,7 +993,53 @@ T2.4 代码审查遗留修复：
 | 5 code tasks (T2.1-T2.5) 全完成 | ✅ |
 | Mac CPU 测试 | 33/33 PASS (Stage 1: 17 + Stage 2: 13 incl. v1_ckpt_compat 3) |
 | Stage 1 测试独立可运行性 | ✅ (T2.4 conftest.py 迁移) |
-| A800 byte-identical 回归 | ⏸ controller 待跑 |
+| A800 byte-identical 回归 | ✅ 24.123 dB (2026-05-18 16:24，commit df1e87d) |
+
+### A800 Stage 2 出口验证（2026-05-18 16:24）
+
+命令：
+
+```bash
+ssh a800-x2 'cd /root/work/yusun/repo/3dgrut && \
+  PATH=/root/miniforge3/envs/3dgrut/bin:$PATH \
+  CUDA_VISIBLE_DEVICES=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  /root/miniforge3/envs/3dgrut/bin/python -u train.py --config-name apps/ncore_3dgut_mcmc \
+    strategy=layered_mcmc \
+    path=/root/work/yusun/ncore-nurec/data/ncore/clips/9ae151dc-.../pai_9ae151dc-....json \
+    resume=/root/work/yusun/ncore-nurec/output/smoke_t01_a800_20260514_165510/.../ckpt_last.pt \
+    use_layered_model=true layers.enabled=[background] \
+    n_iterations=1000 dataset.train.duration_sec=2.0 \
+    dataset.camera_ids=[camera_front_wide_120fov]'
+```
+
+关键日志：
+
+```
+🔆 Using LayeredGaussians with layers=['background']
+LayeredMCMC: 1 sub-strategies for layers ['background']
+🔆 Using LayeredMCMC strategy
+ Detected v1-shape checkpoint (1000000 particles); routing all into layer 'background'.
+```
+
+8 帧 PSNR 对比 Stage 1 T1.2 baseline：
+
+| 帧 | Stage 1 baseline (5a6a5f9) | Stage 2 LayeredMCMC (df1e87d) |
+|---|---:|---:|
+| 0 | 21.55 | 21.55 |
+| 1 | 23.99 | 23.99 |
+| 2 | 22.32 | 22.32 |
+| 3 | 22.69 | 22.69 |
+| 4 | 23.93 | 23.93 |
+| 5 | 24.12 | 24.12 |
+| 6 | 27.17 | 27.17 |
+| 7 | 27.23 | 27.23 |
+| **mean** | **24.123 dB** | **24.123 dB ✅ byte-identical** |
+
+证明：
+- T2.1 `_get_add_cap()` hook 提取未改变 MCMCStrategy 行为
+- T2.2 `LayeredMCMCStrategy` 在 `sub_strategies={"background"}` 时等价于 v1 `MCMCStrategy`
+- T2.3 `layered_mcmc.yaml` `defaults: [mcmc, _self_]` 继承全部 hyper-params 正确
+- v1 ckpt → layered["background"] 路由（T1.3 错误消息路径）正确触发
 
 ### 已记录的 tech debt（Stage 3 可顺手处理）
 
