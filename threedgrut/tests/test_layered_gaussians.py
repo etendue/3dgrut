@@ -212,6 +212,12 @@ def test_multi_layer_ckpt_roundtrip(real_conf):
     }
     model_a.init_from_checkpoint(src_ckpt, setup_optimizer=False)
 
+    # MoG.get_model_parameters() asserts optimizer is not None (checkpoint
+    # writes per-param-group state). The test-only helper attaches a minimal
+    # Adam so we can exercise the save path without the full conf-driven
+    # scheduler tree.
+    model_a.setup_optimizer_for_test()
+
     saved = model_a.get_model_parameters()
     assert "gaussians_nodes" in saved
     assert set(saved["gaussians_nodes"].keys()) == {"background", "road"}
