@@ -24,6 +24,14 @@ compute_extra_metrics: true
 
 enable_frame_timings: false
 
+# v2 layered Gaussians (Stage 1+)
+# Default v1-compatible: use_layered_model=false routes the trainer through a
+# single MixtureOfGaussians. Set to true to build LayeredGaussians by reading
+# layers.enabled (filtered against threedgrut.layers.registry.STANDARD_LAYERS).
+use_layered_model: false
+layers:
+  enabled: [background]   # only consulted when use_layered_model=true
+
 enable_writer: true
 writer:
   hit_stat_frequency: 999999

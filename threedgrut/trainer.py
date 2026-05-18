@@ -186,24 +186,18 @@ class Trainer3DGRUT:
     def init_model(self, conf: DictConfig, scene_extent=None) -> None:
         """Initializes the gaussian model and the optix context.
 
-        When conf.use_layered_model is True, instantiates a LayeredGaussians
-        container with a single background layer (T1.1 default). Multi-layer
-        configs land in T1.2 via conf.layers.enabled.
+        When conf.use_layered_model is True, builds a LayeredGaussians container
+        with layers driven by conf.layers.enabled (defaults to ['background']).
+        Standard layer specs come from threedgrut.layers.registry.
         """
         if conf.get("use_layered_model", False):
             from threedgrut.layers.layered_model import LayeredGaussians
-            from threedgrut.layers.layer_spec import LayerSpec
+            from threedgrut.layers.registry import specs_from_config
 
-            # T1.1: hardcoded single background layer. T1.2 reads conf.layers.enabled.
-            specs = [
-                LayerSpec(
-                    name="background",
-                    layer_id=0,
-                    max_n_particles=conf.get("max_n_gaussians", 1_000_000),
-                )
-            ]
+            specs = specs_from_config(conf)
             self.model = LayeredGaussians(conf, specs=specs, scene_extent=scene_extent)
-            logger.info("🔆 Using LayeredGaussians (single 'background' layer)")
+            layer_names = [s.name for s in specs]
+            logger.info(f"🔆 Using LayeredGaussians with layers={layer_names}")
         else:
             self.model = MixtureOfGaussians(conf, scene_extent=scene_extent)
 
