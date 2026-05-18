@@ -133,7 +133,7 @@ flowchart TD
 | **road_init.py** | — | **新增 LiDAR-Z KNN 路面 init** | T3.3 | `threedgrut/layers/road_init.py` |
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
 | **dynamic_mask.py** | — | **新增 cuboid → 像素 mask 投影** | T4.4 | `threedgrut/layers/dynamic_mask.py` |
-| `MCMCStrategy` | 全局 relocate/add | 抽基类 `_select_indices` 钩子 | T2.1 | `threedgrut/strategy/mcmc.py` |
+| `MCMCStrategy` | 全局 relocate/add | 抽基类 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ | `threedgrut/strategy/mcmc.py` |
 | **LayeredMCMCStrategy** | — | **新增 per-layer cap + relocate scoping** | T2.2 / T2.3 | `threedgrut/strategy/layered_mcmc.py` |
 | **SkyEnvmap** | — | **新增 cubemap (nvdiffrast) 或 MLP** | T5.1 / T5.2 | `threedgrut/correction/sky_envmap.py` |
 | **ExposureModel** | — | **新增 per-camera affine** | T6.1 | `threedgrut/correction/exposure.py` |
@@ -364,7 +364,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     Step["post_optimizer_step()<br/>MOD · T2.1 + T2.2"]:::mod
-    Hook["_select_indices(model)<br/>钩子方法<br/>NEW · T2.1"]:::new
+    Hook["_get_add_cap() → int<br/>钩子方法<br/>DONE · T2.1 ✅ (62fc509)"]:::done
 
     subgraph Loop["for spec in layer_specs (NEW · T2.2)"]
         Check["is_particle_layer ?"]:::new
@@ -427,7 +427,7 @@ flowchart TB
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
 | `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；后续：layered loss / sky blend / exposure / per-frame pose / strategy factory | T1.2 ✅ / T1.5 ✅ / T2.2 / T3.4 / T4.3 / T5.3 / T6.2 |
 | `configs/base_gs.yaml` | 加 `use_layered_model: false` + `layers.enabled: [background]` 默认 | T1.2 ✅ |
-| `threedgrut/strategy/mcmc.py` | 抽 `_select_indices` 钩子 | T2.1 |
+| `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ |
 | `threedgrut/datasets/datasetNcore.py` | aux mask + road_lidar + tracks | T3.1 / T3.2 / T4.1 |
 | `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 |
 
@@ -452,7 +452,8 @@ flowchart TB
 | `STANDARD_LAYERS` 5 层 + layer_id 唯一 | T1.2 ✅ | `test_registry_*`（commit 569819b，4 测试） |
 | v1 ckpt resume 错误消息引导用户到 `layers.enabled` | T1.3 ✅ | `test_v1_ckpt_resume_without_background_layer_raises`（commit ff83028，A800 跑） |
 | 多层 ckpt save→load 字节一致 | T1.4 ✅ | `test_multi_layer_ckpt_roundtrip`（commit ff83028，A800 跑） |
-| LayeredMCMC 单层时 ≡ v1 MCMCStrategy | T2.1 / T2.4 | unit test `test_falls_back_to_global_when_single_layer` |
+| `MCMCStrategy._get_add_cap()` 默认等于 conf 值 | T2.1 ✅ | `test_mcmc_get_add_cap_defaults_to_conf` (Mac, 62fc509) |
+| LayeredMCMC 单层时 ≡ v1 MCMCStrategy | T2.4 | unit test `test_falls_back_to_global_when_single_layer` |
 | 训练全程无跨层迁移 | T2.4 | relocate 1000 步后所有粒子的 layer 归属不变 |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | Dynamic 粒子随 GT pose 正确移动 | T4.5 | mock 单 track，frame 0/N-1 两端 world 位置匹配 |

@@ -39,7 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T2.1 MCMCStrategy 抽 _select_indices 钩子]
     [T2.2 LayeredMCMCStrategy 子类]
     [T2.3 configs/strategy/layered_mcmc.yaml]
     [T2.4 单测 test_layered_mcmc]
@@ -76,17 +75,18 @@ kanban
     [T1.3 v1 ckpt → background trainer 侧错误消息 ✅]
     [T1.4 单测 test_layered_gaussians 扩展 ✅]
     [T1.5 Trainer 集成 use_layered_model flag ✅]
+    [T2.1 MCMCStrategy 抽 _get_add_cap 钩子 ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 27 | T2.x / T3.x / T4.x / T5.x / T6.x / T7.x |
+| Backlog ⬜ | 26 | T2.2+ / T3.x / T4.x / T5.x / T6.x / T7.x |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 6 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5 |
+| Done ✅ | 7 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1 |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -100,7 +100,7 @@ kanban
 | **T1.3** | 1 | v1 flat ckpt → layered["background"] 兼容 | 0.5 | ✅ | MOD `layered_model.py` 错误消息指向 `layers.enabled` (ff83028) |
 | **T1.4** | 1 | 单测 test_layered_gaussians.py 扩展 | 1 | ✅ | NEW `test_layer_spec_registry.py` (9 测试) + 3 个 A800 contract test (60e1154 / 569819b / ff83028) |
 | **T1.5** | 1 | Trainer 集成 + use_layered_model flag | 0.5 | ✅ | MOD `trainer.py` (5a6a5f9 / 8a29fc0) |
-| **T2.1** | 2 | MCMCStrategy 抽 `_select_indices` 钩子 | 0.5 | ⬜ | MOD `strategy/mcmc.py` |
+| **T2.1** | 2 | MCMCStrategy 抽 `_get_add_cap()` 钩子 | 0.5 | ✅ | MOD `strategy/mcmc.py` · NEW `tests/test_layered_mcmc.py` (62fc509) |
 | **T2.2** | 2 | LayeredMCMCStrategy 子类 | 1 | ⬜ | NEW `strategy/layered_mcmc.py` |
 | **T2.3** | 2 | configs/strategy/layered_mcmc.yaml | 0.5 | ⬜ | NEW yaml |
 | **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ⬜ | NEW tests |
@@ -135,7 +135,7 @@ kanban
 |---|---|---:|---|
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
-| 2 | Layered MCMC | 0/5 ⬜ | — |
+| 2 | Layered MCMC | 1/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) |
 | 3 | Road 层 | 0/5 ⬜ | — |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
@@ -156,7 +156,7 @@ flowchart LR
     T15["T1.5 ✅<br/>Trainer 集成"]:::done
 
     %% Stage 2
-    T21["T2.1<br/>_select_indices 钩子"]:::todo
+    T21["T2.1 ✅<br/>_get_add_cap 钩子"]:::done
     T22["T2.2<br/>LayeredMCMC"]:::todo
     T23["T2.3<br/>yaml 配置"]:::todo
     T24["T2.4<br/>单测"]:::todo
@@ -860,4 +860,21 @@ v1 flat ckpt resume 在 LayeredGaussians 路径下的错误消息改良：
 
 ---
 
-> 文档结束。当前应优先处理：**T2.1 / T3.1 并行**（T2.x 与 T3.x 之间无强依赖，dataloader 改完即可同时推进 MCMC 重构）。
+### T2.1 ✅ (2026-05-18, commit 62fc509)
+
+MCMCStrategy 抽 `_get_add_cap()` 钩子：
+
+- `threedgrut/strategy/mcmc.py`：在 `add_new_gaussians` 前新增 `_get_add_cap() -> int` 方法（默认返回 `conf.strategy.add.max_n_gaussians`，v1 行为完全不变），第 142 行改为调用 `self._get_add_cap()`。共 +5 行，其他方法（`relocate_gaussians` / `perturb_gaussians`）零改动。
+- `threedgrut/tests/test_layered_mcmc.py`：新建测试文件，1 个合约测试 `test_mcmc_get_add_cap_defaults_to_conf`，用 `__new__` bypass `__init__`（CUDA JIT）+ sys.modules stub 绕开 ncore 依赖，Mac CPU 可直接运行。
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_layered_mcmc.py` | **1/1 PASS** (Mac CPU, 0.42s) |
+| `pytest test_layer_spec_registry.py` | **9/9 PASS** (Stage 1 回归) |
+| A800 byte-identical 回归 | **Deferred** (controller batch, Stage 2 末尾) |
+
+**注**：原 plan 描述的 `_select_indices` 钩子（选择 mask 再操作）经评估属于过度设计；sub-strategy-array 方案下只需 `_get_add_cap()` 一个 hook，diff 最小，v1 行为 byte-identical。
+
+---
+
+> 文档结束。当前应优先处理：**T2.2 / T3.1 并行**（T2.x 与 T3.x 之间无强依赖，dataloader 改完即可同时推进 MCMC 重构）。
