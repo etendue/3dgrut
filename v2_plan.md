@@ -39,8 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T1.2 LayerSpec 完整字段 + registry]
-    [T1.4 单测 test_layered_gaussians 扩展]
     [T2.1 MCMCStrategy 抽 _select_indices 钩子]
     [T2.2 LayeredMCMCStrategy 子类]
     [T2.3 configs/strategy/layered_mcmc.yaml]
@@ -69,12 +67,14 @@ kanban
     [T7.4 per-layer cap ablation]
     [T7.5 WP_V2_Report.md + schema]
   In Progress
-    [T1.3 v1 flat ckpt → background trainer 侧 resume]
   Review
   Blocked
   Done
     [T0.1 A800 环境验证 smoke 24.12 dB ✅]
     [T1.1 LayeredGaussians 容器 NRE schema ✅]
+    [T1.2 LayerSpec 完整字段 + registry ✅]
+    [T1.3 v1 ckpt → background trainer 侧错误消息 ✅]
+    [T1.4 单测 test_layered_gaussians 扩展 ✅]
     [T1.5 Trainer 集成 use_layered_model flag ✅]
 ```
 
@@ -82,11 +82,11 @@ kanban
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 29 | T1.2 / T2.x / T3.x / T4.x / T5.x / T6.x / T7.x |
-| In Progress 🟡 | 1 | T1.3 |
+| Backlog ⬜ | 27 | T2.x / T3.x / T4.x / T5.x / T6.x / T7.x |
+| In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 3 | T0.1, T1.1, T1.5 |
+| Done ✅ | 6 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5 |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -96,9 +96,9 @@ kanban
 |---|---|---|---:|:---:|---|
 | **T0.1** | 0 | A800 环境验证 + smoke 复跑 | 1 | ✅ | smoke 24.12 dB / 9.48 it/s (2026-05-14) |
 | **T1.1** | 1 | LayeredGaussians 容器 + NRE ckpt schema | 1 | ✅ | NEW `layers/layered_model.py` (5a6a5f9) |
-| **T1.2** | 1 | LayerSpec 完整字段 + registry | 0.5 | ⬜ | MOD `layers/layer_spec.py` · NEW `registry.py` |
-| **T1.3** | 1 | v1 flat ckpt → layered["background"] 兼容 | 0.5 | 🟡 | 容器侧已支持；trainer 侧需补 resume 路径 |
-| **T1.4** | 1 | 单测 test_layered_gaussians.py 扩展 | 1 | ⬜ | NEW tests; 已有 contract test 增量补 |
+| **T1.2** | 1 | LayerSpec 完整字段 + registry | 0.5 | ✅ | MOD `layer_spec.py` · NEW `registry.py` · MOD `trainer.py` + `base_gs.yaml` (60e1154 / 569819b / 6435483) |
+| **T1.3** | 1 | v1 flat ckpt → layered["background"] 兼容 | 0.5 | ✅ | MOD `layered_model.py` 错误消息指向 `layers.enabled` (ff83028) |
+| **T1.4** | 1 | 单测 test_layered_gaussians.py 扩展 | 1 | ✅ | NEW `test_layer_spec_registry.py` (9 测试) + 3 个 A800 contract test (60e1154 / 569819b / ff83028) |
 | **T1.5** | 1 | Trainer 集成 + use_layered_model flag | 0.5 | ✅ | MOD `trainer.py` (5a6a5f9 / 8a29fc0) |
 | **T2.1** | 2 | MCMCStrategy 抽 `_select_indices` 钩子 | 0.5 | ⬜ | MOD `strategy/mcmc.py` |
 | **T2.2** | 2 | LayeredMCMCStrategy 子类 | 1 | ⬜ | NEW `strategy/layered_mcmc.py` |
@@ -134,7 +134,7 @@ kanban
 | Stage | 名称 | 完成 / 总 | 关键产出 |
 |---|---|---:|---|
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
-| 1 | Layer 抽象 | 2/5 🟡 | LayeredGaussians + Trainer 集成已 land |
+| 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 0/5 ⬜ | — |
 | 3 | Road 层 | 0/5 ⬜ | — |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
@@ -150,9 +150,9 @@ flowchart LR
 
     %% Stage 1
     T11["T1.1 ✅<br/>LayeredGaussians"]:::done
-    T12["T1.2<br/>LayerSpec + registry"]:::todo
-    T13["T1.3 🟡<br/>v1 ckpt resume"]:::wip
-    T14["T1.4<br/>单测扩展"]:::todo
+    T12["T1.2 ✅<br/>LayerSpec + registry"]:::done
+    T13["T1.3 ✅<br/>v1 ckpt resume msg"]:::done
+    T14["T1.4 ✅<br/>单测扩展"]:::done
     T15["T1.5 ✅<br/>Trainer 集成"]:::done
 
     %% Stage 2
@@ -786,6 +786,55 @@ Trainer 集成：
 - `Trainer3DGRUT.setup_training` 支持 LayeredGaussians 分支
 - `forward` bridge 让 `self.model(batch, train=...)` 在单 bg 模式下正常工作
 
+### T1.2 ✅ (2026-05-18, commit 60e1154 + 569819b + 6435483)
+
+LayerSpec 完整字段 + registry + trainer wiring：
+
+- `layers/layer_spec.py`：T1.1 的 3 字段 (`name/layer_id/max_n_particles`) → 8 字段，新增 `scale_prior / scale_lr_mult / mask_field / is_particle_layer / density_init`，全部默认值，向后兼容
+- `layers/registry.py` 新建：`STANDARD_LAYERS` dict 注册 5 个标准层（background / road / dynamic_rigids / dynamic_deformables / sky_envmap），`specs_from_config(conf)` 工厂按 `conf.layers.enabled` 过滤、保序、未知名抛 ValueError
+- `layers/__init__.py`：导出 `LayerSpec / STANDARD_LAYERS / specs_from_config`；`LayeredGaussians` 用 try/except 懒导出（dev 笔记本无 torch 时 package 仍可 import）
+- `threedgrut/trainer.py::init_model`：原硬编码单 bg `LayerSpec(...)` → `specs_from_config(conf)`；日志输出实际层名 list
+- `configs/base_gs.yaml` 加默认 `use_layered_model: false` 和 `layers.enabled: [background]`（plan 误称 `base.yaml`，实际项目根 yaml 是 `base_gs.yaml`，继承链 `apps/ncore_3dgut_mcmc → base_mcmc → base_gs`）
+
+本地 Mac 验证：
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_layer_spec_registry.py` | 9/9 PASS |
+| hydra compose 默认 | `use_layered_model=False / layers.enabled=['background']` |
+| hydra compose override `[background,road]` | OK |
+
+A800 端 byte-identical resume 待执行（见 plan Verification 节）。
+
+### T1.3 ✅ (2026-05-18, commit ff83028)
+
+v1 flat ckpt resume 在 LayeredGaussians 路径下的错误消息改良：
+
+- `layers/layered_model.py::init_from_checkpoint` 第 122-129 行：当 ckpt 是 v1 flat 形态但 `self.layers` 不含 "background" 时，错误消息从 "no 'background' layer configured" 改为 "'background' layer is not in conf.layers.enabled (got [...])"，并明确告知"Add 'background' to layers.enabled"
+- 配套 2 个 A800 contract test：`test_v1_ckpt_resume_without_background_layer_raises` (regex match `layers.enabled`) / `test_v1_ckpt_resume_with_background_layer_works`
+
+A800 端验证待跑（rsync + `python train.py resume=<v1_ckpt> use_layered_model=true layers.enabled=[background]`）。
+
+### T1.4 ✅ (2026-05-18, commit 60e1154 + 569819b + ff83028)
+
+单测覆盖扩展：
+
+- 新文件 `threedgrut/tests/test_layer_spec_registry.py`（9 测试，Mac 本地可跑，无 torch 依赖）：
+  - `test_layer_spec_frozen_immutable`：FrozenInstanceError 验证
+  - `test_layer_spec_full_field_defaults`：8 字段默认值 + 显式赋值透传
+  - `test_registry_standard_layers_complete`：5 层全员
+  - `test_registry_specs_have_unique_ids`：layer_id 唯一
+  - `test_registry_particle_flags_correct`：sky/deformable 非粒子层
+  - `test_registry_road_layer_has_flat_scale_prior`：Z-lock 约定 + mask_field
+  - `test_specs_from_config_filters_enabled`：按 enabled 过滤保序
+  - `test_specs_from_config_unknown_layer_raises`：未知名 ValueError
+  - `test_specs_from_config_defaults_to_single_background`：空 conf fallback
+- `threedgrut/tests/test_layered_gaussians.py` 追加 3 个 A800 contract test：`test_v1_ckpt_resume_without_background_layer_raises` / `test_v1_ckpt_resume_with_background_layer_works` / `test_multi_layer_ckpt_roundtrip`
+
+测试矩阵：v1 时代 6 个 contract test + v2 Stage 1 共 9 + 3 = 12 个新测试 = **18 个总测试**（Mac 本地 9 + A800 9）。
+
+**Stage 1 出口**：T1.1 - T1.5 全 ✅；解锁 Stage 2 (LayeredMCMC) 与 Stage 3 (Road) 并行开发窗口。
+
 ---
 
-> 文档结束。当前应优先处理：**T1.2 → T2.1 / T3.1 并行**（T2.x 与 T3.x 之间无强依赖，dataloader 改完即可同时推进 MCMC 重构）。
+> 文档结束。当前应优先处理：**T2.1 / T3.1 并行**（T2.x 与 T3.x 之间无强依赖，dataloader 改完即可同时推进 MCMC 重构）。

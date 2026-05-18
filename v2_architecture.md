@@ -78,12 +78,12 @@ flowchart TD
     Dataset["NCore Dataset<br/>+ sky/road/dyn mask<br/>+ road LiDAR<br/>+ tracks<br/>MOD · T3.1 / T3.2 / T4.1"]:::mod
 
     %% LayeredGaussians 容器
-    subgraph Layered["LayeredGaussians (NEW)<br/>ModuleDict[name → MoG]<br/>T1.1 ✅"]
+    subgraph Layered["LayeredGaussians (NEW)<br/>ModuleDict[name → MoG]<br/>T1.1 ✅ · T1.2 ✅"]
         BG["Background<br/>MoG (flat)<br/>DONE · T1.1 ✅"]:::done
-        Road["Road<br/>scale=[0.1, 0.1, 0.001]<br/>init: LiDAR-Z KNN<br/>NEW · T1.2 + T3.3"]:::new
-        DynR["DynamicRigid<br/>local-frame MoG<br/>+ per-frame pose<br/>NEW · T1.2 + T4.1/T4.2/T4.3"]:::new
-        DynD["DynamicDeformable<br/>(registered, v2.x 占位)"]:::existing
-        Sky["SkyEnvmap<br/>cubemap or MLP<br/>NEW · T5.1 / T5.2"]:::new
+        Road["Road<br/>scale=[0.1, 0.1, 0.001]<br/>spec registered ✅ (T1.2)<br/>init: LiDAR-Z KNN<br/>T3.3 todo"]:::mod
+        DynR["DynamicRigid<br/>local-frame MoG<br/>spec registered ✅ (T1.2)<br/>+ per-frame pose<br/>T4.1/T4.2/T4.3 todo"]:::mod
+        DynD["DynamicDeformable<br/>spec registered ✅ (T1.2)<br/>v2.x 占位"]:::done
+        Sky["SkyEnvmap<br/>spec registered ✅ (T1.2)<br/>cubemap or MLP<br/>T5.1 / T5.2 todo"]:::mod
     end
 
     Fused["fused_view(frame_id)<br/>concat all layers → flat<br/>NEW · T2.5"]:::new
@@ -126,10 +126,10 @@ flowchart TD
 | 模块 | v1 状态 | v2 状态 | 任务 | 文件 |
 |---|---|---|---|---|
 | `train.py` | unchanged | 加 `use_layered_model` 分支 | T1.5 ✅ | `train.py` |
-| `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head | T1.5 ✅ / T3.4 / T4.3 / T5.3 / T6.2 | `threedgrut/trainer.py` |
+| `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head；`init_model` 读 `conf.layers.enabled` 经 registry 构造 specs | T1.2 ✅ / T1.5 ✅ / T3.4 / T4.3 / T5.3 / T6.2 | `threedgrut/trainer.py` |
 | `MixtureOfGaussians` | 全场景表征 | **不动**，被 LayeredGaussians 内嵌 | — | `threedgrut/model/model.py` |
-| **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG** | T1.1 ✅ T1.5 T2.5 | `threedgrut/layers/layered_model.py` |
-| **LayerSpec / registry** | — | **新增 描述层属性** | T1.2 | `threedgrut/layers/layer_spec.py`, `registry.py` |
+| **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG** | T1.1 ✅ T1.5 ✅ T2.5 | `threedgrut/layers/layered_model.py` |
+| **LayerSpec / registry** | — | **新增 描述层属性 + 5 标准层注册表** | T1.2 ✅ | `layer_spec.py` (8 字段), `registry.py` (STANDARD_LAYERS + specs_from_config) |
 | **road_init.py** | — | **新增 LiDAR-Z KNN 路面 init** | T3.3 | `threedgrut/layers/road_init.py` |
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
 | **dynamic_mask.py** | — | **新增 cuboid → 像素 mask 投影** | T4.4 | `threedgrut/layers/dynamic_mask.py` |
@@ -398,10 +398,10 @@ flowchart TB
 
 | 文件 | 任务 |
 |---|---|
-| `threedgrut/layers/__init__.py` | T1.1 ✅ |
-| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T2.5 |
-| `threedgrut/layers/layer_spec.py` | T1.1 ✅ / T1.2 |
-| `threedgrut/layers/registry.py` | T1.2 |
+| `threedgrut/layers/__init__.py` | T1.1 ✅ / T1.2 ✅ (导出 LayerSpec/registry，lazy-import LayeredGaussians) |
+| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 |
+| `threedgrut/layers/layer_spec.py` | T1.1 ✅ / T1.2 ✅ (8 字段) |
+| `threedgrut/layers/registry.py` | T1.2 ✅ |
 | `threedgrut/layers/road_init.py` | T3.3 |
 | `threedgrut/layers/dynamic_rigid_init.py` | T4.2 |
 | `threedgrut/layers/dynamic_mask.py` | T4.4 |
@@ -411,7 +411,8 @@ flowchart TB
 | `threedgrut/correction/exposure.py` | T6.1 |
 | `configs/strategy/layered_mcmc.yaml` | T2.3 |
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T7.1 |
-| `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ (扩展 T1.4) |
+| `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ (+3 contract test) |
+| `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (新建，9 测试，Mac 本地可跑无 torch 依赖) |
 | `threedgrut/tests/test_layered_mcmc.py` | T2.4 |
 | `threedgrut/tests/test_road_init.py` | T3.5 |
 | `threedgrut/tests/test_dynamic_rigid_init.py` | T4.5 |
@@ -424,7 +425,8 @@ flowchart TB
 | 文件 | 改动点 | 任务 |
 |---|---|---|
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
-| `threedgrut/trainer.py` | layered loss / sky blend / exposure / per-frame pose / strategy factory | T1.5 ✅ T2.2 T3.4 T4.3 T5.3 T6.2 |
+| `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；后续：layered loss / sky blend / exposure / per-frame pose / strategy factory | T1.2 ✅ / T1.5 ✅ / T2.2 / T3.4 / T4.3 / T5.3 / T6.2 |
+| `configs/base_gs.yaml` | 加 `use_layered_model: false` + `layers.enabled: [background]` 默认 | T1.2 ✅ |
 | `threedgrut/strategy/mcmc.py` | 抽 `_select_indices` 钩子 | T2.1 |
 | `threedgrut/datasets/datasetNcore.py` | aux mask + road_lidar + tracks | T3.1 / T3.2 / T4.1 |
 | `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 |
@@ -446,6 +448,10 @@ flowchart TB
 | 不变量 | 任务挂点 | 验证手段 |
 |---|---|---|
 | 单 bg 层时 LayeredGaussians 行为 ≡ v1 MoG（byte-identical resume） | T1.1 ✅ | 已在 commit 5a6a5f9 验证（PSNR 24.123 dB ≡ v1 24.123 dB） |
+| LayerSpec 是 frozen 不可变 | T1.2 ✅ | `test_layer_spec_frozen_immutable`（commit 60e1154） |
+| `STANDARD_LAYERS` 5 层 + layer_id 唯一 | T1.2 ✅ | `test_registry_*`（commit 569819b，4 测试） |
+| v1 ckpt resume 错误消息引导用户到 `layers.enabled` | T1.3 ✅ | `test_v1_ckpt_resume_without_background_layer_raises`（commit ff83028，A800 跑） |
+| 多层 ckpt save→load 字节一致 | T1.4 ✅ | `test_multi_layer_ckpt_roundtrip`（commit ff83028，A800 跑） |
 | LayeredMCMC 单层时 ≡ v1 MCMCStrategy | T2.1 / T2.4 | unit test `test_falls_back_to_global_when_single_layer` |
 | 训练全程无跨层迁移 | T2.4 | relocate 1000 步后所有粒子的 layer 归属不变 |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
