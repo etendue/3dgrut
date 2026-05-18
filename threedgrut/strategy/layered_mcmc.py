@@ -6,15 +6,14 @@ field points at LayeredGaussians.layers[name] (an independent MixtureOfGaussians
 with its own optimizer). post_optimizer_step iterates sub-strategies → naturally
 gives per-layer cap + scoped relocate/add/perturb + zero cross-layer migration.
 
-Single-bg mode: only one sub-strategy → behavior byte-identical to v1
-MCMCStrategy (validated by test_layered_mcmc_single_bg_equivalent_to_v1).
+Single-bg mode: only one sub-strategy → structurally identical to v1 MCMCStrategy
+operating on the same MoG (validated by test_layered_mcmc_single_bg_uses_one_sub_strategy;
+note: structural identity only, not byte-identical training output).
 
 Non-particle layers (is_particle_layer=False, e.g. sky_envmap) are skipped:
 they have no MoG particles to densify.
 """
 from __future__ import annotations
-
-from typing import List, Optional
 
 from omegaconf import OmegaConf
 
@@ -28,7 +27,7 @@ from threedgrut.utils.logger import logger
 class LayeredMCMCStrategy(BaseStrategy):
     """Per-layer MCMC densification driven by LayerSpec.max_n_particles."""
 
-    def __init__(self, conf, model: LayeredGaussians, specs: List[LayerSpec]) -> None:
+    def __init__(self, conf, model: LayeredGaussians, specs: list[LayerSpec]) -> None:
         super().__init__(config=conf, model=model)
         self.specs = list(specs)
         self.sub_strategies: dict[str, MCMCStrategy] = {}
@@ -55,7 +54,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         sub.strategy.add.max_n_gaussians = spec.max_n_particles
         return sub
 
-    def init_densification_buffer(self, checkpoint: Optional[dict] = None) -> None:
+    def init_densification_buffer(self, checkpoint: dict | None = None) -> None:
         for sub in self.sub_strategies.values():
             sub.init_densification_buffer(checkpoint)
 
