@@ -215,6 +215,17 @@ class Trainer3DGRUT:
 
                 self.strategy = MCMCStrategy(conf, self.model)
                 logger.info("🔆 Using MCMC strategy")
+            case "LayeredMCMCStrategy":
+                from threedgrut.layers.layered_model import LayeredGaussians
+                from threedgrut.layers.registry import specs_from_config
+                from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
+
+                assert isinstance(self.model, LayeredGaussians), (
+                    "LayeredMCMCStrategy requires use_layered_model=true"
+                )
+                specs = specs_from_config(conf)
+                self.strategy = LayeredMCMCStrategy(conf, self.model, specs)
+                logger.info("🔆 Using LayeredMCMC strategy")
             case _:
                 raise ValueError(f"unrecognized model.strategy {conf.strategy.method}")
 
