@@ -160,3 +160,76 @@ def test_load_v2_checkpoint_warns_on_missing_layer(real_conf):
     model.init_from_checkpoint(v2_ckpt, setup_optimizer=False)
     assert model.layers["background"].positions.shape == (600, 3)
     assert model.layers["road"].positions.shape == (0, 3)
+
+
+# ----------------------------------------------------------- T1.3 / T1.4 additions
+def test_v1_ckpt_resume_without_background_layer_raises(real_conf):
+    """T1.3: layers.enabled=['road'] + v1 ckpt → 明确报错指向 layers.enabled"""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="road", layer_id=1, max_n_particles=200_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+
+    v1_ckpt = _v1_shape_dict(N=100, conf=real_conf)
+    with pytest.raises(ValueError, match="layers.enabled"):
+        model.init_from_checkpoint(v1_ckpt, setup_optimizer=False)
+
+
+def test_v1_ckpt_resume_with_background_layer_works(real_conf):
+    """T1.3: layers.enabled=['background','road'] + v1 ckpt → 全部塞 background"""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+
+    v1_ckpt = _v1_shape_dict(N=100, conf=real_conf)
+    model.init_from_checkpoint(v1_ckpt, setup_optimizer=False)
+    assert model.layers["background"].positions.shape == (100, 3)
+    assert model.layers["road"].positions.shape == (0, 3)
+
+
+def test_multi_layer_ckpt_roundtrip(real_conf):
+    """T1.4: 2 层 LayeredGaussians: save → load 后各层 tensor 字节级一致"""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
+    ]
+    model_a = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+
+    src_ckpt = {
+        "global_step": 30000,
+        "model": {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=300, conf=real_conf),
+                "road":       _v1_shape_dict(N=150, conf=real_conf),
+            },
+        },
+    }
+    model_a.init_from_checkpoint(src_ckpt, setup_optimizer=False)
+
+    saved = model_a.get_model_parameters()
+    assert "gaussians_nodes" in saved
+    assert set(saved["gaussians_nodes"].keys()) == {"background", "road"}
+
+    model_b = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model_b.init_from_checkpoint(
+        {"gaussians_nodes": saved["gaussians_nodes"]},
+        setup_optimizer=False,
+    )
+
+    for layer_name in ["background", "road"]:
+        for attr in [
+            "positions", "rotation", "scale", "density",
+            "features_albedo", "features_specular",
+        ]:
+            t_a = getattr(model_a.layers[layer_name], attr)
+            t_b = getattr(model_b.layers[layer_name], attr)
+            assert torch.equal(t_a.data, t_b.data), (
+                f"Roundtrip mismatch at {layer_name}.{attr}: "
+                f"shapes {t_a.shape} vs {t_b.shape}"
+            )

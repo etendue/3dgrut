@@ -120,9 +120,12 @@ class LayeredGaussians(nn.Module):
 
         # v1 legacy path: route entire flat dict into background.
         if "background" not in self.layers:
+            enabled = [s.name for s in self.specs]
             raise ValueError(
-                "v1 checkpoint detected (flat schema) but no 'background' layer "
-                "configured. Add 'background' to layers.enabled."
+                f"v1 checkpoint detected (flat schema with 'positions' key) "
+                f"but 'background' layer is not in conf.layers.enabled "
+                f"(got {enabled}). Add 'background' to layers.enabled to "
+                f"resume v1 checkpoints."
             )
         n_particles = checkpoint["positions"].shape[0]
         logger.info(
