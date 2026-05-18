@@ -1,0 +1,9 @@
+# Strategy config for LayeredMCMCStrategy (T2.3).
+# Uses Hydra group-defaults to inherit all hyper-params from mcmc.yaml;
+# only overrides `method`.  Per-layer add-caps come from LayerSpec.max_n_particles
+# in the layer registry, not from this file.
+defaults:
+  - mcmc
+  - _self_
+
+method: LayeredMCMCStrategy

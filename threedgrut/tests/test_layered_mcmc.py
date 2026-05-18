@@ -233,3 +233,29 @@ def test_layered_mcmc_single_bg_equivalent_to_v1(real_conf):
     assert isinstance(strat.sub_strategies["background"], MCMCStrategy)
     # Key invariant: sub.model references the layer MoG, not the LayeredGaussians wrapper.
     assert strat.sub_strategies["background"].model is model.layers["background"]
+
+
+def test_layered_mcmc_yaml_inherits_mcmc_defaults():
+    """T2.3: layered_mcmc.yaml inherits mcmc.yaml; only `method` differs."""
+    import os
+    from hydra import compose, initialize_config_dir
+
+    config_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "configs")
+    )
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg_mcmc = compose(
+            config_name="apps/ncore_3dgut_mcmc",
+            overrides=["strategy=mcmc"],
+        )
+        cfg_layered = compose(
+            config_name="apps/ncore_3dgut_mcmc",
+            overrides=["strategy=layered_mcmc", "use_layered_model=true"],
+        )
+
+    assert cfg_mcmc.strategy.method == "MCMCStrategy"
+    assert cfg_layered.strategy.method == "LayeredMCMCStrategy"
+    # Training hyper-params inherited unchanged
+    assert cfg_mcmc.strategy.binom_n_max == cfg_layered.strategy.binom_n_max
+    assert cfg_mcmc.strategy.relocate.frequency == cfg_layered.strategy.relocate.frequency
+    assert cfg_mcmc.strategy.perturb.noise_lr == cfg_layered.strategy.perturb.noise_lr
