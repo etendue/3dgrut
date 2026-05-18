@@ -86,7 +86,7 @@ flowchart TD
         Sky["SkyEnvmap<br/>spec registered ✅ (T1.2)<br/>cubemap or MLP<br/>T5.1 / T5.2 todo"]:::mod
     end
 
-    Fused["fused_view(frame_id)<br/>concat all layers → flat<br/>NEW · T2.5"]:::new
+    Fused["fused_view(frame_id)<br/>concat all layers → flat<br/>DONE · T2.5 ✅ (d4841df)"]:::done
 
     %% Strategy
     Strategy["LayeredMCMCStrategy<br/>per-layer cap + scoped<br/>relocate / add / perturb<br/>DONE · T2.2 ✅ (7ad883b)"]:::done
@@ -128,7 +128,7 @@ flowchart TD
 | `train.py` | unchanged | 加 `use_layered_model` 分支 | T1.5 ✅ | `train.py` |
 | `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head；`init_model` 读 `conf.layers.enabled` 经 registry 构造 specs | T1.2 ✅ / T1.5 ✅ / T3.4 / T4.3 / T5.3 / T6.2 | `threedgrut/trainer.py` |
 | `MixtureOfGaussians` | 全场景表征 | **不动**，被 LayeredGaussians 内嵌 | — | `threedgrut/model/model.py` |
-| **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG** | T1.1 ✅ T1.5 ✅ T2.5 | `threedgrut/layers/layered_model.py` |
+| **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG；fused_view + get_layer_mask 接口实现** | T1.1 ✅ T1.5 ✅ T2.5 ✅ (d4841df) | `threedgrut/layers/layered_model.py` |
 | **LayerSpec / registry** | — | **新增 描述层属性 + 5 标准层注册表** | T1.2 ✅ | `layer_spec.py` (8 字段), `registry.py` (STANDARD_LAYERS + specs_from_config) |
 | **road_init.py** | — | **新增 LiDAR-Z KNN 路面 init** | T3.3 | `threedgrut/layers/road_init.py` |
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
@@ -318,9 +318,9 @@ flowchart TB
     DynD["dynamic_deformables<br/>registered, v2.x 占位<br/>is_particle_layer=False"]:::existing
     SkyL["sky_envmap : SkyEnvmap<br/>is_particle_layer=False<br/>cubemap [6,512,512,3] 或 MLP<br/>forward(viewdirs) → rgb<br/>NEW · T5.1 / T5.2"]:::new
 
-    Fused["fused_view(frame_id, train)<br/>→ flat tensors<br/>concat across particle layers<br/>dynamic 层先 transform_means<br/>T1.5 ✅(单层) · T2.5(多层)"]:::new
+    Fused["fused_view(frame_id, train)<br/>→ flat tensors<br/>concat across particle layers<br/>dynamic 层先 transform_means<br/>T1.5 ✅(单层) · T2.5 ✅(多层 d4841df)"]:::done
 
-    LayerMask["get_layer_mask(name)<br/>→ Bool[N_total]<br/>供 LayeredMCMCStrategy<br/>T2.2"]:::new
+    LayerMask["get_layer_mask(name)<br/>→ Bool[N_total]<br/>供 LayeredMCMCStrategy<br/>T2.5 ✅ (d4841df)"]:::done
 
     Ckpt["checkpoint I/O<br/>NRE schema 对齐<br/>ckpt.model.gaussians_nodes.&lt;name&gt;<br/>3 种输入：NRE wrap / 解开 / v1 flat<br/>DONE · T1.1 ✅"]:::done
 
@@ -399,7 +399,7 @@ flowchart TB
 | 文件 | 任务 |
 |---|---|
 | `threedgrut/layers/__init__.py` | T1.1 ✅ / T1.2 ✅ (导出 LayerSpec/registry，lazy-import LayeredGaussians) |
-| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 |
+| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 ✅ (fused_view + get_layer_mask, d4841df) |
 | `threedgrut/layers/layer_spec.py` | T1.1 ✅ / T1.2 ✅ (8 字段) |
 | `threedgrut/layers/registry.py` | T1.2 ✅ |
 | `threedgrut/layers/road_init.py` | T3.3 |
@@ -461,6 +461,10 @@ flowchart TB
 | init_densification_buffer 广播到所有 sub-strategy | T2.4 ✅ | `test_init_densification_buffer_dispatches_to_all_subs` (Mac, 04c9174) |
 | _make_sub_conf 不改变父 conf | T2.4 ✅ (M-2 carry-over) | `test_make_sub_conf_does_not_mutate_parent` (Mac, 04c9174) |
 | Stage 1 测试单独运行不依赖 test_layered_mcmc.py 的 collect order | T2.4 ✅ (I-1 fix) | conftest.py stubs (51540a8); pytest test_layered_gaussians.py 9/9 PASS standalone |
+| 单 bg 模式 fused_view 返回 bg 层 Parameter 本身（identity，非新 tensor） | T2.5 ✅ | `test_fused_view_single_bg_passes_through` (Mac, d4841df) |
+| 两层 fused_view concat 形状和顺序正确 | T2.5 ✅ | `test_fused_view_two_layers_concat_shape` (Mac, d4841df) |
+| get_layer_mask 是完备分区（union=all, intersection=∅, dtype=bool） | T2.5 ✅ | `test_get_layer_mask_partitions_two_layers` (Mac, d4841df) |
+| get_layer_mask 对未知/非粒子层名抛 ValueError("unknown layer") | T2.5 ✅ | `test_get_layer_mask_unknown_name_raises` (Mac, d4841df) |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | Dynamic 粒子随 GT pose 正确移动 | T4.5 | mock 单 track，frame 0/N-1 两端 world 位置匹配 |
