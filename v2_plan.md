@@ -804,7 +804,17 @@ LayerSpec 完整字段 + registry + trainer wiring：
 | hydra compose 默认 | `use_layered_model=False / layers.enabled=['background']` |
 | hydra compose override `[background,road]` | OK |
 
-A800 端 byte-identical resume 待执行（见 plan Verification 节）。
+**A800 端验证（2026-05-18 11:01-11:02，commit f90b791）**：
+
+| 指标 | T1.1 baseline (5a6a5f9) | T1.2/T1.3 after (f90b791) |
+|---|---:|---:|
+| Mean PSNR | 24.123 dB | **24.123 dB** ✅ byte-identical |
+| Mean SSIM | 0.846 | **0.846** |
+| Mean LPIPS | 0.405 | **0.405** |
+| 8 帧 PSNR | 21.55/23.99/22.32/22.69/23.93/24.12/27.17/27.23 | **完全一致** |
+| `pytest test_layer_spec_registry.py + test_layered_gaussians.py` | — | **18/18 PASS** (5.61s) |
+
+命令：`python train.py --config-name apps/ncore_3dgut_mcmc resume=<v1_ckpt> use_layered_model=true layers.enabled=[background] n_iterations=1000 dataset.train.duration_sec=2.0 dataset.camera_ids=[camera_front_wide_120fov]`
 
 ### T1.3 ✅ (2026-05-18, commit ff83028)
 
@@ -813,7 +823,10 @@ v1 flat ckpt resume 在 LayeredGaussians 路径下的错误消息改良：
 - `layers/layered_model.py::init_from_checkpoint` 第 122-129 行：当 ckpt 是 v1 flat 形态但 `self.layers` 不含 "background" 时，错误消息从 "no 'background' layer configured" 改为 "'background' layer is not in conf.layers.enabled (got [...])"，并明确告知"Add 'background' to layers.enabled"
 - 配套 2 个 A800 contract test：`test_v1_ckpt_resume_without_background_layer_raises` (regex match `layers.enabled`) / `test_v1_ckpt_resume_with_background_layer_works`
 
-A800 端验证待跑（rsync + `python train.py resume=<v1_ckpt> use_layered_model=true layers.enabled=[background]`）。
+**A800 端验证（2026-05-18 11:01-11:02，commit f90b791）**：
+- `test_v1_ckpt_resume_without_background_layer_raises` PASS：错误消息正则 match `layers.enabled` ✓
+- `test_v1_ckpt_resume_with_background_layer_works` PASS：v1 ckpt 全部路由进 background 层；road 层保持空 ✓
+- 端到端 v1 ckpt resume：PSNR 24.123 dB byte-identical with T1.1 baseline ✓
 
 ### T1.4 ✅ (2026-05-18, commit 60e1154 + 569819b + ff83028)
 
@@ -832,6 +845,16 @@ A800 端验证待跑（rsync + `python train.py resume=<v1_ckpt> use_layered_mod
 - `threedgrut/tests/test_layered_gaussians.py` 追加 3 个 A800 contract test：`test_v1_ckpt_resume_without_background_layer_raises` / `test_v1_ckpt_resume_with_background_layer_works` / `test_multi_layer_ckpt_roundtrip`
 
 测试矩阵：v1 时代 6 个 contract test + v2 Stage 1 共 9 + 3 = 12 个新测试 = **18 个总测试**（Mac 本地 9 + A800 9）。
+
+**A800 端验证（2026-05-18 11:01，commit f90b791）**：
+
+| 测试集 | 数量 | 结果 | 耗时 |
+|---|---:|:---:|---:|
+| `test_layer_spec_registry.py` | 9 | ✅ 9/9 PASS | < 0.1s |
+| `test_layered_gaussians.py`（含 T1.4 roundtrip） | 9 | ✅ 9/9 PASS | 5.6s |
+| **合计** | **18** | **✅ 18/18 PASS** | **5.6s** |
+
+注：本地 Mac 首次跑 `test_multi_layer_ckpt_roundtrip` 暴露了 `MoG.get_model_parameters()` 需要 optimizer 初始化的约束（commit f90b791 在测试中加 `setup_optimizer_for_test()` 修复）。
 
 **Stage 1 出口**：T1.1 - T1.5 全 ✅；解锁 Stage 2 (LayeredMCMC) 与 Stage 3 (Road) 并行开发窗口。
 
