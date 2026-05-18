@@ -187,6 +187,61 @@ class LayeredGaussians(nn.Module):
             return layers["background"]
         return None
 
+    # ------------------------------------------------------------------ T2.5 fused-view
+    def fused_view(self, frame_id: int | None = None) -> dict[str, torch.Tensor]:
+        """Return concat of 6 per-particle parameters across all particle layers.
+
+        Single-bg-layer mode: short-circuits to direct attribute access (returns
+        the bg layer's Parameters themselves, byte-identical to the v1 path).
+
+        Multi-layer mode: returns `torch.cat(..., dim=0)` across layers in
+        `self.specs` order (particle layers only).
+
+        Note (T4.3 placeholder): dynamic-rigid layers have positions in
+        object-local frame; the per-frame world transform is NOT applied here
+        yet — that lands in T4.3 by reading `frame_id`. For T2.5 the parameter
+        is accepted but unused.
+        """
+        bg = self._single_bg_layer()
+        if bg is not None:
+            return {n: getattr(bg, n) for n in _FORWARD_PARAM_NAMES}
+
+        pieces: dict[str, list[torch.Tensor]] = {n: [] for n in _FORWARD_PARAM_NAMES}
+        for spec in self.specs:
+            if not spec.is_particle_layer:
+                continue
+            layer = self.layers[spec.name]
+            for n in _FORWARD_PARAM_NAMES:
+                pieces[n].append(getattr(layer, n))
+        return {n: torch.cat(pieces[n], dim=0) for n in _FORWARD_PARAM_NAMES}
+
+    def get_layer_mask(self, name: str) -> torch.Tensor:
+        """Return Bool mask of shape [N_total] selecting particles of layer `name`.
+
+        Mask layout follows the same particle-layer concat order as `fused_view`
+        (specs order, non-particle layers skipped). Used by per-layer loss /
+        region gating downstream.
+        """
+        particle_layers = [s for s in self.specs if s.is_particle_layer]
+        if name not in {s.name for s in particle_layers}:
+            raise ValueError(
+                f"unknown layer '{name}' (or it is a non-particle layer); "
+                f"particle layers: {[s.name for s in particle_layers]}"
+            )
+
+        total = 0
+        target_start, target_end = -1, -1
+        for spec in particle_layers:
+            n_local = self.layers[spec.name].num_gaussians
+            if spec.name == name:
+                target_start, target_end = total, total + n_local
+            total += n_local
+
+        device = self.layers[name].positions.device
+        mask = torch.zeros(total, dtype=torch.bool, device=device)
+        mask[target_start:target_end] = True
+        return mask
+
     def __getattr__(self, name):
         # nn.Module.__getattr__ is only invoked when normal attribute lookup
         # fails (so layers/specs/conf/scene_extent etc. handled by base class

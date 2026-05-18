@@ -239,3 +239,87 @@ def test_multi_layer_ckpt_roundtrip(real_conf):
                 f"Roundtrip mismatch at {layer_name}.{attr}: "
                 f"shapes {t_a.shape} vs {t_b.shape}"
             )
+
+
+# --- T2.5: fused_view / get_layer_mask ---
+def test_fused_view_single_bg_passes_through(real_conf):
+    """T2.5: single-bg mode → fused_view returns the bg layer's Parameters
+    (identity check, not a new concat tensor — this is the byte-identical fast path).
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    v1_ckpt = _v1_shape_dict(N=50, conf=real_conf)
+    model.init_from_checkpoint(v1_ckpt, setup_optimizer=False)
+
+    fused = model.fused_view()
+    for attr in ["positions", "rotation", "scale", "density",
+                 "features_albedo", "features_specular"]:
+        assert fused[attr] is getattr(model.layers["background"], attr), (
+            f"single-bg fused_view must short-circuit to bg layer's {attr}"
+        )
+
+
+def test_fused_view_two_layers_concat_shape(real_conf):
+    """T2.5: two-layer fused_view → concat in specs order; shape and values check."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_from_checkpoint(
+        {"gaussians_nodes": {
+            "background": _v1_shape_dict(N=100, conf=real_conf),
+            "road":       _v1_shape_dict(N=50,  conf=real_conf),
+        }},
+        setup_optimizer=False,
+    )
+
+    fused = model.fused_view()
+    assert fused["positions"].shape == (150, 3)
+    assert fused["density"].shape == (150, 1)
+    # specs order: first 100 = background, next 50 = road
+    assert torch.equal(fused["positions"][:100], model.layers["background"].positions)
+    assert torch.equal(fused["positions"][100:], model.layers["road"].positions)
+
+
+def test_get_layer_mask_partitions_two_layers(real_conf):
+    """T2.5: get_layer_mask returns a Bool[N_total] mask partitioning the two layers."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_from_checkpoint(
+        {"gaussians_nodes": {
+            "background": _v1_shape_dict(N=100, conf=real_conf),
+            "road":       _v1_shape_dict(N=50,  conf=real_conf),
+        }},
+        setup_optimizer=False,
+    )
+
+    bg_mask = model.get_layer_mask("background")
+    road_mask = model.get_layer_mask("road")
+    assert bg_mask.shape == (150,)
+    assert road_mask.shape == (150,)
+    assert bg_mask.dtype == torch.bool
+    assert bg_mask[:100].all().item() and not bg_mask[100:].any().item()
+    assert (not road_mask[:100].any().item()) and road_mask[100:].all().item()
+    # partition: union covers all; intersection empty
+    assert (bg_mask | road_mask).all().item()
+    assert not (bg_mask & road_mask).any().item()
+
+
+def test_get_layer_mask_unknown_name_raises(real_conf):
+    """T2.5: unknown / non-particle layer name → ValueError with helpful message."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    with pytest.raises(ValueError, match="unknown layer"):
+        model.get_layer_mask("nonexistent")
