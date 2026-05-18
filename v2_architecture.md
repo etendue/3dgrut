@@ -89,7 +89,7 @@ flowchart TD
     Fused["fused_view(frame_id)<br/>concat all layers → flat<br/>NEW · T2.5"]:::new
 
     %% Strategy
-    Strategy["LayeredMCMCStrategy<br/>per-layer cap + scoped<br/>relocate / add / perturb<br/>NEW · T2.2 (基于 T2.1 抽基类)"]:::new
+    Strategy["LayeredMCMCStrategy<br/>per-layer cap + scoped<br/>relocate / add / perturb<br/>DONE · T2.2 ✅ (7ad883b)"]:::done
 
     %% Renderer
     Renderer["Renderer (3DGRT / 3DGUT)<br/>flat tensor in → RGB<br/>不动"]:::existing
@@ -134,7 +134,7 @@ flowchart TD
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
 | **dynamic_mask.py** | — | **新增 cuboid → 像素 mask 投影** | T4.4 | `threedgrut/layers/dynamic_mask.py` |
 | `MCMCStrategy` | 全局 relocate/add | 抽基类 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ | `threedgrut/strategy/mcmc.py` |
-| **LayeredMCMCStrategy** | — | **新增 per-layer cap + relocate scoping** | T2.2 / T2.3 | `threedgrut/strategy/layered_mcmc.py` |
+| **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b)** | T2.2 ✅ / T2.3 | `threedgrut/strategy/layered_mcmc.py` |
 | **SkyEnvmap** | — | **新增 cubemap (nvdiffrast) 或 MLP** | T5.1 / T5.2 | `threedgrut/correction/sky_envmap.py` |
 | **ExposureModel** | — | **新增 per-camera affine** | T6.1 | `threedgrut/correction/exposure.py` |
 | `datasetNcore.py` | RGB + ego_mask | 加 sky/road/dyn mask + road LiDAR + tracks | T3.1 / T3.2 / T4.1 | `threedgrut/datasets/datasetNcore.py` |
@@ -361,33 +361,33 @@ flowchart LR
 
 ### 5.2 v2 Layered MCMC（T2.1 / T2.2 / T2.3）
 
+> **实际实现备注（T2.2）**：原计划采用"继承 MCMCStrategy 并 override `_select_indices` / `get_layer_mask`"的方案；**实际采用 sub-strategy 数组方案**：`LayeredMCMCStrategy` 持有 `sub_strategies: dict[str, MCMCStrategy]`，每个 is_particle_layer=True 的层各一个独立 `MCMCStrategy` 实例，`sub.model` 直接指向 `LayeredGaussians.layers[name]`（真实 MoG，非 wrapper）。`_post_optimizer_step` 串行遍历 subs，_get_add_cap 由 sub_conf 中的 `max_n_gaussians` 覆写实现。此方案更轻量：不需要在操作内部切换 layer 上下文，零跨层迁移自然保证，单 bg 模式 byte-identical with v1。
+
 ```mermaid
 flowchart TB
-    Step["post_optimizer_step()<br/>MOD · T2.1 + T2.2"]:::mod
-    Hook["_get_add_cap() → int<br/>钩子方法<br/>DONE · T2.1 ✅ (62fc509)"]:::done
+    Step["LayeredMCMCStrategy<br/>_post_optimizer_step()<br/>DONE · T2.1 + T2.2 ✅ (7ad883b)"]:::done
+    Hook["_get_add_cap() → int<br/>钩子方法<br/>sub_conf.strategy.add.max_n_gaussians<br/>DONE · T2.1 ✅ (62fc509)"]:::done
 
-    subgraph Loop["for spec in layer_specs (NEW · T2.2)"]
-        Check["is_particle_layer ?"]:::new
-        Scope["scope = model.get_layer_mask(spec.name)<br/>cap = spec.max_n_particles"]:::new
-        ReLoc["super().relocate_gaussians(scope=scope)"]:::new
-        AddL["super().add_new_gaussians(scope=scope,<br/>budget=cap - scope.sum())"]:::new
-        PertL["super().perturb_gaussians(scope=scope)"]:::new
+    subgraph Loop["for name, sub in sub_strategies.items() (T2.2 ✅)"]
+        SubMCMC["sub: MCMCStrategy<br/>sub.model = layers[name]<br/>sub._post_optimizer_step()"]:::done
+        ReLoc["sub.relocate_gaussians()<br/>within layer"]:::done
+        AddL["sub.add_new_gaussians()<br/>cap = spec.max_n_particles"]:::done
+        PertL["sub.perturb_gaussians()<br/>within layer"]:::done
     end
 
-    Inv["不变量验证<br/>① 训练全程层归属不变 (无跨层迁移)<br/>② Σ scope.sum() = num_gaussians<br/>③ 单层 (只有 bg) 行为 ≡ v1 MCMCStrategy<br/>NEW · T2.4 单测"]:::new
+    Inv["不变量验证 (T2.2 ✅)<br/>① sub.model is model.layers[name]<br/>② sub._get_add_cap() == spec.max_n_particles<br/>③ 单层 (只有 bg) 行为 ≡ v1 MCMCStrategy<br/>Mac 4/4 测试 PASS (7ad883b)"]:::done
 
     Step --> Hook
     Step --> Loop
-    Check -- yes --> Scope
-    Check -- no --> Loop
-    Scope --> ReLoc
-    Scope --> AddL
-    Scope --> PertL
+    SubMCMC --> ReLoc
+    SubMCMC --> AddL
+    SubMCMC --> PertL
     Loop --> Inv
 
     classDef existing fill:#f5f5f5,stroke:#999,color:#333
     classDef new      fill:#d4f4dd,stroke:#1a7f37,stroke-width:3px,color:#0d3320
     classDef mod      fill:#fff3cd,stroke:#bf8700,stroke-width:3px,color:#7a4d00
+    classDef done     fill:#cfe8ff,stroke:#0969da,stroke-width:3px,color:#0a3069
 ```
 
 ---
@@ -405,7 +405,7 @@ flowchart TB
 | `threedgrut/layers/road_init.py` | T3.3 |
 | `threedgrut/layers/dynamic_rigid_init.py` | T4.2 |
 | `threedgrut/layers/dynamic_mask.py` | T4.4 |
-| `threedgrut/strategy/layered_mcmc.py` | T2.2 |
+| `threedgrut/strategy/layered_mcmc.py` | T2.2 ✅ (7ad883b) |
 | `threedgrut/correction/__init__.py` | T5.2 / T6.1 |
 | `threedgrut/correction/sky_envmap.py` | T5.2 |
 | `threedgrut/correction/exposure.py` | T6.1 |
@@ -413,7 +413,7 @@ flowchart TB
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T7.1 |
 | `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ (+3 contract test) |
 | `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (新建，9 测试，Mac 本地可跑无 torch 依赖) |
-| `threedgrut/tests/test_layered_mcmc.py` | T2.4 |
+| `threedgrut/tests/test_layered_mcmc.py` | T2.1 ✅ (62fc509) · T2.2 ✅ (7ad883b, 4 tests) · T2.4 (remaining) |
 | `threedgrut/tests/test_road_init.py` | T3.5 |
 | `threedgrut/tests/test_dynamic_rigid_init.py` | T4.5 |
 | `threedgrut/tests/test_sky_envmap.py` | T5.4 |
@@ -425,7 +425,7 @@ flowchart TB
 | 文件 | 改动点 | 任务 |
 |---|---|---|
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
-| `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；后续：layered loss / sky blend / exposure / per-frame pose / strategy factory | T1.2 ✅ / T1.5 ✅ / T2.2 / T3.4 / T4.3 / T5.3 / T6.2 |
+| `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case（T2.2 ✅）；后续：layered loss / sky blend / exposure / per-frame pose | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T3.4 / T4.3 / T5.3 / T6.2 |
 | `configs/base_gs.yaml` | 加 `use_layered_model: false` + `layers.enabled: [background]` 默认 | T1.2 ✅ |
 | `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ |
 | `threedgrut/datasets/datasetNcore.py` | aux mask + road_lidar + tracks | T3.1 / T3.2 / T4.1 |
@@ -453,7 +453,9 @@ flowchart TB
 | v1 ckpt resume 错误消息引导用户到 `layers.enabled` | T1.3 ✅ | `test_v1_ckpt_resume_without_background_layer_raises`（commit ff83028，A800 跑） |
 | 多层 ckpt save→load 字节一致 | T1.4 ✅ | `test_multi_layer_ckpt_roundtrip`（commit ff83028，A800 跑） |
 | `MCMCStrategy._get_add_cap()` 默认等于 conf 值 | T2.1 ✅ | `test_mcmc_get_add_cap_defaults_to_conf` (Mac, 62fc509) |
-| LayeredMCMC 单层时 ≡ v1 MCMCStrategy | T2.4 | unit test `test_falls_back_to_global_when_single_layer` |
+| LayeredMCMC sub_strategies 仅含粒子层 | T2.2 ✅ | `test_layered_mcmc_holds_sub_strategy_per_particle_layer` (Mac, 7ad883b) |
+| LayeredMCMC 每层 cap = spec.max_n_particles | T2.2 ✅ | `test_layered_mcmc_sub_uses_per_layer_cap` (Mac, 7ad883b) |
+| LayeredMCMC 单层时 ≡ v1 MCMCStrategy (sub.model is layer MoG) | T2.2 ✅ | `test_layered_mcmc_single_bg_equivalent_to_v1` (Mac, 7ad883b) |
 | 训练全程无跨层迁移 | T2.4 | relocate 1000 步后所有粒子的 layer 归属不变 |
 | 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
 | Dynamic 粒子随 GT pose 正确移动 | T4.5 | mock 单 track，frame 0/N-1 两端 world 位置匹配 |

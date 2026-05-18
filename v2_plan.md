@@ -39,7 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T2.2 LayeredMCMCStrategy 子类]
     [T2.3 configs/strategy/layered_mcmc.yaml]
     [T2.4 单测 test_layered_mcmc]
     [T2.5 LayeredGaussians.fused_view 多层路径]
@@ -76,17 +75,18 @@ kanban
     [T1.4 单测 test_layered_gaussians 扩展 ✅]
     [T1.5 Trainer 集成 use_layered_model flag ✅]
     [T2.1 MCMCStrategy 抽 _get_add_cap 钩子 ✅]
+    [T2.2 LayeredMCMCStrategy 子类 ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 26 | T2.2+ / T3.x / T4.x / T5.x / T6.x / T7.x |
+| Backlog ⬜ | 25 | T2.3+ / T3.x / T4.x / T5.x / T6.x / T7.x |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 7 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1 |
+| Done ✅ | 8 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1, T2.2 |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -101,7 +101,7 @@ kanban
 | **T1.4** | 1 | 单测 test_layered_gaussians.py 扩展 | 1 | ✅ | NEW `test_layer_spec_registry.py` (9 测试) + 3 个 A800 contract test (60e1154 / 569819b / ff83028) |
 | **T1.5** | 1 | Trainer 集成 + use_layered_model flag | 0.5 | ✅ | MOD `trainer.py` (5a6a5f9 / 8a29fc0) |
 | **T2.1** | 2 | MCMCStrategy 抽 `_get_add_cap()` 钩子 | 0.5 | ✅ | MOD `strategy/mcmc.py` · NEW `tests/test_layered_mcmc.py` (62fc509) |
-| **T2.2** | 2 | LayeredMCMCStrategy 子类 | 1 | ⬜ | NEW `strategy/layered_mcmc.py` |
+| **T2.2** | 2 | LayeredMCMCStrategy 子类 | 1 | ✅ | NEW `strategy/layered_mcmc.py` · MOD `trainer.py` · MOD `tests/test_layered_mcmc.py` (7ad883b) |
 | **T2.3** | 2 | configs/strategy/layered_mcmc.yaml | 0.5 | ⬜ | NEW yaml |
 | **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ⬜ | NEW tests |
 | **T2.5** | 2 | LayeredGaussians.fused_view(frame_id) 多层路径 | 1 | ⬜ | MOD `layered_model.py` (T1.5 单层桥之外的多层 forward) |
@@ -135,7 +135,7 @@ kanban
 |---|---|---:|---|
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
-| 2 | Layered MCMC | 1/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) |
+| 2 | Layered MCMC | 2/5 🟡 | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) |
 | 3 | Road 层 | 0/5 ⬜ | — |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
@@ -157,7 +157,7 @@ flowchart LR
 
     %% Stage 2
     T21["T2.1 ✅<br/>_get_add_cap 钩子"]:::done
-    T22["T2.2<br/>LayeredMCMC"]:::todo
+    T22["T2.2 ✅<br/>LayeredMCMC"]:::done
     T23["T2.3<br/>yaml 配置"]:::todo
     T24["T2.4<br/>单测"]:::todo
     T25["T2.5<br/>多层 fused_view"]:::todo
@@ -877,4 +877,22 @@ MCMCStrategy 抽 `_get_add_cap()` 钩子：
 
 ---
 
-> 文档结束。当前应优先处理：**T2.2 / T3.1 并行**（T2.x 与 T3.x 之间无强依赖，dataloader 改完即可同时推进 MCMC 重构）。
+### T2.2 ✅ (2026-05-18, commit 7ad883b)
+
+LayeredMCMCStrategy sub-strategy 数组实现：
+
+- `threedgrut/strategy/layered_mcmc.py`（新建）：`LayeredMCMCStrategy(BaseStrategy)` 持有 `sub_strategies: dict[str, MCMCStrategy]`，每个 is_particle_layer=True 的层各一个 sub。`_make_sub_conf` 用 `OmegaConf.to_container(resolve=False)` + `OmegaConf.create` 深拷贝 conf 并覆盖 `strategy.add.max_n_gaussians = spec.max_n_particles`（注意必须 `resolve=False`，因为 conf 含 `int_list` 自定义 resolver，在 Hydra context 外不可 resolve）。`_post_optimizer_step` 遍历 subs，`suspend()` 向下传播。
+- `threedgrut/trainer.py`：`init_densification_and_pruning_strategy` 新增 `case "LayeredMCMCStrategy"` branch，assert LayeredGaussians + 调 `specs_from_config(conf)` + 构造 `LayeredMCMCStrategy`。
+- `threedgrut/tests/test_layered_mcmc.py`：扩展 `_install_stubs()` 以支持真实 `MixtureOfGaussians` 实例化（不再 stub threedgrut.model.model）；新增正确的 stubs（datasets package-level stub + datasets.utils direct load + DEFAULT_DEVICE=cpu + load_mcmc_plugin no-op + MCMCStrategy.__init__ CUDA-bypass patch）；追加 3 个 T2.2 合约测试。附带修复：tqdm/sklearn stubs 从 MagicMock 升级为带 valid `__spec__` 的 ModuleType，解决 torch._dynamo.trace_rules 的 `__spec__ is not set` 跨文件污染问题（Stage 1 全测试从联合运行时 2 fail → 25/25 pass）。
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_layered_mcmc.py` | **4/4 PASS** (Mac CPU, 0.45s) |
+| `pytest threedgrut/tests/` (全套) | **25/25 PASS** (Mac CPU, 0.81s) |
+| A800 byte-identical 回归 | **Deferred** (controller batch, Stage 2 末尾) |
+
+**实现选择备注**：原 plan T2.2 描述的是继承 MCMCStrategy 并 override `_select_indices` 的方案；实际采用 sub-strategy 数组方案（持有独立 MCMCStrategy 实例，每个 sub.model 指向对应层 MoG），更轻量，不需要在 MCMC 操作内部动态切换 layer 上下文，且 _post_optimizer_step 串行遍历自然实现"零跨层迁移"。
+
+---
+
+> 文档结束。当前应优先处理：**T2.3 / T3.1 并行**（T2.3 是 yaml 配置，T3.1 是数据加载器，二者无依赖）。
