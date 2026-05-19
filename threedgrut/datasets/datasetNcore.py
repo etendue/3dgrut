@@ -33,11 +33,16 @@ from ncore.data import PointCloudsSourceProtocol
 from ncore.impl.common.transformations import HalfClosedInterval
 from scipy import ndimage
 
+from threedgrut.datasets.ncore_semantic import (
+    DYNAMIC_CLASS_IDS,
+    ROAD_CLASS_IDS,
+)
 from threedgrut.datasets.protocols import (
     Batch,
     BoundedMultiViewDataset,
     DatasetVisualization,
 )
+from threedgrut.datasets.tracks_loader import load_tracks_from_manifest  # T4.1.b re-export
 from threedgrut.datasets.utils import (
     PointCloud,
     create_camera_visualization,
@@ -47,6 +52,13 @@ from threedgrut.datasets.utils import (
 )
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import to_torch
+
+# Generic data names exposed by NCore lidar sources after `nre-tools
+# ncore-aux-data --lidar-seg-camvis` runs. The semantic label is per-point
+# Cityscapes-style class id (matched against ROAD_CLASS_IDS / DYNAMIC_CLASS_IDS
+# in ncore_semantic.py). Subject to A800 verification once lidar-seg-camvis
+# completes for the current clip.
+_LIDAR_SEMANTIC_LABEL_NAME = "semantic_label"
 
 
 class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVisualization):
@@ -83,6 +95,13 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         simplejpeg_fastupsample: bool = False,  # ~4-5% faster chroma upsampling, minor quality loss
         # Lidar point cloud color data name (if available)
         lidar_color_generic_data_name: str = "rgb",
+        # T3.1.b / T3.2.b: aux mask + semantic LiDAR support
+        # When True, auto-discovers aux.*.zarr.itar in the clip directory and
+        # appends them to SequenceComponentGroupsReader so sseg / depth /
+        # lidar-sseg become available via camera_labels_ids /
+        # point_clouds_source.get_pc_generic_data(). Required for v2 Stage 3/4.
+        # Defaults to False so v1 / Stage 1-2 dataloader behaviour is byte-identical.
+        load_aux_masks: bool = False,
     ):
         super().__init__()
 
@@ -135,6 +154,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self.init_lidar_ids: list[str] | None = lidar_ids
 
         self.open_consolidated: bool = open_consolidated
+        self.load_aux_masks: bool = load_aux_masks
 
         self.split: str = split
 
@@ -235,9 +255,42 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
 
         # Construct V4 sequence loader — SequenceComponentGroupsReader handles
         # expansion of the meta JSON file to component store paths internally.
+        #
+        # T3.1.b: scene_manifest.component_stores only lists the 9 raw zarr.itar
+        # files (cameras + lidar + ncore4). aux.*.zarr.itar produced by
+        # nre-tools live in the same directory but are NOT in component_stores,
+        # so SequenceLoaderV4 doesn't auto-discover them. Auto-append the aux
+        # store paths to the reader when load_aux_masks=True. This makes:
+        #   - sseg / depth (camera labels) → loader.camera_labels_ids /
+        #     loader.get_camera_labels(<id>)
+        #   - lidar-sseg / lidar-camvis (lidar generic data) → point cloud
+        #     source.get_pc_generic_data(<idx>, <name>)
+        reader_paths: list = [self.sequence_meta_file_path]
+        if self.load_aux_masks:
+            clip_dir = self.sequence_meta_file_path.parent
+            # Order: sseg first, then lidar-* (camera_labels resolution order
+            # is alphabetical-ish but doesn't matter for correctness). Stage 3/4
+            # uses sseg + lidar-sseg + lidar-camvis; depth + dinov2 are not used
+            # in v2 Stage 3-6, but we include them if present for forward compat.
+            for pattern in (
+                "*.aux.sseg.zarr.itar",
+                "*.aux.lidar-sseg.zarr.itar",
+                "*.aux.lidar-camvis.zarr.itar",
+                "*.aux.depth.zarr.itar",
+                "*.aux.dinov2.zarr.itar",
+            ):
+                for aux_path in sorted(clip_dir.glob(pattern)):
+                    reader_paths.append(aux_path)
+            n_aux = len(reader_paths) - 1
+            logger.info(
+                f"NCoreDataset[{self.split}] load_aux_masks=True → "
+                f"appended {n_aux} aux store(s) to reader: "
+                f"{[p.name for p in reader_paths[1:]]}"
+            )
+
         sequence_loader = self.sequence_loaders[sequence_id] = ncore.data.v4.SequenceLoaderV4(
             ncore.data.v4.SequenceComponentGroupsReader(
-                [self.sequence_meta_file_path], open_consolidated=self.open_consolidated
+                reader_paths, open_consolidated=self.open_consolidated
             ),
             poses_component_group_name=self.poses_component_group,
             intrinsics_component_group_name=self.intrinsics_component_group,
@@ -829,6 +882,17 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             if rgb is not None:
                 batch_dict["rgb"] = rgb
 
+            # T3.1.b TODO(A800-pending): when load_aux_masks=True, read per-frame
+            # sseg via loader.get_camera_labels(<id>).get_label(camera_frame_index)
+            # and populate batch_dict with:
+            #   sky_mask  = (sseg == SKY_CLASS_ID).float()                  # [H, W]
+            #   road_mask = isin(sseg, ROAD_CLASS_IDS).float()
+            #   dyn_mask_sseg = isin(sseg, DYNAMIC_CLASS_IDS).float()
+            # Then get_gpu_batch_with_intrinsics wraps them into
+            # Batch.image_infos. The exact reader API name (get_label vs read_at
+            # vs query) needs A800 verification once nre-tools aux pipeline
+            # finishes for this clip — see plan §T3a notes.
+
             return batch_dict
 
         else:
@@ -1013,6 +1077,91 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     color=to_torch(color, device="cpu") if color is not None else None,
                     device="cpu",
                 )
+
+    # ---- T3.2.b: per-semantic-class LiDAR aggregators (v2 Stage 3 / 4 init) ----
+    def _get_semantic_lidar_points(
+        self, class_ids: frozenset[int],
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Aggregate world-frame LiDAR points whose per-point semantic label
+        is in ``class_ids``.
+
+        Requires ``load_aux_masks=True`` (which appends the lidar-sseg aux
+        store to the sequence reader, exposing ``semantic_label`` as a
+        per-point generic data field).
+
+        Returns:
+            xyz:   ``[N, 3]`` world-frame points (CPU tensor).
+            color: ``[N, 3]`` per-point RGB or None when not stored.
+        """
+        if not self.load_aux_masks:
+            raise RuntimeError(
+                "NCoreDataset._get_semantic_lidar_points requires "
+                "load_aux_masks=True; pass it via dataset.load_aux_masks=true "
+                "(Stage 3a aux generation must complete first)."
+            )
+        self._init_worker()
+        sequence_point_clouds_sources = self.sequence_point_clouds_sources[self.sequence_id]
+        sequence_point_clouds_source_ids = self.sequence_point_clouds_source_ids[self.sequence_id]
+        if not sequence_point_clouds_source_ids:
+            raise RuntimeError("NCoreDataset: no point cloud source available")
+
+        time_range = self.time_range_us
+        pose_graph = self.sequence_loaders[self.sequence_id].pose_graph
+        class_tensor = torch.tensor(sorted(class_ids), dtype=torch.long)
+
+        xyz_list: list[torch.Tensor] = []
+        color_list: list[torch.Tensor] = []
+        for source_id in sequence_point_clouds_source_ids:
+            source = sequence_point_clouds_sources[source_id]
+            cover = time_range.cover_range(source.pc_timestamps_us)
+            for pc_idx in cover:
+                if not source.has_pc_generic_data(pc_idx, _LIDAR_SEMANTIC_LABEL_NAME):
+                    continue  # lidar-sseg aux missing for this frame; skip
+
+                pc = source.get_pc(pc_idx)
+                pc_world = pc.transform("world", pc.reference_frame_timestamp_us, pose_graph)
+                xyz_w = pc_world.xyz
+                xyz_wg = (
+                    self.T_world_to_world_global[:3, :3] @ xyz_w.T
+                    + self.T_world_to_world_global[:3, 3:4]
+                ).T
+
+                labels_np = source.get_pc_generic_data(pc_idx, _LIDAR_SEMANTIC_LABEL_NAME)
+                labels = torch.from_numpy(np.asarray(labels_np)).long()
+                mask = torch.isin(labels, class_tensor).numpy()
+                if not mask.any():
+                    continue
+
+                xyz_list.append(to_torch(xyz_wg[mask], device="cpu"))
+
+                # Optional RGB color (T3.3 road_init currently uses neutral
+                # gray; T4.2 dyn_init could use it for albedo init).
+                color = None
+                if pc.has_attribute(self.lidar_color_generic_data_name):
+                    color = pc.get_attribute(self.lidar_color_generic_data_name)
+                elif source.has_pc_generic_data(pc_idx, self.lidar_color_generic_data_name):
+                    color = source.get_pc_generic_data(pc_idx, self.lidar_color_generic_data_name)
+                if color is not None:
+                    color_list.append(to_torch(np.asarray(color)[mask], device="cpu"))
+
+        if not xyz_list:
+            return torch.zeros(0, 3, dtype=torch.float32), None
+        xyz = torch.cat(xyz_list, dim=0).to(torch.float32)
+        rgb = torch.cat(color_list, dim=0).to(torch.float32) if color_list else None
+        return xyz, rgb
+
+    def get_road_lidar_points(self) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """T3.2.b: road LiDAR points (class ∈ ROAD_CLASS_IDS) for road_init.
+
+        Used by trainer.init_model when 'road' is in layers.enabled to seed
+        ``init_road_layer(road_pts, ego_trajectory)``.
+        """
+        return self._get_semantic_lidar_points(ROAD_CLASS_IDS)
+
+    def get_dynamic_lidar_points(self) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """T3.2.b / T4.2.b: dynamic LiDAR points (class ∈ DYNAMIC_CLASS_IDS)
+        for dynamic_rigid_init cuboid filtering."""
+        return self._get_semantic_lidar_points(DYNAMIC_CLASS_IDS)
 
     # ---- Framework protocol methods (BoundedMultiViewDataset, DatasetVisualization) ----
 

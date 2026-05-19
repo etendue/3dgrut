@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Protocol, runtime_checkable
 
 import numpy as np
 import torch
@@ -40,6 +40,11 @@ class Batch:
     pixel_coords: Optional[torch.Tensor] = None  # [B, H, W, 2] (x, y) with +0.5 center offset
     # Exposure prior from EXIF metadata (mean-normalized log2 exposure [1], None if unavailable)
     exposure: Optional[torch.Tensor] = None
+    # T3.1.b: per-frame aux mask dict, populated only when dataset has
+    # ``load_aux_masks=True``. Standard keys: sky_mask / road_mask /
+    # dyn_mask_sseg / dyn_mask_cuboid / valid_pixel_mask. Each tensor is
+    # [B, H, W] float in {0.0, 1.0}, lazily moved to GPU by the dataset.
+    image_infos: Optional[Dict[str, torch.Tensor]] = None
 
     def __post_init__(self):
         batch_size = self.T_to_world.shape[0]
