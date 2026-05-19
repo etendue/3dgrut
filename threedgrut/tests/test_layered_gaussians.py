@@ -425,3 +425,167 @@ def test_optimizer_wrapper_steps_all_layers(real_conf, monkeypatch):
     # param_groups aggregation: sum of per-layer groups
     expected = sum(len(l.optimizer.param_groups) for l in model.layers.values())
     assert len(view.param_groups) == expected
+
+
+# --- T4.0: tracks buffer ---
+def test_layered_gaussians_holds_tracks_buffers(real_conf):
+    """T4.0: tracks kwarg → tracks_poses / tracks_active dicts populated AND
+    PyTorch buffers registered for each track (so .to(device) / state_dict work)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000),
+    ]
+    tracks = {
+        "alice": {"poses": torch.eye(4).expand(20, 4, 4).clone(),
+                  "active": torch.ones(20, dtype=torch.bool)},
+        "bob":   {"poses": torch.eye(4).expand(20, 4, 4).clone(),
+                  "active": torch.cat([torch.zeros(5, dtype=torch.bool),
+                                       torch.ones(15, dtype=torch.bool)])},
+    }
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
+                             tracks=tracks)
+
+    # Mirror dicts populated
+    assert set(model.tracks_poses.keys()) == {"alice", "bob"}
+    assert model.tracks_poses["alice"].shape == (20, 4, 4)
+    assert model.tracks_active["bob"].sum().item() == 15
+
+    # Buffers registered (named_buffers includes them)
+    buf_names = dict(model.named_buffers())
+    assert "_track_pose_alice" in buf_names
+    assert "_track_pose_bob" in buf_names
+    assert "_track_active_alice" in buf_names
+    assert buf_names["_track_pose_alice"].shape == (20, 4, 4)
+    # mirror dict and buffer point to the same tensor (no copy)
+    assert model.tracks_poses["alice"] is buf_names["_track_pose_alice"]
+
+
+def test_layered_gaussians_no_tracks_default(real_conf):
+    """T4.0: when tracks=None (default), tracks_poses/active are empty dicts;
+    no buffer pollution."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    assert model.tracks_poses == {}
+    assert model.tracks_active == {}
+    # No _track_pose_* / _track_active_* buffers
+    buf_names = list(dict(model.named_buffers()).keys())
+    assert not any(n.startswith("_track_pose_") for n in buf_names)
+    assert not any(n.startswith("_track_active_") for n in buf_names)
+
+
+# --- T4.3: _transform_means + fused_view dynamic 分支 ---
+def _make_dyn_model(real_conf, tracks: dict, n_pts_per_track=10):
+    """Helper: build bg+dyn LayeredGaussians, init dyn with given tracks."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000,
+                  scale_prior=(0.05, 0.05, 0.05)),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
+                             tracks=tracks)
+    # bg init
+    model.init_layer_from_points("background", torch.randn(5, 3),
+                                 setup_optimizer=False)
+    # dyn init: concat per-track points + track_ids
+    track_names = sorted(tracks.keys())
+    all_pts = []
+    all_ids = []
+    for tid in track_names:
+        pts = torch.zeros(n_pts_per_track, 3)  # all at local origin for simplicity
+        all_pts.append(pts)
+        all_ids.append(torch.full((n_pts_per_track,),
+                                  track_names.index(tid), dtype=torch.long))
+    model.init_layer_from_points("dynamic_rigids",
+                                 torch.cat(all_pts),
+                                 track_ids=torch.cat(all_ids),
+                                 setup_optimizer=False)
+    return model
+
+
+def test_transform_means_identity_pose(real_conf):
+    """T4.3: identity pose → world == local (no change)."""
+    tracks = {"v0": {
+        "poses": torch.eye(4).expand(5, 4, 4).clone(),
+        "active": torch.ones(5, dtype=torch.bool),
+    }}
+    model = _make_dyn_model(real_conf, tracks, n_pts_per_track=3)
+    local = model.layers["dynamic_rigids"].positions
+    world = model._transform_means(
+        local, model.layers["dynamic_rigids"].track_ids, frame_id=2,
+    )
+    assert torch.allclose(world, local.to(world.dtype))
+
+
+def test_transform_means_single_track_translation(real_conf):
+    """T4.3: pose = identity rot + (1, 2, 3) translation → world = local + t."""
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([1.0, 2.0, 3.0])
+    tracks = {"v0": {
+        "poses": pose.expand(5, 4, 4).clone(),
+        "active": torch.ones(5, dtype=torch.bool),
+    }}
+    model = _make_dyn_model(real_conf, tracks, n_pts_per_track=4)
+    local = model.layers["dynamic_rigids"].positions  # all zeros
+    world = model._transform_means(
+        local, model.layers["dynamic_rigids"].track_ids, frame_id=2,
+    )
+    expected = torch.tensor([1.0, 2.0, 3.0]).expand(4, 3)
+    assert torch.allclose(world, expected.to(world.dtype))
+
+
+def test_transform_means_multi_track_routing(real_conf):
+    """T4.3: 2 tracks with different poses → particles routed correctly."""
+    pose_a = torch.eye(4); pose_a[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
+    pose_b = torch.eye(4); pose_b[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
+    tracks = {
+        "alice": {"poses": pose_a.expand(5, 4, 4).clone(),
+                  "active": torch.ones(5, dtype=torch.bool)},
+        "bob":   {"poses": pose_b.expand(5, 4, 4).clone(),
+                  "active": torch.ones(5, dtype=torch.bool)},
+    }
+    model = _make_dyn_model(real_conf, tracks, n_pts_per_track=3)
+    # _make_dyn_model assigns track_ids 0 to alice (sorted), 1 to bob
+    local = model.layers["dynamic_rigids"].positions  # 6 zero pts (3 per track)
+    world = model._transform_means(
+        local, model.layers["dynamic_rigids"].track_ids, frame_id=0,
+    )
+    # First 3 → alice translation, last 3 → bob translation
+    assert torch.allclose(world[:3], torch.tensor([10.0, 0.0, 0.0]).expand(3, 3).to(world.dtype))
+    assert torch.allclose(world[3:], torch.tensor([0.0, 20.0, 0.0]).expand(3, 3).to(world.dtype))
+
+
+def test_fused_view_dynamic_layer_applies_transform(real_conf):
+    """T4.3: fused_view(frame_id=N) on bg+dyn → dyn positions transformed to world."""
+    pose = torch.eye(4); pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
+    tracks = {"v0": {
+        "poses": pose.expand(5, 4, 4).clone(),
+        "active": torch.ones(5, dtype=torch.bool),
+    }}
+    model = _make_dyn_model(real_conf, tracks, n_pts_per_track=2)
+    fused = model.fused_view(frame_id=0)
+    # bg: 5 pts (random); dyn: 2 pts (origin → transformed to (7,8,9))
+    assert fused["positions"].shape == (7, 3)
+    # Last 2 rows = transformed dyn pts
+    dyn_world = fused["positions"][5:]
+    assert torch.allclose(dyn_world, torch.tensor([7.0, 8.0, 9.0]).expand(2, 3).to(dyn_world.dtype))
+
+
+def test_fused_view_dynamic_layer_frame_id_none_skips_transform(real_conf):
+    """T4.3 D4: frame_id=None → dynamic positions passed through unchanged
+    (TODO Stage 8 inference fallback)."""
+    pose = torch.eye(4); pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
+    tracks = {"v0": {
+        "poses": pose.expand(5, 4, 4).clone(),
+        "active": torch.ones(5, dtype=torch.bool),
+    }}
+    model = _make_dyn_model(real_conf, tracks, n_pts_per_track=2)
+    fused = model.fused_view(frame_id=None)
+    # dyn pts should still be at local origin (zeros), not transformed
+    dyn_local = fused["positions"][5:]
+    assert torch.allclose(dyn_local, torch.zeros_like(dyn_local))

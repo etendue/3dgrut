@@ -87,7 +87,8 @@ _FORWARD_PARAM_NAMES = frozenset({
 class LayeredGaussians(nn.Module):
     """Drop-in replacement for MixtureOfGaussians when use_layered_model=True."""
 
-    def __init__(self, conf, specs: List[LayerSpec], scene_extent: float):
+    def __init__(self, conf, specs: List[LayerSpec], scene_extent: float,
+                 *, tracks: Optional[dict] = None):
         super().__init__()
         # Use object.__setattr__ for non-Module fields to bypass our custom
         # __setattr__ forwarding logic below.
@@ -98,6 +99,28 @@ class LayeredGaussians(nn.Module):
         self.layers: nn.ModuleDict = nn.ModuleDict()
         for spec in specs:
             self.layers[spec.name] = MixtureOfGaussians(conf, scene_extent)
+
+        # T4.0: per-clip dynamic-rigid track poses, registered as nn.Buffer so
+        # they ride along with .to(device) / state_dict() / .cuda(). v2 assumes
+        # single-clip training (D3); multi-clip would require re-construct.
+        # Stored separately as flat names "_track_pose_<tid>" / "_track_active_<tid>"
+        # (PyTorch register_buffer disallows '.' in names) plus mirror Python
+        # dicts for ergonomic per-track lookup by name.
+        object.__setattr__(self, "tracks_poses", {})    # {tid: Tensor[F, 4, 4]}
+        object.__setattr__(self, "tracks_active", {})   # {tid: BoolTensor[F]}
+        if tracks is not None:
+            for tid, info in tracks.items():
+                poses = info["poses"] if isinstance(info, dict) else info[0]
+                active = (info["active"] if isinstance(info, dict) and "active" in info
+                          else info.get("frame_info") if isinstance(info, dict)
+                          else info[1])
+                buf_pose_name = f"_track_pose_{tid}"
+                buf_active_name = f"_track_active_{tid}"
+                self.register_buffer(buf_pose_name, poses, persistent=True)
+                self.register_buffer(buf_active_name, active.to(torch.bool),
+                                     persistent=True)
+                self.tracks_poses[tid] = getattr(self, buf_pose_name)
+                self.tracks_active[tid] = getattr(self, buf_active_name)
 
     # ------------------------------------------------------------------ checkpoint
 
@@ -237,10 +260,13 @@ class LayeredGaussians(nn.Module):
         Multi-layer mode: returns `torch.cat(..., dim=0)` across layers in
         `self.specs` order (particle layers only).
 
-        Note (T4.3 placeholder): dynamic-rigid layers have positions in
-        object-local frame; the per-frame world transform is NOT applied here
-        yet — that lands in T4.3 by reading `frame_id`. For T2.5 the parameter
-        is accepted but unused.
+        T4.3 dynamic-rigid handling: when a particle layer is named
+        ``dynamic_rigids``, its `positions` are stored in object-local frame.
+        Before concat, they are routed through ``_transform_means`` using the
+        current frame's per-track pose (sourced from buffers registered in
+        T4.0). When ``frame_id is None`` (e.g. inference), the dynamic layer's
+        positions are passed through unchanged with a TODO marker for Stage 8
+        "nearest active frame" fallback (D4).
         """
         bg = self._single_bg_layer()
         if bg is not None:
@@ -252,8 +278,51 @@ class LayeredGaussians(nn.Module):
                 continue
             layer = self.layers[spec.name]
             for n in _FORWARD_PARAM_NAMES:
-                pieces[n].append(getattr(layer, n))
+                v = getattr(layer, n)
+                if (
+                    n == "positions"
+                    and spec.name == "dynamic_rigids"
+                    and frame_id is not None
+                    and hasattr(layer, "track_ids")
+                    and len(self.tracks_poses) > 0
+                ):
+                    v = self._transform_means(v, layer.track_ids, frame_id)
+                pieces[n].append(v)
         return {n: torch.cat(pieces[n], dim=0) for n in _FORWARD_PARAM_NAMES}
+
+    # ------------------------------------------------------------------ T4.3 transform_means
+    def _transform_means(
+        self,
+        positions_local: torch.Tensor,
+        track_ids: torch.Tensor,
+        frame_id: int,
+    ) -> torch.Tensor:
+        """Apply per-particle ``object → world`` SE(3) using current frame's
+        per-track pose.
+
+        Pose source: ``self.tracks_poses`` buffer dict registered in T4.0.
+        Particle-to-track routing: ``track_ids`` per-particle int buffer
+        registered by ``init_layer_from_points("dynamic_rigids", ..., track_ids=...)``.
+        Track-name → int-id mapping: ``sorted(self.tracks_poses.keys())``
+        (must match the order used by ``init_dynamic_rigid_layer``).
+
+        Args:
+            positions_local: ``[N, 3]`` object-local positions.
+            track_ids:       ``[N]`` int64; values in ``[0, len(tracks_poses))``.
+            frame_id:        per-clip frame index.
+
+        Returns:
+            ``[N, 3]`` world-frame positions.
+        """
+        track_names = sorted(self.tracks_poses.keys())
+        # Stack poses for this frame: [K, 4, 4]
+        pose_stack = torch.stack(
+            [self.tracks_poses[name][frame_id] for name in track_names]
+        )
+        pose_per_pt = pose_stack[track_ids]                                  # [N, 4, 4]
+        R = pose_per_pt[:, :3, :3]                                            # [N, 3, 3]
+        t = pose_per_pt[:, :3, 3]                                             # [N, 3]
+        return (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
 
     # ------------------------------------------------------------------ T3.0 init
     def init_layer_from_points(

@@ -114,11 +114,14 @@ kanban
 | **T3.3.b** | 3 | road_init.py LiDAR-Z KNN + flat scale prior 实现 | 0.75 | ✅ | NEW `layers/road_init.py` |
 | **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook (D1) | 0.75 | ✅ | NEW `model/layered_loss.py` · MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/layer_spec.py` · MOD `layers/registry.py` · MOD `configs/base_gs.yaml` · NEW `tests/test_layered_loss.py` (6 tests) · 4 new T3.4 tests in `test_layered_mcmc.py` |
 | **T3.5** | 3 | LayeredGaussians 多层 forward + Stage 3 集成 (A800) | 1 | ⬜ | MOD `layers/layered_model.py` · MOD `trainer.py` · NEW yaml |
-| **T4.1** | 4 | scene_manifest tracks → instance_dict loader | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
-| **T4.2** | 4 | dynamic_rigid_init.py cuboid 内 LiDAR 抽取 | 1.5 | ⬜ | NEW `layers/dynamic_rigid_init.py` |
-| **T4.3** | 4 | trainer step 中 per-frame pose 应用 + concat | 1.5 | ⬜ | MOD `trainer.py` · MOD `layered_model.fused_view` |
-| **T4.4** | 4 | dynamic_mask cuboid→像素投影 | 0.5 | ⬜ | NEW `layers/dynamic_mask.py` |
-| **T4.5** | 4 | 单测 test_dynamic_rigid_init.py | 0.5 | ⬜ | NEW tests |
+| **T4.0** | 4 | LayeredGaussians 接 tracks buffer | 0.25 | ✅ | MOD `layers/layered_model.py` · NEW 2 tests |
+| **T4.1.a** | 4 | tracks loader mock 单测 (10 case) | 0.25 | ✅ | NEW `tests/test_tracks_loader.py` |
+| **T4.1.b** | 4 | tracks_loader.py 实现（独立模块） | 0.5 | ✅ | NEW `datasets/tracks_loader.py` |
+| **T4.2.a** | 4 | dynamic_rigid_init 8 单测 | 0.25 | ✅ | NEW `tests/test_dynamic_rigid_init.py` |
+| **T4.2.b** | 4 | dynamic_rigid_init.py cuboid 内 LiDAR 抽取 | 0.5 | ✅ | NEW `layers/dynamic_rigid_init.py` |
+| **T4.3** | 4 | _transform_means + fused_view dynamic 分支 | 1 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests |
+| **T4.4** | 4 | dynamic_mask 纯 PyTorch scanline AABB (D5) | 0.5 | ✅ | NEW `layers/dynamic_mask.py` · NEW 6 tests |
+| **T4.5** | 4 | Stage 4 集成 + A800 出口验收 | 1 | ⬜ | MOD `trainer.py` · NEW yaml · A800 10k step |
 | **T5.1** | 5 | nvdiffrast.torch 可用性确认 / 降级 SkyModel | 0.5 | ⬜ | A800 env probe |
 | **T5.2** | 5 | port EnvLight → correction/sky_envmap.py | 0.5 | ⬜ | NEW `correction/sky_envmap.py` |
 | **T5.3** | 5 | trainer step 中 sky blending + loss | 1 | ⬜ | MOD `trainer.py` |
@@ -140,8 +143,8 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 6/9 ⬜ | T3.0 / T3.1.a / T3.2.a / T3.3.a / T3.3.b / T3.4 ✅（Mac 61/61 PASS, 0.59s） |
-| 4 | DynamicRigid 层 | 0/5 ⬜ | — |
+| 3 | Road 层 | 6/9 ⬜ | T3.0 / T3.1.a / T3.2.a / T3.3.a / T3.3.b / T3.4 ✅（Mac 92/92 PASS, 0.75s） |
+| 4 | DynamicRigid 层 | 7/8 ⬜ | T4.0 / T4.1.a / T4.1.b / T4.2.a / T4.2.b / T4.3 / T4.4 ✅；T4.5 (A800) 待跑 |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
@@ -979,6 +982,50 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### T4.0–T4.4 ✅ (2026-05-19, Mac local · Stage 4 本地全部完成)
+
+Stage 4 本地代码 + 测试一次性 land；T4.5 A800 集成测 deferred 到下个会话（NCore aux 数据 + tracks manifest 就绪后）。
+
+**T4.0 — tracks buffer**：
+- `LayeredGaussians.__init__` 加 `tracks=None` kwarg；每个 track 的 poses + active 注册为持久 buffer (`_track_pose_<tid>` / `_track_active_<tid>`)，mirror 到 `tracks_poses` / `tracks_active` dict（同张 tensor identity 共享）；`tracks=None` 默认 → 空 dict + 无 buffer 污染
+- 2 tests：`test_layered_gaussians_holds_tracks_buffers` / `test_layered_gaussians_no_tracks_default`
+
+**T4.1.a + T4.1.b — tracks 加载**：
+- 新建 `threedgrut/datasets/tracks_loader.py` 放 `load_tracks_from_manifest()`（独立模块，Mac 可 import；datasetNcore.py 后续 re-export）
+- schema 完全对标 plan 文档：`{tid: {pts:None, colors:None, poses[F,4,4], size[3], frame_info[F bool], class:str}}`
+- 缺 tracks 字段（T3a.2 验证 NCore 当前 manifest 就是这样）→ 返回 `{}` 不 crash
+- 完整字段验证：id/poses/extent/active_frames 缺失 / poses shape / active_frames 长度 mismatch 都 ValueError
+- 10 tests covering：basic / multiple / missing tracks / empty / partial active / 各 ValueError 路径
+
+**T4.2.a + T4.2.b — dynamic_rigid_init**：
+- 新建 `threedgrut/layers/dynamic_rigid_init.py::init_dynamic_rigid_layer(instance_pts_dict, dyn_lidar_pts, max_pts_per_track=5000) -> (positions, track_ids, track_names)`
+- 每 track 每 active frame：world → local → cuboid 内过滤 → concat
+- per-track subsample；多 track concat 后输出 `positions[Σ,3]` 在 object-local frame + `track_ids[Σ]` (sorted keys 映射)
+- mutate `instance_pts_dict[tid]["pts"]` in place 供 callers 查询
+- 8 tests：cuboid filter / local frame roundtrip / max_pts / multi-track routing / 空输入 / 空 tracks / inactive frames / dict mutation
+
+**T4.3 — _transform_means + fused_view dynamic 分支**：
+- `LayeredGaussians._transform_means(positions_local, track_ids, frame_id)`：按 `sorted(self.tracks_poses)` 路由，pose stack [K,4,4] → per-pt pose 索引 → `R @ p + t`
+- `fused_view(frame_id)` 对 `spec.name == "dynamic_rigids"` 且 `frame_id is not None` 且 有 tracks 时走 transform；D4 fallback：`frame_id=None` → pass-through (Stage 8 推理时再处理)
+- 5 tests：identity / single translation / multi routing / fused_view applies / frame_id=None skips
+
+**T4.4 — dynamic_mask scanline AABB (D5)**：
+- 新建 `threedgrut/layers/dynamic_mask.py::project_cuboids_to_mask(tracks_poses, tracks_size, K, T_world2cam, H, W, device)`
+- 算法：8 角点 local → world → cam → image → per-track 2D AABB → fill (D5 占位，PSNR 不达再升级凸壳)
+- T=0 / 后向点 / 越界 / 多 track union OR / size 2× → area ≈4× 全测过
+- 6 tests
+
+**测试总数**：
+| 模块 | 数量 | 耗时 |
+|---|---:|---:|
+| `test_layered_gaussians.py` | 25 (含 T4.0×2 / T4.3×5) | — |
+| `test_tracks_loader.py` | 10 | — |
+| `test_dynamic_rigid_init.py` | 8 | — |
+| `test_dynamic_mask.py` | 6 | — |
+| **全套** | **92/92 PASS** | **0.75s** |
+
+**Stage 4 出口剩 T4.5**：trainer.init_model 串通 dynamic 初始化 + LayeredGaussians 多层 forward (T3.5 共用) + 新 yaml + A800 10k step smoke。**依赖**：(a) NCore aux lidar-sseg 数据（T3a.1 还差），(b) scene_manifest tracks 数据（T3a.2 验证当前缺失 — 需用户用 NCore validator 补）。
 
 ### T3.4 ✅ (2026-05-19, Mac local)
 
