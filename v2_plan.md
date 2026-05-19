@@ -983,6 +983,48 @@ T2.4 代码审查遗留修复：
 
 ---
 
+### A800 byte-identical 回归 (T3.0-T4.4) ✅ (2026-05-19 13:02:23, GPU 1 并行)
+
+D8 出口门禁验证：Stage 3/4 全部本地 commits (T3.0/T3.1.a/T3.2.a/T3.3.a/b/T3.4/T4.0/T4.1.a/b/T4.2.a/b/T4.3/T4.4) 不破坏 v1 byte-identical.
+
+命令（GPU 1，与 GPU 0 上的 nre-tools aux 生成并行）：
+```bash
+ssh a800-x2 'cd /root/work/yusun/repo/3dgrut && \
+  PATH=/root/miniforge3/envs/3dgrut/bin:$PATH \
+  CUDA_VISIBLE_DEVICES=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  python -u train.py --config-name apps/ncore_3dgut_mcmc \
+    strategy=layered_mcmc \
+    path=/root/work/yusun/ncore-nurec/data/ncore/clips/9ae151dc-.../pai_9ae151dc-....json \
+    resume=/root/work/yusun/ncore-nurec/output/smoke_t01_a800_20260514_165510/.../ckpt_last.pt \
+    use_layered_model=true layers.enabled=[background] \
+    n_iterations=1000 dataset.train.duration_sec=2.0 \
+    dataset.camera_ids=[camera_front_wide_120fov]'
+```
+
+8 帧 PSNR 逐帧对比 Stage 2 baseline (df1e87d):
+
+| 帧 | Stage 2 baseline | T3.0-T4.4 后 | Δ |
+|---|---:|---:|---:|
+| 0 | 21.55 | 21.55 | 0.00 |
+| 1 | 23.99 | 23.99 | 0.00 |
+| 2 | 22.32 | 22.32 | 0.00 |
+| 3 | 22.69 | 22.69 | 0.00 |
+| 4 | 23.93 | 23.93 | 0.00 |
+| 5 | 24.12 | 24.12 | 0.00 |
+| 6 | 27.17 | 27.17 | 0.00 |
+| 7 | 27.23 | 27.23 | 0.00 |
+| **mean** | **24.123** | **24.123** | **0.000 ✅ byte-identical** |
+
+证明：
+- T3.0 LayeredGaussians.optimizer single-bg identity passthrough → byte-identical
+- T3.4 `noise = noise * torch.ones(3).to(...)` 是浮点 identity，无 bit drift
+- T3.4 layered_loss=false 默认路径不动 v1 公式
+- 所有 Stage 4 新增 import (tracks_loader / dynamic_rigid_init / dynamic_mask)
+  不污染 v1 trainer 路径
+
+**D8 出口门禁 ✅ 通过**。后续 T3.5 / T4.5 A800 集成测可在 Stage 3a aux 数据
+就绪 + tracks manifest 补齐后启动。
+
 ### T4.0–T4.4 ✅ (2026-05-19, Mac local · Stage 4 本地全部完成)
 
 Stage 4 本地代码 + 测试一次性 land；T4.5 A800 集成测 deferred 到下个会话（NCore aux 数据 + tracks manifest 就绪后）。
