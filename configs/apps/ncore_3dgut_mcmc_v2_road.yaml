@@ -1,0 +1,27 @@
+# @package _global_
+#
+# Stage 3 v2 — Background + Road two-layer training config.
+# Inherits from ncore_3dgut_mcmc and switches to:
+#   - LayeredMCMCStrategy (per-layer cap + perturb mask Z lock on road)
+#   - load_aux_masks=true (sseg + lidar-sseg consumed by NCoreDataset)
+#   - layered_loss=true (region-weighted L1 across bg/road/dyn regions)
+#
+# Stage 3 出口门槛 (A800 5k step, 2s, single front camera):
+#   - PSNR ≥ 23.6 dB (baseline 24.123 − 0.5)
+#   - road layer Gaussian count ∈ [50K, 200K]
+#   - road scales.exp()[:, 2].max() < 0.005 (Z lock survives MCMC)
+#   - v1 ckpt resume (layers.enabled=[background] only) byte-identical 24.123 dB
+defaults:
+  - ncore_3dgut_mcmc
+  - override /strategy: layered_mcmc
+  - _self_
+
+use_layered_model: true
+layers:
+  enabled: [background, road]
+
+dataset:
+  load_aux_masks: true   # T3.1.b: sseg + lidar-sseg readers
+
+trainer:
+  layered_loss: true     # T3.4: region-weighted L1 (bg + road; sky → envmap Stage 5)

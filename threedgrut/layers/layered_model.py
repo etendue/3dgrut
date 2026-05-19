@@ -443,30 +443,31 @@ class LayeredGaussians(nn.Module):
         layer = self.layers[layer_name]
         N = positions.shape[0]
         dtype = torch.float32
+        device = positions.device  # T3.5.b: all defaults follow caller device
 
         if rotations is None:
-            rotations = torch.zeros(N, 4, dtype=dtype)
+            rotations = torch.zeros(N, 4, dtype=dtype, device=device)
             rotations[:, 0] = 1.0
         if scales is None:
-            s_phys = torch.tensor(list(spec.scale_prior), dtype=dtype)
+            s_phys = torch.tensor(list(spec.scale_prior), dtype=dtype, device=device)
             scales = torch.log(s_phys).expand(N, 3).clone()
         if densities is None:
-            densities = torch.full((N, 1), float(spec.density_init), dtype=dtype)
+            densities = torch.full((N, 1), float(spec.density_init), dtype=dtype, device=device)
         if colors is None:
-            colors = torch.full((N, 3), 0.5, dtype=dtype)
+            colors = torch.full((N, 3), 0.5, dtype=dtype, device=device)
 
-        features_albedo = (colors.to(dtype=dtype) - 0.5) / _SH_C0
+        features_albedo = (colors.to(dtype=dtype, device=device) - 0.5) / _SH_C0
         num_specular_dims = sh_degree_to_specular_dim(layer.max_n_features)
-        features_specular = torch.zeros((N, num_specular_dims), dtype=dtype)
+        features_specular = torch.zeros((N, num_specular_dims), dtype=dtype, device=device)
 
         # Tensors keep their incoming device. Caller (Trainer) is responsible
         # for putting them on GPU; tests stay on CPU. Note layer.device is
         # hardcoded to "cuda" in MoG.__init__ but is only consulted by code
         # paths that allocate new tensors (not by the assignments below).
-        layer.positions         = nn.Parameter(positions.to(dtype=dtype))
-        layer.rotation          = nn.Parameter(rotations.to(dtype=dtype))
-        layer.scale             = nn.Parameter(scales.to(dtype=dtype))
-        layer.density           = nn.Parameter(densities.to(dtype=dtype))
+        layer.positions         = nn.Parameter(positions.to(dtype=dtype, device=device))
+        layer.rotation          = nn.Parameter(rotations.to(dtype=dtype, device=device))
+        layer.scale             = nn.Parameter(scales.to(dtype=dtype, device=device))
+        layer.density           = nn.Parameter(densities.to(dtype=dtype, device=device))
         layer.features_albedo   = nn.Parameter(features_albedo)
         layer.features_specular = nn.Parameter(features_specular)
 
@@ -477,6 +478,41 @@ class LayeredGaussians(nn.Module):
 
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
+
+    # ------------------------------------------------------------------ T3.5.b trainer compat
+    def build_acc(self, rebuild: bool = True) -> None:
+        """Multi-layer: forward build_acc to every particle layer.
+
+        Single-bg mode goes through __getattr__ bridge (transparent v1 path).
+        For 3DGUT this is a no-op; for 3DGRT it builds per-layer OptiX BVH.
+        """
+        bg = self._single_bg_layer()
+        if bg is not None:
+            bg.build_acc(rebuild=rebuild)
+            return
+        for layer in self.layers.values():
+            layer.build_acc(rebuild=rebuild)
+
+    def setup_optimizer(self, state_dict=None) -> None:
+        """Multi-layer compat shim: each layer's optimizer is already
+        configured by init_layer_from_points(..., setup_optimizer=True);
+        this is a no-op when called again from trainer.setup_training.
+
+        Single-bg mode passes through __getattr__ bridge so v1 behaviour
+        (state_dict resume from ckpt etc.) is byte-identical.
+        """
+        bg = self._single_bg_layer()
+        if bg is not None:
+            bg.setup_optimizer(state_dict=state_dict)
+            return
+        # Multi-layer: per-layer optimizers already attached via
+        # init_layer_from_points; nothing to do.
+        if state_dict is not None:
+            logger.warning(
+                "LayeredGaussians.setup_optimizer: multi-layer mode ignores "
+                "state_dict (per-layer optimizers were set up at init); "
+                "ckpt optimizer state restore not yet plumbed in v2 multi-layer."
+            )
 
     # ------------------------------------------------------------------ T3.0 optimizer view
     @property
@@ -533,6 +569,41 @@ class LayeredGaussians(nn.Module):
             bg = self._single_bg_layer()
             if bg is not None:
                 return getattr(bg, name)
+            # T3.5.b multi-layer fused fallback for trainer MoG-style accessors.
+            modules = self.__dict__.get("_modules", {})
+            layers = modules.get("layers", {})
+            specs = self.__dict__.get("specs") or []
+            particle_layer_names = [s.name for s in specs if s.is_particle_layer]
+            # Per-particle Parameter attributes -> concat across particle layers.
+            if name in _FORWARD_PARAM_NAMES:
+                pieces = [getattr(layers[n], name) for n in particle_layer_names]
+                return torch.cat(pieces, dim=0) if pieces else torch.empty(0)
+            if name == "num_gaussians":
+                return sum(layers[n].num_gaussians for n in particle_layer_names)
+            # MoG accessor methods -> return callable that fuses per-layer results.
+            if name in ("get_density", "get_scale", "get_rotation",
+                        "get_features", "get_features_albedo",
+                        "get_features_specular", "get_positions"):
+                def _fused(*args, **kwargs):
+                    pieces = [getattr(layers[n], name)(*args, **kwargs)
+                              for n in particle_layer_names]
+                    return torch.cat(pieces, dim=0) if pieces else torch.empty(0)
+                return _fused
+            # Per-layer broadcast methods (no return-value fusion, just dispatch).
+            # scheduler_step / setup_scheduler etc. step each layer independently.
+            if name in ("scheduler_step", "setup_scheduler",
+                        "validate_fields", "set_optimizable_parameters"):
+                def _broadcast(*args, **kwargs):
+                    for n in particle_layer_names:
+                        getattr(layers[n], name)(*args, **kwargs)
+                return _broadcast
+            # Last-resort fallback: delegate to the first particle layer.
+            # All layers share the same conf so scalar / config attributes
+            # like progressive_training / max_n_features / n_active_features /
+            # feature_dim_increase_interval / feature_dim_increase_step /
+            # scene_extent are identical across layers and need no fusion.
+            if particle_layer_names:
+                return getattr(layers[particle_layer_names[0]], name)
             raise
 
     def __setattr__(self, name, value):

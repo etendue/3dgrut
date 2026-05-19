@@ -90,11 +90,21 @@ def init_road_layer(
         idx = torch.randperm(grid_xy.shape[0], device=device)[:max_n]
         grid_xy = grid_xy[idx]
 
-    # 3. KNN-Z via cdist (avoid PyTorch3D / sklearn deps; OK at this size
-    #    since road LiDAR is typically < 500K and grid <= max_n = 200K).
-    dists = torch.cdist(grid_xy.unsqueeze(0), road_points[:, :2].unsqueeze(0))[0]
-    nearest = dists.argmin(dim=1)
-    grid_z = road_points[nearest, 2]
+    # 3. KNN-Z. Prefer scipy cKDTree (O(N log N), no NxM matrix); fall back to
+    #    torch.cdist for small inputs / environments without scipy (Mac unit tests).
+    #    Earlier torch.cdist(grid[200K], road_pts[629K]) was 500 GB host RAM →
+    #    OOM kill on A800 (exit 137); cKDTree is the production path.
+    try:
+        from scipy.spatial import cKDTree
+        rp_cpu = road_points[:, :2].detach().cpu().numpy()
+        tree = cKDTree(rp_cpu)
+        grid_cpu = grid_xy.detach().cpu().numpy()
+        _, nearest = tree.query(grid_cpu, k=1)
+        nearest_t = torch.from_numpy(nearest).to(device=road_points.device, dtype=torch.long)
+    except ImportError:
+        dists = torch.cdist(grid_xy.unsqueeze(0), road_points[:, :2].unsqueeze(0))[0]
+        nearest_t = dists.argmin(dim=1).to(torch.long)
+    grid_z = road_points[nearest_t, 2]
     positions = torch.cat([grid_xy, grid_z.unsqueeze(-1)], dim=-1)  # [N, 3]
 
     N = positions.shape[0]

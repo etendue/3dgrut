@@ -328,7 +328,57 @@ class Trainer3DGRUT:
                         dtype=torch.float32,
                         device=self.device,
                     )
-                    model.init_from_lidar(pc, observer_points)
+                    # T3.5.b: multi-layer init for LayeredGaussians road / dyn layers.
+                    # Single-bg mode: model.init_from_lidar transparently routes
+                    # to background via __getattr__ bridge (byte-identical with v1).
+                    # Multi-layer: explicitly init each particle layer.
+                    from threedgrut.layers.layered_model import LayeredGaussians
+                    if isinstance(model, LayeredGaussians) and model._single_bg_layer() is None:
+                        # multi-layer: per-spec init dispatcher
+                        layer_names = [s.name for s in model.specs]
+                        # 1. background: standard LiDAR init (non-dynamic points)
+                        if "background" in model.layers:
+                            model.layers["background"].init_from_lidar(pc, observer_points)
+                            logger.info(
+                                f"🔆 background layer initialized: "
+                                f"{model.layers['background'].num_gaussians} particles"
+                            )
+                        # 2. road: BEV-grid + LiDAR-Z KNN from road-semantic LiDAR
+                        if "road" in model.layers:
+                            from threedgrut.layers.road_init import init_road_layer
+                            road_pts, road_rgb = train_dataset.get_road_lidar_points()
+                            traj = torch.tensor(
+                                train_dataset.get_observer_points(),
+                                dtype=torch.float32,
+                            )
+                            road_spec = next(s for s in model.specs if s.name == "road")
+                            r_pos, r_rot, r_sca, r_den, r_col = init_road_layer(
+                                road_pts, traj,
+                                max_n=road_spec.max_n_particles,
+                            )
+                            device = model.layers["road"].device
+                            model.init_layer_from_points(
+                                "road",
+                                r_pos.to(device),
+                                rotations=r_rot.to(device),
+                                scales=r_sca.to(device),
+                                densities=r_den.to(device),
+                                colors=r_col.to(device),
+                                setup_optimizer=True,
+                            )
+                            logger.info(
+                                f"🔆 road layer initialized: {r_pos.shape[0]} "
+                                f"particles (from {road_pts.shape[0]} road LiDAR pts)"
+                            )
+                        # 3. dynamic_rigids: deferred to T4.5 (needs tracks manifest)
+                        if "dynamic_rigids" in model.layers:
+                            logger.warning(
+                                "🔆 dynamic_rigids layer enabled but T4.5 (tracks "
+                                "manifest + dyn init) not yet wired; layer stays empty."
+                            )
+                    else:
+                        # single-bg or v1: original byte-identical path
+                        model.init_from_lidar(pc, observer_points)
                 case _:
                     raise ValueError(
                         f"unrecognized initialization.method {conf.initialization.method}, choose from [colmap, point_cloud, random, checkpoint, lidar]"

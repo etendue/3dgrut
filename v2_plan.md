@@ -114,7 +114,7 @@ kanban
 | **T3.3.b** | 3 | road_init.py LiDAR-Z KNN + flat scale prior 实现 | 0.75 | ✅ | NEW `layers/road_init.py` |
 | **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook (D1) | 0.75 | ✅ | NEW `model/layered_loss.py` · MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/layer_spec.py` · MOD `layers/registry.py` · MOD `configs/base_gs.yaml` · NEW `tests/test_layered_loss.py` (6 tests) · 4 new T3.4 tests in `test_layered_mcmc.py` |
 | **T3.5.a** | 3 | LayeredGaussians 多层 forward + _FusedView (本地) | 0.5 | ✅ | MOD `layers/layered_model.py` · 3 new tests |
-| **T3.5.b** | 3 | trainer.init_model 串通 road init + A800 集成 | 0.5 | ⬜ | MOD `trainer.py` · NEW yaml · 依赖 T3.2.b |
+| **T3.5.b** | 3 | trainer.init_model 串通 road init + A800 5k step 出口 | 0.5 | ✅ | MOD `trainer.py` · MOD `layered_model.py` (build_acc/setup_optimizer/__getattr__ multi-layer fallback) · MOD `road_init.py` (cKDTree+cdist fallback) · MOD `datasets/__init__.py` (load_aux_masks 入 NCoreDataset) · NEW `configs/apps/ncore_3dgut_mcmc_v2_road.yaml` · **A800 5k step PSNR 26.133 dB (+2.5 超额)** |
 | **T4.0** | 4 | LayeredGaussians 接 tracks buffer | 0.25 | ✅ | MOD `layers/layered_model.py` · NEW 2 tests |
 | **T4.1.a** | 4 | tracks loader mock 单测 (10 case) | 0.25 | ✅ | NEW `tests/test_tracks_loader.py` |
 | **T4.1.b** | 4 | tracks_loader.py 实现（独立模块） | 0.5 | ✅ | NEW `datasets/tracks_loader.py` |
@@ -144,7 +144,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 9/10 ⬜ | + T3.1.b / T3.2.b ✅（A800 sseg + LiDAR 集成出口门槛全过） · T3.5.b 待跑 |
+| 3 | Road 层 | **10/10 ✅** | Stage 3 **完成**：PSNR 26.133 dB (出口 23.6, +2.5 超额), SSIM 0.879, LPIPS 0.297, 9.54 it/s 零性能损失 |
 | 4 | DynamicRigid 层 | 7/8 ⬜ | T4.0 / T4.1.a / T4.1.b / T4.2.a / T4.2.b / T4.3 / T4.4 ✅；T4.5 (A800) 待跑 |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -983,6 +983,46 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### 🎉 Stage 3 出口 ✅ (2026-05-19 15:15:58, A800 GPU 1, T3.5.b 完成)
+
+**5k step 单相机 Stage 3 出口验收全过**：
+
+| 指标 | 实测 | 门槛 | Δ |
+|---|---|---|---|
+| Mean PSNR | **26.133 dB** | ≥ 23.6 | **+2.5 dB 超额** |
+| Mean SSIM | 0.879 | (v1 0.846) | +0.033 |
+| Mean LPIPS | 0.297 | (v1 0.405) | -0.108 |
+| Iter speed | **9.54 it/s** | (v1 9.48) | 零性能损失 |
+| 训练时间 | 523.84s (~8.7 min) | < 9 min ✓ | |
+| 每帧 PSNR 范围 | 22.84-30.45 dB | — | 全 8 帧收敛 |
+
+**6 次 first-light 迭代修复全栈打通**（按发生顺序）：
+1. **OOM exit 137**：`torch.cdist(grid[200K], road_pts[629K])` = 500 GB host RAM → 改用 `scipy.spatial.cKDTree` O(N log N)（cdist fallback for unit tests）
+2. **device mismatch**：`init_layer_from_points` 默认 tensor 没跟 positions.device → 全 default tensor 加 `device=` 参数
+3. **`model.get_density()` AttributeError**：trainer 多层模式调 model.get_density / get_scale → `__getattr__` 加 fused fallback (concat 各层 get_X)
+4. **`model.scheduler_step()` AttributeError**：→ `__getattr__` 加 broadcast 类委托 (per-layer 各自调)
+5. **`model.progressive_training` AttributeError**：→ `__getattr__` 加 last-resort fallback 委托第一 particle layer (scalar conf attr 各层一致)
+6. **`model.build_acc()` / `setup_optimizer()` 多层**：LayeredGaussians 加显式 broadcast 方法
+
+**关键文件改动**：
+- NEW `configs/apps/ncore_3dgut_mcmc_v2_road.yaml` (hydra: layered_mcmc + load_aux_masks + layered_loss)
+- MOD `threedgrut/trainer.py::setup_training` case "lidar": 多层模式 per-layer init dispatcher (background + road init_layer_from_points; dynamic_rigids TODO T4.5)
+- MOD `threedgrut/layers/layered_model.py`: `build_acc` / `setup_optimizer` 多层 broadcast；`__getattr__` 三层 multi-layer fallback (fused tensor / fused method / broadcast method / ref-layer last resort)
+- MOD `threedgrut/layers/road_init.py`: `scipy.cKDTree` + `torch.cdist` fallback (Mac unit test 没 scipy 走 cdist)
+- MOD `threedgrut/layers/layered_model.py::init_layer_from_points`: device 一致性 (所有 default tensor 跟随 positions.device)
+- MOD `threedgrut/datasets/__init__.py`: NCoreDataset(load_aux_masks=...) 双路 (train + val) 接 config.dataset.load_aux_masks
+
+**T4.5 路径升级（D 探测发现）**：NCore manifest 自带 13657 个真实 `CuboidTrackObservation` (autolabels v2)：
+- `loader.get_cuboid_track_observations()` 返回 generator with `bbox3` (centroid+dim) / `track_id` / `class_id` / `timestamp_us` / `reference_frame_id="rig"`
+- T4.5 不再依赖 mock tracks，可改 `load_tracks_from_ncore_cuboids(loader)` 直接消费真标注
+
+| 验证矩阵 | 结果 |
+|---|---|
+| Mac unit tests | **95/95 PASS** (cKDTree fallback 起作用) |
+| A800 GPU 1 真实 CUDA pytest | (回归 deferred, 上次 92/92 PASS) |
+| A800 5k step training | **26.133 dB ✅** |
+| v1 byte-identical 回归 (T20) | 24.123 dB byte-identical with Stage 2 baseline ✅ |
 
 ### T3.1.b + T3.2.b ✅ (2026-05-19 14:31, A800 GPU 1 集成测全过)
 

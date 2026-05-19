@@ -140,6 +140,7 @@ def make(name: str, config, ray_jitter):
                 simplejpeg_fastdct=config.dataset.get("simplejpeg_fastdct", False),
                 simplejpeg_fastupsample=config.dataset.get("simplejpeg_fastupsample", False),
                 lidar_color_generic_data_name=config.dataset.get("lidar_color_generic_data_name", "rgb"),
+                load_aux_masks=config.dataset.get("load_aux_masks", False),  # T3.1.b
             )
             # Validation uses same temporal window as training by default
             train_seek_offset = config.dataset.train.get("seek_offset_sec", 0.0)
@@ -175,6 +176,7 @@ def make(name: str, config, ray_jitter):
                 simplejpeg_fastdct=config.dataset.get("simplejpeg_fastdct", False),
                 simplejpeg_fastupsample=config.dataset.get("simplejpeg_fastupsample", False),
                 lidar_color_generic_data_name=config.dataset.get("lidar_color_generic_data_name", "rgb"),
+                load_aux_masks=config.dataset.get("load_aux_masks", False),  # T3.1.b (val)
             )
         case _:
             raise ValueError(
