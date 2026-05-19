@@ -113,7 +113,8 @@ kanban
 | **T3.3.a** | 3 | road_init 6 单测（z_lock / scale_flat / handles_empty / max_n / identity_quat / uneven_terrain） | 0.25 | ✅ | NEW `tests/test_road_init.py` |
 | **T3.3.b** | 3 | road_init.py LiDAR-Z KNN + flat scale prior 实现 | 0.75 | ✅ | NEW `layers/road_init.py` |
 | **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook (D1) | 0.75 | ✅ | NEW `model/layered_loss.py` · MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/layer_spec.py` · MOD `layers/registry.py` · MOD `configs/base_gs.yaml` · NEW `tests/test_layered_loss.py` (6 tests) · 4 new T3.4 tests in `test_layered_mcmc.py` |
-| **T3.5** | 3 | LayeredGaussians 多层 forward + Stage 3 集成 (A800) | 1 | ⬜ | MOD `layers/layered_model.py` · MOD `trainer.py` · NEW yaml |
+| **T3.5.a** | 3 | LayeredGaussians 多层 forward + _FusedView (本地) | 0.5 | ✅ | MOD `layers/layered_model.py` · 3 new tests |
+| **T3.5.b** | 3 | trainer.init_model 串通 road init + A800 集成 | 0.5 | ⬜ | MOD `trainer.py` · NEW yaml · 依赖 T3.2.b |
 | **T4.0** | 4 | LayeredGaussians 接 tracks buffer | 0.25 | ✅ | MOD `layers/layered_model.py` · NEW 2 tests |
 | **T4.1.a** | 4 | tracks loader mock 单测 (10 case) | 0.25 | ✅ | NEW `tests/test_tracks_loader.py` |
 | **T4.1.b** | 4 | tracks_loader.py 实现（独立模块） | 0.5 | ✅ | NEW `datasets/tracks_loader.py` |
@@ -143,7 +144,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 6/9 ⬜ | T3.0 / T3.1.a / T3.2.a / T3.3.a / T3.3.b / T3.4 ✅（Mac 92/92 PASS, 0.75s） |
+| 3 | Road 层 | 7/10 ⬜ | + T3.5.a ✅（_FusedView + multi-layer forward; Mac 95/95 PASS, 0.60s） |
 | 4 | DynamicRigid 层 | 7/8 ⬜ | T4.0 / T4.1.a / T4.1.b / T4.2.a / T4.2.b / T4.3 / T4.4 ✅；T4.5 (A800) 待跑 |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -982,6 +983,26 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### T3.5.a ✅ (2026-05-19, Mac local + A800 GPU 1 contract test)
+
+LayeredGaussians 多层 forward 路由 land：
+
+- `threedgrut/layers/layered_model.py`：
+  - 新增 `_FusedView` 类（轻量 MoG-like façade）：暴露 positions/rotation/scale/density/features_albedo/features_specular 直接访问 + num_gaussians/n_active_features/max_n_features/background 配置 + get_rotation()/get_scale()/get_density()/get_features()/get_positions() 激活函数借自 ref layer
+  - 改 `forward(gpu_batch, train, frame_id)`：单 bg 模式仍 byte-identical 透传到 bg.__call__；多层模式调 `fused_view(frame_id)` → `_FusedView(fused, ref_layer)` → `ref_layer.renderer.render(view, gpu_batch, train, frame_id)`
+- `test_layered_gaussians.py` 新增 3 个 T3.5 contract test：
+  - `test_fused_view_object_exposes_full_mog_contract`：14 个 attr/method 完整暴露 + 激活函数借用 + identity reuse
+  - `test_forward_single_bg_passes_through_to_bg_layer`：monkey-patch bg `__call__`，验证单 bg 不走 fused_view 路径
+  - `test_forward_multi_layer_dispatches_to_ref_renderer`：monkey-patch ref.renderer.render，验证多层路径调用、view 类型、num_gaussians、train、frame_id 全 propagate
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_layered_gaussians.py` | 25 prior + 3 new = **28/28 PASS** (Mac CPU, 0.60s) |
+| 全套 | **95/95 PASS** |
+| A800 GPU 1 真实 CUDA 回归 (含 T3.5.a) | **92/92 PASS** (3.69s, GPU 1 与 nre-tools 并行) |
+
+**T3.5.b 待办**：trainer.init_model 加 road init 串通调用 — 依赖 T3.2.b NCoreDataset.get_road_lidar_points API。新 yaml `configs/apps/ncore_3dgut_mcmc_v2_road.yaml`。A800 5k step PSNR ≥ 23.6 dB 出口门槛。
 
 ### A800 byte-identical 回归 (T3.0-T4.4) ✅ (2026-05-19 13:02:23, GPU 1 并行)
 

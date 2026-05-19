@@ -589,3 +589,125 @@ def test_fused_view_dynamic_layer_frame_id_none_skips_transform(real_conf):
     # dyn pts should still be at local origin (zeros), not transformed
     dyn_local = fused["positions"][5:]
     assert torch.allclose(dyn_local, torch.zeros_like(dyn_local))
+
+
+# --- T3.5: multi-layer forward routing + _FusedView contract ---
+def test_fused_view_object_exposes_full_mog_contract(real_conf):
+    """T3.5: _FusedView exposes all attrs/methods the renderer accesses on
+    a MoG: positions / rotation / scale / density / features_albedo /
+    features_specular / num_gaussians / n_active_features / background /
+    get_rotation() / get_scale() / get_density() / get_features() /
+    get_positions(). Borrows activations + background from ref layer."""
+    from threedgrut.layers.layered_model import LayeredGaussians, _FusedView
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
+                  scale_prior=(0.1, 0.1, 0.001)),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_layer_from_points("background", torch.randn(30, 3),
+                                 setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(20, 3),
+                                 setup_optimizer=False)
+
+    fused = model.fused_view(frame_id=0)
+    ref = model.layers["background"]
+    view = _FusedView(fused, ref)
+
+    # Direct tensor access
+    assert view.positions.shape == (50, 3)
+    assert view.rotation.shape == (50, 4)
+    assert view.scale.shape == (50, 3)
+    assert view.density.shape == (50, 1)
+    assert view.features_albedo.shape[0] == 50
+    assert view.features_specular.shape[0] == 50
+
+    # Shape / config
+    assert view.num_gaussians == 50
+    assert view.n_active_features == ref.n_active_features
+    assert view.max_n_features == ref.max_n_features
+    assert view.background is ref.background  # identity reuse, no copy
+
+    # Activated accessors run through ref's activation fns
+    rot = view.get_rotation()
+    assert torch.allclose(rot, ref.rotation_activation(fused["rotation"]))
+    scl = view.get_scale()
+    assert torch.allclose(scl, ref.scale_activation(fused["scale"]))
+    dns = view.get_density()
+    assert torch.allclose(dns, ref.density_activation(fused["density"]))
+
+    # Pre-activation passthrough
+    assert view.get_rotation(preactivation=True) is fused["rotation"]
+    assert view.get_scale(preactivation=True) is fused["scale"]
+    assert view.get_density(preactivation=True) is fused["density"]
+
+    # Features concat
+    feat = view.get_features()
+    assert feat.shape[0] == 50
+    assert feat.shape[1] == (view.features_albedo.shape[1]
+                              + view.features_specular.shape[1])
+
+    # get_positions = positions (no activation on positions)
+    assert view.get_positions() is fused["positions"]
+
+
+def test_forward_single_bg_passes_through_to_bg_layer(real_conf, monkeypatch):
+    """T3.5: single-bg mode → forward() bypasses fused_view path entirely
+    and delegates to bg.__call__ (byte-identical with v1)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+
+    # Spy on bg layer __call__; intercept to avoid invoking real renderer.
+    bg = model.layers["background"]
+    calls: list = []
+    def fake_call(self, gpu_batch, train=False, frame_id=0):
+        calls.append((id(gpu_batch), train, frame_id))
+        return {"pred_rgb": torch.zeros(1, 4, 4, 3)}
+    monkeypatch.setattr(type(bg), "__call__", fake_call)
+
+    out = model(object(), train=True, frame_id=42)  # gpu_batch sentinel
+    assert len(calls) == 1
+    assert calls[0][1] is True
+    assert calls[0][2] == 42
+    assert "pred_rgb" in out
+
+
+def test_forward_multi_layer_dispatches_to_ref_renderer(real_conf, monkeypatch):
+    """T3.5: multi-layer mode → forward() builds fused_view + _FusedView
+    + calls ref_layer.renderer.render(view, batch, train, frame_id).
+
+    We don't run a real renderer (no CUDA tracer on Mac); instead we
+    monkey-patch ref.renderer.render to capture (view_type, train, frame_id)
+    and verify fused tensor shapes propagate correctly."""
+    from threedgrut.layers.layered_model import LayeredGaussians, _FusedView
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
+                  scale_prior=(0.1, 0.1, 0.001)),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_layer_from_points("background", torch.randn(30, 3),
+                                 setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(20, 3),
+                                 setup_optimizer=False)
+
+    ref = next(iter(model.layers.values()))
+    captured: dict = {}
+    def fake_render(view, gpu_batch, train, frame_id):
+        captured["view_type"] = type(view).__name__
+        captured["num_gaussians"] = view.num_gaussians
+        captured["train"] = train
+        captured["frame_id"] = frame_id
+        return {"pred_rgb": torch.zeros(1, 4, 4, 3)}
+    monkeypatch.setattr(ref.renderer, "render", fake_render)
+
+    out = model(object(), train=False, frame_id=7)
+    assert captured["view_type"] == "_FusedView"
+    assert captured["num_gaussians"] == 50  # 30 bg + 20 road
+    assert captured["train"] is False
+    assert captured["frame_id"] == 7
+    assert "pred_rgb" in out

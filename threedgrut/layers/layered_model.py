@@ -84,6 +84,73 @@ _FORWARD_PARAM_NAMES = frozenset({
 })
 
 
+class _FusedView:
+    """MoG-like view onto fused multi-layer tensors for renderer compatibility.
+
+    ``Renderer.render(model, batch, ...)`` accesses these on the model:
+      - ``positions`` / ``rotation`` / ``scale`` / ``density``
+      - ``features_albedo`` / ``features_specular``
+      - ``num_gaussians`` (shape property)
+      - ``n_active_features`` (SH progressive feature dim)
+      - ``get_rotation() / get_scale() / get_density() / get_features() / get_positions()``
+      - ``background`` (callable module applying bg color)
+
+    The fused tensors come from ``LayeredGaussians.fused_view(frame_id)`` (concat
+    across particle layers, dynamic positions already world-transformed by T4.3);
+    activation functions + background module are borrowed from a "reference" layer
+    (the first particle layer in spec order). All layers share the same conf so
+    activations match.
+
+    This is a thin façade with no torch.nn.Module semantics — the renderer only
+    reads attributes, never calls .train() / .parameters() / .state_dict() on the
+    model itself, so a plain Python object suffices and avoids ModuleDict /
+    Parameter registration overhead per frame.
+    """
+
+    def __init__(self, fused_tensors: dict, ref_layer: MixtureOfGaussians):
+        self._t = fused_tensors
+        self._ref = ref_layer
+
+    # Direct fused tensor access ---------------------------------------------
+    @property
+    def positions(self) -> torch.Tensor: return self._t["positions"]
+    @property
+    def rotation(self) -> torch.Tensor: return self._t["rotation"]
+    @property
+    def scale(self) -> torch.Tensor: return self._t["scale"]
+    @property
+    def density(self) -> torch.Tensor: return self._t["density"]
+    @property
+    def features_albedo(self) -> torch.Tensor: return self._t["features_albedo"]
+    @property
+    def features_specular(self) -> torch.Tensor: return self._t["features_specular"]
+
+    # Shape / config ---------------------------------------------------------
+    @property
+    def num_gaussians(self) -> int: return int(self._t["positions"].shape[0])
+    @property
+    def n_active_features(self) -> int: return self._ref.n_active_features
+    @property
+    def max_n_features(self) -> int: return self._ref.max_n_features
+    @property
+    def background(self): return self._ref.background
+    @property
+    def device(self): return self._ref.device
+
+    # Activated accessors borrowed from ref layer ----------------------------
+    def get_positions(self) -> torch.Tensor: return self._t["positions"]
+    def get_rotation(self, preactivation: bool = False) -> torch.Tensor:
+        return self._t["rotation"] if preactivation else self._ref.rotation_activation(self._t["rotation"])
+    def get_scale(self, preactivation: bool = False) -> torch.Tensor:
+        return self._t["scale"] if preactivation else self._ref.scale_activation(self._t["scale"])
+    def get_density(self, preactivation: bool = False) -> torch.Tensor:
+        return self._t["density"] if preactivation else self._ref.density_activation(self._t["density"])
+    def get_features(self) -> torch.Tensor:
+        return torch.cat((self._t["features_albedo"], self._t["features_specular"]), dim=1)
+    def get_features_albedo(self) -> torch.Tensor: return self._t["features_albedo"]
+    def get_features_specular(self) -> torch.Tensor: return self._t["features_specular"]
+
+
 class LayeredGaussians(nn.Module):
     """Drop-in replacement for MixtureOfGaussians when use_layered_model=True."""
 
@@ -226,21 +293,29 @@ class LayeredGaussians(nn.Module):
     # forward attribute reads and Parameter writes through to that layer so the
     # existing Trainer + MCMCStrategy + renderer code paths continue working.
 
-    def forward(self, *args, **kwargs):
-        """Forward the render call to the single bg layer in single-layer mode.
+    def forward(self, gpu_batch, train: bool = False, frame_id: int = 0):
+        """Render the scene through whatever layer setup we have.
 
-        `nn.Module.__call__` resolves `forward` via class-level lookup, which
-        bypasses our `__getattr__` bridge entirely. Define forward explicitly
-        so `self.model(batch, train=True, frame_id=...)` works in single-bg
-        T1.1 mode. Multi-layer mode lands in T2 with a fused-view forward.
+        Single-bg mode (T1.1 fast path): directly call the bg layer's
+        ``forward`` → byte-identical with v1 (no allocations, no wrapping).
+
+        Multi-layer mode (T3.5): build a fused-tensor view across all particle
+        layers via ``fused_view(frame_id)`` (dynamic layer positions are
+        world-transformed inline by T4.3), wrap it in a ``_FusedView`` so the
+        renderer's MoG-style attribute access works unchanged, then dispatch
+        to the reference (first) layer's renderer. All layers share conf so
+        renderer params (camera model, sensor params, tracer settings) are
+        identical regardless of which layer we pick.
         """
         bg = self._single_bg_layer()
-        if bg is None:
-            raise NotImplementedError(
-                "LayeredGaussians.forward only defined for single-bg-layer mode "
-                "(T1.1 scope). Multi-layer fused-view forward lands in T2."
-            )
-        return bg(*args, **kwargs)
+        if bg is not None:
+            return bg(gpu_batch, train=train, frame_id=frame_id)
+
+        # Multi-layer: fused view + reference layer renderer.
+        fused = self.fused_view(frame_id)
+        ref_layer = next(iter(self.layers.values()))
+        view = _FusedView(fused, ref_layer)
+        return ref_layer.renderer.render(view, gpu_batch, train, frame_id)
 
     def _single_bg_layer(self):
         """Return the bg layer iff this is a single-bg-layer setup, else None."""
