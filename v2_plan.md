@@ -107,9 +107,9 @@ kanban
 | **T2.5** | 2 | LayeredGaussians.fused_view(frame_id) 多层路径 | 1 | ✅ | MOD `layered_model.py` · NEW 4 tests (d4841df) |
 | **T3.0** | 3 | LayeredGaussians.init_layer_from_points + optimizer property | 0.5 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests (Mac 38/38 PASS) |
 | **T3.1.a** | 3 | ncore_semantic 常量 + mock 单测（sky/road/dyn partition） | 0.25 | ✅ | NEW `datasets/ncore_semantic.py` · NEW `tests/test_ncore_aux_masks.py` (4 tests) |
-| **T3.1.b** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask（A800 集成） | 0.75 | 🟡 | MOD `datasets/datasetNcore.py` (load_aux_masks 参数 + aux paths auto-append ✅; sseg 抽取 + image_infos 装配 TODO 待 A800 实测 reader API) · MOD `datasets/protocols.py` (Batch.image_infos 字段 ✅) |
+| **T3.1.b** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask（A800 集成） | 0.75 | ✅ | NEW `datasets/aux_readers.py` (绕过 SDK 直读 itar) · MOD `datasets/datasetNcore.py` (load_aux_masks + sseg 抽取 + image_infos 装配) · MOD `datasets/protocols.py` (Batch.image_infos) · A800 单帧 sseg 0.11s / sky 1.85% / road 21.55% / dyn 2.50% pairwise disjoint |
 | **T3.2.a** | 3 | LiDAR semantic filter mock 单测（行为契约） | 0.25 | ✅ | NEW 3 tests in `test_ncore_aux_masks.py`（合并到 T3.1.a commit） |
-| **T3.2.b** | 3 | datasetNcore.py 暴露 road/dyn LiDAR 点（A800 集成） | 0.75 | 🟡 | MOD `datasets/datasetNcore.py` (get_road_lidar_points / get_dynamic_lidar_points / _get_semantic_lidar_points ✅ 接口实现完整, 需 A800 lidar-sseg 数据验证 _LIDAR_SEMANTIC_LABEL_NAME) |
+| **T3.2.b** | 3 | datasetNcore.py 暴露 road/dyn LiDAR 点（A800 集成） | 0.75 | ✅ | get_road_lidar_points / get_dynamic_lidar_points / _get_semantic_lidar_points 改用 LidarSsegAuxReader 直读 · A800 road 629K pts Z std 0.425m / dyn 135K pts |
 | **T3.3.a** | 3 | road_init 6 单测（z_lock / scale_flat / handles_empty / max_n / identity_quat / uneven_terrain） | 0.25 | ✅ | NEW `tests/test_road_init.py` |
 | **T3.3.b** | 3 | road_init.py LiDAR-Z KNN + flat scale prior 实现 | 0.75 | ✅ | NEW `layers/road_init.py` |
 | **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook (D1) | 0.75 | ✅ | NEW `model/layered_loss.py` · MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/layer_spec.py` · MOD `layers/registry.py` · MOD `configs/base_gs.yaml` · NEW `tests/test_layered_loss.py` (6 tests) · 4 new T3.4 tests in `test_layered_mcmc.py` |
@@ -144,7 +144,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 7/10 ⬜ | + T3.5.a ✅（_FusedView + multi-layer forward; Mac 95/95 PASS, 0.60s） |
+| 3 | Road 层 | 9/10 ⬜ | + T3.1.b / T3.2.b ✅（A800 sseg + LiDAR 集成出口门槛全过） · T3.5.b 待跑 |
 | 4 | DynamicRigid 层 | 7/8 ⬜ | T4.0 / T4.1.a / T4.1.b / T4.2.a / T4.2.b / T4.3 / T4.4 ✅；T4.5 (A800) 待跑 |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -983,6 +983,41 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### T3.1.b + T3.2.b ✅ (2026-05-19 14:31, A800 GPU 1 集成测全过)
+
+aux 读取栈改造 + A800 集成验证：
+
+**关键架构决定**：NRE 工具产出的 `aux.*.zarr.itar` 根 `.zattrs` 缺 `version` 字段 → `SequenceComponentGroupsReader` 不接受。**绕过 SDK 直读 itar**：
+
+- 新建 `threedgrut/datasets/aux_readers.py`：
+  - `SsegAuxReader`：lazy open `IndexedTarStore + zarr.open`，per-camera group 缓存；`read(camera_id, timestamp_us) -> np.ndarray[H, W] uint8`（PNG decode）
+  - `LidarSsegAuxReader`：同模式；`read(lidar_id, timestamp_us) -> np.ndarray[N_pts] uint8`
+  - `discover_aux_path(clip_dir, aux_type)`：glob `*.aux.<type>.zarr.itar`
+  - 文档化 schema (路径 `/aux/<type>/<sensor>/<ts_us>`，class palette 20 类 + ignore)
+- 撤销之前在 `datasetNcore.py` 的 SDK aux paths append（schema 不兼容必失败）
+- `_get_semantic_lidar_points`：改用 `LidarSsegAuxReader` + 与 pc shape 匹配 sanity check
+- `__getitem__` 训练分支：加 sseg PNG decode → sky/road/dyn pixel masks
+- `get_gpu_batch_with_intrinsics`：装 `image_infos` (sky/road/dyn_mask_sseg → GPU)
+- `_ensure_aux_readers()` lazy init helper（per-process，无重复 itar open）
+
+**🎯 关键 fix**：sseg/lidar-sseg key 是 `camera.frames_timestamps_us[idx, FrameTimepoint.END]` **不是 START**。A800 探测 599/599 keys 100% match END。最初用 START 给 KeyError。
+
+**A800 集成测结果 (clip 9ae151dc, 2s 51 frames)**：
+
+| 验证 | 实测 | 期望 |
+|---|---|---|
+| sseg 单帧 latency | 0.11s | < 1s ✓ |
+| sky_mask coverage | 1.85% (100% top half) | 上半为主 ✓ |
+| road_mask coverage | 21.55% (100% bottom half) | 下半为主 ✓ |
+| dyn_mask_sseg coverage | 2.50% | 合理 ✓ |
+| 三 mask pairwise disjoint | max sum = 1.0 ✓ | ≤ 1.0 |
+| road LiDAR pts | **629K** | [10K, 500K] (略多, 含 sidewalk 类 OK) |
+| road Z std | **0.425 m** ✓ | < 0.5 m |
+| dyn LiDAR pts | 135K | 合理 |
+| Z range / XY 形态 | [-45, 1.67] / (-129,205)×(-19,32) | ego traj + 30m cut 范围合理 |
+
+**剩余 Stage 3**：T3.5.b trainer.init_model 串通 road init + Stage 3 出口 5k step (PSNR ≥ 23.6 dB)。
 
 ### T3.5.a ✅ (2026-05-19, Mac local + A800 GPU 1 contract test)
 
