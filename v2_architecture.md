@@ -72,16 +72,16 @@ flowchart TD
 ```mermaid
 flowchart TD
     CLI["train.py<br/>+ use_layered_model flag"]:::done
-    Trainer["Trainer3DGRUT<br/>• layer-aware loss<br/>• per-frame pose apply<br/>• sky blend + exposure<br/>MOD · T3.4 / T4.3 / T5.3 / T6.2"]:::mod
+    Trainer["Trainer3DGRUT<br/>• region-weighted loss ✅ T3.4<br/>• road init 串通 ✅ T3.5.b<br/>• dynamic_rigids init + timestamp ✅ T4.5<br/>• sky blend + exposure (Stage 5/6)<br/>MOD"]:::done
 
     %% Dataset
-    Dataset["NCore Dataset<br/>+ sky/road/dyn mask<br/>+ road LiDAR<br/>+ tracks<br/>MOD · T3.1 / T3.2 / T4.1"]:::mod
+    Dataset["NCore Dataset<br/>+ sky/road/dyn mask ✅ T3.1.b<br/>+ road / dyn LiDAR ✅ T3.2.b<br/>+ cuboid tracks (real autolabels v2) ✅ T4.5<br/>+ timestamp_us → Batch ✅ T4.5<br/>MOD"]:::done
 
     %% LayeredGaussians 容器
     subgraph Layered["LayeredGaussians (NEW)<br/>ModuleDict[name → MoG]<br/>T1.1 ✅ · T1.2 ✅"]
         BG["Background<br/>MoG (flat)<br/>DONE · T1.1 ✅"]:::done
-        Road["Road<br/>scale=[0.1, 0.1, 0.001]<br/>spec registered ✅ (T1.2)<br/>init: LiDAR-Z KNN<br/>T3.3 todo"]:::mod
-        DynR["DynamicRigid<br/>local-frame MoG<br/>spec registered ✅ (T1.2)<br/>+ per-frame pose<br/>T4.1/T4.2/T4.3 todo"]:::mod
+        Road["Road<br/>scale=[0.1, 0.1, 0.001]<br/>scipy.cKDTree LiDAR-Z lift<br/>DONE · T3.3.b ✅"]:::done
+        DynR["DynamicRigid<br/>local-frame MoG<br/>+ timestamp-aligned pose<br/>+ track_ids buffer sync<br/>DONE · T4.2.b/T4.3/T4.5 ✅"]:::done
         DynD["DynamicDeformable<br/>spec registered ✅ (T1.2)<br/>v2.x 占位"]:::done
         Sky["SkyEnvmap<br/>spec registered ✅ (T1.2)<br/>cubemap or MLP<br/>T5.1 / T5.2 todo"]:::mod
     end
@@ -126,7 +126,7 @@ flowchart TD
 | 模块 | v1 状态 | v2 状态 | 任务 | 文件 |
 |---|---|---|---|---|
 | `train.py` | unchanged | 加 `use_layered_model` 分支 | T1.5 ✅ | `train.py` |
-| `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head；`init_model` 读 `conf.layers.enabled` 经 registry 构造 specs | T1.2 ✅ / T1.5 ✅ / T3.4 / T4.3 / T5.3 / T6.2 | `threedgrut/trainer.py` |
+| `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head + multi-layer init dispatcher (case "lidar" 分支 bg/road/dynamic_rigids 各 init)；`get_losses` region-weighted L1 + perturb mask；timestamp_us → forward | T1.2 ✅ / T1.5 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.3 ✅ / T4.5 ✅ / T5.3 / T6.2 | `threedgrut/trainer.py` |
 | `MixtureOfGaussians` | 全场景表征 | **不动**，被 LayeredGaussians 内嵌 | — | `threedgrut/model/model.py` |
 | **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG；fused_view + get_layer_mask 接口实现；T3.0 加 init_layer_from_points + optimizer property** | T1.1 ✅ T1.5 ✅ T2.5 ✅ (d4841df) T3.0 ✅ | `threedgrut/layers/layered_model.py` |
 | **LayerSpec / registry** | — | **新增 描述层属性 + 5 标准层注册表** | T1.2 ✅ | `layer_spec.py` (8 字段), `registry.py` (STANDARD_LAYERS + specs_from_config) |
@@ -139,7 +139,12 @@ flowchart TD
 | **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b / 04c9174)** | T2.2 ✅ / T2.3 ✅ / T2.4 ✅ | `threedgrut/strategy/layered_mcmc.py` |
 | **SkyEnvmap** | — | **新增 cubemap (nvdiffrast) 或 MLP** | T5.1 / T5.2 | `threedgrut/correction/sky_envmap.py` |
 | **ExposureModel** | — | **新增 per-camera affine** | T6.1 | `threedgrut/correction/exposure.py` |
-| `datasetNcore.py` | RGB + ego_mask | 加 sky/road/dyn mask + road LiDAR + tracks | T3.1 / T3.2 / T4.1 | `threedgrut/datasets/datasetNcore.py` |
+| `datasetNcore.py` | RGB + ego_mask | + load_aux_masks + aux_readers 直读 itar (sseg/lidar-sseg)；get_road/dynamic_lidar_points 按 class 过滤；__getitem__ 注入 timestamp_us (cam END) + region masks 到 batch | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ | `threedgrut/datasets/datasetNcore.py` |
+| **aux_readers.py** | — | **新增 SsegAuxReader / LidarSsegAuxReader 直读 zarr.itar (绕开 SDK version check)** | T3.1.b ✅ | `threedgrut/datasets/aux_readers.py` |
+| **ncore_semantic.py** | — | **新增 SKY/ROAD/DYNAMIC class ID 常量 (Cityscapes palette)** | T3.1.a ✅ | `threedgrut/datasets/ncore_semantic.py` |
+| `protocols.py::Batch` | rays + rgb + mask | + image_infos dict (sky/road/dyn masks GPU) + timestamp_us (cam END, 微秒 universal time) | T3.1.b ✅ / T4.5 ✅ | `threedgrut/datasets/protocols.py` |
+| `tracks_loader.py::load_tracks_from_ncore_cuboids` | — | **新增 真 NCore cuboid autolabels v2 → instance_pts_dict（替代 mock JSON）** | T4.5 ✅ | `threedgrut/datasets/tracks_loader.py` |
+| `mcmc.py` | add/relocate 不感知 buffer | + track_ids buffer sync (add 时 cat sampled，relocate 时 dead 继承 alive donor) | T4.5 ✅ | `threedgrut/strategy/mcmc.py` |
 | `Renderer` (3DGRT/3DGUT) | flat tensor in | **不动**（tracer 层不感知 layer） | — | `threedgrt_tracer/` / `threedgut_tracer/` |
 | `scene_manifest schema` | v1 | 加可选 `layer_assignments` | T7.5 | `schemas/scene_manifest.schema.json` |
 

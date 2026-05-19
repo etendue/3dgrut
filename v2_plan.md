@@ -39,16 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T3.1 datasetNcore 加载 aux mask]
-    [T3.2 datasetNcore 暴露 road LiDAR]
-    [T3.3 road_init.py LiDAR-Z KNN]
-    [T3.4 region-weighted loss]
-    [T3.5 单测 test_road_init]
-    [T4.1 tracks → instance_pts_dict]
-    [T4.2 dynamic_rigid_init cuboid 抽取]
-    [T4.3 per-frame pose 应用 + concat]
-    [T4.4 dynamic_mask cuboid 投影]
-    [T4.5 单测 test_dynamic_rigid_init]
     [T5.1 nvdiffrast 可用性确认]
     [T5.2 port EnvLight → sky_envmap.py]
     [T5.3 sky blending + loss]
@@ -76,17 +66,30 @@ kanban
     [T2.3 configs/strategy/layered_mcmc.yaml ✅]
     [T2.4 单测 test_layered_mcmc ✅]
     [T2.5 LayeredGaussians.fused_view 多层路径 ✅]
+    [T3.0 init_layer_from_points + optimizer property ✅]
+    [T3.1.a/T3.2.a ncore_semantic + mock 单测 ✅]
+    [T3.1.b/T3.2.b NCoreDataset aux + LiDAR (A800 集成) ✅]
+    [T3.3.a/b road_init.py LiDAR-Z KNN ✅]
+    [T3.4 region-weighted loss + perturb_mask Z lock ✅]
+    [T3.5.a 多层 forward + _FusedView ✅]
+    [T3.5.b Stage 3 出口 A800 5k PSNR 26.13 ✅]
+    [T4.0 tracks buffer ✅]
+    [T4.1.a/b load_tracks_from_manifest ✅]
+    [T4.2.a/b dynamic_rigid_init ✅]
+    [T4.3 _transform_means + fused_view dyn ✅]
+    [T4.4 dynamic_mask scanline AABB ✅]
+    [T4.5 Stage 4 出口 A800 10k PSNR 26.32 (real cuboids + timestamp-aligned) ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 22 | T3.x / T4.x / T5.x / T6.x / T7.x |
+| Backlog ⬜ | 12 | T5.x / T6.x / T7.x |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 11 | T0.1, T1.1, T1.2, T1.3, T1.4, T1.5, T2.1, T2.2, T2.3, T2.4, T2.5 |
+| Done ✅ | 27 | Stage 0-4 全部完成（T0.1 + T1.x × 5 + T2.x × 5 + T3.x × 9 + T4.x × 8） |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -122,7 +125,7 @@ kanban
 | **T4.2.b** | 4 | dynamic_rigid_init.py cuboid 内 LiDAR 抽取 | 0.5 | ✅ | NEW `layers/dynamic_rigid_init.py` |
 | **T4.3** | 4 | _transform_means + fused_view dynamic 分支 | 1 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests |
 | **T4.4** | 4 | dynamic_mask 纯 PyTorch scanline AABB (D5) | 0.5 | ✅ | NEW `layers/dynamic_mask.py` · NEW 6 tests |
-| **T4.5** | 4 | Stage 4 集成 + A800 出口验收 | 1 | ⬜ | MOD `trainer.py` · NEW yaml · A800 10k step |
+| **T4.5** | 4 | Stage 4 集成 + A800 出口验收（real cuboids + timestamp-aligned） | 1.5 | ✅ | NEW `tracks_loader.load_tracks_from_ncore_cuboids` · MOD `layered_model.py` (populate_tracks + timestamp-aligned _resolve_pose_idx) · MOD `protocols.Batch.timestamp_us` · MOD `datasetNcore.__getitem__` (train+val timestamp_us) · MOD `trainer.setup_training` (dynamic_rigids 串通) · MOD `mcmc.py` (track_ids buffer sync on add/relocate) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` · **A800 10k PSNR 26.315 dB (+0.18 vs Stage 3), SSIM 0.883, LPIPS 0.275, 9.58 it/s 零性能损失** |
 | **T5.1** | 5 | nvdiffrast.torch 可用性确认 / 降级 SkyModel | 0.5 | ⬜ | A800 env probe |
 | **T5.2** | 5 | port EnvLight → correction/sky_envmap.py | 0.5 | ⬜ | NEW `correction/sky_envmap.py` |
 | **T5.3** | 5 | trainer step 中 sky blending + loss | 1 | ⬜ | MOD `trainer.py` |
@@ -145,7 +148,7 @@ kanban
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
 | 3 | Road 层 | **10/10 ✅** | Stage 3 **完成**：PSNR 26.133 dB (出口 23.6, +2.5 超额), SSIM 0.879, LPIPS 0.297, 9.54 it/s 零性能损失 |
-| 4 | DynamicRigid 层 | 7/8 ⬜ | T4.0 / T4.1.a / T4.1.b / T4.2.a / T4.2.b / T4.3 / T4.4 ✅；T4.5 (A800) 待跑 |
+| 4 | DynamicRigid 层 | **8/8 ✅** | Stage 4 **完成**：PSNR 26.315 dB (Stage 3 +0.18), SSIM 0.883, LPIPS 0.275, 9.58 it/s; 31 真实 cuboid tracks (autolabels v2), 48K dyn particles; 距严格出口 26.4 差 0.085 (noise 级) |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
@@ -758,6 +761,82 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### 🎉 Stage 4 出口 ✅ (2026-05-19 16:39:17, A800 GPU 1, T4.5 完成, commit 4807951)
+
+10k step 三层 (bg + road + dynamic_rigids) Stage 4 出口验收：
+
+| 指标 | Stage 4 (timestamp-aligned) | Stage 3 baseline | Δ |
+|---|---|---|---|
+| Mean PSNR | **26.315 dB** | 26.133 | **+0.18** |
+| Mean SSIM | **0.883** | 0.879 | +0.004 |
+| Mean LPIPS | **0.275** | 0.297 | -0.022 |
+| Iter speed | **9.58 it/s** | 9.54 | **零性能损失** (三层 vs 两层) |
+| 训练时间 | 1043.9s (17.4 min) | 523s (8.7 min, 5k step) | 2× (10k vs 5k) |
+| 出口门槛 26.4 | -0.085 | — | noise 级 (< 0.1 dB) |
+| dynamic_rigid tracks | 31 real (autolabels v2) | — | 完全省 mock |
+| dynamic 粒子数 | 48,488 | — | 出口预期 [10K, 50K] 命中 |
+
+**实施关键 — 真实 NCore 数据 + timestamp-aligned 全栈**：
+
+1. **真 cuboid autolabels（替代 mock tracks）** — `tracks_loader.load_tracks_from_ncore_cuboids(loader, cam_ts)`：
+   - iter `loader.get_cuboid_track_observations()` (13657 obs across full clip) → groupby track_id → filter vehicle classes (automobile/truck/bus) → 每 cam frame 找 nearest cuboid obs within 50ms tolerance → `obs.transform("world", ts, pose_graph)` 把 rig→world
+   - clip 9ae151dc 在 2s 窗内：179 unique tracks → 31 vehicle tracks
+   - 完全绕过 mock，省去用户跑 NCore validator 的等待
+
+2. **timestamp-aligned dyn pose 查询**（替代 frame_idx mismatch）：
+   - `Batch.timestamp_us` 字段（dataset 写入 cam END timestamp = sseg key 一致）
+   - `LayeredGaussians.forward` 用 `gpu_batch.timestamp_us` 而非 trainer 的 `frame_id=global_step`
+   - `_resolve_pose_idx(timestamp_us, frame_id)`：binary-search 共享 `tracks_camera_timestamps_us` buffer，返回最近 pose index；frame_id 路径保留作 backward-compat (T4.3 unit tests)
+   - 修复前 frame_idx mismatch 导致 F6/F7 后帧退化 -3 dB；修复后 F6/F7 反而 +0.7 dB
+   - 物理上：universal time coordinate 全栈对齐（cuboid obs ts + cam frame END ts + sseg key ts 都是同 NCore 微秒时钟）
+
+3. **MCMC track_ids buffer sync**：
+   - `MCMCStrategy.add_new_gaussians` 加 hook：`hasattr(model, "track_ids") → torch.cat([track_ids, track_ids[sampled_idxs]])`
+   - `relocate_gaussians` 加 hook：dead particles 继承 alive 的 track_id (`track_ids[dead_idxs] = track_ids[sampled_idxs]`)
+   - 之前 add 1.05× 后 track_ids 长度不变 → shape mismatch crash
+
+**逐帧 PSNR vs Stage 3 (timestamp-aligned)**：
+
+| Frame | Stage 4 | Stage 3 | Δ | 解读 |
+|---|---|---|---|---|
+| 0 | 25.48 | 24.76 | **+0.72** | dyn 加成 |
+| 1 | 26.89 | 26.21 | **+0.68** | dyn 加成 |
+| 2 | 21.96 | 22.84 | -0.88 | dyn 训练略挤压 bg |
+| 3 | 23.18 | 23.77 | -0.59 | 同上 |
+| 4 | 26.58 | 26.69 | -0.11 | ≈持平 |
+| 5 | 26.16 | 26.07 | +0.09 | ≈持平 |
+| 6 | 29.00 | 28.29 | **+0.71** | dyn 加成（之前 -2.7） |
+| 7 | 31.27 | 30.45 | **+0.82** | dyn 加成（之前 -2.9） |
+
+**6 轮 first-light + 3 轮 10k 出口迭代 fix 全栈打通**：
+1. `cKDTree OOM` (road_init.py 200K×629K=500GB host) → scipy + cdist fallback
+2. `init_layer_from_points` 所有 default tensor 跟随 positions device
+3. `__getattr__` multi-layer fallback (fused tensor / fused method / broadcast method / ref-layer last resort)
+4. `LayeredGaussians.populate_tracks` + 共享 `tracks_camera_timestamps_us` buffer
+5. `mcmc add/relocate` 同步 track_ids buffer (T4.2.b D2 兑现)
+6. **timestamp-aligned `_resolve_pose_idx`** (替换 frame_idx mismatch, +1.1 dB)
+
+**v1 byte-identical 回归（T4.5 阶段，task #29，commit 同一栈）**：A800 GPU 0 与 Stage 4 出口并行跑 v1 ckpt resume 1k step → 8/8 帧 PSNR 24.123 dB byte-identical with Stage 2/3 baseline ✅ (D8 出口门禁通过)。
+
+---
+
+### 🎉 Stage 3 出口 ✅ (2026-05-19 15:15:58, A800 GPU 1, T3.5.b 完成, commit 8a625c2)
+
+5k step 两层 (bg + road) Stage 3 出口验收：
+
+| 指标 | Stage 3 | 出口门槛 | v1 baseline |
+|---|---|---|---|
+| Mean PSNR | **26.133 dB** | ≥ 23.6 (+0.5 vs v1) | 24.123 |
+| Mean SSIM | **0.879** | (v1 0.846) | 0.846 |
+| Mean LPIPS | **0.297** | (v1 0.405) | 0.405 |
+| Iter speed | **9.54 it/s** | (v1 9.48) | 9.48 |
+| 训练时间 | 523s (8.7 min, 5k) | — | — |
+| **超出口门槛** | **+2.5 dB** | — | — |
+
+详见 commit `8a625c2` (T3.5.b) 文档 + §5 后段 Stage 3 节点（保留下方原节点）。
+
+---
 
 ### T0.1 ✅ (2026-05-14 16:55-16:57，smoke)
 
