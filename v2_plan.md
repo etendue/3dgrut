@@ -110,9 +110,10 @@ kanban
 | **T3.1.b** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask（A800 集成） | 0.75 | ⬜ | MOD `datasets/datasetNcore.py` |
 | **T3.2.a** | 3 | LiDAR semantic filter mock 单测（行为契约） | 0.25 | ✅ | NEW 3 tests in `test_ncore_aux_masks.py`（合并到 T3.1.a commit） |
 | **T3.2.b** | 3 | datasetNcore.py 暴露 road/dyn LiDAR 点（A800 集成） | 0.75 | ⬜ | MOD 同上 |
-| **T3.3** | 3 | road_init.py LiDAR-Z KNN + flat scale prior | 1 | ⬜ | NEW `layers/road_init.py` |
-| **T3.4** | 3 | trainer.py region-weighted loss | 0.5 | ⬜ | MOD `trainer.py` |
-| **T3.5** | 3 | 单测 test_road_init.py | 0.5 | ⬜ | NEW tests |
+| **T3.3.a** | 3 | road_init 6 单测（z_lock / scale_flat / handles_empty / max_n / identity_quat / uneven_terrain） | 0.25 | ✅ | NEW `tests/test_road_init.py` |
+| **T3.3.b** | 3 | road_init.py LiDAR-Z KNN + flat scale prior 实现 | 0.75 | ✅ | NEW `layers/road_init.py` |
+| **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook | 0.75 | ⬜ | MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/registry.py` |
+| **T3.5** | 3 | LayeredGaussians 多层 forward + Stage 3 集成 (A800) | 1 | ⬜ | MOD `layers/layered_model.py` · MOD `trainer.py` · NEW yaml |
 | **T4.1** | 4 | scene_manifest tracks → instance_dict loader | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
 | **T4.2** | 4 | dynamic_rigid_init.py cuboid 内 LiDAR 抽取 | 1.5 | ⬜ | NEW `layers/dynamic_rigid_init.py` |
 | **T4.3** | 4 | trainer step 中 per-frame pose 应用 + concat | 1.5 | ⬜ | MOD `trainer.py` · MOD `layered_model.fused_view` |
@@ -139,7 +140,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 3/9 ⬜ | T3.0 ✅ / T3.1.a ✅ / T3.2.a ✅（Mac 45/45 PASS, 0.6s） |
+| 3 | Road 层 | 5/9 ⬜ | T3.0 / T3.1.a / T3.2.a / T3.3.a / T3.3.b ✅（Mac 51/51 PASS, 0.6s） |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -978,6 +979,31 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### T3.3.a + T3.3.b ✅ (2026-05-19, Mac local)
+
+road_init.py BEV-grid + LiDAR-Z KNN 实现 + 6 个 contract tests：
+
+- `threedgrut/layers/road_init.py` 新建 `init_road_layer(road_points, ego_trajectory, cut_range=30.0, resolution=0.05, max_n=200_000)`:
+  1. BEV bbox = ego traj XY 范围 ± cut_range
+  2. 2D grid at `resolution`
+  3. KNN-Z (用 `torch.cdist` 避开 PyTorch3D / sklearn)
+  4. 截 max_n before cdist（防超大 grid 爆内存）
+  5. defaults: identity quat / `log(scale_prior)` / density=0 / 中性灰
+- 空 LiDAR / 空 ego traj fallback 返回 shape=(0,...) 一致 tensor
+- 跟随地形（10% grade ramp 测试通过 → Z mean 拟合）
+- `threedgrut/tests/test_road_init.py` 新建 6 测试（pure CPU mock，0.06s）
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_road_init.py` | **6/6 PASS** (Mac CPU, 0.06s) |
+| 全测试套（含 T3.0/T3.1.a/T3.2.a） | **51/51 PASS** |
+| Z lock 精度 | mock 100 flat-Z 点 → \|Z\| max < 0.05 m ✓ |
+| flat scale 约束 | exp(scale_z) < 0.005 ✓; XY scale ∈ [0.05, 0.2] ✓ |
+| 地形跟随 | 10% grade ramp → X=40 处 Z mean ≈ 4 ✓ |
+| max_n 截断 | 100×100m BEV @ res=0.5m → 78400 候选 → 截到 1000 ✓ |
+
+**剩余 Stage 3**：T3.4 region loss + perturb mask hook（pure Mac），T3.1.b/T3.2.b/T3.5 需 A800/NCore SDK。
 
 ### T3.1.a + T3.2.a ✅ (2026-05-19, Mac local)
 

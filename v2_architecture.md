@@ -130,7 +130,7 @@ flowchart TD
 | `MixtureOfGaussians` | 全场景表征 | **不动**，被 LayeredGaussians 内嵌 | — | `threedgrut/model/model.py` |
 | **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG；fused_view + get_layer_mask 接口实现；T3.0 加 init_layer_from_points + optimizer property** | T1.1 ✅ T1.5 ✅ T2.5 ✅ (d4841df) T3.0 ✅ | `threedgrut/layers/layered_model.py` |
 | **LayerSpec / registry** | — | **新增 描述层属性 + 5 标准层注册表** | T1.2 ✅ | `layer_spec.py` (8 字段), `registry.py` (STANDARD_LAYERS + specs_from_config) |
-| **road_init.py** | — | **新增 LiDAR-Z KNN 路面 init** | T3.3 | `threedgrut/layers/road_init.py` |
+| **road_init.py** | — | **新增 LiDAR-Z KNN 路面 init** | T3.3.a/b ✅ | `threedgrut/layers/road_init.py` |
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
 | **dynamic_mask.py** | — | **新增 cuboid → 像素 mask 投影** | T4.4 | `threedgrut/layers/dynamic_mask.py` |
 | `MCMCStrategy` | 全局 relocate/add | 抽基类 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ | `threedgrut/strategy/mcmc.py` |
