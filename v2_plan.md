@@ -105,6 +105,7 @@ kanban
 | **T2.3** | 2 | configs/strategy/layered_mcmc.yaml | 0.5 | ✅ | NEW `configs/strategy/layered_mcmc.yaml` · MOD `trainer.py` (1a0d275) |
 | **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ✅ | NEW `conftest.py` (I-1 fix) · 8 tests total (51540a8 / 04c9174) |
 | **T2.5** | 2 | LayeredGaussians.fused_view(frame_id) 多层路径 | 1 | ✅ | MOD `layered_model.py` · NEW 4 tests (d4841df) |
+| **T3.0** | 3 | LayeredGaussians.init_layer_from_points + optimizer property | 0.5 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests (Mac 38/38 PASS) |
 | **T3.1** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
 | **T3.2** | 3 | datasetNcore.py 暴露 road LiDAR 点 | 1 | ⬜ | MOD 同上 |
 | **T3.3** | 3 | road_init.py LiDAR-Z KNN + flat scale prior | 1 | ⬜ | NEW `layers/road_init.py` |
@@ -136,7 +137,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 0/5 ⬜ | — |
+| 3 | Road 层 | 1/9 ⬜ | T3.0 ✅ (init_layer_from_points + optimizer property; Mac 38/38) |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -973,6 +974,33 @@ T2.4 代码审查遗留修复：
 ---
 
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
+
+---
+
+### T3.0 ✅ (2026-05-19, Mac local)
+
+`LayeredGaussians.init_layer_from_points()` + `optimizer` property — Stage 3/4 共享前置 API：
+
+- `threedgrut/layers/layered_model.py`：
+  - 新增 `_LayeredOptimizerView` 类（轻量包装，遍历 `self._layers[*].optimizer.step/zero_grad`；`param_groups` 聚合）
+  - 新增 `init_layer_from_points(name, positions, *, colors, rotations, scales, densities, track_ids, observer_pts, setup_optimizer)` 方法：spec-aware 默认（scale_prior log-applied / density_init / identity quat / 中性灰 → SH DC），全量 nn.Parameter 化（避开 `default_initialize_from_points` 的 sklearn KNN，让 Mac CPU 可跑测试）
+  - 新增 `optimizer` property：单 bg 模式 byte-identical 透传到 bg.optimizer（identity 检查通过）；多层模式返回 `_LayeredOptimizerView`
+  - track_ids 通过 `register_buffer(persistent=True)` 注册（dynamic_rigids T4.3 用）
+- `threedgrut/tests/test_layered_gaussians.py`：新增 5 个 T3.0 测试
+  - `test_init_layer_from_points_routes_to_mog`：positions 灌进对应层，其他层不受影响；road spec_prior=(0.1,0.1,0.001) Z log 后 e^scale_z < 0.005 ✓
+  - `test_init_layer_from_points_unknown_layer_raises`：未知层 ValueError ✓
+  - `test_init_layer_from_points_track_ids_registered_as_buffer`：track_ids 注册为 named_buffer ✓
+  - `test_optimizer_property_single_bg_passthrough`：identity 检查 `model.optimizer is bg.optimizer` ✓
+  - `test_optimizer_wrapper_steps_all_layers`：monkeypatch step 验证多层 fan-out + param_groups 聚合 ✓
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_layered_gaussians.py` | 13 prior + 5 new = **18/18 PASS** (Mac CPU, 0.57s) |
+| `pytest threedgrut/tests/` 全套 | **38/38 PASS** (Mac CPU, 0.53s) |
+| 单 bg 模式 optimizer identity | `model.optimizer is bg.optimizer` ✓ byte-identical |
+| 多层模式 optimizer 类型 | `_LayeredOptimizerView` (非 bg.optimizer) ✓ |
+
+**实现选择备注**：原 plan 建议 `init_layer_from_points` 调 `MoG.default_initialize_from_points()` 走 KNN 路径估 scale；实际全量 Parameter 化更直接 — Mac 上 conftest.py 把 sklearn stub 成空 module，default 路径会 broken，而 road_init / dyn_init 都自己提供 scales（spec.scale_prior 即可），不需要内部 distance estimation。代价是 features_specular 不从 default 路径走（直接 zero init），与 v1 一致（v1 也是 zero init specular）。
 
 ---
 

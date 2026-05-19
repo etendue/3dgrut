@@ -323,3 +323,105 @@ def test_get_layer_mask_unknown_name_raises(real_conf):
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     with pytest.raises(ValueError, match="unknown layer"):
         model.get_layer_mask("nonexistent")
+
+
+# --- T3.0: init_layer_from_points + optimizer property ---
+def _two_layer_model(real_conf):
+    """Helper: build a bg+road LayeredGaussians for T3.0 tests."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
+                  scale_prior=(0.1, 0.1, 0.001), mask_field="road_mask"),
+    ]
+    return LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+
+
+def test_init_layer_from_points_routes_to_mog(real_conf):
+    """T3.0: init_layer_from_points places positions into the named layer's MoG
+    without touching other layers; defaults from spec.scale_prior / density_init.
+    """
+    model = _two_layer_model(real_conf)
+    assert model.layers["road"].num_gaussians == 0
+    assert model.layers["background"].num_gaussians == 0
+
+    pts = torch.randn(100, 3)
+    model.init_layer_from_points("road", pts, setup_optimizer=False)
+
+    assert model.layers["road"].positions.shape == (100, 3)
+    # spec.scale_prior=(0.1, 0.1, 0.001) → log-applied; Z-axis log(0.001) ≈ -6.907
+    sz = model.layers["road"].scale[:, 2].exp().max().item()
+    assert sz < 0.005, f"road Z scale prior leaked: max={sz}"
+    # background stays empty
+    assert model.layers["background"].num_gaussians == 0
+
+
+def test_init_layer_from_points_unknown_layer_raises(real_conf):
+    """T3.0: unknown layer name raises ValueError listing enabled layers."""
+    model = _two_layer_model(real_conf)
+    with pytest.raises(ValueError, match="unknown layer"):
+        model.init_layer_from_points("sky_envmap", torch.randn(10, 3),
+                                     setup_optimizer=False)
+
+
+def test_init_layer_from_points_track_ids_registered_as_buffer(real_conf):
+    """T3.0: track_ids kwarg registers a persistent buffer on the layer (for T4.3)."""
+    model = _two_layer_model(real_conf)
+    pts = torch.randn(20, 3)
+    tids = torch.arange(20, dtype=torch.long)
+    model.init_layer_from_points("road", pts, track_ids=tids, setup_optimizer=False)
+    layer = model.layers["road"]
+    assert hasattr(layer, "track_ids")
+    assert layer.track_ids.dtype == torch.int64
+    assert layer.track_ids.shape == (20,)
+    # registered as a named buffer (so .to(device) / state_dict() carry it)
+    assert "track_ids" in dict(layer.named_buffers())
+
+
+def test_optimizer_property_single_bg_passthrough(real_conf):
+    """T3.0: single-bg mode short-circuits to the bg layer's optimizer
+    (byte-identical with v1 — no wrapper allocation)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_layer_from_points("background", torch.randn(30, 3),
+                                 setup_optimizer=False)
+    model.setup_optimizer_for_test()
+
+    bg_opt = model.layers["background"].optimizer
+    assert model.optimizer is bg_opt, (
+        "single-bg mode must return the bg layer's optimizer identity"
+    )
+
+
+def test_optimizer_wrapper_steps_all_layers(real_conf, monkeypatch):
+    """T3.0: multi-layer mode: model.optimizer.step() fans out to every layer's
+    sub-optimizer; zero_grad / param_groups also aggregated."""
+    model = _two_layer_model(real_conf)
+    model.init_layer_from_points("background", torch.randn(50, 3),
+                                 setup_optimizer=False)
+    model.init_layer_from_points("road",       torch.randn(50, 3),
+                                 setup_optimizer=False)
+    model.setup_optimizer_for_test()
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        model.layers["background"].optimizer, "step",
+        lambda *a, **kw: calls.append("bg"),
+    )
+    monkeypatch.setattr(
+        model.layers["road"].optimizer, "step",
+        lambda *a, **kw: calls.append("road"),
+    )
+
+    view = model.optimizer
+    # Multi-layer: NOT the same object as bg.optimizer; it's a fan-out view.
+    assert view is not model.layers["background"].optimizer
+    view.step()
+    assert set(calls) == {"bg", "road"}, f"got {calls}"
+
+    # param_groups aggregation: sum of per-layer groups
+    expected = sum(len(l.optimizer.param_groups) for l in model.layers.values())
+    assert len(view.param_groups) == expected

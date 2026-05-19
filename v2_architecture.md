@@ -128,7 +128,7 @@ flowchart TD
 | `train.py` | unchanged | 加 `use_layered_model` 分支 | T1.5 ✅ | `train.py` |
 | `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head；`init_model` 读 `conf.layers.enabled` 经 registry 构造 specs | T1.2 ✅ / T1.5 ✅ / T3.4 / T4.3 / T5.3 / T6.2 | `threedgrut/trainer.py` |
 | `MixtureOfGaussians` | 全场景表征 | **不动**，被 LayeredGaussians 内嵌 | — | `threedgrut/model/model.py` |
-| **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG；fused_view + get_layer_mask 接口实现** | T1.1 ✅ T1.5 ✅ T2.5 ✅ (d4841df) | `threedgrut/layers/layered_model.py` |
+| **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG；fused_view + get_layer_mask 接口实现；T3.0 加 init_layer_from_points + optimizer property** | T1.1 ✅ T1.5 ✅ T2.5 ✅ (d4841df) T3.0 ✅ | `threedgrut/layers/layered_model.py` |
 | **LayerSpec / registry** | — | **新增 描述层属性 + 5 标准层注册表** | T1.2 ✅ | `layer_spec.py` (8 字段), `registry.py` (STANDARD_LAYERS + specs_from_config) |
 | **road_init.py** | — | **新增 LiDAR-Z KNN 路面 init** | T3.3 | `threedgrut/layers/road_init.py` |
 | **dynamic_rigid_init.py** | — | **新增 cuboid 内 LiDAR 抽取** | T4.2 | `threedgrut/layers/dynamic_rigid_init.py` |
@@ -399,7 +399,7 @@ flowchart TB
 | 文件 | 任务 |
 |---|---|
 | `threedgrut/layers/__init__.py` | T1.1 ✅ / T1.2 ✅ (导出 LayerSpec/registry，lazy-import LayeredGaussians) |
-| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 ✅ (fused_view + get_layer_mask, d4841df) |
+| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 ✅ (fused_view + get_layer_mask, d4841df) / T3.0 ✅ (init_layer_from_points + optimizer property + _LayeredOptimizerView) |
 | `threedgrut/layers/layer_spec.py` | T1.1 ✅ / T1.2 ✅ (8 字段) |
 | `threedgrut/layers/registry.py` | T1.2 ✅ |
 | `threedgrut/layers/road_init.py` | T3.3 |

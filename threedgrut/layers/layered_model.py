@@ -25,7 +25,7 @@ modification for T1.1 smoke. T2 replaces this with explicit fused-view logic.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -33,6 +33,46 @@ import torch.nn as nn
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.logger import logger
+from threedgrut.utils.misc import sh_degree_to_specular_dim
+
+
+# Degree-0 SH coefficient: 1 / (2 * sqrt(pi)). Used to convert RGB in [0, 1]
+# to the DC term of the SH expansion in init_layer_from_points.
+_SH_C0 = 0.28209479177387814
+
+
+class _LayeredOptimizerView:
+    """Lightweight optimizer-like wrapper that fans calls across per-layer Adams.
+
+    LayeredGaussians.optimizer returns one of these in multi-layer mode so the
+    Trainer's main loop ``self.model.optimizer.step()`` works unchanged. In
+    single-bg mode the property short-circuits to the bg layer's own optimizer
+    (byte-identical with the v1 path; this wrapper is not used).
+    """
+
+    def __init__(self, layers: nn.ModuleDict) -> None:
+        self._layers = layers
+
+    def step(self) -> None:
+        for layer in self._layers.values():
+            opt = getattr(layer, "optimizer", None)
+            if opt is not None:
+                opt.step()
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        for layer in self._layers.values():
+            opt = getattr(layer, "optimizer", None)
+            if opt is not None:
+                opt.zero_grad(set_to_none=set_to_none)
+
+    @property
+    def param_groups(self) -> list[dict]:
+        groups: list[dict] = []
+        for layer in self._layers.values():
+            opt = getattr(layer, "optimizer", None)
+            if opt is not None:
+                groups.extend(opt.param_groups)
+        return groups
 
 
 # Per-particle parameter names forwarded to the single background layer when in
@@ -214,6 +254,103 @@ class LayeredGaussians(nn.Module):
             for n in _FORWARD_PARAM_NAMES:
                 pieces[n].append(getattr(layer, n))
         return {n: torch.cat(pieces[n], dim=0) for n in _FORWARD_PARAM_NAMES}
+
+    # ------------------------------------------------------------------ T3.0 init
+    def init_layer_from_points(
+        self,
+        layer_name: str,
+        positions: torch.Tensor,
+        *,
+        colors: Optional[torch.Tensor] = None,
+        rotations: Optional[torch.Tensor] = None,
+        scales: Optional[torch.Tensor] = None,
+        densities: Optional[torch.Tensor] = None,
+        track_ids: Optional[torch.Tensor] = None,
+        observer_pts: Optional[torch.Tensor] = None,
+        setup_optimizer: bool = True,
+    ) -> None:
+        """Initialize one named layer's MoG parameters from a point cloud.
+
+        Spec-aware defaults: when scales / densities / colors / rotations are
+        omitted, fall back to ``LayerSpec.scale_prior`` (log-applied) /
+        ``LayerSpec.density_init`` / identity quat / neutral gray (0.5).
+
+        Args:
+            layer_name: must be in ``self.layers``.
+            positions: ``[N, 3]``. World frame for background / road;
+                object-local frame for dynamic_rigids (pair with ``track_ids``).
+            colors:    ``[N, 3]`` in [0, 1]; default neutral gray.
+            rotations: ``[N, 4]`` quat wxyz; default identity ``(1, 0, 0, 0)``.
+            scales:    ``[N, 3]`` log-space; default ``torch.log(spec.scale_prior)``.
+            densities: ``[N, 1]`` log-space; default ``spec.density_init``.
+            track_ids: ``[N]`` int64; only meaningful for dynamic_rigids.
+                Registered as a persistent buffer ``track_ids`` on the layer.
+            observer_pts: reserved; ignored in T3.0 (full Parameter path,
+                no observer-distance scale estimation).
+            setup_optimizer: when True (default), wire the per-layer Adam via
+                ``layer.set_optimizable_parameters()`` + ``layer.setup_optimizer()``.
+                Tests that bypass CUDA conf paths pass False.
+        """
+        if layer_name not in self.layers:
+            raise ValueError(
+                f"unknown layer '{layer_name}', enabled = {list(self.layers)}"
+            )
+        spec = next(s for s in self.specs if s.name == layer_name)
+        layer = self.layers[layer_name]
+        N = positions.shape[0]
+        dtype = torch.float32
+
+        if rotations is None:
+            rotations = torch.zeros(N, 4, dtype=dtype)
+            rotations[:, 0] = 1.0
+        if scales is None:
+            s_phys = torch.tensor(list(spec.scale_prior), dtype=dtype)
+            scales = torch.log(s_phys).expand(N, 3).clone()
+        if densities is None:
+            densities = torch.full((N, 1), float(spec.density_init), dtype=dtype)
+        if colors is None:
+            colors = torch.full((N, 3), 0.5, dtype=dtype)
+
+        features_albedo = (colors.to(dtype=dtype) - 0.5) / _SH_C0
+        num_specular_dims = sh_degree_to_specular_dim(layer.max_n_features)
+        features_specular = torch.zeros((N, num_specular_dims), dtype=dtype)
+
+        # Tensors keep their incoming device. Caller (Trainer) is responsible
+        # for putting them on GPU; tests stay on CPU. Note layer.device is
+        # hardcoded to "cuda" in MoG.__init__ but is only consulted by code
+        # paths that allocate new tensors (not by the assignments below).
+        layer.positions         = nn.Parameter(positions.to(dtype=dtype))
+        layer.rotation          = nn.Parameter(rotations.to(dtype=dtype))
+        layer.scale             = nn.Parameter(scales.to(dtype=dtype))
+        layer.density           = nn.Parameter(densities.to(dtype=dtype))
+        layer.features_albedo   = nn.Parameter(features_albedo)
+        layer.features_specular = nn.Parameter(features_specular)
+
+        if setup_optimizer:
+            layer.set_optimizable_parameters()
+            layer.setup_optimizer()
+            layer.validate_fields()
+
+        if track_ids is not None:
+            layer.register_buffer("track_ids", track_ids.long(), persistent=True)
+
+    # ------------------------------------------------------------------ T3.0 optimizer view
+    @property
+    def optimizer(self):
+        """Drop-in optimizer view across all layers.
+
+        Single-bg mode: return the bg layer's own optimizer directly, so
+        ``self.model.optimizer.step()`` from the trainer is byte-identical
+        with v1 (no wrapper allocation, no fan-out cost).
+
+        Multi-layer mode: return a ``_LayeredOptimizerView`` that fans
+        ``step()`` / ``zero_grad()`` / ``param_groups`` across each layer's
+        sub-optimizer.
+        """
+        bg = self._single_bg_layer()
+        if bg is not None and getattr(bg, "optimizer", None) is not None:
+            return bg.optimizer
+        return _LayeredOptimizerView(self.layers)
 
     def get_layer_mask(self, name: str) -> torch.Tensor:
         """Return Bool mask of shape [N_total] selecting particles of layer `name`.
