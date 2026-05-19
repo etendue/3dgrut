@@ -784,6 +784,36 @@ flowchart LR
 
 ## 5. Done Log
 
+### 📊 Stage 3 7-cam 20s 30k step baseline (2026-05-19 17:00:34, A800 GPU 0, task #30)
+
+**v1 KPI 对照实测** — 用 v2_road yaml (bg + road, region-weighted L1, perturb Z lock) 跑 7-cam × 整 20s clip × 30k step：
+
+| 指标 | 实测 (v2 Stage 3, 7-cam 20s 30k) | v1 plan "目标" KPI | v2 Stage 7 出口 KPI |
+|---|---|---|---|
+| Mean PSNR | **23.825 dB** | 27.60 (差 -3.78) | ≥ 28.5 (差 -4.7) |
+| Mean SSIM | 0.819 | — | — |
+| Mean LPIPS | 0.371 | — | — |
+| std_psnr | 3.125 (后向相机偏低) | — | — |
+| Eval frames | 525 (7 cam × 75 val) | — | — |
+| 训练时间 | 62.75 min (52 train + 10 eval) | A100 35 min | ≤ 60 min ✓ |
+
+**关键观察 & v2 KPI 缺口分析**：
+
+1. **7-cam 比单 cam 低 2.3 dB**（单 cam 30k 未跑，但 5k 已 26.13；7-cam 30k 仅 23.83）：多 cam 7× 像素 + 7× 视角 → 30k step 仍欠拟合迹象明显
+2. **后向相机拖低**：std 3.125，rear cameras frame PSNR 17-25 dB；front_wide / front_tele 仍稳在 26-30 dB
+3. **v1 plan "27.60"** 可能是借来的 NCore 对照数字（"v1 基线"列），不是 9ae151dc clip 上 v1 真实测过的；我们这次是从 random init 用 v2 protocol 跑的，apples vs oranges
+4. **距 v2 Stage 7 出口 ≥28.5 缺 4.7 dB**，候选 ROI 顺序：
+   - Stage 5 sky envmap (sky 区不爆黑) → **+1~2 dB** 估
+   - LiDAR depth supervision (drivestudio 标配, §14.3 V3-T9) → +0.5~1 dB
+   - Stage 6 per-cam exposure (rear/侧 camera 曝光对齐) → +0.5~1 dB
+   - v2_full yaml (含 dynamic_rigids 层) → +0.2~0.5 dB
+   - 30k → 50k-100k step (drivestudio / NuRec 常用) → +0.5~1 dB
+5. **task #30 ssh wrapper exit 255 ≠ training failed**：远端 A800 process 跑完，eval 525 frames 全数完成 + metrics.json 保存；只是本地 ssh session 中途断了
+
+**Stage 3 (bg+road, 单层不含 dyn) 7-cam 20s 30k 数字定调**：23.825 dB 是 v2 当前架构的**7-cam baseline 起点**，Stage 5/6 加完整后预期 26-28 dB。
+
+---
+
 ### 🎉 Stage 4 出口 ✅ (2026-05-19 16:39:17, A800 GPU 1, T4.5 完成, commit 4807951)
 
 10k step 三层 (bg + road + dynamic_rigids) Stage 4 出口验收：
