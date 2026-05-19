@@ -45,6 +45,13 @@ class Batch:
     # dyn_mask_sseg / dyn_mask_cuboid / valid_pixel_mask. Each tensor is
     # [B, H, W] float in {0.0, 1.0}, lazily moved to GPU by the dataset.
     image_infos: Optional[Dict[str, torch.Tensor]] = None
+    # T4.5: per-frame camera END timestamp in microseconds. NCoreDataset sets
+    # this from ``camera_sensor.frames_timestamps_us[camera_frame_index, END]``;
+    # matches the sseg / lidar-sseg aux key convention. Used by
+    # LayeredGaussians.forward to look up per-track cuboid pose at the right
+    # absolute time (bypassing fragile dataset frame-index translations).
+    # Set to -1 when unavailable (non-NCore datasets / inference free camera).
+    timestamp_us: int = -1
 
     def __post_init__(self):
         batch_size = self.T_to_world.shape[0]

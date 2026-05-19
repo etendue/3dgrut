@@ -132,6 +132,11 @@ class MCMCStrategy(BaseStrategy):
 
             self._update_param_with_optimizer(update_param_fn, update_optimizer_fn)
 
+            # T4.5 fix: dead particles inherit track_id from their alive donor
+            # so the reborn particle sits in the right cuboid's local frame.
+            if hasattr(self.model, "track_ids") and self.model.track_ids is not None:
+                self.model.track_ids[dead_idxs] = self.model.track_ids[sampled_idxs]
+
         if self.conf.strategy.print_stats:
             logger.info(f"Relocated {n_dead_gaussians} ({n_dead_gaussians / len(densities) * 100:.2f}%) gaussians")
 
@@ -173,6 +178,15 @@ class MCMCStrategy(BaseStrategy):
                 return torch.cat([v, v_new])
 
             self._update_param_with_optimizer(update_param_fn, update_optimizer_fn)
+
+            # T4.5 fix: sync per-particle non-Parameter buffers (e.g. track_ids
+            # for dynamic_rigids layer) that _update_param_with_optimizer only
+            # touches Parameter fields. Without this, fused_view sees a layer
+            # whose positions.shape[0] > track_ids.shape[0] → crash.
+            if hasattr(self.model, "track_ids") and self.model.track_ids is not None:
+                self.model.track_ids = torch.cat(
+                    [self.model.track_ids, self.model.track_ids[sampled_idxs]]
+                )
 
         if self.conf.strategy.print_stats:
             logger.info(

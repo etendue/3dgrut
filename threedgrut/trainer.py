@@ -370,12 +370,74 @@ class Trainer3DGRUT:
                                 f"🔆 road layer initialized: {r_pos.shape[0]} "
                                 f"particles (from {road_pts.shape[0]} road LiDAR pts)"
                             )
-                        # 3. dynamic_rigids: deferred to T4.5 (needs tracks manifest)
+                        # 3. dynamic_rigids: real-cuboids path (T4.5).
+                        # Source tracks from NCore manifest cuboid autolabels
+                        # (loader.get_cuboid_track_observations); no mock.
                         if "dynamic_rigids" in model.layers:
-                            logger.warning(
-                                "🔆 dynamic_rigids layer enabled but T4.5 (tracks "
-                                "manifest + dyn init) not yet wired; layer stays empty."
+                            import ncore.data as _nd
+                            from threedgrut.datasets.tracks_loader import (
+                                load_tracks_from_ncore_cuboids,
                             )
+                            from threedgrut.layers.dynamic_rigid_init import (
+                                init_dynamic_rigid_layer,
+                            )
+                            loader = train_dataset.sequence_loaders[
+                                train_dataset.sequence_id
+                            ]
+                            # Reference camera (first) for frame timestamps;
+                            # cuboid_track_observations are sensor-agnostic so
+                            # any camera's END timestamps work as the canonical
+                            # timeline (matches sseg/lidar-sseg key convention).
+                            ref_cam = train_dataset.camera_ids[0]
+                            ref_sensor = train_dataset.sequence_camera_sensors[
+                                train_dataset.sequence_id
+                            ][ref_cam]
+                            cam_ts = ref_sensor.frames_timestamps_us[
+                                :, _nd.FrameTimepoint.END
+                            ]
+                            # Restrict to clip's active time window so we don't
+                            # iterate frames outside the duration_sec slice.
+                            time_range = train_dataset.time_range_us
+                            in_window = np.array([
+                                int(t) in time_range for t in cam_ts
+                            ])
+                            cam_ts_active = np.asarray(cam_ts)[in_window]
+                            tracks = load_tracks_from_ncore_cuboids(
+                                loader, cam_ts_active,
+                            )
+                            logger.info(
+                                f"🔆 NCore cuboids → {len(tracks)} dynamic_rigid "
+                                f"tracks (over {cam_ts_active.shape[0]} frames in window)"
+                            )
+                            if not tracks:
+                                logger.warning(
+                                    "🔆 dynamic_rigids layer enabled but no "
+                                    "vehicle tracks within time window; layer "
+                                    "stays empty (this is OK for clips with no "
+                                    "vehicles in the chosen duration_sec slice)."
+                                )
+                            else:
+                                model.populate_tracks(tracks)
+                                # Pull dyn LiDAR + filter per-cuboid → object-local
+                                dyn_pts, _ = train_dataset.get_dynamic_lidar_points()
+                                d_pos, d_track_ids, _track_names = (
+                                    init_dynamic_rigid_layer(
+                                        tracks, dyn_pts, max_pts_per_track=5_000,
+                                    )
+                                )
+                                device = model.layers["dynamic_rigids"].device
+                                model.init_layer_from_points(
+                                    "dynamic_rigids",
+                                    d_pos.to(device),
+                                    track_ids=d_track_ids.to(device),
+                                    setup_optimizer=True,
+                                )
+                                logger.info(
+                                    f"🔆 dynamic_rigids layer initialized: "
+                                    f"{d_pos.shape[0]} particles "
+                                    f"(from {dyn_pts.shape[0]} dyn LiDAR pts × "
+                                    f"{len(tracks)} cuboids)"
+                                )
                     else:
                         # single-bg or v1: original byte-identical path
                         model.init_from_lidar(pc, observer_points)

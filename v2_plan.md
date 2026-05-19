@@ -1346,3 +1346,122 @@ LayeredMCMC: 1 sub-strategies for layers ['background']
 ### Stage 3 / 4 解锁
 
 Stage 2 完成后，Stage 3 (Road) 和 Stage 4 (DynamicRigid) 可并行：它们只往 `LayeredGaussians.layers[name]` 塞数据，不再触碰 MCMC。
+
+---
+
+## 14. NuRec vs v2 缺口清单（V3 / V4 任务种子）
+
+> **来源**：`/Users/etendue/repo/report/NVIDIA NuRec 技术深度解析.md`（基于 NuRec 25.7.9 + parsed_config.yaml 7350 行）
+> **对照基线**：本 plan（v2 Stage 1-7） + `configs/apps/ncore_3dgut_mcmc_v2_full.yaml`
+> **状态符号**：✅ 已落 / 在做 · ⚠️ 占位 / 部分实现 · ❌ 完全未实现（V3 / V4 候选）
+> **本节作用**：把所有"NuRec 有 · v2 没做"的 trick 落到具体任务种子，按预期 PSNR 贡献排序，留作 V3 / V4 plan 的输入。
+
+### 14.1 辅助数据通道（NuRec §3）
+
+| NuRec trick | 状态 | V3/V4 任务种子 |
+|---|:---:|---|
+| DepthAnythingV2 度量深度 prior | ❌ | V3-D1：dataset 加 metric depth 读取 + trainer 加 depth loss head |
+| DINOv2 背景层 extra_signal（20 维语义 logits） | ❌ | V3-D2：MoG 加 extra_signal 通道 + dataset DINOv2 feat reader |
+| Mask2Former seg-logits（21 类 softmax）作 aux CE loss | ⚠️ T3.1.b 只有 hard mask | V3-D3：sseg 直读 logits + sky/road/dyn CE 头 |
+| 场景流 mask（`track_min_speed=1.4 m/s` + dilate 20 px） | ❌ | V3-D4：dataset 加 flow mask + 并入 valid_pixel_mask |
+| 交通灯 / 闪烁光源 mask（21 px dilation） | ❌ | V3-D5：与 D4 同走 mask 管线 |
+| Cuboid LiDAR padding `[0.5, 0.5, 0.25] m` | ❌ T4.4 仅精确投影 | V3-D6：T4.4 dynamic_mask 加 cuboid 膨胀 |
+| Cuboid camera padding `[1.0, 1.0, 0.25] m` | ❌ | V3-D7：同 D6 |
+| 相机 mask 30 iter dilation | ❌ | V3-D8：mask 合并管线统一加 dilation |
+| 帧 mask 10 iter dilation | ❌ | V3-D9：同 D8 |
+
+### 14.2 多层场景分解（NuRec §4）
+
+| NuRec trick | 状态 | V3/V4 任务种子 |
+|---|:---:|---|
+| Background `fourier_features_dim=5`（时间编码） | ❌ | V3-L1：MoG 加 fourier-time embedding（背景） |
+| Road `fourier_features_dim=1`（轻量时间编码） | ❌ | V3-L2：road 同上（小维度） |
+| Road `scale_pos_lr_by_scene_extent=false` | ❌ | V3-L3：LayerSpec 加 `scale_pos_lr_by_scene_extent` 字段，trainer 接 |
+| Background `ignore_classes_from_layers=[road]` | ❌ | V3-L4：layered loss 加层级排他 mask |
+| DynamicRigid `symmetric_axis='Y'`（左右对称先验） | ❌ | V3-L5：dynamic_rigid_init 注入对称粒子 + 镜像约束 reg |
+| DynamicRigid 5000 pts/track + 上限 300K | ⚠️ v2 用 200K | V3-L6：per-track cap + 全层 cap 对齐 NuRec |
+| Track-pose 联合优化（fix_first/last + warm start ≥ 500） | ❌（v2.x 明确不做） | V3-L7：dynamic_rigids pose 加可学习 Δpose + Sequential warm-up |
+| `optimize_track_albedo`（每轨迹外观偏移） | ❌ | V3-L8：每 track 一个 SH bias，Constant→Linear→Cosine LR |
+| `optimize_track_scale`（每轨迹尺度偏移） | ❌ | V3-L9：同 L8 |
+| DynamicDeformable hash-grid-object 形变场（permuto hash 16 层 + FullyFusedMLP 64×1，渐进 10→16） | ❌（v2 仅 spec 占位） | **V4 主力**：完整形变层；`deformnet_start_iteration=1000`、`optimize_canonical_xyz`、`smoothness_frame_steps=5` |
+| Sky envmap cubemap 512×512×6 面 + nvdiffrast | ⚠️ T5.2 计划 | V2/V3 完成 Stage 5 |
+| Sky envmap `should_inpaint=true` + threshold 0.05 + kernel 10 | ❌ | V3-L10：在 T5.2 基础上加 inpaint 模块（关键 — 新视角不爆黑洞） |
+| Sky envmap `composite_in_linear_space=false`（gamma 合成） | ❌ | V3-L11：trainer blend 路径加 sRGB↔linear |
+| Sky envmap `min_grad_updates=1000`（warm-up） | ❌ | V3-L12：sky_envmap 前 1k 步冻结 |
+
+### 14.3 训练策略（NuRec §5）
+
+| NuRec trick | 状态 | V3/V4 任务种子 |
+|---|:---:|---|
+| PERTURB `move_outside_of_cuboid=false`（粒子不出 cuboid） | ⚠️ T3.4 perturb mask hook 已抽出 | V3-T1：把 hook 实现为"粒子+noise 后投回 cuboid"约束 |
+| `opacity_threshold=0.005` 剪枝 | 待校对 | V3-T2：与 NuRec 校对当前 mcmc.py 实际值 |
+| `binom_n_max=51` / `noise_lr=5000` | 待校对 | V3-T3：同 T2 |
+| add/relocate 双阶上限（`add.max_n=1.8M`，overall=2M） | ❌ v2 单层 cap | V3-T4：layered_mcmc.yaml 加 `add_cap_ratio=0.9` |
+| StepFunCosineAnnealingLR（阶梯余弦） | ❌ | V3-T5：新建 scheduler，供轨迹标定 / albedo / 形变网络 |
+| SequentialLR（Constant → Linear → Cosine） | ❌ | V3-T6：与 L7 / L8 配合 |
+| position 组 vs 特征组独立 LR + γ=0.9998465 | ⚠️ v1 fused_adam 已分组 | V3-T7：校对 per-layer LR 是否对齐 NuRec |
+| 每步 `camera_rays=6144 + lidar_rays=2048` 1:1 | ⚠️ v2 未启 LiDAR ray | V3-T8：trainer step 加 LiDAR ray batch |
+| **LiDAR ray 监督本身**（NuRec 主训练同等权重） | ❌（最关键缺口之一） | V3-T9：LiDAR depth/intensity ray loss head |
+
+### 14.4 渲染管线（NuRec §6）
+
+| NuRec trick | 状态 | V3/V4 任务种子 |
+|---|:---:|---|
+| 3DGRT k-buffer 二次射线 + 与 3DGUT 混合 | ⚠️ v1 有，v2 未启 | V3-R1：v2_full.yaml 切到 3DGRUT 复合 renderer + 配置 secondary ray |
+| `lidar_divergence=0.002 rad`（cone 抗锯齿） | ❌ | V3-R2：与 T8 / T9 配合，tracer 端 expose |
+| `min_projected_ray_radius=0.5477`（≈√(1/3)） | 待校对 | V3-R3：校对 3DGUT default |
+| `image_margin_factor=0.1` | 待校对 | V3-R4：同 R3 |
+
+### 14.5 后处理（NuRec §7）
+
+| NuRec trick | 状态 | V3/V4 任务种子 |
+|---|:---:|---|
+| **Cosmos-DiFix 扩散修复 + 渐进蒸馏** | ❌（v2 明确 v3） | **V3 主力**：fixer 模型 NGC 下载 + 缓存策略 + 50% 训练视角 + 50% ±2 m 新视角；`start_epoch=16`、`full_novel_view_by_epoch=22`、`use_color_transfer=true` |
+| 双边网格 1×1×1 grid（按 `camera_id`） | ⚠️ T6 affine 占位 | V3-P1：Recon-Studio 双边网格直接 port，替换 affine |
+| 有效像素 mask 管线（多源 + dilation 合并） | ⚠️ T3.4 部分 | V3-P2：把 D4-D9 mask 全部汇入 valid_pixel_mask |
+
+### 14.6 几何提取 / USDZ（NuRec §8）
+
+> 全部明确为独立 WP（V1-5 / V1-6），不在本表归类 V3/V4 — 仅做 trick 锚点。
+
+| NuRec trick | 状态 | 归属 |
+|---|:---:|---|
+| Poisson 网格 (`n_neighbors=200`, `trim_distance=0.225`) | ❌ | V1-5 |
+| Ground mesh (RANSAC plane, `voxel_size=0.1`, 10 smoothing passes) | ❌ | V1-5 |
+| USDZ 包 (nrec_data + rig_trajectories + sequence_tracks + map.xodr) | ❌ | V1-6 |
+| OpenDRIVE 坐标链 NuRec → ECEF → ENU | ❌ | V1-6 |
+
+### 14.7 评估 / 验证（NuRec §10）
+
+| NuRec trick | 状态 | V3/V4 任务种子 |
+|---|:---:|---|
+| `val_lidar=true` LiDAR 域单独 PSNR | ❌ | V3-E1：与 T9 配合开启 |
+| cPSNR（按 semantic class 拆 PSNR） | ❌（T7.3 KPI 概念有，工具未实现） | V3-E2：evaluator 加 per-class PSNR / SSIM 拆解 |
+| 新视角扰动验证集（±2 m 平移 + 小旋转） | ❌ | V3-E3：与 Cosmos-DiFix 同一套 pose 生成器复用 |
+
+### 14.8 V3 优先级排序（按预期 PSNR 贡献，从大到小）
+
+| # | Trick | 任务种子 ID |
+|---:|---|---|
+| 1 | Cosmos-DiFix 渐进蒸馏 | V3-Cosmos |
+| 2 | LiDAR ray 监督 + lidar_divergence | V3-T8 / T9 / R2 |
+| 3 | Sky envmap inpaint + gamma 合成（Stage 5 完成 + 增强） | V3-L10 / L11 / L12 |
+| 4 | Track-pose 联合优化（warm start + fix_first/last） | V3-L7 |
+| 5 | `symmetric_axis='Y'` + per-track albedo/scale | V3-L5 / L8 / L9 |
+| 6 | 背景层 extra_signal 20 维语义 logits + Fourier time encoding | V3-L1 / D2 |
+| 7 | 双边网格 1×1×1 替换 affine（T6 升级） | V3-P1 |
+| 8 | MCMC PERTURB cuboid 约束 + add/relocate 双阶上限 | V3-T1 / T4 |
+| 9 | DynamicDeformable hash-grid 形变场（行人 / 骑行） | **V4 主力** |
+| 10 | mask 管线膨胀细节（cuboid padding / 场景流 / 交通灯） | V3-D4-D9 |
+
+### 14.9 不收录的 NuRec 部分
+
+| 部分 | 原因 |
+|---|---|
+| NCore v4 schema 详解 | 数据层已通过 NCoreDataset + aux_readers.py 完整对接（T3.1.b ✅） |
+| 3DGUT UT 投影主射线 / 多项式畸变 / 滚动快门（5 iter） | v1 已对齐，无 gap |
+| 渐进式 SH（0 → 3 in 3k step） | v1 已对齐 |
+| MCMC 三操作主框架（RELOCATE / ADD / PERTURB） | T2.x ✅ 完成主框架 |
+| 多层主架构（背景 / 路面 / 动态刚体 / 天空 envmap） | Stage 1-5 已规划 / 部分完成 |
+| Ego 掩膜 | v1 已有 |
+| Cuboid 轨迹清洗（`track_min_speed`、`min_centroid_dist`） | T4.1 已对接 |

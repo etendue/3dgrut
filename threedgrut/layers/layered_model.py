@@ -175,19 +175,13 @@ class LayeredGaussians(nn.Module):
         # dicts for ergonomic per-track lookup by name.
         object.__setattr__(self, "tracks_poses", {})    # {tid: Tensor[F, 4, 4]}
         object.__setattr__(self, "tracks_active", {})   # {tid: BoolTensor[F]}
+        # T4.5 timestamp-aligned dyn pose lookup: shared per-frame absolute
+        # camera END timestamps in microseconds. Single buffer across all
+        # tracks (all tracks share the same camera frame schedule). Used by
+        # _transform_means to binary-search a batch's timestamp_us → pose idx.
+        # None when no tracks (single-bg / road-only multi-layer).
         if tracks is not None:
-            for tid, info in tracks.items():
-                poses = info["poses"] if isinstance(info, dict) else info[0]
-                active = (info["active"] if isinstance(info, dict) and "active" in info
-                          else info.get("frame_info") if isinstance(info, dict)
-                          else info[1])
-                buf_pose_name = f"_track_pose_{tid}"
-                buf_active_name = f"_track_active_{tid}"
-                self.register_buffer(buf_pose_name, poses, persistent=True)
-                self.register_buffer(buf_active_name, active.to(torch.bool),
-                                     persistent=True)
-                self.tracks_poses[tid] = getattr(self, buf_pose_name)
-                self.tracks_active[tid] = getattr(self, buf_active_name)
+            self._populate_tracks_impl(tracks)
 
     # ------------------------------------------------------------------ checkpoint
 
@@ -311,8 +305,17 @@ class LayeredGaussians(nn.Module):
         if bg is not None:
             return bg(gpu_batch, train=train, frame_id=frame_id)
 
+        # T4.5: use absolute camera END timestamp_us from the batch as the
+        # universal time coordinate for dyn pose lookup (binary-search in
+        # the shared tracks_camera_timestamps_us buffer). frame_id arg from
+        # trainer is global_step for tracer NVTX, not a dataset index, and
+        # using it as a dyn pose index causes timing drift (verified Stage 4
+        # 10k run: late frames lost ~3 dB due to closest_idx vs cover_range
+        # absolute-position mismatch). Fall back to -1 → no transform when
+        # batch lacks timestamp_us (non-NCore datasets / inference).
+        ts_us = getattr(gpu_batch, "timestamp_us", -1)
         # Multi-layer: fused view + reference layer renderer.
-        fused = self.fused_view(frame_id)
+        fused = self.fused_view(timestamp_us=ts_us)
         ref_layer = next(iter(self.layers.values()))
         view = _FusedView(fused, ref_layer)
         return ref_layer.renderer.render(view, gpu_batch, train, frame_id)
@@ -326,7 +329,8 @@ class LayeredGaussians(nn.Module):
         return None
 
     # ------------------------------------------------------------------ T2.5 fused-view
-    def fused_view(self, frame_id: int | None = None) -> dict[str, torch.Tensor]:
+    def fused_view(self, frame_id: int | None = None, *,
+                   timestamp_us: int = -1) -> dict[str, torch.Tensor]:
         """Return concat of 6 per-particle parameters across all particle layers.
 
         Single-bg-layer mode: short-circuits to direct attribute access (returns
@@ -335,13 +339,17 @@ class LayeredGaussians(nn.Module):
         Multi-layer mode: returns `torch.cat(..., dim=0)` across layers in
         `self.specs` order (particle layers only).
 
-        T4.3 dynamic-rigid handling: when a particle layer is named
-        ``dynamic_rigids``, its `positions` are stored in object-local frame.
-        Before concat, they are routed through ``_transform_means`` using the
-        current frame's per-track pose (sourced from buffers registered in
-        T4.0). When ``frame_id is None`` (e.g. inference), the dynamic layer's
-        positions are passed through unchanged with a TODO marker for Stage 8
-        "nearest active frame" fallback (D4).
+        T4.3/T4.5 dynamic-rigid handling: when a particle layer is named
+        ``dynamic_rigids`` and ``timestamp_us > 0``, its `positions` (stored
+        in object-local frame) are routed through ``_transform_means`` using
+        the per-track pose at that absolute camera timestamp (binary-search
+        in the shared ``tracks_camera_timestamps_us`` buffer). When neither
+        timestamp_us nor frame_id is provided (e.g. inference free camera),
+        the dynamic layer's positions are passed through unchanged (Stage 8
+        "nearest active frame" fallback TODO, D4).
+
+        ``frame_id`` arg kept for backward compat (T2.5 test helper, T4.3
+        unit tests). New code paths should pass timestamp_us instead.
         """
         bg = self._single_bg_layer()
         if bg is not None:
@@ -357,44 +365,86 @@ class LayeredGaussians(nn.Module):
                 if (
                     n == "positions"
                     and spec.name == "dynamic_rigids"
-                    and frame_id is not None
                     and hasattr(layer, "track_ids")
                     and len(self.tracks_poses) > 0
+                    and (timestamp_us > 0 or frame_id is not None)
                 ):
-                    v = self._transform_means(v, layer.track_ids, frame_id)
+                    v = self._transform_means(
+                        v, layer.track_ids,
+                        timestamp_us=timestamp_us, frame_id=frame_id,
+                    )
                 pieces[n].append(v)
         return {n: torch.cat(pieces[n], dim=0) for n in _FORWARD_PARAM_NAMES}
 
-    # ------------------------------------------------------------------ T4.3 transform_means
+    # ------------------------------------------------------------------ T4.5 transform_means (timestamp-aligned)
+    def _resolve_pose_idx(self, timestamp_us: int, frame_id: int | None) -> int:
+        """Convert (timestamp_us | frame_id) → pose-buffer index.
+
+        Priority:
+          1. timestamp_us > 0 + tracks_camera_timestamps_us populated →
+             binary-search nearest cam timestamp index. This is the
+             T4.5 correct path (universal time coordinate).
+          2. frame_id is not None → use as-is, clamped to [0, F-1].
+             Backward compat for T2.5 / T4.3 unit tests and inference
+             callers without timestamp_us.
+          3. Else → 0 (defensive fallback).
+        """
+        any_track = next(iter(self.tracks_poses))
+        F = getattr(self, f"_track_pose_{any_track}").shape[0]
+
+        if timestamp_us > 0 and hasattr(self, "tracks_camera_timestamps_us"):
+            ts_buf = self.tracks_camera_timestamps_us
+            # Binary search; clamp to [0, F-1]; check whether prev is closer.
+            idx = int(torch.searchsorted(
+                ts_buf, torch.tensor(int(timestamp_us), dtype=ts_buf.dtype, device=ts_buf.device)
+            ).item())
+            idx = max(0, min(idx, F - 1))
+            if idx > 0:
+                d_curr = abs(int(ts_buf[idx].item()) - int(timestamp_us))
+                d_prev = abs(int(ts_buf[idx - 1].item()) - int(timestamp_us))
+                if d_prev < d_curr:
+                    idx -= 1
+            return idx
+        if frame_id is not None:
+            return max(0, min(int(frame_id), F - 1))
+        return 0
+
     def _transform_means(
         self,
         positions_local: torch.Tensor,
         track_ids: torch.Tensor,
-        frame_id: int,
+        timestamp_us: int = -1,
+        frame_id: int | None = None,
     ) -> torch.Tensor:
-        """Apply per-particle ``object → world`` SE(3) using current frame's
-        per-track pose.
+        """Apply per-particle ``object → world`` SE(3) using the per-track
+        pose at the frame nearest ``timestamp_us`` (T4.5 timestamp-aligned).
 
-        Pose source: ``self.tracks_poses`` buffer dict registered in T4.0.
-        Particle-to-track routing: ``track_ids`` per-particle int buffer
-        registered by ``init_layer_from_points("dynamic_rigids", ..., track_ids=...)``.
-        Track-name → int-id mapping: ``sorted(self.tracks_poses.keys())``
-        (must match the order used by ``init_dynamic_rigid_layer``).
+        Pose source: ``self.tracks_poses`` buffer dict (populate_tracks).
+        Particle-to-track routing: per-particle ``track_ids`` int buffer
+        on the layer, mapped via ``sorted(self.tracks_poses.keys())`` to
+        the dict insertion order used by ``init_dynamic_rigid_layer``.
 
         Args:
             positions_local: ``[N, 3]`` object-local positions.
             track_ids:       ``[N]`` int64; values in ``[0, len(tracks_poses))``.
-            frame_id:        per-clip frame index.
+            timestamp_us:    absolute camera END timestamp (preferred).
+            frame_id:        legacy index for backward-compat callers.
 
         Returns:
             ``[N, 3]`` world-frame positions.
         """
         track_names = sorted(self.tracks_poses.keys())
-        # Stack poses for this frame: [K, 4, 4]
+        device = positions_local.device
+        idx = self._resolve_pose_idx(timestamp_us, frame_id)
+        # Stack poses for this frame: [K, 4, 4] on positions device.
+        # Buffers may sit on CPU even after layer Parameters move to CUDA
+        # (LayeredGaussians has no explicit .to() call from trainer), so
+        # sync each per-track pose tensor to the positions device.
         pose_stack = torch.stack(
-            [self.tracks_poses[name][frame_id] for name in track_names]
+            [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
         )
-        pose_per_pt = pose_stack[track_ids]                                  # [N, 4, 4]
+        track_ids = track_ids.to(device)
+        pose_per_pt = pose_stack[track_ids]                                   # [N, 4, 4]
         R = pose_per_pt[:, :3, :3]                                            # [N, 3, 3]
         t = pose_per_pt[:, :3, 3]                                             # [N, 3]
         return (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
@@ -478,6 +528,59 @@ class LayeredGaussians(nn.Module):
 
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
+
+    # ------------------------------------------------------------------ T4.5: populate tracks post-construct
+    def populate_tracks(self, tracks: dict) -> None:
+        """Register per-track pose / active buffers + shared timestamp buffer.
+
+        Used by trainer.setup_training when the dataset (loader) becomes
+        available — at __init__ time we typically don't have it yet, so
+        tracks is None there. Idempotent: calling with the same track_id
+        replaces the existing buffer; calling with new ids adds them.
+
+        Args:
+            tracks: ``{track_id: {poses[F,4,4], active|frame_info[F bool],
+                                  cam_timestamps_us[F int64], ...}}``
+                — schema from load_tracks_from_ncore_cuboids. All tracks
+                share the same cam_timestamps_us (NCore camera schedule
+                is sensor-driven, not track-specific).
+        """
+        self._populate_tracks_impl(tracks)
+
+    def _populate_tracks_impl(self, tracks: dict) -> None:
+        """Shared impl for __init__ and populate_tracks paths."""
+        # Shared cam timestamp buffer (single tensor across all tracks).
+        # Take from the first track that supplies it; verify subsequent
+        # tracks match (they should — same NCore loader, same camera).
+        shared_ts = None
+        for tid, info in tracks.items():
+            ts = info.get("cam_timestamps_us") if isinstance(info, dict) else None
+            if ts is not None:
+                shared_ts = ts.to(torch.int64) if torch.is_tensor(ts) else torch.as_tensor(ts, dtype=torch.int64)
+                break
+        if shared_ts is not None:
+            # Replace existing if any; persistent=True so save/load roundtrips.
+            if hasattr(self, "tracks_camera_timestamps_us"):
+                delattr(self, "tracks_camera_timestamps_us")
+            self.register_buffer("tracks_camera_timestamps_us",
+                                 shared_ts, persistent=True)
+
+        for tid, info in tracks.items():
+            poses = info["poses"] if isinstance(info, dict) else info[0]
+            active = (info["active"] if isinstance(info, dict) and "active" in info
+                      else info.get("frame_info") if isinstance(info, dict)
+                      else info[1])
+            buf_pose_name = f"_track_pose_{tid}"
+            buf_active_name = f"_track_active_{tid}"
+            if hasattr(self, buf_pose_name):
+                delattr(self, buf_pose_name)
+            if hasattr(self, buf_active_name):
+                delattr(self, buf_active_name)
+            self.register_buffer(buf_pose_name, poses, persistent=True)
+            self.register_buffer(buf_active_name, active.to(torch.bool),
+                                 persistent=True)
+            self.tracks_poses[tid] = getattr(self, buf_pose_name)
+            self.tracks_active[tid] = getattr(self, buf_active_name)
 
     # ------------------------------------------------------------------ T3.5.b trainer compat
     def build_acc(self, rebuild: bool = True) -> None:

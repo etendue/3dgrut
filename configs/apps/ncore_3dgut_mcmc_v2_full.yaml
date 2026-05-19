@@ -1,0 +1,22 @@
+# @package _global_
+#
+# Stage 4 v2 — Background + Road + DynamicRigid three-layer training config.
+# Inherits from v2_road (which already has layered_mcmc + load_aux_masks +
+# layered_loss) and adds dynamic_rigids to enabled layers.
+#
+# T4.5 dynamic_rigids data source: NCore manifest cuboid autolabels
+# (loader.get_cuboid_track_observations, no mock fixture needed; verified
+# 9ae151dc clip has 179 unique tracks across 13657 observations).
+#
+# Stage 4 出口门槛 (A800 10k step, 2s, single front camera):
+#   - PSNR ≥ Stage 3 baseline + 0.3 dB (= 26.4 dB or better)
+#   - dynamic_rigids layer particle count ∈ [10K, 50K]
+#   - 车辆 IoU vs cuboid > 0.7 (抽 3 帧手验)
+#   - v1 ckpt resume (layers=[background] only) byte-identical 24.123 dB
+#   - road-only mode (Stage 3 出口配置) 不退化
+defaults:
+  - ncore_3dgut_mcmc_v2_road
+  - _self_
+
+layers:
+  enabled: [background, road, dynamic_rigids]

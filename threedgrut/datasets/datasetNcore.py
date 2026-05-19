@@ -863,6 +863,14 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             if rgb is not None:
                 batch_dict["rgb"] = rgb
 
+            # T4.5: absolute camera END timestamp (microseconds) — universal
+            # time coordinate for dyn pose lookup, sseg key alignment, etc.
+            batch_dict["timestamp_us"] = int(
+                camera_sensor.frames_timestamps_us[
+                    camera_frame_index, ncore.data.FrameTimepoint.END
+                ]
+            )
+
             # T3.1.b: per-frame sseg → sky/road/dyn pixel masks (when enabled).
             # Read PNG directly via SsegAuxReader (NCore SDK can't parse aux
             # store schema; see _ensure_aux_readers note). Frame key is the
@@ -954,6 +962,12 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     "camera_id": camera_id,
                     "frame_idx": -1,  # Validation: -1 signals novel-view mode for PPISP
                     "camera_idx": camera_index,
+                    # T4.5: validation frame's absolute camera END timestamp
+                    "timestamp_us": int(
+                        camera_sensor.frames_timestamps_us[
+                            camera_frame_index, ncore.data.FrameTimepoint.END
+                        ]
+                    ),
                 }
 
             raise IndexError(f"Out of range validation sample {idx}")
@@ -1343,6 +1357,12 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 "road_mask": _to_gpu(batch["road_mask"]),
                 "dyn_mask_sseg": _to_gpu(batch["dyn_mask_sseg"]),
             }
+
+        # --- T4.5: camera END timestamp → Batch.timestamp_us --------------------
+        # Universal time coordinate for dyn pose lookup, sseg key alignment.
+        if "timestamp_us" in batch:
+            ts = batch["timestamp_us"]
+            batch_dict["timestamp_us"] = ts[0].item() if isinstance(ts, torch.Tensor) else int(ts)
 
         return Batch(**batch_dict)
 
