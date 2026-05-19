@@ -67,18 +67,18 @@ kanban
     [T2.4 单测 test_layered_mcmc ✅]
     [T2.5 LayeredGaussians.fused_view 多层路径 ✅]
     [T3.0 init_layer_from_points + optimizer property ✅]
-    [T3.1.a/T3.2.a ncore_semantic + mock 单测 ✅]
-    [T3.1.b/T3.2.b NCoreDataset aux + LiDAR (A800 集成) ✅]
-    [T3.3.a/b road_init.py LiDAR-Z KNN ✅]
+    [T3.1.a + T3.2.a ncore_semantic + mock 单测 ✅]
+    [T3.1.b + T3.2.b NCoreDataset aux + LiDAR A800 集成 ✅]
+    [T3.3.a + T3.3.b road_init.py LiDAR-Z KNN ✅]
     [T3.4 region-weighted loss + perturb_mask Z lock ✅]
     [T3.5.a 多层 forward + _FusedView ✅]
     [T3.5.b Stage 3 出口 A800 5k PSNR 26.13 ✅]
     [T4.0 tracks buffer ✅]
-    [T4.1.a/b load_tracks_from_manifest ✅]
-    [T4.2.a/b dynamic_rigid_init ✅]
+    [T4.1.a + T4.1.b load_tracks_from_manifest ✅]
+    [T4.2.a + T4.2.b dynamic_rigid_init ✅]
     [T4.3 _transform_means + fused_view dyn ✅]
     [T4.4 dynamic_mask scanline AABB ✅]
-    [T4.5 Stage 4 出口 A800 10k PSNR 26.32 (real cuboids + timestamp-aligned) ✅]
+    [T4.5 Stage 4 出口 A800 10k PSNR 26.32 real cuboids + timestamp-aligned ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
@@ -173,19 +173,27 @@ flowchart LR
     T24["T2.4 ✅<br/>单测 (51540a8/04c9174)"]:::done
     T25["T2.5 ✅<br/>多层 fused_view (d4841df)"]:::done
 
-    %% Stage 3
-    T31["T3.1<br/>aux mask"]:::todo
-    T32["T3.2<br/>road LiDAR"]:::todo
-    T33["T3.3<br/>road_init"]:::todo
-    T34["T3.4<br/>region loss"]:::todo
-    T35["T3.5<br/>单测"]:::todo
+    %% Stage 3 ✅ 全部完成 (commits b3b3b2b / e8cb490 / 9f6a54c / 9077fd6 / 5b49f4b / c688984 / 8a625c2)
+    T30["T3.0 ✅<br/>init_layer_from_points<br/>+ optimizer property"]:::done
+    T31a["T3.1.a ✅<br/>ncore_semantic 常量"]:::done
+    T31b["T3.1.b ✅<br/>aux_readers + sseg mask"]:::done
+    T32a["T3.2.a ✅<br/>LiDAR filter mock"]:::done
+    T32b["T3.2.b ✅<br/>road/dyn LiDAR 接口"]:::done
+    T33a["T3.3.a ✅<br/>road_init 6 单测"]:::done
+    T33b["T3.3.b ✅<br/>road_init scipy cKDTree"]:::done
+    T34["T3.4 ✅<br/>region loss + perturb Z lock"]:::done
+    T35a["T3.5.a ✅<br/>多层 forward + _FusedView"]:::done
+    T35b["T3.5.b ✅<br/>Stage 3 出口<br/>A800 5k 26.13 dB"]:::done
 
-    %% Stage 4
-    T41["T4.1<br/>tracks loader"]:::todo
-    T42["T4.2<br/>dyn cuboid 抽取"]:::todo
-    T43["T4.3<br/>per-frame pose"]:::todo
-    T44["T4.4<br/>dyn mask 投影"]:::todo
-    T45["T4.5<br/>单测"]:::todo
+    %% Stage 4 ✅ 全部完成 (commits b22a506 / 4807951)
+    T40["T4.0 ✅<br/>tracks buffer"]:::done
+    T41a["T4.1.a ✅<br/>tracks loader 10 单测"]:::done
+    T41b["T4.1.b ✅<br/>load_tracks_from_ncore_cuboids<br/>(real autolabels v2)"]:::done
+    T42a["T4.2.a ✅<br/>dyn_init 8 单测"]:::done
+    T42b["T4.2.b ✅<br/>dynamic_rigid_init cuboid 抽取"]:::done
+    T43["T4.3 ✅<br/>_transform_means timestamp-aligned"]:::done
+    T44["T4.4 ✅<br/>dynamic_mask scanline AABB"]:::done
+    T45["T4.5 ✅<br/>Stage 4 出口<br/>A800 10k 26.32 dB"]:::done
 
     %% Stage 5
     T51["T5.1<br/>nvdiffrast 探测"]:::todo
@@ -211,20 +219,34 @@ flowchart LR
 
     T15 --> T21 --> T22 --> T23 --> T24
     T22 --> T25
-    T43 -.也依赖.-> T25
 
-    T15 --> T31
-    T31 --> T33 --> T34 --> T35
-    T31 --> T32 --> T33
+    %% Stage 3 chain
+    T15 --> T30
+    T30 --> T31a --> T31b
+    T30 --> T32a --> T32b
+    T30 --> T33a --> T33b
+    T31b --> T34
+    T32b --> T34
+    T34 --> T35a --> T35b
+    T33b --> T35b
+    T25 --> T35a
 
-    T15 --> T41 --> T42 --> T43 --> T44 --> T45
+    %% Stage 4 chain
+    T15 --> T40
+    T40 --> T41a --> T41b
+    T40 --> T42a --> T42b
+    T41b --> T45
+    T42b --> T45
+    T43 --> T45
+    T44 --> T45
+    T35a --> T43
 
+    %% Stage 5/6/7 (todo)
     T15 --> T51 --> T52 --> T53 --> T54
-
     T15 --> T61 --> T62 --> T63
 
     T24 --> T71
-    T35 --> T71
+    T35b --> T71
     T45 --> T71
     T54 --> T71
     T63 --> T71

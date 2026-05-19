@@ -186,66 +186,67 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant DL as Dataloader (MOD T3.1)
-    participant T as Trainer (MOD T3.4/T5.3/T6.2)
-    participant LG as LayeredGaussians (NEW)
-    participant R as Renderer (不动)
-    participant SKY as SkyEnvmap (NEW T5)
-    participant EXP as Exposure (NEW T6)
-    participant L as Layered Loss (MOD T3.4)
+    participant DL as Dataloader ✅ T3.1.b
+    participant T as Trainer ✅ T3.4/T3.5.b/T4.5
+    participant LG as LayeredGaussians ✅ T1.1
+    participant R as Renderer 不动
+    participant SKY as SkyEnvmap NEW T5
+    participant EXP as Exposure NEW T6
+    participant L as Layered Loss ✅ T3.4
     participant O as Optimizer + ExposureOpt
-    participant S as LayeredMCMC (NEW T2)
+    participant S as LayeredMCMC ✅ T2.2
 
-    DL->>T: batch (+ sky/road/dyn mask)
-    Note over DL,T: NEW T3.1 · 多类 mask 同 batch 返回
+    DL->>T: batch + image_infos + timestamp_us
+    Note over DL,T: ✅ T3.1.b · sky/road/dyn mask + cam END ts (微秒)
 
-    T->>LG: model(batch, frame_id)
-    LG->>LG: fused = fused_view(frame_id)
-    Note over LG: NEW T2.5 · concat 各层 tensor
-    LG->>LG: dynamic 层 transform_means(local→world)
-    Note over LG: NEW T4.3 · 用 GT pose 变换
-    LG->>R: flat tensor
+    T->>LG: model(batch, train, frame_id)
+    LG->>LG: ts_us = batch.timestamp_us
+    LG->>LG: fused = fused_view(timestamp_us=ts_us)
+    Note over LG: ✅ T2.5 · concat 各层 tensor
+    LG->>LG: dynamic 层 _transform_means(local, track_ids, ts_us)
+    Note over LG: ✅ T4.3/T4.5 · binary-search ts → world pose
+    LG->>R: _FusedView (MoG-like view)
     R-->>LG: rgb_gauss, alpha
 
     LG->>SKY: viewdirs
     SKY-->>T: rgb_sky
     T->>T: rgb_blend = rgb_gauss + rgb_sky·(1-α)
-    Note over T: NEW T5.3 · sky blend
+    Note over T: NEW T5.3 · sky blend (待办)
 
     T->>EXP: (camera_idx, rgb_blend)
     EXP-->>T: rgb_final = exp(a)·rgb + b
-    Note over EXP: NEW T6.2 · per-camera affine
+    Note over EXP: NEW T6.2 · per-camera affine (待办)
 
-    T->>L: layered_loss(rgb_final, gt, masks)
-    Note over L: MOD T3.4 · region-weighted
+    T->>L: compute_layered_l1_loss(rgb_final, gt, image_infos)
+    Note over L: ✅ T3.4 · region-weighted bg+road+dyn
     L-->>T: loss
 
     T->>O: loss.backward()
-    T->>O: step both optimizers (model + exposure)
-    O-->>LG: 更新模型参数
-    O-->>EXP: 更新 exposure 参数
+    T->>O: _LayeredOptimizerView.step() 遍历各层
+    O-->>LG: 更新各层 Parameter
+    O-->>EXP: 更新 exposure 参数 (待办)
 
     T->>S: post_optimizer_step()
-    loop for each particle layer
-        S->>LG: scope = get_layer_mask(name)
-        S->>LG: relocate / add / perturb scoped to layer
+    loop for each particle layer (sub_strategies)
+        S->>LG: sub.relocate / add / perturb (scoped to layer)
+        S->>LG: track_ids buffer sync ✅ T4.5 (add cat, relocate inherit)
     end
-    Note over S,LG: NEW T2.2 · per-layer cap, 跨层无迁移
+    Note over S,LG: ✅ T2.2 · per-layer cap, 跨层无迁移
 ```
 
 ### 2.3 流程差异 → 任务映射
 
 | 流程节点 | v1 | v2 | 任务 |
 |---|---|---|---|
-| Dataloader 输出 | RGB + ego_mask | + sky/road/dyn mask + road_lidar + tracks | **T3.1 / T3.2 / T4.1** |
-| 模型 forward | 单 MoG flat | LayeredGaussians.fused_view(frame_id) | **T1.5 ✅** (单 bg 桥)；**T2.5** (多层 fused) |
-| Dynamic pose | n/a | per-frame transform_means local→world | **T4.3** |
-| 渲染后处理 | 直接 RGB | + sky envmap blend | **T5.3** |
-| 色彩校正 | n/a | per-camera affine | **T6.2** |
-| Loss | 全图均匀 | region-weighted | **T3.4** |
-| Dynamic mask | n/a | cuboid 投影到像素平面 | **T4.4** |
-| MCMC 致密化 | 全局 cap | per-layer cap + 跨层无迁移 | **T2.1 ✅ / T2.2 ✅ / T2.3 ✅** |
-| Optimizer | 单 Adam | + 独立 exposure optimizer | **T6.2** |
+| Dataloader 输出 | RGB + ego_mask | + image_infos (sky/road/dyn mask) + timestamp_us + road_lidar + dyn_lidar | **T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅** |
+| 模型 forward | 单 MoG flat | LayeredGaussians.forward → fused_view(timestamp_us) → _FusedView → renderer | **T1.5 ✅** (单 bg 桥) / **T2.5 ✅** / **T3.5.a ✅** (多层 + _FusedView) |
+| Dynamic pose | n/a | _transform_means(local, track_ids, timestamp_us) binary-search ts→pose | **T4.3 ✅ / T4.5 ✅** (real cuboids autolabels v2) |
+| 渲染后处理 | 直接 RGB | + sky envmap blend | **T5.3** (待办) |
+| 色彩校正 | n/a | per-camera affine | **T6.2** (待办) |
+| Loss | 全图均匀 L1+SSIM | region-weighted L1 (bg+road+dyn 分区) + 全图 SSIM | **T3.4 ✅** |
+| Dynamic mask | n/a | cuboid 8 角点 → AABB → mask scanline (纯 PyTorch) | **T4.4 ✅** |
+| MCMC 致密化 | 全局 cap | per-layer cap + 跨层无迁移 + track_ids buffer sync | **T2.1 ✅ / T2.2 ✅ / T2.3 ✅ / T4.5 ✅** |
+| Optimizer | 单 Adam | _LayeredOptimizerView 遍历各层 + 独立 exposure optimizer | **T3.0 ✅** (单/多层) / **T6.2** (exposure 待办) |
 
 ---
 
@@ -255,29 +256,29 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Raw["NCore clip raw data<br/>• images<br/>• aux.sseg.zarr.itar<br/>• aux.lidar-sseg.zarr.itar<br/>• aux.egomask.zarr.itar (v1)<br/>• scene_manifest.tracks"]:::existing
+    Raw["NCore clip raw data<br/>• images<br/>• aux.sseg.zarr.itar ✅ Stage 3a<br/>• aux.lidar-sseg.zarr.itar ✅ Stage 3a<br/>• aux.egomask.zarr.itar (v1)<br/>• ncore4.zarr.itar.cuboid_track_observations<br/>  (autolabels v2, 13657 obs, 179 tracks)"]:::existing
 
-    DS["datasetNcore.py<br/>MOD · T3.1 / T3.2 / T4.1"]:::mod
+    DS["datasetNcore.py<br/>+ aux_readers.py 直读 itar<br/>DONE · T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅"]:::done
 
-    %% 派生数据
-    SsegMask["sseg masks<br/>sky/road/dyn_sseg<br/>NEW · T3.1"]:::new
-    RoadPts["road LiDAR pts<br/>NEW · T3.2"]:::new
-    DynPts["dynamic LiDAR pts<br/>NEW · T3.2"]:::new
-    Tracks["tracks (poses, extent,<br/>frame_info)<br/>NEW · T4.1"]:::new
-    InstDict["instance_pts_dict<br/>NEW · T4.1"]:::new
+    %% 派生数据 ✅
+    SsegMask["sseg masks<br/>sky/road/dyn_sseg<br/>DONE · T3.1.b ✅"]:::done
+    RoadPts["road LiDAR pts<br/>(629K pts, Z std 0.4 m)<br/>DONE · T3.2.b ✅"]:::done
+    DynPts["dynamic LiDAR pts<br/>(135K pts)<br/>DONE · T3.2.b ✅"]:::done
+    Tracks["cuboid tracks (real autolabels v2)<br/>poses + extent + active +<br/>cam_timestamps_us (shared)<br/>DONE · T4.5 ✅"]:::done
+    InstDict["instance_pts_dict<br/>{tid: poses,size,frame_info,...}<br/>DONE · T4.1.b ✅"]:::done
 
-    %% Init 模块
-    RoadInit["road_init.py<br/>LiDAR-Z KNN<br/>NEW · T3.3"]:::new
-    DynInit["dynamic_rigid_init.py<br/>cuboid 内 LiDAR<br/>NEW · T4.2"]:::new
-    DynMask["dynamic_mask.py<br/>cuboid → 像素 mask<br/>NEW · T4.4"]:::new
+    %% Init 模块 ✅
+    RoadInit["road_init.py<br/>BEV grid + scipy.cKDTree LiDAR-Z<br/>(cdist fallback for Mac)<br/>DONE · T3.3.b ✅"]:::done
+    DynInit["dynamic_rigid_init.py<br/>cuboid 内 LiDAR → object-local<br/>(31 tracks, 48K particles)<br/>DONE · T4.2.b ✅"]:::done
+    DynMask["dynamic_mask.py<br/>cuboid 8 角点 → AABB → mask<br/>(纯 PyTorch scanline, D5)<br/>DONE · T4.4 ✅"]:::done
 
-    %% Layered 层
-    RoadL["Road layer"]:::new
-    DynR["DynamicRigid layer"]:::new
-    SkyL["Sky Envmap<br/>(无 LiDAR/mask 输入)"]:::new
+    %% Layered 层 ✅
+    RoadL["Road layer ✅ T3.3.b"]:::done
+    DynR["DynamicRigid layer ✅ T4.5"]:::done
+    SkyL["Sky Envmap<br/>(无 LiDAR/mask 输入)<br/>NEW · T5"]:::new
 
-    %% Loss regions
-    LayLoss["Layered Loss<br/>region-weighted<br/>MOD · T3.4"]:::mod
+    %% Loss regions ✅
+    LayLoss["Layered Loss<br/>region-weighted L1 (bg+road+dyn)<br/>+ 全图 SSIM (D7)<br/>DONE · T3.4 ✅"]:::done
 
     Raw --> DS
 
@@ -319,17 +320,21 @@ flowchart TB
     Specs["specs: list[LayerSpec]<br/>registry-driven<br/>T1.2"]:::new
 
     %% layers
-    BG["background : MoG<br/>positions (world)<br/>scale_prior [0.1,0.1,0.1]<br/>兼容 v1 ckpt 透传<br/>DONE · T1.1 ✅"]:::done
-    Road["road : MoG<br/>positions (world, Z 锁定)<br/>scale_prior [0.1,0.1,0.001]<br/>scale_lr_mult 0.2<br/>mask_field='road_mask'<br/>NEW · T1.2 + T3.3"]:::new
-    DynR["dynamic_rigids : MoG<br/>positions (object-local)<br/>scale_prior [0.05,0.05,0.05]<br/>mask_field='dynamic_mask'<br/>track_id per-particle buffer<br/>per-frame pose 运行时变换<br/>NEW · T1.2 + T4.2 + T4.3"]:::new
+    BG["background : MoG<br/>positions world frame<br/>scale_prior [0.1,0.1,0.1]<br/>兼容 v1 ckpt 透传<br/>DONE · T1.1 ✅"]:::done
+    Road["road : MoG<br/>positions world Z 锁定<br/>scale_prior [0.1,0.1,0.001]<br/>scale_lr_mult 0.2<br/>perturb_scale_mask 1,1,0 (D1)<br/>mask_field road_mask<br/>DONE · T1.2 + T3.3.b ✅"]:::done
+    DynR["dynamic_rigids : MoG<br/>positions object-local frame<br/>scale_prior [0.05,0.05,0.05]<br/>mask_field dynamic_mask<br/>track_ids per-particle buffer<br/>(sync on MCMC add/relocate, T4.5)<br/>timestamp-aligned world transform<br/>DONE · T1.2+T4.2.b+T4.3+T4.5 ✅"]:::done
     DynD["dynamic_deformables<br/>registered, v2.x 占位<br/>is_particle_layer=False"]:::existing
-    SkyL["sky_envmap : SkyEnvmap<br/>is_particle_layer=False<br/>cubemap [6,512,512,3] 或 MLP<br/>forward(viewdirs) → rgb<br/>NEW · T5.1 / T5.2"]:::new
+    SkyL["sky_envmap : SkyEnvmap<br/>is_particle_layer=False<br/>cubemap [6,512,512,3] 或 MLP<br/>forward viewdirs to rgb<br/>NEW · T5.1 / T5.2"]:::new
 
-    Fused["fused_view(frame_id, train)<br/>→ flat tensors<br/>concat across particle layers<br/>dynamic 层先 transform_means<br/>T1.5 ✅(单层) · T2.5 ✅(多层 d4841df)"]:::done
+    Fused["fused_view(timestamp_us)<br/>concat all particle layers<br/>dyn 层先 _transform_means<br/>(binary-search ts to pose, T4.5)<br/>DONE · T2.5 ✅ + T4.5 ✅"]:::done
 
-    LayerMask["get_layer_mask(name)<br/>→ Bool[N_total]<br/>供 LayeredMCMCStrategy<br/>T2.5 ✅ (d4841df)"]:::done
+    LayerMask["get_layer_mask(name)<br/>Bool N_total<br/>供 LayeredMCMCStrategy<br/>T2.5 ✅"]:::done
 
-    Ckpt["checkpoint I/O<br/>NRE schema 对齐<br/>ckpt.model.gaussians_nodes.&lt;name&gt;<br/>3 种输入：NRE wrap / 解开 / v1 flat<br/>DONE · T1.1 ✅"]:::done
+    Ckpt["checkpoint I/O<br/>NRE schema 对齐<br/>ckpt.model.gaussians_nodes.NAME<br/>3 种输入: NRE wrap / 解开 / v1 flat<br/>DONE · T1.1 ✅"]:::done
+
+    Tracks2["tracks_camera_timestamps_us (shared buffer)<br/>+ _track_pose_TID + _track_active_TID<br/>(populate_tracks)<br/>DONE · T4.5 ✅"]:::done
+    OptView["_LayeredOptimizerView<br/>多层 step/zero_grad/param_groups 遍历<br/>(单 bg 透传 bg.optimizer)<br/>DONE · T3.0 ✅"]:::done
+    InitAPI["init_layer_from_points(name, ...)<br/>spec-aware defaults + device sync<br/>DONE · T3.0 ✅"]:::done
 
     LG --> Specs
     LG --> BG
@@ -340,6 +345,9 @@ flowchart TB
     LG ==> Fused
     LG ==> LayerMask
     LG ==> Ckpt
+    LG ==> Tracks2
+    LG ==> OptView
+    LG ==> InitAPI
 
     classDef existing fill:#f5f5f5,stroke:#999,color:#333
     classDef new      fill:#d4f4dd,stroke:#1a7f37,stroke-width:3px,color:#0d3320
@@ -409,35 +417,50 @@ flowchart TB
 | `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 ✅ (fused_view + get_layer_mask, d4841df) / T3.0 ✅ (init_layer_from_points + optimizer property + _LayeredOptimizerView) |
 | `threedgrut/layers/layer_spec.py` | T1.1 ✅ / T1.2 ✅ (8 字段) |
 | `threedgrut/layers/registry.py` | T1.2 ✅ |
-| `threedgrut/layers/road_init.py` | T3.3 |
-| `threedgrut/layers/dynamic_rigid_init.py` | T4.2 |
-| `threedgrut/layers/dynamic_mask.py` | T4.4 |
+| `threedgrut/layers/road_init.py` | T3.3.b ✅ (9f6a54c, scipy.cKDTree + cdist fallback) |
+| `threedgrut/layers/dynamic_rigid_init.py` | T4.2.b ✅ (b22a506) |
+| `threedgrut/layers/dynamic_mask.py` | T4.4 ✅ (b22a506, 纯 PyTorch scanline AABB) |
 | `threedgrut/strategy/layered_mcmc.py` | T2.2 ✅ (7ad883b) |
-| `threedgrut/correction/__init__.py` | T5.2 / T6.1 |
-| `threedgrut/correction/sky_envmap.py` | T5.2 |
-| `threedgrut/correction/exposure.py` | T6.1 |
-| `configs/strategy/layered_mcmc.yaml` | T2.3 ✅ (1a0d275) — Hydra `defaults:[mcmc,_self_]` 继承，仅改 method |
-| `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T7.1 |
-| `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ (+3 contract test) |
-| `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (新建，9 测试，Mac 本地可跑无 torch 依赖) |
-| `threedgrut/tests/test_layered_mcmc.py` | T2.1 ✅ (62fc509) · T2.2 ✅ (7ad883b, 4 tests) · T2.3 ✅ (1a0d275, 5 tests) · T2.4 ✅ (51540a8/04c9174, 8 tests) |
-| `threedgrut/tests/conftest.py` | T2.4 ✅ (51540a8) — sys.modules stubs + MCMCStrategy no-CUDA patch (I-1 fix; moved from test_layered_mcmc.py) |
-| `threedgrut/tests/test_road_init.py` | T3.5 |
-| `threedgrut/tests/test_dynamic_rigid_init.py` | T4.5 |
-| `threedgrut/tests/test_sky_envmap.py` | T5.4 |
-| `threedgrut/tests/test_exposure.py` | T6.3 |
-| `WP_V2_Report.md` | T7.5 |
+| `threedgrut/model/layered_loss.py` | T3.4 ✅ (9077fd6, region-weighted L1 纯函数) |
+| `threedgrut/datasets/ncore_semantic.py` | T3.1.a ✅ (e8cb490, Cityscapes palette 常量) |
+| `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) |
+| `threedgrut/datasets/tracks_loader.py` | T4.1.b ✅ (b22a506) + T4.5 ✅ (4807951, load_tracks_from_ncore_cuboids) |
+| `threedgrut/correction/__init__.py` | T5.2 / T6.1 (待办) |
+| `threedgrut/correction/sky_envmap.py` | T5.2 (待办) |
+| `threedgrut/correction/exposure.py` | T6.1 (待办) |
+| `configs/strategy/layered_mcmc.yaml` | T2.3 ✅ (1a0d275) — Hydra `defaults:[mcmc,_self_]` 继承 |
+| `configs/apps/ncore_3dgut_mcmc_v2_road.yaml` | T3.5.b ✅ (8a625c2) |
+| `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T4.5 ✅ (4807951) |
+| `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ / T2.5 ✅ / T3.0 ✅ / T4.0 ✅ / T4.3 ✅ / T3.5.a ✅ (28 tests total) |
+| `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (9 tests) |
+| `threedgrut/tests/test_layered_mcmc.py` | T2.1-T2.4 ✅ + T3.4 perturb mask 4 new tests (13 total) |
+| `threedgrut/tests/test_layered_loss.py` | T3.4 ✅ (6 tests, region L1 partition / SSIM 全图) |
+| `threedgrut/tests/test_ncore_aux_masks.py` | T3.1.a / T3.2.a ✅ (7 tests) |
+| `threedgrut/tests/conftest.py` | T2.4 ✅ (51540a8) — sys.modules stubs + MCMCStrategy no-CUDA patch |
+| `threedgrut/tests/test_road_init.py` | T3.3.a ✅ (6 tests) |
+| `threedgrut/tests/test_tracks_loader.py` | T4.1.a ✅ (10 tests) |
+| `threedgrut/tests/test_dynamic_rigid_init.py` | T4.2.a ✅ (8 tests) |
+| `threedgrut/tests/test_dynamic_mask.py` | T4.4 ✅ (6 tests) |
+| `threedgrut/tests/test_sky_envmap.py` | T5.4 (待办) |
+| `threedgrut/tests/test_exposure.py` | T6.3 (待办) |
+| `WP_V2_Report.md` | T7.5 (待办) |
 
 ### 6.2 修改文件
 
 | 文件 | 改动点 | 任务 |
 |---|---|---|
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
-| `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case（T2.2 ✅）；T2.3 ✅ 去除重复 `specs_from_config` 调用，改用 `self.model.specs`；后续：layered loss / sky blend / exposure / per-frame pose | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 / T4.3 / T5.3 / T6.2 |
-| `configs/base_gs.yaml` | 加 `use_layered_model: false` + `layers.enabled: [background]` 默认 | T1.2 ✅ |
-| `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 ✅ (62fc509); T3.4 抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical) | T2.1 ✅ / T3.4 ✅ |
-| `threedgrut/datasets/datasetNcore.py` | aux mask + road_lidar + tracks | T3.1 / T3.2 / T4.1 |
-| `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 |
+| `threedgrut/trainer.py` | `init_model` 读 `conf.layers.enabled`；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case；`setup_training` case "lidar" 多层 init 分支 (bg/road/dynamic_rigids 各自 init_layer_from_points + populate_tracks)；`get_losses` 接 `compute_layered_l1_loss` (layered_loss 开关) | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.5 ✅ / T5.3 / T6.2 |
+| `threedgrut/layers/layered_model.py` | `init_layer_from_points` + `optimizer` property + `_LayeredOptimizerView`；`fused_view(timestamp_us)` + `_transform_means` + `_resolve_pose_idx` (binary-search ts→pose)；`populate_tracks` + 共享 `tracks_camera_timestamps_us` buffer；`build_acc` / `setup_optimizer` 多层 broadcast；`__getattr__` 多层 fused/broadcast/ref-fallback；`forward` 多层路由 + `_FusedView` | T1.1 ✅ / T1.3 ✅ / T2.5 ✅ / T3.0 ✅ / T3.5.a ✅ / T4.0 ✅ / T4.3 ✅ / T4.5 ✅ |
+| `threedgrut/datasets/datasetNcore.py` | load_aux_masks 参数；`__getitem__` (train+val) 抽 sseg mask + 注入 timestamp_us；`get_gpu_batch_with_intrinsics` 装 image_infos + timestamp_us；`_get_semantic_lidar_points` + `get_road/dynamic_lidar_points` 用 LidarSsegAuxReader；`_ensure_aux_readers` lazy init | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ |
+| `threedgrut/datasets/__init__.py` | NCoreDataset(load_aux_masks=...) 双路 (train+val) | T3.1.b ✅ |
+| `threedgrut/datasets/protocols.py::Batch` | + image_infos: dict (sky/road/dyn masks GPU) + timestamp_us: int (cam END, 微秒) | T3.1.b ✅ / T4.5 ✅ |
+| `threedgrut/layers/layer_spec.py` | + perturb_scale_mask 字段 (tuple[3] 或 None) | T3.4 ✅ |
+| `threedgrut/layers/registry.py` | road spec 加 perturb_scale_mask=(1.0,1.0,0.0) | T3.4 ✅ |
+| `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 (62fc509)；抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical, road spec 注 1,1,0)；add/relocate 同步 track_ids buffer (T4.5) | T2.1 ✅ / T3.4 ✅ / T4.5 ✅ |
+| `threedgrut/strategy/layered_mcmc.py` | sub 构造时 `_install_perturb_mask` 注入 spec.perturb_scale_mask | T3.4 ✅ |
+| `configs/base_gs.yaml` | + `use_layered_model: false` + `layers.enabled: [background]` + `trainer.layered_loss: false` 默认 | T1.2 ✅ / T3.4 ✅ |
+| `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 (待办) |
 
 ### 6.3 复用外部代码（不修改源头，借代码或思想）
 
@@ -473,8 +496,25 @@ flowchart TB
 | 两层 fused_view concat 形状和顺序正确 | T2.5 ✅ | `test_fused_view_two_layers_concat_shape` (Mac, d4841df) |
 | get_layer_mask 是完备分区（union=all, intersection=∅, dtype=bool） | T2.5 ✅ | `test_get_layer_mask_partitions_two_layers` (Mac, d4841df) |
 | get_layer_mask 对未知/非粒子层名抛 ValueError("unknown layer") | T2.5 ✅ | `test_get_layer_mask_unknown_name_raises` (Mac, d4841df) |
-| 路面层 Z scale 不漂移 | T3.5 | 1000 步后 `scales.exp()[:, 2].max() < 0.005` |
-| Dynamic 粒子随 GT pose 正确移动 | T4.5 | mock 单 track，frame 0/N-1 两端 world 位置匹配 |
+| **T3.0** 多层 optimizer fan-out / 单 bg byte-identical 透传 | T3.0 ✅ | `test_optimizer_property_single_bg_passthrough` / `test_optimizer_wrapper_steps_all_layers` (Mac, b3b3b2b) |
+| **T3.0** init_layer_from_points spec-aware defaults (scale_prior 等) | T3.0 ✅ | `test_init_layer_from_points_routes_to_mog` (Mac, b3b3b2b) |
+| **T3.1.a** sky/road/dyn 三 mask pairwise disjoint | T3.1.a ✅ | `test_sky_road_dyn_masks_are_disjoint_partition` (Mac, e8cb490) |
+| **T3.1.b** A800 单帧 sseg 抽取 sky < 5% / road > 20% / disjoint | T3.1.b ✅ | A800 集成测 (5b49f4b): sky 1.85% top half / road 21.55% bottom half / max sum ≤ 1.0 |
+| **T3.2.b** road LiDAR Z std < 0.5 m | T3.2.b ✅ | A800 实测 (5b49f4b): 629K pts, Z std 0.425 m |
+| **T3.3.b** 路面层 Z scale 不漂移 (BEV grid Z lock + 路面层 perturb Z mask) | T3.3.b ✅ + T3.4 ✅ | `test_road_init_scale_flat` (Mac): `scales.exp()[:, 2].max() < 0.005`; perturb mask `(1,1,0)` 由 `test_road_spec_has_perturb_scale_mask_z_zero` 验证 |
+| **T3.4** region-weighted L1 三区 partition 正确 + SSIM 全图 | T3.4 ✅ | `test_compute_layered_l1_loss_partitions_three_regions` (Mac, 9077fd6) |
+| **T3.4 D1** road perturb mask Z 锁定 | T3.4 ✅ | `test_layered_mcmc_installs_road_perturb_mask` (Mac, 9077fd6) |
+| **T3.4 D6** 小区域 mask < min_pixels 时该区贡献 = 0 (数值稳定) | T3.4 ✅ | `test_compute_layered_l1_loss_small_region_skipped` (Mac, 9077fd6) |
+| **T3.5.a** 多层 forward 调 fused_view + _FusedView + ref_renderer | T3.5.a ✅ | `test_forward_multi_layer_dispatches_to_ref_renderer` (Mac, c688984) |
+| **T3.5.b** A800 5k step Stage 3 出口 PSNR ≥ 23.6 | T3.5.b ✅ | A800 实测 (8a625c2): **PSNR 26.133 dB (+2.5 超额)**, road 200K particles, Z lock 保持 |
+| **T4.0** tracks_poses buffer 与 mirror dict identity 同步 | T4.0 ✅ | `test_layered_gaussians_holds_tracks_buffers` (Mac, b22a506) |
+| **T4.1.a/b** 真 NCore cuboid autolabels v2 解析 schema 正确 (179 unique tracks) | T4.1.b ✅ / T4.5 ✅ | `test_tracks_loader.py` 10 tests + A800 探测 (4807951): 13657 obs, 179 unique tracks, 31 vehicle tracks in 2s window |
+| **T4.2.b** Dynamic 粒子 cuboid filter + object-local frame | T4.2.b ✅ | `test_init_dyn_rigid_local_frame_roundtrip` / `test_init_dyn_rigid_cuboid_filter_keeps_inside_points` (Mac, b22a506) |
+| **T4.3 / T4.5** Dynamic 粒子 timestamp-aligned 世界变换 | T4.3 ✅ / T4.5 ✅ | `test_transform_means_*` (Mac, b22a506) + A800 实测 (4807951): F6/F7 后帧从 -3 dB 退化变 +0.7 dB 加成 |
+| **T4.4** Dynamic mask AABB pixel 数随 size² 缩放 | T4.4 ✅ | `test_project_cuboid_aabb_increases_with_size` (Mac, b22a506) |
+| **T4.5** MCMC add/relocate 同步 track_ids buffer (无 shape mismatch) | T4.5 ✅ | A800 实测 (4807951): dyn 层 48K→50K add 后训练不崩，1000 step 后 dyn 粒子仍正确 routed |
+| **T4.5** Stage 4 出口 A800 10k PSNR > Stage 3 baseline | T4.5 ✅ | A800 实测 (4807951): **PSNR 26.315 dB (+0.18 vs Stage 3), SSIM 0.883 (best), LPIPS 0.275 (best)** |
+| **v1 byte-identical 回归 (T3.0-T4.5 全栈)** | D8 出口门禁 ✅ | A800 1k step (T20 / task #29): 24.123 dB 全 8 帧精确一致 with Stage 2 baseline |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 
 ---
