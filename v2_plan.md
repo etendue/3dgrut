@@ -106,8 +106,10 @@ kanban
 | **T2.4** | 2 | 单测 test_layered_mcmc.py | 1 | ✅ | NEW `conftest.py` (I-1 fix) · 8 tests total (51540a8 / 04c9174) |
 | **T2.5** | 2 | LayeredGaussians.fused_view(frame_id) 多层路径 | 1 | ✅ | MOD `layered_model.py` · NEW 4 tests (d4841df) |
 | **T3.0** | 3 | LayeredGaussians.init_layer_from_points + optimizer property | 0.5 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests (Mac 38/38 PASS) |
-| **T3.1** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
-| **T3.2** | 3 | datasetNcore.py 暴露 road LiDAR 点 | 1 | ⬜ | MOD 同上 |
+| **T3.1.a** | 3 | ncore_semantic 常量 + mock 单测（sky/road/dyn partition） | 0.25 | ✅ | NEW `datasets/ncore_semantic.py` · NEW `tests/test_ncore_aux_masks.py` (4 tests) |
+| **T3.1.b** | 3 | datasetNcore.py 加载 sky/road/dyn aux mask（A800 集成） | 0.75 | ⬜ | MOD `datasets/datasetNcore.py` |
+| **T3.2.a** | 3 | LiDAR semantic filter mock 单测（行为契约） | 0.25 | ✅ | NEW 3 tests in `test_ncore_aux_masks.py`（合并到 T3.1.a commit） |
+| **T3.2.b** | 3 | datasetNcore.py 暴露 road/dyn LiDAR 点（A800 集成） | 0.75 | ⬜ | MOD 同上 |
 | **T3.3** | 3 | road_init.py LiDAR-Z KNN + flat scale prior | 1 | ⬜ | NEW `layers/road_init.py` |
 | **T3.4** | 3 | trainer.py region-weighted loss | 0.5 | ⬜ | MOD `trainer.py` |
 | **T3.5** | 3 | 单测 test_road_init.py | 0.5 | ⬜ | NEW tests |
@@ -137,7 +139,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 1/9 ⬜ | T3.0 ✅ (init_layer_from_points + optimizer property; Mac 38/38) |
+| 3 | Road 层 | 3/9 ⬜ | T3.0 ✅ / T3.1.a ✅ / T3.2.a ✅（Mac 45/45 PASS, 0.6s） |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -976,6 +978,27 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### T3.1.a + T3.2.a ✅ (2026-05-19, Mac local)
+
+NCore semantic class ID 常量 + mock 行为契约测试：
+
+- `threedgrut/datasets/ncore_semantic.py` 新建：占位 Cityscapes palette（mask2former 后端默认）
+  - `SKY_CLASS_ID = 10`
+  - `ROAD_CLASS_IDS = frozenset({0, 1})` (road + sidewalk 作为广义可行驶面)
+  - `DYNAMIC_CLASS_IDS = frozenset({11..18})` (person + vehicle 类)
+  - TODO 注释：T3.1.b A800 集成时必须读一帧 sseg itar 抽 unique values 对账；NRE mask2former palette 可能与 Cityscapes 标准有偏移
+- `threedgrut/tests/test_ncore_aux_masks.py` 新建：7 个测试
+  - T3.1.a (4): 三 mask disjoint partition；road/dyn 全 class IDs 覆盖；sky 是 singular int
+  - T3.2.a (3): mock LiDAR semantic filter 行为契约（`_filter_pts_by_label` 参考实现，T3.2.b 实装时用此契约）
+
+| 指标 | 实际 |
+|---|---:|
+| `pytest test_ncore_aux_masks.py` | **7/7 PASS** (Mac CPU, 0.04s) |
+| 全测试套（含 T3.0） | **45/45 PASS** |
+| A800 sseg palette 对账 | **Deferred** to T3.1.b A800 integration |
+
+**Stage 3 待办**：T3.1.b / T3.2.b 真实 NCoreDataset 改动（需要 ncore SDK + A800 sseg 数据）；T3.3.a/b road_init（纯本地，下个）。
 
 ### T3.0 ✅ (2026-05-19, Mac local)
 
