@@ -428,7 +428,7 @@ flowchart TB
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
 | `threedgrut/trainer.py` | `init_model` 改读 `conf.layers.enabled`（T1.2 ✅）；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case（T2.2 ✅）；T2.3 ✅ 去除重复 `specs_from_config` 调用，改用 `self.model.specs`；后续：layered loss / sky blend / exposure / per-frame pose | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 / T4.3 / T5.3 / T6.2 |
 | `configs/base_gs.yaml` | 加 `use_layered_model: false` + `layers.enabled: [background]` 默认 | T1.2 ✅ |
-| `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ |
+| `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 ✅ (62fc509); T3.4 抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical) | T2.1 ✅ / T3.4 ✅ |
 | `threedgrut/datasets/datasetNcore.py` | aux mask + road_lidar + tracks | T3.1 / T3.2 / T4.1 |
 | `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 |
 

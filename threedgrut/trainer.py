@@ -32,6 +32,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 import threedgrut.datasets as datasets
 from threedgrut.datasets.protocols import BoundedMultiViewDataset
 from threedgrut.datasets.utils import DEFAULT_DEVICE, MultiEpochsDataLoader, PointCloud
+from threedgrut.model.layered_loss import compute_layered_l1_loss
 from threedgrut.model.losses import ssim
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.optimizers import SelectiveAdam
@@ -540,11 +541,25 @@ class Trainer3DGRUT:
             rgb_pred = rgb_pred * mask
 
         # L1 loss
+        # T3.4: when conf.trainer.layered_loss is enabled and the batch
+        # carries per-region masks in image_infos, partition L1 across
+        # {bg, road, dyn} regions and sum per-region means (sky excluded;
+        # Stage 5 envmap takes over). SSIM stays full-image (D7).
+        # v1 byte-identical when layered_loss=false or image_infos missing.
         loss_l1 = torch.zeros(1, device=self.device)
         lambda_l1 = 0.0
         if self.conf.loss.use_l1:
             with torch.cuda.nvtx.range(f"loss-l1"):
-                loss_l1 = torch.abs(rgb_pred - rgb_gt).mean()
+                use_layered = getattr(self.conf, "trainer", {}).get("layered_loss", False)
+                image_infos = getattr(gpu_batch, "image_infos", None)
+                if use_layered and image_infos is not None:
+                    loss_l1 = compute_layered_l1_loss(
+                        rgb_pred, rgb_gt,
+                        image_infos=image_infos,
+                        valid_mask=mask,
+                    )
+                else:
+                    loss_l1 = torch.abs(rgb_pred - rgb_gt).mean()
                 lambda_l1 = self.conf.loss.lambda_l1
 
         # L2 loss

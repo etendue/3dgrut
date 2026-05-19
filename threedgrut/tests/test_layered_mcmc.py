@@ -118,10 +118,78 @@ def test_layered_mcmc_yaml_inherits_mcmc_defaults():
 
     assert cfg_mcmc.strategy.method == "MCMCStrategy"
     assert cfg_layered.strategy.method == "LayeredMCMCStrategy"
-    # Training hyper-params inherited unchanged
+    # Training hyper-params inherited unchanged (T2.3)
     assert cfg_mcmc.strategy.binom_n_max == cfg_layered.strategy.binom_n_max
     assert cfg_mcmc.strategy.relocate.frequency == cfg_layered.strategy.relocate.frequency
     assert cfg_mcmc.strategy.perturb.noise_lr == cfg_layered.strategy.perturb.noise_lr
+
+
+# --- T3.4: perturb mask hook (D1) ---
+def test_mcmc_get_perturb_mask_default_is_ones(real_conf):
+    """T3.4: MCMCStrategy._get_perturb_mask() default = ones (v1 byte-identical)."""
+    import torch
+    from threedgrut.strategy.mcmc import MCMCStrategy
+
+    strat = MCMCStrategy.__new__(MCMCStrategy)
+    mask = strat._get_perturb_mask()
+    assert mask.shape == (3,)
+    assert torch.equal(mask, torch.ones(3))
+
+
+def test_road_spec_has_perturb_scale_mask_z_zero():
+    """T3.4 D1: registry road spec installs perturb_scale_mask=(1, 1, 0).
+
+    Without this, MCMC perturb would noisily drift the LiDAR-Z-locked thin
+    disc off the road surface even though road_init enforces Z lock at init.
+    """
+    from threedgrut.layers.registry import STANDARD_LAYERS
+
+    road = STANDARD_LAYERS["road"]
+    assert road.perturb_scale_mask == (1.0, 1.0, 0.0), (
+        f"road perturb mask leaked Z: {road.perturb_scale_mask}"
+    )
+    # Background / dynamic_rigids should NOT override (free perturb)
+    assert STANDARD_LAYERS["background"].perturb_scale_mask is None
+    assert STANDARD_LAYERS["dynamic_rigids"].perturb_scale_mask is None
+
+
+def test_layered_mcmc_installs_road_perturb_mask(real_conf):
+    """T3.4 D1: LayeredMCMCStrategy injects road spec's perturb mask into
+    sub-strategy['road']; background sub stays at default ones."""
+    import torch
+    from threedgrut.layers.layer_spec import LayerSpec
+    from threedgrut.layers.layered_model import LayeredGaussians
+    from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000,
+                  scale_prior=(0.1, 0.1, 0.001),
+                  perturb_scale_mask=(1.0, 1.0, 0.0)),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    strat = LayeredMCMCStrategy(real_conf, model, specs)
+
+    bg_mask = strat.sub_strategies["background"]._get_perturb_mask()
+    road_mask = strat.sub_strategies["road"]._get_perturb_mask()
+
+    assert torch.equal(bg_mask, torch.ones(3))
+    assert torch.equal(road_mask, torch.tensor([1.0, 1.0, 0.0]))
+
+
+def test_layered_mcmc_perturb_mask_skipped_when_spec_none(real_conf):
+    """T3.4 D1: when spec.perturb_scale_mask is None, sub keeps the default
+    _get_perturb_mask path — no instance attribute installed."""
+    from threedgrut.layers.layer_spec import LayerSpec
+    from threedgrut.layers.layered_model import LayeredGaussians
+    from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    strat = LayeredMCMCStrategy(real_conf, model, specs)
+    sub = strat.sub_strategies["background"]
+    # No _perturb_mask_override attribute → default class method path
+    assert not hasattr(sub, "_perturb_mask_override")
 
 
 

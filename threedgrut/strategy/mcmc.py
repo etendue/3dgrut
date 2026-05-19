@@ -140,6 +140,16 @@ class MCMCStrategy(BaseStrategy):
         (e.g. LayeredMCMCStrategy) to scope to a single layer."""
         return self.conf.strategy.add.max_n_gaussians
 
+    def _get_perturb_mask(self) -> torch.Tensor:
+        """[3] elementwise multiplier on the positional perturb noise (xyz).
+
+        Default = ones (v1 byte-identical: noise unaffected).
+        LayeredMCMCStrategy overrides this per sub to honour LayerSpec.
+        perturb_scale_mask — e.g. road layer uses (1, 1, 0) so MCMC perturb
+        cannot drift the thin disc off its LiDAR-Z-locked surface (T3.4 D1).
+        """
+        return torch.ones(3)
+
     @torch.no_grad()
     def add_new_gaussians(self) -> None:
         # Get the current number of gaussians
@@ -188,6 +198,10 @@ class MCMCStrategy(BaseStrategy):
             torch.randn_like(positions) * (op_sigmoid(1 - densities)) * self.conf.strategy.perturb.noise_lr * current_lr
         )
         noise = torch.bmm(covariance, noise.unsqueeze(-1)).squeeze(-1)
+
+        # T3.4 D1: per-axis mask on positional noise. Default is ones (v1
+        # byte-identical); LayeredMCMC road sub overrides to (1, 1, 0).
+        noise = noise * self._get_perturb_mask().to(noise.device).to(noise.dtype)
 
         self.model.positions.add_(noise)
 

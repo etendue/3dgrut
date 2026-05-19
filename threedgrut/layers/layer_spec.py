@@ -43,3 +43,8 @@ class LayerSpec:
     mask_field: str | None = None
     is_particle_layer: bool = True
     density_init: float = 0.1
+    # T3.4 D1: per-axis multiplier on MCMC positional perturb noise. Road
+    # uses (1, 1, 0) so the LiDAR-Z-locked thin disc cannot drift in Z under
+    # MCMC perturb. None = no override (LayeredMCMCStrategy leaves the sub's
+    # default _get_perturb_mask=ones in place).
+    perturb_scale_mask: tuple[float, float, float] | None = None

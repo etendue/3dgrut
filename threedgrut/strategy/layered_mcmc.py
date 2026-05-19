@@ -15,6 +15,7 @@ they have no MoG particles to densify.
 """
 from __future__ import annotations
 
+import torch
 from omegaconf import OmegaConf
 
 from threedgrut.layers.layer_spec import LayerSpec
@@ -35,13 +36,30 @@ class LayeredMCMCStrategy(BaseStrategy):
             if not spec.is_particle_layer:
                 continue
             sub_conf = self._make_sub_conf(conf, spec)
-            self.sub_strategies[spec.name] = MCMCStrategy(
-                sub_conf, model.layers[spec.name]
-            )
+            sub = MCMCStrategy(sub_conf, model.layers[spec.name])
+            self._install_perturb_mask(sub, spec)
+            self.sub_strategies[spec.name] = sub
         logger.info(
             f"LayeredMCMC: {len(self.sub_strategies)} sub-strategies for "
             f"layers {list(self.sub_strategies.keys())}"
         )
+
+    @staticmethod
+    def _install_perturb_mask(sub: MCMCStrategy, spec: LayerSpec) -> None:
+        """T3.4 D1: bind spec.perturb_scale_mask onto the sub's _get_perturb_mask.
+
+        If spec.perturb_scale_mask is None, leave the default (returns ones)
+        so the sub's perturb behaviour is byte-identical with v1 MCMCStrategy.
+        Otherwise install a per-sub override that returns the spec mask as a
+        CPU tensor (gets .to(noise.device) inside perturb_gaussians).
+        """
+        if spec.perturb_scale_mask is None:
+            return
+        mask = torch.tensor(spec.perturb_scale_mask, dtype=torch.float32)
+        # Instance-level override; default at the class still returns ones for
+        # other subs / when bypassed via super().
+        sub._perturb_mask_override = mask
+        sub._get_perturb_mask = lambda: sub._perturb_mask_override
 
     @staticmethod
     def _make_sub_conf(conf, spec: LayerSpec):

@@ -112,7 +112,7 @@ kanban
 | **T3.2.b** | 3 | datasetNcore.py 暴露 road/dyn LiDAR 点（A800 集成） | 0.75 | ⬜ | MOD 同上 |
 | **T3.3.a** | 3 | road_init 6 单测（z_lock / scale_flat / handles_empty / max_n / identity_quat / uneven_terrain） | 0.25 | ✅ | NEW `tests/test_road_init.py` |
 | **T3.3.b** | 3 | road_init.py LiDAR-Z KNN + flat scale prior 实现 | 0.75 | ✅ | NEW `layers/road_init.py` |
-| **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook | 0.75 | ⬜ | MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/registry.py` |
+| **T3.4** | 3 | trainer.py region-weighted loss + perturb mask hook (D1) | 0.75 | ✅ | NEW `model/layered_loss.py` · MOD `trainer.py` · MOD `strategy/mcmc.py` · MOD `strategy/layered_mcmc.py` · MOD `layers/layer_spec.py` · MOD `layers/registry.py` · MOD `configs/base_gs.yaml` · NEW `tests/test_layered_loss.py` (6 tests) · 4 new T3.4 tests in `test_layered_mcmc.py` |
 | **T3.5** | 3 | LayeredGaussians 多层 forward + Stage 3 集成 (A800) | 1 | ⬜ | MOD `layers/layered_model.py` · MOD `trainer.py` · NEW yaml |
 | **T4.1** | 4 | scene_manifest tracks → instance_dict loader | 1 | ⬜ | MOD `datasets/datasetNcore.py` |
 | **T4.2** | 4 | dynamic_rigid_init.py cuboid 内 LiDAR 抽取 | 1.5 | ⬜ | NEW `layers/dynamic_rigid_init.py` |
@@ -140,7 +140,7 @@ kanban
 | 0 | A800 环境验证 | 1/1 ✅ | smoke 24.12 dB baseline |
 | 1 | Layer 抽象 | 5/5 ✅ | LayeredGaussians + registry + base.yaml 默认 + 9 本地单测 + 3 A800 contract test |
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
-| 3 | Road 层 | 5/9 ⬜ | T3.0 / T3.1.a / T3.2.a / T3.3.a / T3.3.b ✅（Mac 51/51 PASS, 0.6s） |
+| 3 | Road 层 | 6/9 ⬜ | T3.0 / T3.1.a / T3.2.a / T3.3.a / T3.3.b / T3.4 ✅（Mac 61/61 PASS, 0.59s） |
 | 4 | DynamicRigid 层 | 0/5 ⬜ | — |
 | 5 | Sky envmap | 0/4 ⬜ | — |
 | 6 | Exposure | 0/3 ⬜ | — |
@@ -979,6 +979,40 @@ T2.4 代码审查遗留修复：
 > 文档结束。当前应优先处理：**T3.1 / T3.2**（数据加载器，为 road 层提供 aux mask + LiDAR 点）。
 
 ---
+
+### T3.4 ✅ (2026-05-19, Mac local)
+
+region-weighted L1 loss + MCMC perturb mask hook (D1)：
+
+**Loss 侧 (D6 D7):**
+- `threedgrut/model/layered_loss.py` 新建 `compute_layered_l1_loss(rgb_pred, rgb_gt, image_infos, valid_mask, min_pixels=100)`：
+  - 纯函数（不依赖 Trainer / CUDA），单测可纯 import
+  - image_infos=None / 缺 sky_mask → 走 v1 fallback (.mean()` or masked mean)
+  - 否则 bg + road + dyn 三区均值之和（sky 不算 L1，envmap 接管）
+  - dyn 优先用 `dyn_mask_cuboid`（Stage 4 T4.4），fallback `dyn_mask_sseg`（Stage 3）
+  - mask.sum() < min_pixels 该区跳过（D6 数值稳定）
+- `threedgrut/trainer.py::get_losses` 加 `layered_loss` 开关分支；SSIM 保持全图（D7）
+- `configs/base_gs.yaml` 加 `trainer.layered_loss: false` 默认
+
+**Perturb mask hook (D1):**
+- `threedgrut/strategy/mcmc.py`：抽 `_get_perturb_mask() -> Tensor[3]` 钩子，默认 `torch.ones(3)`（v1 byte-identical）；`perturb_gaussians` noise elementwise 乘 mask
+- `threedgrut/strategy/layered_mcmc.py`：`_install_perturb_mask(sub, spec)` 静态方法 — 仅当 `spec.perturb_scale_mask is not None` 时绑定 `sub._perturb_mask_override` 并替换 `sub._get_perturb_mask`，否则保持默认（bg / dyn 行为不变）
+- `threedgrut/layers/layer_spec.py` 加 `perturb_scale_mask: tuple[float,float,float] | None = None` 字段
+- `threedgrut/layers/registry.py`：road spec 加 `perturb_scale_mask=(1.0, 1.0, 0.0)`
+
+**测试 (10 new tests, Mac 0.59s)：**
+- `test_layered_loss.py` 6 tests：v1 fallback / valid_mask / 三区 partition / small region skipped (D6) / cuboid > sseg precedence / scalar+backward
+- `test_layered_mcmc.py` 4 new tests：default ones / road spec Z lock / sub install / no-spec skip
+
+| 指标 | 实际 |
+|---|---:|
+| 三区 partition 数值对账 | pred=1/gt=0, 4×4 三区各 4 px → loss = 3.0 (bg+road+dyn 均值和) ✓ |
+| v1 fallback byte-identical | `image_infos=None` → `.mean()` 公式与改前一致 ✓ |
+| Road perturb mask installed | `sub["road"]._get_perturb_mask() == [1, 1, 0]` ✓ |
+| Bg perturb mask unchanged | `sub["bg"]._get_perturb_mask() == [1, 1, 1]` (default) ✓ |
+| 全测试套 | **61/61 PASS** (Mac, 0.59s) |
+
+**剩余 Stage 3**：T3.5 LayeredGaussians 多层 forward + Stage 3 出口集成 (需 A800)；T3.1.b / T3.2.b NCoreDataset 改动 (需 ncore SDK)。
 
 ### T3.3.a + T3.3.b ✅ (2026-05-19, Mac local)
 

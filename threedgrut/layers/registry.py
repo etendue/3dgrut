@@ -27,6 +27,7 @@ STANDARD_LAYERS: dict[str, LayerSpec] = {
         name="road", layer_id=1, max_n_particles=200_000,
         scale_prior=(0.1, 0.1, 0.001), scale_lr_mult=0.2,
         mask_field="road_mask",
+        perturb_scale_mask=(1.0, 1.0, 0.0),  # T3.4 D1: Z lock during MCMC perturb
     ),
     "dynamic_rigids": LayerSpec(
         name="dynamic_rigids", layer_id=2, max_n_particles=200_000,

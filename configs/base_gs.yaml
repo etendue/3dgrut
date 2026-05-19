@@ -32,6 +32,14 @@ use_layered_model: false
 layers:
   enabled: [background]   # only consulted when use_layered_model=true
 
+# T3.4: region-weighted L1 loss for layered training. When true AND the
+# dataloader populates batch.image_infos (sky/road/dyn masks), L1 loss is
+# partitioned per region and per-region means are summed (sky excluded;
+# Stage 5 envmap takes over). SSIM stays full-image (D7). Default false
+# leaves v1 byte-identical .mean() L1 in place.
+trainer:
+  layered_loss: false
+
 enable_writer: true
 writer:
   hit_stat_frequency: 999999
