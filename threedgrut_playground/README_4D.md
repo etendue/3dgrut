@@ -35,6 +35,8 @@ python train.py --config-name apps/ncore_3dgut_mcmc_v2_full \
 
 ### 2. 启动 4D viewer
 
+**有 RT cores（RTX 系列）**：
+
 ```bash
 python -m threedgrut_playground.viser_gui_4d \
     --gs_object /path/to/ckpt_last.pt \
@@ -42,7 +44,21 @@ python -m threedgrut_playground.viser_gui_4d \
     --port 8080
 ```
 
-浏览器打开 `http://localhost:8080`（远程用 `ssh -L 8080:localhost:8080 a800-x2`）。
+**无 RT cores（A100 / A800 / H100 等 datacenter ML 卡）**：必须加 `--no_gaussian_render`，否则 OptiX 扩展 dlopen 时 segfault。
+
+```bash
+python -m threedgrut_playground.viser_gui_4d \
+    --gs_object /path/to/ckpt_last.pt \
+    --no_gaussian_render \
+    --port 8080
+```
+
+此模式跳过 Engine3DGRUT 全套（不渲染 Gaussian 背景），只保留 scene primitives + timeline。Mac 远程看：
+
+```bash
+ssh -L 8080:localhost:8080 a800-x2
+# 浏览器 http://localhost:8080
+```
 
 ### 3. 旧 ckpt（无 viz_4d）的两种 fallback
 
@@ -146,14 +162,23 @@ python -m threedgrut_playground.viser_gui_4d \
     "tracks_camera_timestamps_us": Tensor[F] int64,
 
     "lidar": {
-        "road_xyz":          Tensor[M_road, 3] | None,
-        "road_rgb":          Tensor[M_road, 3] | None,
-        "dynamic_xyz":       Tensor[M_dyn,  3] | None,
-        "dynamic_rgb":       Tensor[M_dyn,  3] | None,
-        "road_n_total":      int | None,
-        "road_subsample":    int | None,
-        "dynamic_n_total":   int | None,
-        "dynamic_subsample": int | None,
+        # Road LiDAR: static, world frame
+        "road_xyz":               Tensor[M_road, 3] | None,
+        "road_rgb":               Tensor[M_road, 3] | None,
+        "road_n_total":           int | None,
+        "road_subsample":         int | None,
+        # T8.11 — dynamic LiDAR: per-track object-local frame so viewer
+        # can transform back to world every frame, keeping points glued
+        # to the moving cuboid.
+        "dynamic_local_xyz":      Tensor[N, 3] | None,   # object-local
+        "dynamic_track_ids":      Tensor[N]    | None,   # idx into track_names
+        "dynamic_track_names":    list[str]    | None,   # idx → tid
+        "dynamic_pts_per_track":  int          | None,
+        # Legacy world-frame union (pre-T8.11 ckpts / fallback only)
+        "dynamic_xyz":            Tensor[M_dyn, 3] | None,
+        "dynamic_rgb":            Tensor[M_dyn, 3] | None,
+        "dynamic_n_total":        int | None,
+        "dynamic_subsample":      int | None,
     },
 
     "viewer_defaults": {
@@ -228,6 +253,23 @@ pip install viser==1.0.0
 ### Multi-camera frustum 没显示其他相机
 
 设计取舍：当前只渲染 `primary_camera_id` 的 frustum，避免 7 相机环视拥挤。多相机的 pose 仍 concat 进 `poses_c2w`（用于 ego polyline 完整轨迹），未来可扩展为 togglable per-camera frustum.
+
+### `OptiX dlopen segfault` / `lib3dgrt_cc.so` 加载崩溃
+
+GPU 没 RT cores（A100/A800/H100 等 datacenter ML 卡）。加 `--no_gaussian_render` 跳过 Engine3DGRUT 即可。这是 OptiX BVH traversal 在没有 RT cores 的 GPU 上的硬性限制，不是 3dgrut bug。
+
+### Dynamic LiDAR 点云不随 cuboid 动（T8.11 之前 bug）
+
+旧 ckpt（T8.11 之前 inject 的）没存 per-track object-local 字段，只有 `dynamic_xyz` 世界帧聚合。重新 inject 或重训即可：
+
+```bash
+python -m threedgrut.viz.inject \
+    --ckpt /path/to/old.pt \
+    --dataset_path /path/to/manifest.json \
+    --out /path/to/new.pt
+```
+
+新 ckpt 字段验证：`viz_4d.lidar.dynamic_local_xyz` 应该非 None，`dynamic_track_names` 应该是 list[str]。
 
 ### Cuboid 朝向不对（拐弯/掉头时偏）
 
