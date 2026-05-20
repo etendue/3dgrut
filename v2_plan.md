@@ -44,6 +44,7 @@ kanban
     [T7.3 7-cam 20s full 30k step + KPI]
     [T7.4 per-layer cap ablation]
     [T7.5 WP_V2_Report.md + schema]
+    [T8.12 vast.ai H100 (Hopper, RT cores) 验证 viser_gui_4d 完整 Gaussian 渲染]
   In Progress
   Review
   Blocked
@@ -100,7 +101,7 @@ kanban
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 5 | T7.1-T7.5 (Stage 7 完整 KPI) |
+| Backlog ⬜ | 6 | T7.1-T7.5 (Stage 7 完整 KPI) + T8.12 (vast.ai H100 viser Gaussian 渲染验证, v3 备选) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
@@ -166,6 +167,7 @@ kanban
 | **T8.9** | 8 | inject_viz_4d CLI 工具（方案 B 一次性注入旧 ckpt） | 0.25 | ✅ **A800 端到端** | NEW `threedgrut/viz/inject.py` (~165 行: inject_viz_4d + _populate_tracks_from_dataset + _extract_conf 兼容旧 v2 ckpt 顶层无 config 的嵌套布局) · MOD `threedgrut_playground/README_4D.md` (加方案 B 章节) · NEW `threedgrut/tests/test_inject_viz_4d.py` (5 测试). **A800 实测 (T6F.3 ckpt v2_egomask_fix_20260520_113746)**: 991.3MB 旧 ckpt → 1m50s 注入 → 995.1MB (+3.8MB 元数据), viz_4d schema_v1, 31 tracks (与 T4.5 baseline 完全吻合), sample track automobile size=[4.09, 1.87, 1.61]m, ego 51 poses + primary cam fov_y=2.441 rad, road_xyz 200K/629K, dyn_xyz 100K/135K, ts range 88-1988 ms (duration_sec=2.0 对齐) |
 | **T8.10** | 8 | viser_gui_4d --no_gaussian_render 模式 (Ampere datacenter GPU 兼容) | 0.25 | ✅ **A800 端到端** | **仅 Ampere datacenter SKU (A100/A800)** RT cores 被 NVIDIA 阉割导致 OptiX dlopen segfault. Hopper datacenter (H100/H800/H200, 第 3 代 RT cores) + RTX 系列 + workstation A5000/A6000 都有 RT cores, 不需要此 flag. MOD `viser_gui_4d.py`: --no_gaussian_render flag 跳过 Engine3DGRUT 实例化, 主循环只跑 _play_tick + scene primitives. UI 隐藏 Resolution/Near/Far/FPS 控件. **A800 实测**: server listening *:8080 起来, 浏览器拖 timeline → ego/cuboid/LiDAR/frustum 全部动起来 (无 Gaussian 背景) |
 | **T8.11** | 8 | dynamic LiDAR per-track object-local frame + per-frame transform | 0.25 | ✅ **A800 端到端** | T8.10 暴露视觉 bug: cuboid 移动但 dyn LiDAR 点云不动 (static world union). 修复复用训练侧 `init_dynamic_rigid_layer` 路径: MOD `viz/metadata.py:_extract_lidar` 调用它产 per-track local pts + track_ids + track_names; NEW schema 字段 `dynamic_local_xyz/track_ids/track_names`; MOD `FourDMetadata.has_per_track_dyn_lidar()` helper; MOD `viser_gui_4d`: `_build_dyn_lidar_world(frame_idx)` 每帧 R·local+t + instance_color 着色, `_update_dynamic_lidar` remove+add point_cloud. NEW `lidar_dynamic_pts_per_track` config 默认 5000. **A800 实测**: 48,488 个 object-local 点分布在 20 个 active tracks (cap 5000/track), 994.8 MB ckpt, 浏览器拖 timeline → dyn LiDAR 点云跟着 cuboid 飘. NEW `test_dyn_lidar_per_track_local_frame` 测试 |
+| **T8.12** | 8 | vast.ai H100 验证 viser_gui_4d 完整 Gaussian 渲染 (RT cores 路径) | 0.5 | ⬜ Backlog | A800 上只能跑 --no_gaussian_render (Ampere 无 RT cores). 真要看 Gaussian 背景渲染需要带 RT cores 的卡. 详细 runbook: `docs/T8.12_h100_viser_validation_plan.md`. 流程: 租 vast.ai H100 (¥10-15/h) → 上传 994.8 MB ckpt → OptiX 首次编译 5-10 min → 启动 viser_gui_4d **不加 --no_gaussian_render** → Mac 浏览器 ssh -L 端口转发 → 验收 5 项 (启动无 segfault / Gaussian 图正常 / timeline 拖动车跟 cuboid 走 / ≥10 FPS @ 1080×720 / dyn LiDAR 在 Gaussian 背景下仍跟车飘). 总时长 45-60 min, 总成本 ¥10-15. 备选 RTX 4090 ¥5-8/h. **不阻塞 Stage 7/9 训练 KPI; v3 备选**. 不需要 NCore SDK (ckpt 自带 viz_4d) |
 | | | **合计** | **30.0** | | |
 
 ### 1.3 当前 Stage 状态汇总
