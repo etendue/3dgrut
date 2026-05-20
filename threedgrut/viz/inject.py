@@ -34,6 +34,32 @@ from omegaconf import OmegaConf
 from threedgrut.utils.logger import logger
 
 
+def _extract_conf(ckpt: dict):
+    """Find the OmegaConf-like config blob in a 3dgrut ckpt.
+
+    Two layouts exist in the wild:
+
+      v1 / new-v2: ``ckpt["config"]``                                 (top-level)
+      old v2:      ``ckpt["model"]["gaussians_nodes"][<layer>]["config"]``
+
+    The old-v2 nesting happens because each per-layer MoG's
+    ``get_model_parameters()`` returns its own ``config`` entry, and the
+    LayeredGaussians container historically didn't surface one. Newer trainers
+    (T8.2+) mirror the v1 top-level key for symmetry.
+    """
+    conf = ckpt.get("config")
+    if conf is not None:
+        return conf
+    model_blob = ckpt.get("model")
+    if not isinstance(model_blob, dict):
+        return None
+    nodes = model_blob.get("gaussians_nodes") or {}
+    for _layer_name, params in nodes.items():
+        if isinstance(params, dict) and "config" in params:
+            return params["config"]
+    return None
+
+
 def _populate_tracks_from_dataset(model, dataset) -> int:
     """Replicate ``Trainer.setup_training`` tracks loading (lines 380-447).
 
@@ -88,9 +114,12 @@ def inject_viz_4d(ckpt_path: str, dataset_path: str | None,
 
     logger.info(f"[inject] loading ckpt: {src}")
     ckpt = torch.load(src, weights_only=False)
-    conf = ckpt.get("config")
+    conf = _extract_conf(ckpt)
     if conf is None:
-        raise ValueError("ckpt missing 'config' key — not a 3dgrut ckpt?")
+        raise ValueError(
+            "ckpt missing 'config' — not a 3dgrut ckpt? Looked at top-level "
+            "and ckpt['model']['gaussians_nodes'][<layer>]['config']."
+        )
     if not bool(conf.get("use_layered_model", False)):
         raise ValueError(
             "ckpt is not a v2 LayeredGaussians ckpt (use_layered_model=false). "

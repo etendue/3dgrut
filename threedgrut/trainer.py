@@ -1136,7 +1136,12 @@ class Trainer3DGRUT:
         from threedgrut.layers.layered_model import LayeredGaussians
 
         if isinstance(self.model, LayeredGaussians):
-            parameters = {"model": model_params}
+            # v2: config doesn't ride along in get_model_parameters() (each
+            # per-layer MoG keeps its own under gaussians_nodes/<name>/config
+            # but that's nested and ad-hoc). Mirror v1's flat top-level key so
+            # downstream tools (engine.load_3dgrt_object, viz.inject) can read
+            # ckpt["config"] uniformly across v1 / v2.
+            parameters = {"model": model_params, "config": self.conf}
         else:
             parameters = model_params
         parameters |= {"global_step": self.global_step, "epoch": self.n_epochs - 1}

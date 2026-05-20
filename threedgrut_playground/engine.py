@@ -1207,8 +1207,20 @@ class Engine3DGRUT:
 
         if object_path.endswith(".pt"):
             checkpoint = torch.load(object_path, weights_only=False)
-            conf = checkpoint["config"]
-            if conf.render["method"] != "3dgrt":
+            # Config layout varies across 3dgrut versions: v1 / new-v2 trainers
+            # put it at the top level; older v2 ckpts (pre-T8.2) only have it
+            # nested under ckpt["model"]["gaussians_nodes"][<layer>]["config"]
+            # because each per-layer MoG.get_model_parameters() carried its own.
+            conf = checkpoint.get("config")
+            if conf is None and isinstance(checkpoint.get("model"), dict):
+                nodes = checkpoint["model"].get("gaussians_nodes") or {}
+                for _ln, p in nodes.items():
+                    if isinstance(p, dict) and "config" in p:
+                        conf = p["config"]
+                        break
+            if conf is None:
+                conf = load_default_config()
+            elif conf.render["method"] != "3dgrt":
                 conf = load_default_config()
             # v2 LayeredGaussians: detect via use_layered_model flag and route
             # to the layered container. Falls through to v1 flat MoG path when
