@@ -44,9 +44,11 @@ python -m threedgrut_playground.viser_gui_4d \
 
 浏览器打开 `http://localhost:8080`（远程用 `ssh -L 8080:localhost:8080 a800-x2`）。
 
-### 3. 旧 ckpt（无 viz_4d）的 dataset fallback
+### 3. 旧 ckpt（无 viz_4d）的两种 fallback
 
-如果手里只有训好的旧 v2 ckpt（没有 `viz_4d` 块），可以通过 `--dataset_path` 让 viewer 现场提取：
+如果手里只有训好的旧 v2 ckpt（没有 `viz_4d` 块），有两条路径可选。
+
+**方案 A — viewer 端 lazy fallback**（最简单，每次启动现场提取）：
 
 ```bash
 python -m threedgrut_playground.viser_gui_4d \
@@ -55,7 +57,26 @@ python -m threedgrut_playground.viser_gui_4d \
     --port 8080
 ```
 
-该路径会 lazy import `NCoreDataset` + `extract_4d_metadata`，因此**无 NCore SDK 的机器只要不传 `--dataset_path` 就不会崩**。
+该路径会 lazy import `NCoreDataset` + `extract_4d_metadata`，因此**无 NCore SDK 的机器只要不传 `--dataset_path` 就不会崩**。每次启动都会重新加载 dataset（首次 ~30s）。
+
+**方案 B — 一次性注入 viz_4d 块到 ckpt**（推荐，省每次 NCore SDK reload，让 ckpt 在无 SDK 机器上可用）：
+
+```bash
+python -m threedgrut.viz.inject \
+    --ckpt /path/to/old_v2_ckpt.pt \
+    --dataset_path /path/to/scene_manifest.json \
+    --out /path/to/new_ckpt_with_viz_4d.pt    # 或省略 --out 原地覆盖（留 .bak 备份）
+```
+
+注入后的 ckpt 字节级保留所有原字段（model / strategy / post_processing / exposure_state / sky_envmap_state 不变），只新增顶层 `viz_4d` 块。之后启动 viewer 不需要 `--dataset_path`：
+
+```bash
+python -m threedgrut_playground.viser_gui_4d \
+    --gs_object /path/to/new_ckpt_with_viz_4d.pt \
+    --port 8080
+```
+
+适用场景：经常分享/回放同一个 ckpt、想给没装 NCore SDK 的同事看效果。
 
 ### 4. v1 ckpt
 
