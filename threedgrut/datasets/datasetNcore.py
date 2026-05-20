@@ -871,6 +871,32 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 ]
             )
 
+            # T6F.1: ego mask (per-frame, cached at __init__) → batch_dict["valid"].
+            # Stage 1-6 漏洞：ego mask 在 L385-395 / L531-537 加载并 dilate 缓存了，
+            # 但训练分支从未读取，导致 Batch.mask=None → trainer.get_losses 跳过
+            # mask 乘法 → ego 车身像素参与 loss → 浪费高斯容量 + 验证 PSNR 虚高。
+            # 这里把 cache 取出来按渲染分辨率 resize（与 val 分支 L942-947 同款）。
+            if (
+                sampled_camera_id is not None
+                and sequence_id in self.sequence_cameras_frame_valid_pixels_masks
+                and sampled_camera_id in self.sequence_cameras_frame_valid_pixels_masks[sequence_id]
+            ):
+                _frame_valid_mask = self.sequence_cameras_frame_valid_pixels_masks[sequence_id][
+                    sampled_camera_id
+                ].get(int(camera_frame_index))
+                if _frame_valid_mask is not None:
+                    w_render, h_render = self._camera_resolutions[sampled_camera_id]
+                    if (
+                        _frame_valid_mask.shape[0] != h_render
+                        or _frame_valid_mask.shape[1] != w_render
+                    ):
+                        _frame_valid_mask = cv2.resize(
+                            _frame_valid_mask.astype(np.uint8),
+                            (w_render, h_render),
+                            interpolation=cv2.INTER_NEAREST,
+                        ).astype(bool)
+                    batch_dict["valid"] = to_torch(_frame_valid_mask, device="cpu")
+
             # T3.1.b: per-frame sseg → sky/road/dyn pixel masks (when enabled).
             # Read PNG directly via SsegAuxReader (NCore SDK can't parse aux
             # store schema; see _ensure_aux_readers note). Frame key is the
@@ -1344,6 +1370,18 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         if "camera_idx" in batch:
             camera_idx = batch["camera_idx"]
             batch_dict["camera_idx"] = camera_idx[0].item() if isinstance(camera_idx, torch.Tensor) else int(camera_idx)
+
+        # --- T6F.1: ego mask (per-frame) → Batch.mask --------------------------
+        # 训练分支 __getitem__ 把 cache 中的 ego mask 注入 batch_dict["valid"]
+        # (2D [H, W] bool 或经 dataloader collate 后 3D [B, H, W])，验证分支 L959
+        # 也注入 "valid" (1D [H*W] bool 已展平到 pixel order)。这里统一 reshape
+        # 到 protocols.Batch 要求的 [B, H, W, 1] float32 并搬 GPU。
+        if "valid" in batch and batch["valid"] is not None:
+            valid = batch["valid"]
+            if not isinstance(valid, torch.Tensor):
+                valid = torch.from_numpy(valid)
+            mask = valid.to(self.device, non_blocking=True).float()
+            batch_dict["mask"] = mask.reshape(1, h, w, 1)
 
         # --- T3.1.b: aux per-region masks → Batch.image_infos -------------------
         # Each mask is [H, W] float in {0.0, 1.0}. The dataloader's default

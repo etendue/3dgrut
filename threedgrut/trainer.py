@@ -669,6 +669,41 @@ class Trainer3DGRUT:
             with torch.cuda.nvtx.range(f"criterions_lpips"):
                 metrics["lpips"] = lpips(pred_rgb_full_clipped, rgb_gt_full).item()
 
+            # T6F.2: masked PSNR / SSIM / LPIPS（Stage 6-fix）
+            # Stage 1-6 PSNR/SSIM/LPIPS 都在含 ego 车身像素的全图上算，导致虚高。
+            # 这里在保留全图三指标（与历史 Stage 3/4/5/6 baseline 可比）同时，
+            # 当 Batch.mask 不为 None 时追加 psnr_masked / ssim_masked / lpips_masked.
+            #   - PSNR_masked: 解析公式 sum((p-g)^2 * m) / (sum(m) * 3) → -10·log10
+            #   - SSIM / LPIPS 不支持像素级掩膜 → 用 GT-fill：mask=False 区填 GT
+            #     (差=0)，再算 SSIM/LPIPS；该区 SSIM≈1 / LPIPS≈0，按面积稀释稳定.
+            # mask=None（NeRF/Colmap 等无 ego mask 的 dataset）走 byte-identical
+            # 回归：三指标直接复制全图值，保证不引入回归.
+            mask = gpu_batch.mask  # [B, H, W, 1] 或 None
+            if mask is not None:
+                mask = mask.to(rgb_pred.dtype)
+                # PSNR_masked
+                diff_sq = (rgb_pred - rgb_gt).pow(2) * mask  # broadcast last dim 1→3
+                denom = mask.sum().clamp(min=1.0) * 3
+                mse_masked = diff_sq.sum() / denom
+                metrics["psnr_masked"] = (
+                    -10.0 * torch.log10(mse_masked.clamp(min=1e-10))
+                ).item()
+                # SSIM_masked / LPIPS_masked via GT-fill
+                m4d = mask.permute(0, 3, 1, 2)  # [B, 1, H, W]
+                rgb_pred_filled = pred_rgb_full * m4d + rgb_gt_full * (1.0 - m4d)
+                rgb_pred_filled_clipped = (
+                    pred_rgb_full_clipped * m4d + rgb_gt_full * (1.0 - m4d)
+                )
+                metrics["ssim_masked"] = ssim(rgb_pred_filled, rgb_gt_full).item()
+                metrics["lpips_masked"] = lpips(
+                    rgb_pred_filled_clipped, rgb_gt_full
+                ).item()
+            else:
+                # byte-identical 回归：mask=None → masked 指标 ≡ 全图指标
+                metrics["psnr_masked"] = metrics["psnr"]
+                metrics["ssim_masked"] = metrics["ssim"]
+                metrics["lpips_masked"] = metrics["lpips"]
+
             if iteration in self.conf.writer.log_image_views:
                 metrics["img_hit_counts"] = jet_map(outputs["hits_count"][-1], self.conf.writer.max_num_hits)
                 metrics["img_gt"] = gpu_batch.rgb_gt[-1].clip(0, 1.0)

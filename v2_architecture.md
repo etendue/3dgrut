@@ -72,10 +72,10 @@ flowchart TD
 ```mermaid
 flowchart TD
     CLI["train.py<br/>+ use_layered_model flag"]:::done
-    Trainer["Trainer3DGRUT<br/>• region-weighted loss ✅ T3.4<br/>• road init 串通 ✅ T3.5.b<br/>• dynamic_rigids init + timestamp ✅ T4.5<br/>• sky blend + exposure (Stage 5/6)<br/>MOD"]:::done
+    Trainer["Trainer3DGRUT<br/>• region-weighted loss ✅ T3.4<br/>• road init 串通 ✅ T3.5.b<br/>• dynamic_rigids init + timestamp ✅ T4.5<br/>• sky blend + exposure (Stage 5/6)<br/>• masked PSNR/SSIM/LPIPS 双指标 ✅ T6F.2 (Mac)<br/>MOD"]:::done
 
     %% Dataset
-    Dataset["NCore Dataset<br/>+ sky/road/dyn mask ✅ T3.1.b<br/>+ road / dyn LiDAR ✅ T3.2.b<br/>+ cuboid tracks (real autolabels v2) ✅ T4.5<br/>+ timestamp_us → Batch ✅ T4.5<br/>MOD"]:::done
+    Dataset["NCore Dataset<br/>+ sky/road/dyn mask ✅ T3.1.b<br/>+ road / dyn LiDAR ✅ T3.2.b<br/>+ cuboid tracks (real autolabels v2) ✅ T4.5<br/>+ timestamp_us → Batch ✅ T4.5<br/>+ ego mask 真注入 Batch.mask (train+val) ✅ T6F.1 (Mac)<br/>MOD"]:::done
 
     %% LayeredGaussians 容器
     subgraph Layered["LayeredGaussians (NEW)<br/>ModuleDict[name → MoG]<br/>T1.1 ✅ · T1.2 ✅"]
@@ -126,7 +126,7 @@ flowchart TD
 | 模块 | v1 状态 | v2 状态 | 任务 | 文件 |
 |---|---|---|---|---|
 | `train.py` | unchanged | 加 `use_layered_model` 分支 | T1.5 ✅ | `train.py` |
-| `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head + multi-layer init dispatcher (case "lidar" 分支 bg/road/dynamic_rigids 各 init)；`get_losses` region-weighted L1 + perturb mask；timestamp_us → forward | T1.2 ✅ / T1.5 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.3 ✅ / T4.5 ✅ / T5.3 / T6.2 | `threedgrut/trainer.py` |
+| `Trainer3DGRUT` | 单 MoG | 支持 LayeredGaussians + 多 head + multi-layer init dispatcher (case "lidar" 分支 bg/road/dynamic_rigids 各 init)；`get_losses` region-weighted L1 + perturb mask；timestamp_us → forward；**`compute_metrics` 输出 psnr/ssim/lpips full + masked 双指标 (T6F.2 ✅ Mac，mask=None 时 byte-identical 回归)** | T1.2 ✅ / T1.5 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.3 ✅ / T4.5 ✅ / T5.3 / T6.2 / T6F.2 ✅ | `threedgrut/trainer.py` |
 | `MixtureOfGaussians` | 全场景表征 | **不动**，被 LayeredGaussians 内嵌 | — | `threedgrut/model/model.py` |
 | **LayeredGaussians** | — | **新增 容器，ModuleDict 持每层 MoG；fused_view + get_layer_mask 接口实现；T3.0 加 init_layer_from_points + optimizer property** | T1.1 ✅ T1.5 ✅ T2.5 ✅ (d4841df) T3.0 ✅ | `threedgrut/layers/layered_model.py` |
 | **LayerSpec / registry** | — | **新增 描述层属性 + 5 标准层注册表** | T1.2 ✅ | `layer_spec.py` (8 字段), `registry.py` (STANDARD_LAYERS + specs_from_config) |
@@ -139,10 +139,10 @@ flowchart TD
 | **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b / 04c9174)** | T2.2 ✅ / T2.3 ✅ / T2.4 ✅ | `threedgrut/strategy/layered_mcmc.py` |
 | **SkyEnvmap** | — | **新增 SkyEnvmapBase + SkyEnvmapCubemap (nvdiffrast 6 面立方体贴图，移植自 drivestudio EnvLight) + SkyEnvmapMLP (SinusoidalEncoder + 3 层 MLP + sigmoid，无外部依赖)** | T5.2 ✅ (Stage 5 Mac) | `threedgrut/correction/__init__.py` · `threedgrut/correction/sky_envmap.py` |
 | **ExposureModel** | — | **新增 per-camera affine `exp(a)*x + b`，零初始化 = identity** | T6.1 ✅ (Stage 6 Mac) | `threedgrut/correction/exposure.py` |
-| `datasetNcore.py` | RGB + ego_mask | + load_aux_masks + aux_readers 直读 itar (sseg/lidar-sseg)；get_road/dynamic_lidar_points 按 class 过滤；__getitem__ 注入 timestamp_us (cam END) + region masks 到 batch | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ | `threedgrut/datasets/datasetNcore.py` |
+| `datasetNcore.py` | RGB + ego_mask | + load_aux_masks + aux_readers 直读 itar (sseg/lidar-sseg)；get_road/dynamic_lidar_points 按 class 过滤；__getitem__ 注入 timestamp_us (cam END) + region masks 到 batch；**train+val 真把 ego mask 注入 `batch_dict["valid"]` → `get_gpu_batch_with_intrinsics` 转 `Batch.mask` reshape [1,H,W,1] float32 (T6F.1 ✅ Mac，修复"加载了但没用"漏洞)** | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ / T6F.1 ✅ | `threedgrut/datasets/datasetNcore.py` |
 | **aux_readers.py** | — | **新增 SsegAuxReader / LidarSsegAuxReader 直读 zarr.itar (绕开 SDK version check)** | T3.1.b ✅ | `threedgrut/datasets/aux_readers.py` |
 | **ncore_semantic.py** | — | **新增 SKY/ROAD/DYNAMIC class ID 常量 (Cityscapes palette)** | T3.1.a ✅ | `threedgrut/datasets/ncore_semantic.py` |
-| `protocols.py::Batch` | rays + rgb + mask | + image_infos dict (sky/road/dyn masks GPU) + timestamp_us (cam END, 微秒 universal time) | T3.1.b ✅ / T4.5 ✅ | `threedgrut/datasets/protocols.py` |
+| `protocols.py::Batch` | rays + rgb + mask | + image_infos dict (sky/road/dyn masks GPU) + timestamp_us (cam END, 微秒 universal time); **Batch.mask 字段 v1 起就存在但 NCore 一直空填，Stage 6-fix 后由 NCore 真填充 (T6F.1 ✅ Mac)** | T3.1.b ✅ / T4.5 ✅ / T6F.1 ✅ | `threedgrut/datasets/protocols.py` |
 | `tracks_loader.py::load_tracks_from_ncore_cuboids` | — | **新增 真 NCore cuboid autolabels v2 → instance_pts_dict（替代 mock JSON）** | T4.5 ✅ | `threedgrut/datasets/tracks_loader.py` |
 | `mcmc.py` | add/relocate 不感知 buffer | + track_ids buffer sync (add 时 cat sampled，relocate 时 dead 继承 alive donor) | T4.5 ✅ | `threedgrut/strategy/mcmc.py` |
 | `Renderer` (3DGRT/3DGUT) | flat tensor in | **不动**（tracer 层不感知 layer） | — | `threedgrt_tracer/` / `threedgut_tracer/` |
@@ -452,12 +452,12 @@ flowchart TB
 | 文件 | 改动点 | 任务 |
 |---|---|---|
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
-| `threedgrut/trainer.py` | `init_model` 读 `conf.layers.enabled`；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case；`setup_training` case "lidar" 多层 init 分支 (bg/road/dynamic_rigids 各自 init_layer_from_points + populate_tracks)；`get_losses` 接 `compute_layered_l1_loss` + `compute_sky_loss` (layered_loss + use_sky_envmap 开关)；`init_exposure_model` 新方法 (Stage 6) 建 ExposureModel + 独立 Adam; `run_train_iter` sky blend 后 / loss 前应用 `exposure_model(cam_idx, pred_rgb)` + 在 model.optimizer.step() 后 exposure_optimizer.step()；`save_checkpoint` 加 `exposure_state` 段；`exposure_model` / `exposure_optimizer` 加 class-level Optional 默认 | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.5 ✅ / T5.3 ✅ / T6.2 ✅ |
+| `threedgrut/trainer.py` | `init_model` 读 `conf.layers.enabled`；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case；`setup_training` case "lidar" 多层 init 分支 (bg/road/dynamic_rigids 各自 init_layer_from_points + populate_tracks)；`get_losses` 接 `compute_layered_l1_loss` + `compute_sky_loss` (layered_loss + use_sky_envmap 开关)；`init_exposure_model` 新方法 (Stage 6) 建 ExposureModel + 独立 Adam; `run_train_iter` sky blend 后 / loss 前应用 `exposure_model(cam_idx, pred_rgb)` + 在 model.optimizer.step() 后 exposure_optimizer.step()；`save_checkpoint` 加 `exposure_state` 段；`exposure_model` / `exposure_optimizer` 加 class-level Optional 默认；**`compute_metrics` 在 validation 分支 mask 不为 None 时追加 psnr_masked (-10·log10(sum((p-g)²·m)/(sum(m)·3))) + ssim_masked / lpips_masked via GT-fill 近似；mask=None 时 byte-identical 回归三指标 = 全图 (T6F.2 ✅ Mac)** | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.5 ✅ / T5.3 ✅ / T6.2 ✅ / T6F.2 ✅ |
 | `threedgrut/layers/layered_model.py` | `init_layer_from_points` + `optimizer` property + `_LayeredOptimizerView`；`fused_view(timestamp_us)` + `_transform_means` + `_resolve_pose_idx` (binary-search ts→pose)；`populate_tracks` + 共享 `tracks_camera_timestamps_us` buffer；`build_acc` / `setup_optimizer` 多层 broadcast；`__getattr__` 多层 fused/broadcast/ref-fallback；`forward` 多层路由 + `_FusedView`；`_build_sky_module(spec, conf)` 工厂 + `_blend_sky(outputs, batch)` 末尾混合 + `setup_optimizer` 给 sky 挂 Adam (Stage 5)；`forward` 多层 ref_layer 选粒子层（跳过 sky）；`build_acc` skip 非粒子层 | T1.1 ✅ / T1.3 ✅ / T2.5 ✅ / T3.0 ✅ / T3.5.a ✅ / T4.0 ✅ / T4.3 ✅ / T4.5 ✅ / T5.3 ✅ |
 | `threedgrut/model/layered_loss.py` | `compute_layered_l1_loss` (T3.4) + 新增 `compute_sky_loss(rgb_sky, rgb_gt, sky_mask, min_pixels=100)` 纯函数 (Stage 5, T5.3) | T3.4 ✅ / T5.3 ✅ |
-| `threedgrut/datasets/datasetNcore.py` | load_aux_masks 参数；`__getitem__` (train+val) 抽 sseg mask + 注入 timestamp_us；`get_gpu_batch_with_intrinsics` 装 image_infos + timestamp_us；`_get_semantic_lidar_points` + `get_road/dynamic_lidar_points` 用 LidarSsegAuxReader；`_ensure_aux_readers` lazy init | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ |
+| `threedgrut/datasets/datasetNcore.py` | load_aux_masks 参数；`__getitem__` (train+val) 抽 sseg mask + 注入 timestamp_us；`get_gpu_batch_with_intrinsics` 装 image_infos + timestamp_us；`_get_semantic_lidar_points` + `get_road/dynamic_lidar_points` 用 LidarSsegAuxReader；`_ensure_aux_readers` lazy init；**`__getitem__` train 分支从已缓存的 `sequence_cameras_frame_valid_pixels_masks` 取 ego 帧 mask（downsample 走 cv2 INTER_NEAREST）塞 `batch_dict["valid"]`；val 分支已有；`get_gpu_batch_with_intrinsics` 把 valid → `Batch.mask` reshape [1,H,W,1] float32 (T6F.1 ✅ Mac，修复"加载了但 batch 没传出去"的漏洞)** | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ / T6F.1 ✅ |
 | `threedgrut/datasets/__init__.py` | NCoreDataset(load_aux_masks=...) 双路 (train+val) | T3.1.b ✅ |
-| `threedgrut/datasets/protocols.py::Batch` | + image_infos: dict (sky/road/dyn masks GPU) + timestamp_us: int (cam END, 微秒) | T3.1.b ✅ / T4.5 ✅ |
+| `threedgrut/datasets/protocols.py::Batch` | + image_infos: dict (sky/road/dyn masks GPU) + timestamp_us: int (cam END, 微秒); **mask 字段无 schema 变化（v1 起就有），但 NCore 在 T6F.1 之后才真填充 (类型 float32 [B,H,W,1]) ✅ Mac** | T3.1.b ✅ / T4.5 ✅ / T6F.1 ✅ |
 | `threedgrut/layers/layer_spec.py` | + perturb_scale_mask 字段 (tuple[3] 或 None, T3.4)；+ `extra: dict` field (compare=False keeps hashable, T5.3 sky backend/resolution 载体) | T3.4 ✅ / T5.3 ✅ |
 | `threedgrut/layers/registry.py` | road spec 加 perturb_scale_mask=(1.0,1.0,0.0, T3.4)；sky_envmap spec 加 `extra={"backend":"cubemap","resolution":128}` (T5.3 默认) | T3.4 ✅ / T5.3 ✅ |
 | `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 (62fc509)；抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical, road spec 注 1,1,0)；add/relocate 同步 track_ids buffer (T4.5) | T2.1 ✅ / T3.4 ✅ / T4.5 ✅ |
@@ -539,6 +539,19 @@ flowchart TB
 | **T6.3.a A800** Stage 6 出口 exposure_a.std > 0.01 (5-cam 学到 per-cam 差异) | T6.3.a ✅ | A800 GPU0 实测: **exposure_a.std=0.0306** (3× 出口门槛), gains 0.878-0.946 across 5 cams |
 | **T6.3.a A800** sky + exposure 同时启用，ckpt 含 sky_envmap_state + exposure_state 双段共存 | T6.3.a ✅ | A800 实测 ckpt 字段同时存在；3 模块（粒子层 + sky envmap + per-cam exposure）byte-level coexist |
 | **T6.3.a A800** color-correction 净收益 cc_PSNR - raw_PSNR ≥ 0.5 dB (证明 exposure 学到非平凡 affine) | T6.3.a ✅ | A800 实测: cc_PSNR 24.937 - raw_PSNR 23.237 = **+1.7 dB** (远超 0.5) |
+| **T6F.1** ego mask 注入后 `Batch.mask` shape == [1,H,W,1] / dtype=float32 | T6F.1 ✅ | `test_batch_mask_field_4d_shape_passes_post_init` (Mac, test_datasetNcore_ego_mask.py) |
+| **T6F.1** `protocols.Batch.__post_init__` 拒绝 3D mask (强制 reshape，防止误传) | T6F.1 ✅ | `test_batch_mask_field_3d_shape_rejected_by_post_init` (Mac) |
+| **T6F.1** valid 2D / 1D 都能 reshape 到 [1,H,W,1] 且数值等价 (train 2D vs val 1D 一致性) | T6F.1 ✅ | `test_valid_2d_reshape_to_4d_mask` + `test_valid_1d_reshape_to_4d_mask` (Mac) |
+| **T6F.1** valid_mask=None / 全 1 时 byte-identical 回归 (NeRF/Colmap 不引入回归) | T6F.1 ✅ | `test_layered_l1_valid_mask_none_is_v1_byte_identical` + `test_layered_l1_all_valid_mask_equivalent_to_no_mask` (Mac, 全套 139/139 PASS) |
+| **T6F.1** ego mask 接通后 `compute_layered_l1_loss(valid_mask=mask)` 剔除 ego 像素 (无需改 layered_loss.py) | T6F.1 ✅ | `test_layered_l1_with_ego_mask_excludes_ego_pixels` (Mac, ego 区 0.5 误差 + mask 后 loss ≈ 0) |
+| **T6F.2** mask=None / 全 1 时 psnr_masked ≡ psnr (byte-identical 回归三指标) | T6F.2 ✅ | `test_masked_metrics_equal_full_when_mask_none` + `test_masked_metrics_equal_full_when_mask_all_ones` (Mac, test_trainer_masked_metrics.py, float32 容差 1e-4) |
+| **T6F.2** psnr_masked 数值正确 (mask=True 区 uniform 误差 δ → -10·log10(δ²) 解析值对齐) | T6F.2 ✅ | `test_psnr_masked_uniform_error_matches_analytic_formula` (Mac, δ=0.1 → 20.0 dB) |
+| **T6F.2** psnr_masked 只看 mask=True 像素 (mask=False 区造巨大误差 psnr_masked ≥ 99 dB 因 1e-10 clamp) | T6F.2 ✅ | `test_psnr_masked_ignores_error_in_masked_region` (Mac) |
+| **T6F.2** SSIM 通过 GT-fill 近似实现 masked (ssim_masked > ssim_full 且 ≤ 1) | T6F.2 ✅ | `test_ssim_masked_via_gt_fill_better_than_full_ssim` (Mac, mock SSIM=1-MSE 验证单调改善) |
+| **T6F.2** LPIPS 通过 GT-fill 近似实现 masked (lpips_masked < lpips_full 且 ≥ 0) | T6F.2 ✅ | `test_lpips_masked_via_gt_fill_better_than_full_lpips` (Mac, mock LPIPS=MSE 验证单调改善) |
+| **T6F.2** mask [B,H,W,1] broadcast 到 rgb [B,H,W,3] 不爆 | T6F.2 ✅ | `test_psnr_masked_mask_shape_broadcast_to_rgb` (Mac) |
+| **T6F.3 A800** Stage 6-fix 出口 5k smoke psnr_full ≈ Stage 4 baseline (26.3 ± 0.3 dB) 且 psnr_masked < psnr_full (差额 0.2-1.5 dB 量化 ego 水分) | T6F.3 ⬜ | A800 实测 v2_full_exposure (commit hash, 数据回填 v2_plan.md § 5 Done Log) |
+| **T6F.3 A800** ego 区高斯密度下降 (mask 让 dyn / bg 不在 ego 区生成；总粒子数 ≤ 旧 baseline) | T6F.3 ⬜ | A800 实测 num_gaussians 时序 + playground viewport 查 ego 正下方区域 |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 
 ---
