@@ -43,6 +43,10 @@ STANDARD_LAYERS: dict[str, LayerSpec] = {
         name="sky_envmap", layer_id=-1, max_n_particles=0,
         scale_prior=(0.0, 0.0, 0.0),
         mask_field="sky_mask", is_particle_layer=False,
+        # T5.4: backend selects cubemap (default, nvdiffrast) vs mlp (fallback).
+        # Trainer reads conf.trainer.sky_backend / sky_resolution and overrides
+        # these defaults at LayeredGaussians construction time.
+        extra={"backend": "cubemap", "resolution": 128},
     ),
 }
 

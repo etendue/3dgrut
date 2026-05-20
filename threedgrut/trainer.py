@@ -32,7 +32,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 import threedgrut.datasets as datasets
 from threedgrut.datasets.protocols import BoundedMultiViewDataset
 from threedgrut.datasets.utils import DEFAULT_DEVICE, MultiEpochsDataLoader, PointCloud
-from threedgrut.model.layered_loss import compute_layered_l1_loss
+from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 from threedgrut.model.losses import ssim
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.optimizers import SelectiveAdam
@@ -82,6 +82,12 @@ class Trainer3DGRUT:
 
     post_processing_schedulers: Optional[list] = None
     """ Schedulers for post-processing module optimizers """
+
+    exposure_model: Optional[nn.Module] = None
+    """ T6.1: per-camera affine exposure correction (Stage 6). None when use_exposure=false. """
+
+    exposure_optimizer: Optional[torch.optim.Optimizer] = None
+    """ T6.2: independent Adam stepped alongside the main MoG optimizer. """
 
     _distillation_start_step: int = -1
     """ Step at which distillation starts (-1 means disabled) """
@@ -133,6 +139,7 @@ class Trainer3DGRUT:
         self.setup_training(conf, self.model, self.train_dataset)
         self.init_experiments_tracking(conf)
         self.init_post_processing(conf)
+        self.init_exposure_model(conf)
         self.init_gui(conf, self.model, self.train_dataset, self.val_dataset, self.scene_bbox)
 
     def init_dataloaders(self, conf: DictConfig):
@@ -560,6 +567,53 @@ class Trainer3DGRUT:
         else:
             raise ValueError(f"Unknown post-processing method: {method}")
 
+    def init_exposure_model(self, conf: DictConfig) -> None:
+        """Stage 6 T6.2: per-camera affine exposure with independent Adam.
+
+        Enabled by ``conf.trainer.use_exposure``. Camera count comes from the
+        train dataset's ``get_frames_per_camera()`` so any dataset that
+        implements :class:`BoundedMultiViewDataset` works (NCore + COLMAP). On
+        resume, exposure parameters and the optimizer state are restored from
+        the ``"exposure_state"`` key in the checkpoint (added by
+        :meth:`save_checkpoint`).
+        """
+        trainer_conf = getattr(conf, "trainer", None)
+        if trainer_conf is None:
+            return
+        use_exposure = trainer_conf.get("use_exposure", False) if hasattr(trainer_conf, "get") \
+            else getattr(trainer_conf, "use_exposure", False)
+        if not use_exposure:
+            return
+
+        from threedgrut.correction import ExposureModel
+
+        num_camera = len(self.train_dataset.get_frames_per_camera())
+        if num_camera < 1:
+            logger.warning(
+                "📷 ExposureModel requested but dataset reports 0 cameras; "
+                "skipping (use_exposure=true → no-op)."
+            )
+            return
+        self.exposure_model = ExposureModel(num_camera=num_camera).to(self.device)
+        exposure_lr = float(
+            trainer_conf.get("exposure_lr", 1e-3) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "exposure_lr", 1e-3)
+        )
+        self.exposure_optimizer = torch.optim.Adam(
+            self.exposure_model.parameters(), lr=exposure_lr
+        )
+        logger.info(
+            f"📷 ExposureModel initialized: {num_camera} cameras, lr={exposure_lr}"
+        )
+
+        # Restore from checkpoint if resuming.
+        if conf.resume:
+            ckpt = torch.load(conf.resume, weights_only=False, map_location=self.device)
+            if "exposure_state" in ckpt:
+                self.exposure_model.load_state_dict(ckpt["exposure_state"]["module"])
+                self.exposure_optimizer.load_state_dict(ckpt["exposure_state"]["optimizer"])
+                logger.info("📷 ExposureModel state restored from checkpoint")
+
     @torch.cuda.nvtx.range("get_metrics")
     def get_metrics(
         self,
@@ -646,6 +700,8 @@ class Trainer3DGRUT:
         rgb_gt = gpu_batch.rgb_gt
         rgb_pred = outputs["pred_rgb"]
         mask = gpu_batch.mask
+        image_infos = getattr(gpu_batch, "image_infos", None)
+        trainer_conf = getattr(self.conf, "trainer", {})
 
         # Mask out the invalid pixels if the mask is provided
         if mask is not None:
@@ -662,8 +718,8 @@ class Trainer3DGRUT:
         lambda_l1 = 0.0
         if self.conf.loss.use_l1:
             with torch.cuda.nvtx.range(f"loss-l1"):
-                use_layered = getattr(self.conf, "trainer", {}).get("layered_loss", False)
-                image_infos = getattr(gpu_batch, "image_infos", None)
+                use_layered = trainer_conf.get("layered_loss", False) if hasattr(trainer_conf, "get") \
+                    else getattr(trainer_conf, "layered_loss", False)
                 if use_layered and image_infos is not None:
                     loss_l1 = compute_layered_l1_loss(
                         rgb_pred, rgb_gt,
@@ -708,8 +764,33 @@ class Trainer3DGRUT:
                 loss_scale = torch.abs(self.model.get_scale()).mean()
                 lambda_scale = self.conf.loss.lambda_scale
 
+        # T5.5: sky envmap region L1.
+        # Uses the *pre-blend* rgb_sky (set in LayeredGaussians._blend_sky) so
+        # sky supervision stays decoupled from per-camera exposure (T6.2
+        # transforms only the final pred_rgb). compute_sky_loss returns 0
+        # without NaN when sky_mask is empty (D6 min_pixels guard).
+        loss_sky = torch.zeros(1, device=self.device)
+        lambda_sky = 0.0
+        use_sky = trainer_conf.get("use_sky_envmap", False) if hasattr(trainer_conf, "get") \
+            else getattr(trainer_conf, "use_sky_envmap", False)
+        if use_sky and "rgb_sky" in outputs and image_infos is not None:
+            sky_mask = image_infos.get("sky_mask") if hasattr(image_infos, "get") \
+                else getattr(image_infos, "sky_mask", None)
+            with torch.cuda.nvtx.range(f"loss-sky"):
+                loss_sky = compute_sky_loss(outputs["rgb_sky"], gpu_batch.rgb_gt, sky_mask)
+                lambda_sky = float(
+                    trainer_conf.get("lambda_sky", 0.1) if hasattr(trainer_conf, "get")
+                    else getattr(trainer_conf, "lambda_sky", 0.1)
+                )
+
         # Total loss
-        loss = lambda_l1 * loss_l1 + lambda_ssim * loss_ssim + lambda_opacity * loss_opacity + lambda_scale * loss_scale
+        loss = (
+            lambda_l1 * loss_l1
+            + lambda_ssim * loss_ssim
+            + lambda_opacity * loss_opacity
+            + lambda_scale * loss_scale
+            + lambda_sky * loss_sky
+        )
         return dict(
             total_loss=loss,
             l1_loss=lambda_l1 * loss_l1,
@@ -717,6 +798,7 @@ class Trainer3DGRUT:
             ssim_loss=lambda_ssim * loss_ssim,
             opacity_loss=lambda_opacity * loss_opacity,
             scale_loss=lambda_scale * loss_scale,
+            sky_loss=lambda_sky * loss_sky,
         )
 
     @torch.cuda.nvtx.range("log_validation_iter")
@@ -1030,6 +1112,13 @@ class Trainer3DGRUT:
                 "schedulers": [sched.state_dict() for sched in self.post_processing_schedulers],
             }
 
+        # T6.2: per-camera ExposureModel + its independent Adam state.
+        if self.exposure_model is not None:
+            parameters["exposure_state"] = {
+                "module": self.exposure_model.state_dict(),
+                "optimizer": self.exposure_optimizer.state_dict(),
+            }
+
         os.makedirs(os.path.join(out_dir, f"ours_{int(global_step)}"), exist_ok=True)
         if not last_checkpoint:
             ckpt_path = os.path.join(out_dir, f"ours_{int(global_step)}", f"ckpt_{global_step}.pt")
@@ -1104,6 +1193,16 @@ class Trainer3DGRUT:
             with torch.cuda.nvtx.range(f"train_{global_step}_post_processing"):
                 outputs = apply_post_processing(self.post_processing, outputs, gpu_batch, training=True)
 
+        # T6.2: per-camera exposure (applied AFTER sky blend in
+        # LayeredGaussians.forward, BEFORE the loss). Decouples sky_loss in
+        # get_losses (which uses outputs["rgb_sky"] pre-exposure) from
+        # per-camera tone, see test_sky_loss_zero_when_no_sky_pixels rationale.
+        if self.exposure_model is not None:
+            with torch.cuda.nvtx.range(f"train_{global_step}_exposure"):
+                outputs["pred_rgb"] = self.exposure_model(
+                    gpu_batch.camera_idx, outputs["pred_rgb"]
+                )
+
         # Compute the losses of a single batch
         with torch.cuda.nvtx.range(f"train_{global_step}_loss"):
             batch_losses = self.get_losses(gpu_batch, outputs)
@@ -1162,6 +1261,12 @@ class Trainer3DGRUT:
                     opt.zero_grad()
                 for sched in self.post_processing_schedulers:
                     sched.step()
+
+        # T6.2: per-camera exposure optimizer step (independent of MoG opt).
+        if self.exposure_optimizer is not None:
+            with torch.cuda.nvtx.range(f"train_{global_step}_exposure_opt"):
+                self.exposure_optimizer.step()
+                self.exposure_optimizer.zero_grad(set_to_none=True)
 
         # Post backward strategy step
         with torch.cuda.nvtx.range(f"train_{global_step}_post_opt_step"):

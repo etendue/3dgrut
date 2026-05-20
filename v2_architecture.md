@@ -83,7 +83,7 @@ flowchart TD
         Road["Road<br/>scale=[0.1, 0.1, 0.001]<br/>scipy.cKDTree LiDAR-Z lift<br/>DONE · T3.3.b ✅"]:::done
         DynR["DynamicRigid<br/>local-frame MoG<br/>+ timestamp-aligned pose<br/>+ track_ids buffer sync<br/>DONE · T4.2.b/T4.3/T4.5 ✅"]:::done
         DynD["DynamicDeformable<br/>spec registered ✅ (T1.2)<br/>v2.x 占位"]:::done
-        Sky["SkyEnvmap<br/>spec registered ✅ (T1.2)<br/>cubemap or MLP<br/>T5.1 / T5.2 todo"]:::mod
+        Sky["SkyEnvmap<br/>spec registered ✅ (T1.2)<br/>cubemap (drivestudio EnvLight port)<br/>+ MLP fallback (SinusoidalEnc+3-layer)<br/>DONE · T5.2 ✅ (Stage 5 Mac)"]:::done
     end
 
     Fused["fused_view(frame_id)<br/>concat all layers → flat<br/>DONE · T2.5 ✅ (d4841df)"]:::done
@@ -95,10 +95,10 @@ flowchart TD
     Renderer["Renderer (3DGRT / 3DGUT)<br/>flat tensor in → RGB<br/>不动"]:::existing
 
     %% Post-rendering heads
-    SkyBlend["Sky Envmap blend<br/>rgb_gauss + rgb_sky·(1-α)<br/>NEW · T5.3"]:::new
-    Exposure["Exposure (per-camera)<br/>exp(a)·rgb + b<br/>NEW · T6.1 / T6.2"]:::new
-    LayLoss["Layered Loss<br/>region-weighted L1 + SSIM<br/>MOD · T3.4"]:::mod
-    Opt["Optimizer + ExposureOptimizer<br/>独立参数组"]:::mod
+    SkyBlend["Sky Envmap blend (in LayeredGaussians._blend_sky)<br/>rgb_gauss + rgb_sky·(1-pred_opacity)<br/>DONE · T5.3 ✅ (Stage 5 Mac)"]:::done
+    Exposure["Exposure (per-camera)<br/>exp(a)·rgb + b · zero-init=identity<br/>DONE · T6.1 / T6.2 ✅ (Stage 6 Mac)"]:::done
+    LayLoss["Layered Loss<br/>region-weighted L1 + sky_loss + SSIM<br/>MOD · T3.4 ✅ / T5.3 ✅"]:::done
+    Opt["Optimizer + ExposureOptimizer<br/>独立参数组 (post_processing 范式)<br/>DONE · T6.2 ✅"]:::done
 
     CLI --> Trainer
     Trainer --> Dataset
@@ -137,8 +137,8 @@ flowchart TD
 | **layered_loss.py** | — | **新增 region-weighted L1 纯函数 (T3.4)** | T3.4 ✅ | `threedgrut/model/layered_loss.py` |
 | `MCMCStrategy` | 全局 relocate/add | 抽基类 `_get_add_cap()` 钩子 ✅ (62fc509) | T2.1 ✅ | `threedgrut/strategy/mcmc.py` |
 | **LayeredMCMCStrategy** | — | **新增 sub-strategy 数组，per-layer cap；实际采用 sub-strategy 数组方案（非原计划的 _select_indices 继承方案），更轻量 ✅ (7ad883b / 04c9174)** | T2.2 ✅ / T2.3 ✅ / T2.4 ✅ | `threedgrut/strategy/layered_mcmc.py` |
-| **SkyEnvmap** | — | **新增 cubemap (nvdiffrast) 或 MLP** | T5.1 / T5.2 | `threedgrut/correction/sky_envmap.py` |
-| **ExposureModel** | — | **新增 per-camera affine** | T6.1 | `threedgrut/correction/exposure.py` |
+| **SkyEnvmap** | — | **新增 SkyEnvmapBase + SkyEnvmapCubemap (nvdiffrast 6 面立方体贴图，移植自 drivestudio EnvLight) + SkyEnvmapMLP (SinusoidalEncoder + 3 层 MLP + sigmoid，无外部依赖)** | T5.2 ✅ (Stage 5 Mac) | `threedgrut/correction/__init__.py` · `threedgrut/correction/sky_envmap.py` |
+| **ExposureModel** | — | **新增 per-camera affine `exp(a)*x + b`，零初始化 = identity** | T6.1 ✅ (Stage 6 Mac) | `threedgrut/correction/exposure.py` |
 | `datasetNcore.py` | RGB + ego_mask | + load_aux_masks + aux_readers 直读 itar (sseg/lidar-sseg)；get_road/dynamic_lidar_points 按 class 过滤；__getitem__ 注入 timestamp_us (cam END) + region masks 到 batch | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ | `threedgrut/datasets/datasetNcore.py` |
 | **aux_readers.py** | — | **新增 SsegAuxReader / LidarSsegAuxReader 直读 zarr.itar (绕开 SDK version check)** | T3.1.b ✅ | `threedgrut/datasets/aux_readers.py` |
 | **ncore_semantic.py** | — | **新增 SKY/ROAD/DYNAMIC class ID 常量 (Cityscapes palette)** | T3.1.a ✅ | `threedgrut/datasets/ncore_semantic.py` |
@@ -324,7 +324,7 @@ flowchart TB
     Road["road : MoG<br/>positions world Z 锁定<br/>scale_prior [0.1,0.1,0.001]<br/>scale_lr_mult 0.2<br/>perturb_scale_mask 1,1,0 (D1)<br/>mask_field road_mask<br/>DONE · T1.2 + T3.3.b ✅"]:::done
     DynR["dynamic_rigids : MoG<br/>positions object-local frame<br/>scale_prior [0.05,0.05,0.05]<br/>mask_field dynamic_mask<br/>track_ids per-particle buffer<br/>(sync on MCMC add/relocate, T4.5)<br/>timestamp-aligned world transform<br/>DONE · T1.2+T4.2.b+T4.3+T4.5 ✅"]:::done
     DynD["dynamic_deformables<br/>registered, v2.x 占位<br/>is_particle_layer=False"]:::existing
-    SkyL["sky_envmap : SkyEnvmap<br/>is_particle_layer=False<br/>cubemap [6,512,512,3] 或 MLP<br/>forward viewdirs to rgb<br/>NEW · T5.1 / T5.2"]:::new
+    SkyL["sky_envmap : SkyEnvmap<br/>is_particle_layer=False<br/>cubemap [6,128,128,3] or MLP fallback<br/>forward(viewdirs) -> rgb_sky<br/>挂 ModuleDict; setup_optimizer 挂独立 Adam<br/>DONE · T5.2 + T5.3 ✅ (Stage 5 Mac)"]:::done
 
     Fused["fused_view(timestamp_us)<br/>concat all particle layers<br/>dyn 层先 _transform_means<br/>(binary-search ts to pose, T4.5)<br/>DONE · T2.5 ✅ + T4.5 ✅"]:::done
 
@@ -425,12 +425,14 @@ flowchart TB
 | `threedgrut/datasets/ncore_semantic.py` | T3.1.a ✅ (e8cb490, Cityscapes palette 常量) |
 | `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) |
 | `threedgrut/datasets/tracks_loader.py` | T4.1.b ✅ (b22a506) + T4.5 ✅ (4807951, load_tracks_from_ncore_cuboids) |
-| `threedgrut/correction/__init__.py` | T5.2 / T6.1 (待办) |
-| `threedgrut/correction/sky_envmap.py` | T5.2 (待办) |
-| `threedgrut/correction/exposure.py` | T6.1 (待办) |
+| `threedgrut/correction/__init__.py` | T5.2 ✅ / T6.1 ✅ (Stage 5/6 Mac) |
+| `threedgrut/correction/sky_envmap.py` | T5.2 ✅ (Stage 5 Mac, SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap) |
+| `threedgrut/correction/exposure.py` | T6.1 ✅ (Stage 6 Mac, 35 行 affine 移植自 Recon-Studio) |
 | `configs/strategy/layered_mcmc.yaml` | T2.3 ✅ (1a0d275) — Hydra `defaults:[mcmc,_self_]` 继承 |
 | `configs/apps/ncore_3dgut_mcmc_v2_road.yaml` | T3.5.b ✅ (8a625c2) |
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T4.5 ✅ (4807951) |
+| `configs/apps/ncore_3dgut_mcmc_v2_sky.yaml` | T5.3 ✅ (Stage 5 Mac, 基于 v2_full + sky_envmap 层 + use_sky_envmap=true) |
+| `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` | T6.2 ✅ (Stage 6 Mac, 基于 sky yaml + 5 相机环 + use_exposure=true) |
 | `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ / T2.5 ✅ / T3.0 ✅ / T4.0 ✅ / T4.3 ✅ / T3.5.a ✅ (28 tests total) |
 | `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (9 tests) |
 | `threedgrut/tests/test_layered_mcmc.py` | T2.1-T2.4 ✅ + T3.4 perturb mask 4 new tests (13 total) |
@@ -441,8 +443,8 @@ flowchart TB
 | `threedgrut/tests/test_tracks_loader.py` | T4.1.a ✅ (10 tests) |
 | `threedgrut/tests/test_dynamic_rigid_init.py` | T4.2.a ✅ (8 tests) |
 | `threedgrut/tests/test_dynamic_mask.py` | T4.4 ✅ (6 tests) |
-| `threedgrut/tests/test_sky_envmap.py` | T5.4 (待办) |
-| `threedgrut/tests/test_exposure.py` | T6.3 (待办) |
+| `threedgrut/tests/test_sky_envmap.py` | T5.4 ✅ (Stage 5 Mac, 11 测试: base abstract / MLP shape+range+grad / Cubemap shape+orthonormal+no-dep error) |
+| `threedgrut/tests/test_exposure.py` | T6.3 ✅ (Stage 6 Mac, 6 测试: identity / grad_iso / clamp / invalid_idx / zero_cam / ckpt_roundtrip) |
 | `WP_V2_Report.md` | T7.5 (待办) |
 
 ### 6.2 修改文件
@@ -450,26 +452,28 @@ flowchart TB
 | 文件 | 改动点 | 任务 |
 |---|---|---|
 | `train.py` | use_layered_model 分支 | T1.5 ✅ |
-| `threedgrut/trainer.py` | `init_model` 读 `conf.layers.enabled`；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case；`setup_training` case "lidar" 多层 init 分支 (bg/road/dynamic_rigids 各自 init_layer_from_points + populate_tracks)；`get_losses` 接 `compute_layered_l1_loss` (layered_loss 开关) | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.5 ✅ / T5.3 / T6.2 |
-| `threedgrut/layers/layered_model.py` | `init_layer_from_points` + `optimizer` property + `_LayeredOptimizerView`；`fused_view(timestamp_us)` + `_transform_means` + `_resolve_pose_idx` (binary-search ts→pose)；`populate_tracks` + 共享 `tracks_camera_timestamps_us` buffer；`build_acc` / `setup_optimizer` 多层 broadcast；`__getattr__` 多层 fused/broadcast/ref-fallback；`forward` 多层路由 + `_FusedView` | T1.1 ✅ / T1.3 ✅ / T2.5 ✅ / T3.0 ✅ / T3.5.a ✅ / T4.0 ✅ / T4.3 ✅ / T4.5 ✅ |
+| `threedgrut/trainer.py` | `init_model` 读 `conf.layers.enabled`；`init_densification_and_pruning_strategy` 加 `LayeredMCMCStrategy` case；`setup_training` case "lidar" 多层 init 分支 (bg/road/dynamic_rigids 各自 init_layer_from_points + populate_tracks)；`get_losses` 接 `compute_layered_l1_loss` + `compute_sky_loss` (layered_loss + use_sky_envmap 开关)；`init_exposure_model` 新方法 (Stage 6) 建 ExposureModel + 独立 Adam; `run_train_iter` sky blend 后 / loss 前应用 `exposure_model(cam_idx, pred_rgb)` + 在 model.optimizer.step() 后 exposure_optimizer.step()；`save_checkpoint` 加 `exposure_state` 段；`exposure_model` / `exposure_optimizer` 加 class-level Optional 默认 | T1.2 ✅ / T1.5 ✅ / T2.2 ✅ / T2.3 ✅ / T3.4 ✅ / T3.5.b ✅ / T4.5 ✅ / T5.3 ✅ / T6.2 ✅ |
+| `threedgrut/layers/layered_model.py` | `init_layer_from_points` + `optimizer` property + `_LayeredOptimizerView`；`fused_view(timestamp_us)` + `_transform_means` + `_resolve_pose_idx` (binary-search ts→pose)；`populate_tracks` + 共享 `tracks_camera_timestamps_us` buffer；`build_acc` / `setup_optimizer` 多层 broadcast；`__getattr__` 多层 fused/broadcast/ref-fallback；`forward` 多层路由 + `_FusedView`；`_build_sky_module(spec, conf)` 工厂 + `_blend_sky(outputs, batch)` 末尾混合 + `setup_optimizer` 给 sky 挂 Adam (Stage 5)；`forward` 多层 ref_layer 选粒子层（跳过 sky）；`build_acc` skip 非粒子层 | T1.1 ✅ / T1.3 ✅ / T2.5 ✅ / T3.0 ✅ / T3.5.a ✅ / T4.0 ✅ / T4.3 ✅ / T4.5 ✅ / T5.3 ✅ |
+| `threedgrut/model/layered_loss.py` | `compute_layered_l1_loss` (T3.4) + 新增 `compute_sky_loss(rgb_sky, rgb_gt, sky_mask, min_pixels=100)` 纯函数 (Stage 5, T5.3) | T3.4 ✅ / T5.3 ✅ |
 | `threedgrut/datasets/datasetNcore.py` | load_aux_masks 参数；`__getitem__` (train+val) 抽 sseg mask + 注入 timestamp_us；`get_gpu_batch_with_intrinsics` 装 image_infos + timestamp_us；`_get_semantic_lidar_points` + `get_road/dynamic_lidar_points` 用 LidarSsegAuxReader；`_ensure_aux_readers` lazy init | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ |
 | `threedgrut/datasets/__init__.py` | NCoreDataset(load_aux_masks=...) 双路 (train+val) | T3.1.b ✅ |
 | `threedgrut/datasets/protocols.py::Batch` | + image_infos: dict (sky/road/dyn masks GPU) + timestamp_us: int (cam END, 微秒) | T3.1.b ✅ / T4.5 ✅ |
-| `threedgrut/layers/layer_spec.py` | + perturb_scale_mask 字段 (tuple[3] 或 None) | T3.4 ✅ |
-| `threedgrut/layers/registry.py` | road spec 加 perturb_scale_mask=(1.0,1.0,0.0) | T3.4 ✅ |
+| `threedgrut/layers/layer_spec.py` | + perturb_scale_mask 字段 (tuple[3] 或 None, T3.4)；+ `extra: dict` field (compare=False keeps hashable, T5.3 sky backend/resolution 载体) | T3.4 ✅ / T5.3 ✅ |
+| `threedgrut/layers/registry.py` | road spec 加 perturb_scale_mask=(1.0,1.0,0.0, T3.4)；sky_envmap spec 加 `extra={"backend":"cubemap","resolution":128}` (T5.3 默认) | T3.4 ✅ / T5.3 ✅ |
 | `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 (62fc509)；抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical, road spec 注 1,1,0)；add/relocate 同步 track_ids buffer (T4.5) | T2.1 ✅ / T3.4 ✅ / T4.5 ✅ |
 | `threedgrut/strategy/layered_mcmc.py` | sub 构造时 `_install_perturb_mask` 注入 spec.perturb_scale_mask | T3.4 ✅ |
-| `configs/base_gs.yaml` | + `use_layered_model: false` + `layers.enabled: [background]` + `trainer.layered_loss: false` 默认 | T1.2 ✅ / T3.4 ✅ |
+| `configs/base_gs.yaml` | + `use_layered_model: false` + `layers.enabled: [background]` + `trainer.layered_loss: false` 默认 (T1.2/T3.4)；+ `trainer.use_sky_envmap` + `sky_backend (null=spec default)` + `sky_resolution` + `sky_lr` + `lambda_sky` (T5.3 Stage 5)；+ `trainer.use_exposure` + `exposure_lr` (T6.2 Stage 6) | T1.2 ✅ / T3.4 ✅ / T5.3 ✅ / T6.2 ✅ |
 | `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 (待办) |
 
 ### 6.3 复用外部代码（不修改源头，借代码或思想）
 
 | 来源 | 用法 | 任务 |
 |---|---|---|
-| `drivestudio/models/modules.py:174-205` (EnvLight) | 直接复制 → `correction/sky_envmap.py` | T5.2 |
+| `drivestudio/models/modules.py:174-208` (EnvLight) | 直接复制 → `SkyEnvmapCubemap` in `correction/sky_envmap.py` (参数名 `base` 保留, to_opengl 矩阵保留) | T5.2 ✅ |
+| `drivestudio/models/modules.py:114-172` (SkyModel) | 简化复制（去外观嵌入分支，外观由 Stage 6 接管）→ `SkyEnvmapMLP` in `correction/sky_envmap.py` | T5.2 ✅ |
 | `drivestudio/models/nodes/rigid.py:315-362` (transform_means) | 模式参考，重写 | T4.3 |
 | `drivestudio/datasets/driving_dataset.py:263-396` (get_init_objects) | schema 参考，重写 NCore 版 | T4.1 |
-| Reconstruction-Studio `models/luxury/exposure.py` (29 行) | 直接复制 → `correction/exposure.py` | T6.1 |
+| Reconstruction-Studio `models/luxury/exposure.py` (29 行) | 直接复制 → `correction/exposure.py` (去掉 num_camera==1 短路，加 invalid idx / zero camera 防御) | T6.1 ✅ |
 | Reconstruction-Studio `models/gaussians/surface.py` (863 行) | 仅借 LiDAR-Z KNN init 思路（不引入 2DGS / PyTorch3D） | T3.3 |
 
 ---
@@ -515,6 +519,20 @@ flowchart TB
 | **T4.5** MCMC add/relocate 同步 track_ids buffer (无 shape mismatch) | T4.5 ✅ | A800 实测 (4807951): dyn 层 48K→50K add 后训练不崩，1000 step 后 dyn 粒子仍正确 routed |
 | **T4.5** Stage 4 出口 A800 10k PSNR > Stage 3 baseline | T4.5 ✅ | A800 实测 (4807951): **PSNR 26.315 dB (+0.18 vs Stage 3), SSIM 0.883 (best), LPIPS 0.275 (best)** |
 | **v1 byte-identical 回归 (T3.0-T4.5 全栈)** | D8 出口门禁 ✅ | A800 1k step (T20 / task #29): 24.123 dB 全 8 帧精确一致 with Stage 2 baseline |
+| **T5.2** SkyEnvmapMLP 不依赖 nvdiffrast (构造 + forward 都可在 CPU 跑) | T5.2 ✅ | `test_mlp_forward_shape_flat` / `test_mlp_output_in_unit_range` (Mac CPU, 4 tests) |
+| **T5.2** SkyEnvmapCubemap.base.shape == (6, R, R, 3) 纯结构性，构造不需 GPU | T5.2 ✅ | `test_cubemap_params_shape_default` / `test_cubemap_to_opengl_is_orthonormal` (Mac CPU) |
+| **T5.2** 无 nvdiffrast 环境下 SkyEnvmapCubemap.forward 抛 ImportError 带 `pip install nvdiffrast` / `sky_backend: mlp` 指引 | T5.2 ✅ | `test_cubemap_raises_clearly_without_nvdiffrast` (Mac CPU, monkeypatch dr=None) |
+| **T5.3** sky 关闭时 LayeredGaussians.forward 与 Stage 4 byte-identical (outputs 不含 rgb_sky key) | T5.3 ✅ | `test_blend_sky_passes_through_when_no_sky_layer` (Mac); 全部 28 个老 layered_gaussians 测试 + 12 layered_mcmc 维持 PASS |
+| **T5.3** `rgb_gauss + rgb_sky * (1-α)` 极值正确 (α=0→sky only, α=1→gauss only) | T5.3 ✅ | `test_blend_sky_alpha_zero_returns_sky_only` + `test_blend_sky_alpha_one_returns_gauss_only` (Mac) |
+| **T5.3** spec.extra 与 conf.trainer.sky_backend 优先级正确 (conf 非 null → 覆盖, conf null → spec 默认) | T5.3 ✅ | `test_layered_gaussians_holds_sky_module_{mlp,cubemap}` (Mac); base_gs.yaml sky_backend=null 用 spec.extra 默认 cubemap |
+| **T5.3** sky_mask 为空时 sky_loss = 0 (无 NaN, D6 min_pixels guard) | T5.3 ✅ | `test_compute_sky_loss_zero_when_no_sky_pixels` + `test_compute_sky_loss_none_mask_returns_zero` (Mac) |
+| **T5.3** sky_loss 数值正确 (rgb_sky - rgb_gt = 0.5 全图 sky → loss = 0.5) | T5.3 ✅ | `test_compute_sky_loss_uniform_region_arithmetic` (Mac) |
+| **T6.1** ExposureModel zero init = identity (forward(i, img) ≈ img.clamp(0,1) when a=b=0) | T6.1 ✅ | `test_zero_init_is_identity` (Mac, N=5 相机全过) |
+| **T6.1** per-camera grad 隔离 (forward(0,...).backward() → exposure_a[1:].grad == 0) | T6.1 ✅ | `test_per_camera_grad_isolation` (Mac) |
+| **T6.1** 输出 clamp 到 [0, 1] (大正 a + b 后仍合法) | T6.1 ✅ | `test_clamp_to_unit_range` (Mac, a=5/b=2 → 148× gain 仍 clamp) |
+| **T6.1** invalid idx / num_camera=0 抛清晰异常 | T6.1 ✅ | `test_invalid_camera_idx_raises` + `test_constructor_rejects_zero_cameras` (Mac) |
+| **T6.2** exposure ckpt save/load state_dict roundtrip 字节一致 | T6.2 ✅ | `test_state_dict_roundtrip` (Mac, exposure_a/b float copy 验证) |
+| **T6.2** use_exposure=false 时 byte-identical with Stage 5 (no exposure_model attribute set) | T6.2 ✅ | trainer.exposure_model class default None; 全测试套件 123/123 PASS 维持 byte-identical |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 
 ---

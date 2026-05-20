@@ -11,7 +11,7 @@ mask gating, lr_mult and particle/non-particle distinction so that Stage 2
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -48,3 +48,8 @@ class LayerSpec:
     # MCMC perturb. None = no override (LayeredMCMCStrategy leaves the sub's
     # default _get_perturb_mask=ones in place).
     perturb_scale_mask: tuple[float, float, float] | None = None
+    # T5.4: backend-specific knobs for non-particle layers. Currently used by
+    # the sky_envmap layer to carry {"backend": "cubemap"|"mlp", "resolution":
+    # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,
+    # because the auto-generated __eq__/__hash__ skip this field.
+    extra: dict = field(default_factory=dict, compare=False)

@@ -1,0 +1,31 @@
+# @package _global_
+#
+# Stage 6 v2 — Stage 5 (sky envmap) + per-camera affine exposure correction.
+# Adds ExposureModel(num_camera=N) with an independent Adam (lr=exposure_lr)
+# applied AFTER sky blend, BEFORE the loss. Zero-init makes the module the
+# identity at training start.
+#
+# Stage 6 出口门槛 (A800 5k step, 2s, 5-camera ring):
+#   - exit 0
+#   - exposure_model.exposure_a.detach().std() > 0.01 (learned per-cam offsets)
+#   - 全图 PSNR ≥ Stage 5 同 5-cam baseline (不退化)
+#   - rear / 侧 cam PSNR > Stage 5 同 cam baseline + 0.3 dB
+defaults:
+  - ncore_3dgut_mcmc_v2_sky
+  - _self_
+
+dataset:
+  # NCore clip 9ae151dc cameras (see manifest's *.ncore4-camera*.zarr.itar list).
+  # Pick a balanced 5-cam ring: front-wide + rear-tele (long range) + two side
+  # cross + one rear corner — covers the per-camera exposure delta we want to
+  # learn (front/rear EXIF differs ~1-2 stops on NCore).
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_rear_tele_30fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_rear_left_70fov
+
+trainer:
+  use_exposure: true
+  exposure_lr: 1.0e-3

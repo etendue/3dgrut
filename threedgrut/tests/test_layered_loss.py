@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import torch
 
-from threedgrut.model.layered_loss import compute_layered_l1_loss
+from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 
 
 def _quad_mask(H: int, W: int, quadrant: str) -> torch.Tensor:
@@ -112,3 +112,62 @@ def test_compute_layered_l1_loss_returns_scalar():
     assert loss.ndim == 0
     loss.backward()
     assert pred.grad is not None
+
+
+# ============================================================================
+# T5.5: sky envmap region L1.
+# ============================================================================
+def test_compute_sky_loss_zero_when_no_sky_pixels():
+    """sky_mask sum < min_pixels → loss is 0 (no NaN, no grad explosion)."""
+    rgb_sky = torch.ones(1, 4, 4, 3, requires_grad=True)
+    gt = torch.zeros(1, 4, 4, 3)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=torch.zeros(1, 4, 4),
+                            min_pixels=1)
+    assert loss.item() == 0.0
+
+
+def test_compute_sky_loss_none_mask_returns_zero():
+    """No mask in the batch → sky_loss returns 0 (graceful no-op)."""
+    rgb_sky = torch.ones(1, 4, 4, 3)
+    gt = torch.zeros(1, 4, 4, 3)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=None)
+    assert loss.item() == 0.0
+
+
+def test_compute_sky_loss_uniform_region_arithmetic():
+    """rgb_sky - gt = 0.5 over a uniform sky region → loss == 0.5."""
+    rgb_sky = torch.full((1, 4, 4, 3), 0.5)
+    gt = torch.zeros(1, 4, 4, 3)
+    sky_mask = torch.ones(1, 4, 4)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=sky_mask, min_pixels=1)
+    assert torch.allclose(loss, torch.tensor(0.5), atol=1e-6)
+
+
+def test_compute_sky_loss_only_on_sky_region():
+    """Pixels outside sky_mask must not contribute."""
+    rgb_sky = torch.ones(1, 4, 4, 3)
+    gt = torch.zeros(1, 4, 4, 3)
+    sky_mask = _quad_mask(4, 4, "tl").unsqueeze(0)  # 4 of 16 pixels
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=sky_mask, min_pixels=1)
+    # |1 - 0| over masked pixels, averaged → 1.0
+    assert torch.allclose(loss, torch.tensor(1.0), atol=1e-6)
+
+
+def test_compute_sky_loss_squeezed_mask_shape():
+    """Mask provided already with trailing 1 (shape [B,H,W,1]) must work."""
+    rgb_sky = torch.full((1, 4, 4, 3), 0.5)
+    gt = torch.zeros(1, 4, 4, 3)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=torch.ones(1, 4, 4, 1),
+                            min_pixels=1)
+    assert torch.allclose(loss, torch.tensor(0.5), atol=1e-6)
+
+
+def test_compute_sky_loss_grad_flows_through_pred():
+    """sky_loss must be differentiable wrt rgb_sky params."""
+    rgb_sky = torch.ones(1, 4, 4, 3, requires_grad=True)
+    gt = torch.zeros(1, 4, 4, 3)
+    sky_mask = torch.ones(1, 4, 4)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=sky_mask, min_pixels=1)
+    loss.backward()
+    assert rgb_sky.grad is not None
+    assert rgb_sky.grad.abs().sum().item() > 0

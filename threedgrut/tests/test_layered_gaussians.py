@@ -711,3 +711,226 @@ def test_forward_multi_layer_dispatches_to_ref_renderer(real_conf, monkeypatch):
     assert captured["train"] is False
     assert captured["frame_id"] == 7
     assert "pred_rgb" in out
+
+
+# ============================================================================
+# T5.4: sky envmap layer integration tests.
+# ============================================================================
+def _make_fake_batch(H: int = 4, W: int = 4):
+    """Minimal Batch-like object exposing rays_dir / T_to_world / world flag.
+
+    LayeredGaussians._blend_sky only touches these three attributes.
+    """
+    class _Batch:
+        pass
+    b = _Batch()
+    # Camera-frame rays roughly forward; world-frame conversion goes through
+    # T_to_world's rotation.
+    b.rays_dir = torch.randn(1, H, W, 3)
+    b.T_to_world = torch.eye(4).unsqueeze(0)  # identity → rays unchanged
+    b.rays_in_world_space = False
+    b.timestamp_us = -1
+    return b
+
+
+def test_layered_gaussians_holds_sky_module_mlp(real_conf):
+    """T5.4: sky_envmap layer with backend='mlp' creates SkyEnvmapMLP module."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+    from threedgrut.correction.sky_envmap import SkyEnvmapMLP
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    assert "sky_envmap" in model.layers
+    assert isinstance(model.layers["sky_envmap"], SkyEnvmapMLP)
+
+
+def test_layered_gaussians_holds_sky_module_cubemap(real_conf):
+    """T5.4: backend='cubemap' creates SkyEnvmapCubemap with custom resolution."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+    from threedgrut.correction.sky_envmap import SkyEnvmapCubemap
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "cubemap", "resolution": 32}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    sky = model.layers["sky_envmap"]
+    assert isinstance(sky, SkyEnvmapCubemap)
+    assert sky.base.shape == (6, 32, 32, 3)
+
+
+def test_blend_sky_alpha_zero_returns_sky_only(real_conf):
+    """alpha=0 (no Gaussians hit) → pred_rgb == rgb_sky (Gauss contributes 0)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    batch = _make_fake_batch(H=4, W=4)
+    outputs = {
+        "pred_rgb": torch.zeros(1, 4, 4, 3),
+        "pred_opacity": torch.zeros(1, 4, 4, 1),
+    }
+    out = model._blend_sky(outputs, batch)
+    assert "rgb_sky" in out and "rgb_gaussians" in out
+    # Gauss is 0, alpha is 0 → pred_rgb == rgb_sky.
+    assert torch.allclose(out["pred_rgb"], out["rgb_sky"])
+
+
+def test_blend_sky_alpha_one_returns_gauss_only(real_conf):
+    """alpha=1 (fully opaque) → pred_rgb == rgb_gauss, sky contributes 0."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    batch = _make_fake_batch(H=4, W=4)
+    rgb_gauss = torch.rand(1, 4, 4, 3)
+    outputs = {
+        "pred_rgb": rgb_gauss.clone(),
+        "pred_opacity": torch.ones(1, 4, 4, 1),
+    }
+    out = model._blend_sky(outputs, batch)
+    assert torch.allclose(out["pred_rgb"], rgb_gauss, atol=1e-6)
+    assert torch.allclose(out["rgb_gaussians"], rgb_gauss, atol=1e-6)
+
+
+def test_blend_sky_passes_through_when_no_sky_layer(real_conf):
+    """No sky layer in specs → outputs unmodified, no rgb_sky / rgb_gaussians key."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
+                  scale_prior=(0.1, 0.1, 0.001)),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    batch = _make_fake_batch()
+    outputs = {
+        "pred_rgb": torch.rand(1, 4, 4, 3),
+        "pred_opacity": torch.rand(1, 4, 4, 1),
+    }
+    out = model._blend_sky(outputs, batch)
+    # When sky is absent, _blend_sky must be a no-op.
+    assert out is outputs
+    assert "rgb_sky" not in out
+    assert "rgb_gaussians" not in out
+
+
+def test_forward_multi_layer_with_sky_attaches_sky_outputs(real_conf, monkeypatch):
+    """Multi-layer forward with sky_envmap → outputs gains rgb_sky + rgb_gaussians.
+
+    Mocks the renderer to return a constant rgb / opacity so we can verify the
+    blend keys appear and the math is correct end-to-end through forward.
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_layer_from_points("background", torch.randn(10, 3),
+                                 setup_optimizer=False)
+
+    ref = model.layers["background"]
+    def fake_render(view, gpu_batch, train, frame_id):
+        return {
+            "pred_rgb":     torch.zeros(1, 4, 4, 3),  # no gaussian contribution
+            "pred_opacity": torch.zeros(1, 4, 4, 1),  # transparent → sky only
+        }
+    monkeypatch.setattr(ref.renderer, "render", fake_render)
+
+    out = model(_make_fake_batch(H=4, W=4), train=False, frame_id=0)
+    assert "rgb_sky" in out
+    assert "rgb_gaussians" in out
+    # alpha=0 + gauss=0 → pred_rgb == rgb_sky elementwise.
+    assert torch.allclose(out["pred_rgb"], out["rgb_sky"])
+
+
+def test_sky_envmap_state_roundtrip_in_checkpoint(real_conf):
+    """T5.4: sky layer state_dict round-trips through get_model_parameters /
+    init_from_checkpoint without touching gaussians_nodes.
+
+    Bug found on A800 dry-run: LayeredGaussians.get_model_parameters tried to
+    call ``layer.get_model_parameters()`` on the SkyEnvmapMLP module (which is
+    not a MoG). The fix routes sky via state_dict() under a sibling key.
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    # Init the particle layer so get_model_parameters has something to emit.
+    # setup_optimizer_for_test attaches a minimal Adam so each particle layer's
+    # own get_model_parameters() (which asserts on self.optimizer) passes.
+    model.init_layer_from_points("background", torch.randn(8, 3),
+                                 setup_optimizer=False)
+    model.setup_optimizer_for_test()
+
+    # Mutate sky weights so the round-trip can detect them.
+    sky_layer0 = model.layers["sky_envmap"].layer0
+    with torch.no_grad():
+        sky_layer0.weight.fill_(0.42)
+        sky_layer0.bias.fill_(-0.13)
+    saved_weight = sky_layer0.weight.detach().clone()
+    saved_bias = sky_layer0.bias.detach().clone()
+
+    params = model.get_model_parameters()
+    # Save shape contract.
+    assert "gaussians_nodes" in params
+    assert "background" in params["gaussians_nodes"]
+    assert "sky_envmap" not in params["gaussians_nodes"]   # NOT under gaussians_nodes
+    assert "sky_envmap_state" in params                     # sibling key
+
+    # Build a fresh container and round-trip through init_from_checkpoint.
+    model2 = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    # Wrap under "model.gaussians_nodes" + "model.sky_envmap_state" to match
+    # Trainer.save_checkpoint on-disk schema for LayeredGaussians.
+    ckpt = {"model": params}
+    model2.init_from_checkpoint(ckpt, setup_optimizer=False)
+
+    # Sky weights restored bit-for-bit.
+    assert torch.equal(model2.layers["sky_envmap"].layer0.weight, saved_weight)
+    assert torch.equal(model2.layers["sky_envmap"].layer0.bias, saved_bias)
+
+
+def test_get_model_parameters_skips_non_particle_layers(real_conf):
+    """T5.4: dynamic_deformables (is_particle_layer=False stub) must not be
+    iterated as a MoG — the gaussians_nodes dict only contains particle layers.
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_layer_from_points("background", torch.randn(5, 3),
+                                 setup_optimizer=False)
+    model.setup_optimizer_for_test()
+    params = model.get_model_parameters()
+    assert list(params["gaussians_nodes"].keys()) == ["background"]

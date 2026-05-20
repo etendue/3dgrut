@@ -39,13 +39,9 @@
 ```mermaid
 kanban
   Backlog
-    [T5.1 nvdiffrast 可用性确认]
-    [T5.2 port EnvLight → sky_envmap.py]
-    [T5.3 sky blending + loss]
-    [T5.4 单测 test_sky_envmap]
-    [T6.1 port ExposureModel]
-    [T6.2 per-camera 应用 + 独立 optimizer]
-    [T6.3 单测 test_exposure]
+    [T5.1 nvdiffrast 可用性确认 - 待 A800 probe]
+    [T5.6 Stage 5 出口 A800 5k smoke]
+    [T6.3.a Stage 6 出口 A800 5k smoke 多相机]
     [T7.1 v2_full 配置文件]
     [T7.2 2s smoke 全 pipeline]
     [T7.3 7-cam 20s full 30k step + KPI]
@@ -79,17 +75,23 @@ kanban
     [T4.3 _transform_means + fused_view dyn ✅]
     [T4.4 dynamic_mask scanline AABB ✅]
     [T4.5 Stage 4 出口 A800 10k PSNR 26.32 real cuboids + timestamp-aligned ✅]
+    [T5.2 SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap ✅]
+    [T5.3 LayeredGaussians._blend_sky + trainer get_losses sky_loss ✅]
+    [T5.4 test_sky_envmap 11 测试 + test_layered_gaussians 6 sky tests ✅]
+    [T6.1 ExposureModel 移植 Recon-Studio + 6 测试 ✅]
+    [T6.2 trainer init_exposure_model + per-cam apply + exposure_optimizer ✅]
+    [T6.3 test_exposure 6 测试 + ckpt roundtrip ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 12 | T5.x / T6.x / T7.x |
+| Backlog ⬜ | 8 | T5.1 A800 probe / T5.6 / T6.3.a / T7.1-T7.5 (Stage 7 完整 KPI) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 27 | Stage 0-4 全部完成（T0.1 + T1.x × 5 + T2.x × 5 + T3.x × 9 + T4.x × 8） |
+| Done ✅ | 33 | Stage 0-4 全部完成 + Stage 5/6 Mac 本地完成（含 sky_envmap.py / exposure.py / LayeredGaussians 接入 / trainer get_losses + setup + run_iter / 29 新单测） |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -126,13 +128,13 @@ kanban
 | **T4.3** | 4 | _transform_means + fused_view dynamic 分支 | 1 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests |
 | **T4.4** | 4 | dynamic_mask 纯 PyTorch scanline AABB (D5) | 0.5 | ✅ | NEW `layers/dynamic_mask.py` · NEW 6 tests |
 | **T4.5** | 4 | Stage 4 集成 + A800 出口验收（real cuboids + timestamp-aligned） | 1.5 | ✅ | NEW `tracks_loader.load_tracks_from_ncore_cuboids` · MOD `layered_model.py` (populate_tracks + timestamp-aligned _resolve_pose_idx) · MOD `protocols.Batch.timestamp_us` · MOD `datasetNcore.__getitem__` (train+val timestamp_us) · MOD `trainer.setup_training` (dynamic_rigids 串通) · MOD `mcmc.py` (track_ids buffer sync on add/relocate) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` · **A800 10k PSNR 26.315 dB (+0.18 vs Stage 3), SSIM 0.883, LPIPS 0.275, 9.58 it/s 零性能损失** |
-| **T5.1** | 5 | nvdiffrast.torch 可用性确认 / 降级 SkyModel | 0.5 | ⬜ | A800 env probe |
-| **T5.2** | 5 | port EnvLight → correction/sky_envmap.py | 0.5 | ⬜ | NEW `correction/sky_envmap.py` |
-| **T5.3** | 5 | trainer step 中 sky blending + loss | 1 | ⬜ | MOD `trainer.py` |
-| **T5.4** | 5 | 单测 test_sky_envmap.py | 1 | ⬜ | NEW tests |
-| **T6.1** | 6 | port ExposureModel → correction/exposure.py | 0.25 | ⬜ | NEW `correction/exposure.py` |
-| **T6.2** | 6 | trainer step per-camera 应用 + 独立 optimizer | 0.5 | ⬜ | MOD `trainer.py` |
-| **T6.3** | 6 | 单测 test_exposure.py | 0.25 | ⬜ | NEW tests |
+| **T5.1** | 5 | nvdiffrast.torch 可用性确认 / 降级 SkyModel | 0.5 | ⬜ | A800 env probe **待用户手动跑** |
+| **T5.2** | 5 | port EnvLight → correction/sky_envmap.py (含 MLP fallback) | 0.5 | ✅ | NEW `threedgrut/correction/__init__.py` · NEW `threedgrut/correction/sky_envmap.py` (SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap) |
+| **T5.3** | 5 | LayeredGaussians sky 层接入 + trainer sky blending + loss | 1 | ✅ | MOD `threedgrut/layers/layer_spec.py` (+ `extra` field) · MOD `threedgrut/layers/registry.py` (sky_envmap extra={backend,resolution}) · MOD `threedgrut/layers/layered_model.py` (_build_sky_module + _blend_sky + sky optimizer hookup + multi-layer ref_layer particle-only) · MOD `threedgrut/trainer.py` (get_losses sky_loss path) · MOD `threedgrut/model/layered_loss.py` (compute_sky_loss 纯函数) · MOD `configs/base_gs.yaml` (trainer.use_sky_envmap/sky_backend/sky_resolution/sky_lr/lambda_sky) · NEW `configs/apps/ncore_3dgut_mcmc_v2_sky.yaml` |
+| **T5.4** | 5 | 单测 test_sky_envmap.py + LayeredGaussians sky 集成 + sky_loss | 1 | ✅ | NEW `threedgrut/tests/test_sky_envmap.py` (11 测试) · 6 个新测试在 `test_layered_gaussians.py` (sky module / blend extremes / forward 集成) · 6 个新测试在 `test_layered_loss.py` (compute_sky_loss) · 全部 Mac CPU PASS |
+| **T6.1** | 6 | port ExposureModel → correction/exposure.py | 0.25 | ✅ | NEW `threedgrut/correction/exposure.py` (移植 Recon-Studio 29 行 affine) |
+| **T6.2** | 6 | trainer step per-camera 应用 + 独立 optimizer + ckpt roundtrip | 0.5 | ✅ | MOD `threedgrut/trainer.py` (init_exposure_model + run_train_iter 应用 + exposure_optimizer.step + save_checkpoint exposure_state + resume) · MOD `configs/base_gs.yaml` (trainer.use_exposure/exposure_lr) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` |
+| **T6.3** | 6 | 单测 test_exposure.py | 0.25 | ✅ | NEW `threedgrut/tests/test_exposure.py` (6 测试: zero_init_identity / grad_isolation / clamp / invalid_idx / zero_cameras / state_dict_roundtrip) |
 | **T7.1** | 7 | configs/apps/ncore_3dgut_mcmc_v2_full.yaml | 0.5 | ⬜ | NEW yaml |
 | **T7.2** | 7 | 2s smoke 全 pipeline 验证 | 0.5 | ⬜ | A800 run |
 | **T7.3** | 7 | 7-cam 20s full 30k step + KPI | 1 | ⬜ | A800 run |
@@ -149,8 +151,8 @@ kanban
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
 | 3 | Road 层 | **10/10 ✅** | Stage 3 **完成**：PSNR 26.133 dB (出口 23.6, +2.5 超额), SSIM 0.879, LPIPS 0.297, 9.54 it/s 零性能损失 |
 | 4 | DynamicRigid 层 | **8/8 ✅** | Stage 4 **完成**：PSNR 26.315 dB (Stage 3 +0.18), SSIM 0.883, LPIPS 0.275, 9.58 it/s; 31 真实 cuboid tracks (autolabels v2), 48K dyn particles; 距严格出口 26.4 差 0.085 (noise 级) |
-| 5 | Sky envmap | 0/4 ⬜ | — |
-| 6 | Exposure | 0/3 ⬜ | — |
+| 5 | Sky envmap | **3/4 🟡** | Mac 本地 ✅：SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap + LayeredGaussians sky 接入 + sky_loss 纯函数 + 23 新测试。剩 T5.1 A800 nvdiffrast probe 待用户跑 + T5.6 A800 5k smoke 出口。 |
+| 6 | Exposure | **3/3 ✅** | Mac 本地全部完成：ExposureModel + trainer init/apply/step/ckpt + 6 新测试。剩 T6.3.a A800 5k 5-cam smoke 出口待用户跑（独立 stage 进度，不在 T6.x 计数）。 |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
 
 ### 1.4 依赖关系图
@@ -195,16 +197,16 @@ flowchart LR
     T44["T4.4 ✅<br/>dynamic_mask scanline AABB"]:::done
     T45["T4.5 ✅<br/>Stage 4 出口<br/>A800 10k 26.32 dB"]:::done
 
-    %% Stage 5
-    T51["T5.1<br/>nvdiffrast 探测"]:::todo
-    T52["T5.2<br/>sky_envmap.py"]:::todo
-    T53["T5.3<br/>sky blend"]:::todo
-    T54["T5.4<br/>单测"]:::todo
+    %% Stage 5 (3/4 ✅, T5.1 A800 probe 待用户)
+    T51["T5.1<br/>nvdiffrast 探测<br/>(A800 待用户)"]:::todo
+    T52["T5.2 ✅<br/>sky_envmap.py<br/>(MLP + Cubemap)"]:::done
+    T53["T5.3 ✅<br/>sky blend + sky_loss"]:::done
+    T54["T5.4 ✅<br/>23 新测试"]:::done
 
-    %% Stage 6
-    T61["T6.1<br/>ExposureModel"]:::todo
-    T62["T6.2<br/>per-cam apply"]:::todo
-    T63["T6.3<br/>单测"]:::todo
+    %% Stage 6 ✅ Mac 本地完成
+    T61["T6.1 ✅<br/>ExposureModel"]:::done
+    T62["T6.2 ✅<br/>per-cam apply + opt + ckpt"]:::done
+    T63["T6.3 ✅<br/>6 测试"]:::done
 
     %% Stage 7
     T71["T7.1<br/>v2_full 配置"]:::todo
@@ -783,6 +785,45 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### 🎉 Stage 5 + Stage 6 Mac 本地完成 (2026-05-19, Mac CPU venv)
+
+Stage 5 (T5.2-T5.4) + Stage 6 (T6.1-T6.3) 整个代码路径在 Mac 本地完成并 Mac 单测全过。**剩余 A800 任务**：T5.1 nvdiffrast probe + T5.6 / T6.3.a 5k step smoke 出口（用户手动 ssh 跑）。
+
+**关键发现**（修正了 plan.md 原描述）：
+- `pred_opacity` 已经在 renderer 输出字典里（3DGUT `pred_rgba[..., 3:]` / 3DGRT 直接）→ Stage 5 sky blend 不用改 CUDA / binding，直接用 `(1 - outputs["pred_opacity"])` 当透射率
+- `Batch.camera_idx` / `Batch.rays_dir` / `Batch.T_to_world` 已就位 → Stage 6 exposure 直接 `batch.camera_idx`，Stage 5 viewdirs 用 `T_to_world[:3,:3] @ rays_dir` 转世界帧
+
+**Stage 5 实现细节**：
+- `threedgrut/correction/sky_envmap.py`：`SkyEnvmapBase` 抽象基类 + `SkyEnvmapMLP`（无外部依赖，SinusoidalEncoder + 3 层 MLP + sigmoid）+ `SkyEnvmapCubemap`（drivestudio EnvLight 移植，nvdiffrast 不可用时 forward 抛 ImportError 带明确指引）
+- `LayeredGaussians`：构造时按 `spec.extra["backend"]` 实例化 sky 模块挂 ModuleDict；`forward` 末尾调 `_blend_sky(outputs, batch)`，写入 `rgb_gaussians` / `rgb_sky` / `pred_rgb` 三 key；`setup_optimizer` 给 sky 模块挂独立 Adam（lr=trainer.sky_lr，默认 0.01）
+- `_LayeredOptimizerView.step()` 已通过 `getattr(layer, "optimizer", None)` 自动 fan-out 到 sky，无需改动 view
+- `compute_sky_loss(rgb_sky, rgb_gt, sky_mask, min_pixels=100)`：纯函数，sky_mask 为空时返回 0（min_pixels guard），有 NaN 安全；3 通道分母处理正确
+- `LayerSpec.extra: dict`（field 加 compare=False 保持 hashable）；registry `sky_envmap` 默认 `{"backend":"cubemap","resolution":128}`；conf.trainer.sky_backend 非 null 时覆盖 spec
+- `configs/base_gs.yaml` 加 `use_sky_envmap` / `sky_backend(null=spec默认)` / `sky_resolution` / `sky_lr` / `lambda_sky` 字段
+- `configs/apps/ncore_3dgut_mcmc_v2_sky.yaml`：基于 v2_full 加 sky_envmap 层 + use_sky_envmap=true
+
+**Stage 6 实现细节**：
+- `threedgrut/correction/exposure.py`：`ExposureModel(num_camera)` — 移植 Recon-Studio 29 行 affine（去掉 num_camera==1 短路）；`forward(idx, image) = (exp(a)*image + b).clamp(0, 1)`，零初始化 = identity
+- `Trainer3DGRUT.init_exposure_model(conf)`：从 `train_dataset.get_frames_per_camera()` 取 num_camera；建独立 `self.exposure_optimizer = Adam(lr=conf.trainer.exposure_lr)`；resume 时从 ckpt["exposure_state"] 恢复
+- `run_train_iter`：sky blend 后、loss 前应用 `outputs["pred_rgb"] = self.exposure_model(camera_idx, outputs["pred_rgb"])`；`model.optimizer.step()` 后 `exposure_optimizer.step() + zero_grad()`
+- `save_checkpoint`：增 `"exposure_state": {"module": state_dict, "optimizer": state_dict}` 段，与 post_processing_optimizers 范式一致
+- `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml`：基于 sky yaml + 5 相机环 + use_exposure=true
+
+**Mac 测试套件**：123 passed, 1 skipped (nvdiffrast 不可用预期 skip)。新增 29 个测试：
+- `test_sky_envmap.py` (11 tests)：base abstract / MLP shape+range+grad / Cubemap shape+orthonormal+no-dep error
+- `test_layered_gaussians.py` (6 new tests)：holds_sky_module {mlp, cubemap} / blend_sky_alpha_zero / blend_sky_alpha_one / blend_sky_no_sky_layer / forward_multi_layer_with_sky
+- `test_layered_loss.py` (6 new tests)：sky_loss zero_when_no_pixels / none_mask / uniform_region_arithmetic / only_on_sky_region / squeezed_mask_shape / grad_flows
+- `test_exposure.py` (6 tests)：zero_init_identity / per_camera_grad_isolation / clamp_unit_range / invalid_idx / zero_cameras / state_dict_roundtrip
+
+**byte-identical 回归**：全部 28 个老 layered_gaussians 测试 + 12 layered_mcmc + 6 老 layered_loss 测试维持 PASS（sky / exposure 关闭时与 Stage 4 完全一致）。
+
+**待 A800 验收（用户手动）**：
+1. `ssh a800-x2 && conda activate 3dgrut && python -c "import nvdiffrast.torch; print(nvdiffrast.__version__)"` — T5.1 backend 选择
+2. `python -u train.py --config-name apps/ncore_3dgut_mcmc_v2_sky n_iterations=5000 dataset.train.duration_sec=2.0 'dataset.camera_ids=[camera_front_wide_120fov]' ...` — T5.6 Stage 5 出口（目标全图 PSNR ≥ 25.8 / sky 区 ≥ 28）
+3. `python -u train.py --config-name apps/ncore_3dgut_mcmc_v2_full_exposure n_iterations=5000 dataset.train.duration_sec=2.0 ...` — T6.3.a Stage 6 出口（exposure_a.std() > 0.01 / rear cam +0.3 dB）
+
+---
 
 ### 📊 Stage 3 7-cam 20s 30k step baseline (2026-05-19 17:00:34, A800 GPU 0, task #30)
 

@@ -37,8 +37,25 @@ layers:
 # partitioned per region and per-region means are summed (sky excluded;
 # Stage 5 envmap takes over). SSIM stays full-image (D7). Default false
 # leaves v1 byte-identical .mean() L1 in place.
+# T5.4 / T5.5 sky envmap: when use_sky_envmap=true AND layers.enabled
+# contains 'sky_envmap', LayeredGaussians blends a learned sky onto the
+# Gauss render via (1 - pred_opacity) and get_losses adds a sky-region
+# L1 weighted by lambda_sky. sky_backend ∈ {"cubemap", "mlp"} picks the
+# nvdiffrast cubemap or the dependency-free MLP fallback. sky_lr is the
+# Adam lr attached to the sky module (separate group from MoG opt).
+# T6.1 / T6.2 exposure: per-camera affine exp(a)*x + b applied after sky
+# blend, before the loss. Independent Adam at exposure_lr.
 trainer:
   layered_loss: false
+  use_sky_envmap: false
+  # null = pick the registry spec default (cubemap, 128). Set to "mlp" /
+  # explicit ints to override at the yaml level.
+  sky_backend: null
+  sky_resolution: null
+  sky_lr: 0.01
+  lambda_sky: 0.1
+  use_exposure: false
+  exposure_lr: 1.0e-3
 
 enable_writer: true
 writer:

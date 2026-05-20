@@ -78,3 +78,46 @@ def compute_layered_l1_loss(
 
     # Sky region intentionally NOT included: envmap (Stage 5) takes over.
     return _w(bg) + _w(road) + _w(dyn)
+
+
+def compute_sky_loss(
+    rgb_sky: torch.Tensor,
+    rgb_gt: torch.Tensor,
+    sky_mask: Optional[torch.Tensor],
+    min_pixels: int = 100,
+) -> torch.Tensor:
+    """L1 between the rendered envmap and GT, summed over the sky region only.
+
+    T5.5: ``L_sky = mean_over_sky_pixels |rgb_sky - rgb_gt|``. The caller
+    multiplies by ``lambda_sky`` and adds to the total loss. Returns 0 (with
+    correct device/dtype but no grad) when:
+
+      - sky_mask is None
+      - sky_mask.sum() < min_pixels (no sky in this frame)
+
+    so the trainer can call this unconditionally without NaN risk.
+
+    Args:
+        rgb_sky: ``[..., 3]`` sky envmap output (pre-exposure; from
+            ``LayeredGaussians._blend_sky``).
+        rgb_gt:  ``[..., 3]`` ground-truth image, same shape.
+        sky_mask: ``[...,]`` or ``[..., 1]`` binary mask {0, 1}. None → 0 loss.
+        min_pixels: when ``sky_mask.sum() < min_pixels`` the loss is zeroed
+            (no NaN, no noisy edge-frame contribution).
+
+    Returns:
+        Scalar tensor on rgb_sky's device.
+    """
+    if sky_mask is None:
+        return torch.zeros((), device=rgb_sky.device, dtype=rgb_sky.dtype)
+
+    sm = sky_mask.to(rgb_sky.dtype)
+    if sm.dim() == rgb_sky.dim() - 1:
+        sm = sm.unsqueeze(-1)
+    s = sm.sum()
+    if s.item() < min_pixels:
+        return torch.zeros((), device=rgb_sky.device, dtype=rgb_sky.dtype)
+
+    num = (torch.abs(rgb_sky - rgb_gt) * sm).sum()
+    # 3 channels in the numerator → divide by 3 × pixel-count.
+    return num / (s * 3.0 + 1e-6)

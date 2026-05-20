@@ -36,6 +36,44 @@ from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import sh_degree_to_specular_dim
 
 
+def _build_sky_module(spec: LayerSpec, conf) -> nn.Module:
+    """Instantiate the sky envmap backend for the sky_envmap layer.
+
+    ``conf.trainer`` overrides ``spec.extra`` defaults so users can flip
+    cubemap → mlp without touching the registry.
+    """
+    # Lazy import keeps test_layer_spec_registry.py from pulling nvdiffrast
+    # / torch.nn graph stuff during spec inspection.
+    from threedgrut.correction.sky_envmap import SkyEnvmapCubemap, SkyEnvmapMLP
+
+    extra = dict(getattr(spec, "extra", {}) or {})
+    trainer_conf = getattr(conf, "trainer", None)
+    # Lookup order: conf.trainer.{sky_backend,sky_resolution} (explicit user
+    # override, only when not None) → spec.extra defaults → hardcoded
+    # ("cubemap", 128).
+    conf_backend = None
+    conf_resolution = None
+    if trainer_conf is not None:
+        conf_backend = (
+            trainer_conf.get("sky_backend", None)
+            if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "sky_backend", None)
+        )
+        conf_resolution = (
+            trainer_conf.get("sky_resolution", None)
+            if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "sky_resolution", None)
+        )
+    backend = conf_backend if conf_backend is not None else extra.get("backend", "cubemap")
+    resolution = conf_resolution if conf_resolution is not None else extra.get("resolution", 128)
+
+    if backend == "mlp":
+        return SkyEnvmapMLP()
+    if backend == "cubemap":
+        return SkyEnvmapCubemap(resolution=int(resolution))
+    raise ValueError(f"unknown sky backend '{backend}', expected 'cubemap' or 'mlp'")
+
+
 # Degree-0 SH coefficient: 1 / (2 * sqrt(pi)). Used to convert RGB in [0, 1]
 # to the DC term of the SH expansion in init_layer_from_points.
 _SH_C0 = 0.28209479177387814
@@ -165,7 +203,16 @@ class LayeredGaussians(nn.Module):
         # nn.ModuleDict so .to(device) / state_dict() recurse into layers.
         self.layers: nn.ModuleDict = nn.ModuleDict()
         for spec in specs:
-            self.layers[spec.name] = MixtureOfGaussians(conf, scene_extent)
+            if spec.is_particle_layer:
+                self.layers[spec.name] = MixtureOfGaussians(conf, scene_extent)
+            elif spec.name == "sky_envmap":
+                # T5.4: sky envmap is a small parametric module (cubemap or
+                # MLP); shares ModuleDict so .to(device) / state_dict() / load
+                # recurse into it, but does NOT contribute particles to
+                # fused_view.
+                self.layers[spec.name] = _build_sky_module(spec, conf)
+            # dynamic_deformables: registered as a non-particle stub in the
+            # registry; no module instantiated (v2.x placeholder, T1.2).
 
         # T4.0: per-clip dynamic-rigid track poses, registered as nn.Buffer so
         # they ride along with .to(device) / state_dict() / .cuda(). v2 assumes
@@ -199,14 +246,24 @@ class LayeredGaussians(nn.Module):
         After Trainer writes this under the 'model' key, the on-disk ckpt is:
             ckpt["model"]["gaussians_nodes"]["background"]["positions"]
         matching NRE (nvcr.io/nvidia/nre/nre-ga:latest) output format.
+
+        T5.4: non-particle modules (sky_envmap) are stored under separate
+        sibling keys via nn.Module.state_dict(), since they don't implement
+        the MoG ``get_model_parameters`` contract.
         """
-        return {
+        out: dict = {
             "gaussians_nodes": {
-                name: layer.get_model_parameters()
-                for name, layer in self.layers.items()
+                s.name: self.layers[s.name].get_model_parameters()
+                for s in self.specs
+                if s.is_particle_layer and s.name in self.layers
             },
             "scene_extent": self.scene_extent,
         }
+        # T5.4: sky envmap state — saved as raw state_dict so SkyEnvmapMLP /
+        # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
+        if "sky_envmap" in self.layers:
+            out["sky_envmap_state"] = self.layers["sky_envmap"].state_dict()
+        return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
         """Dispatch checkpoint into per-layer MoG. Accepts three input shapes:
@@ -231,6 +288,10 @@ class LayeredGaussians(nn.Module):
         if nodes_dict is not None:
             # v2 path: dispatch per layer.
             for name, layer in self.layers.items():
+                # T5.4: sky envmap (non-particle) restored separately below,
+                # not from gaussians_nodes — skip the warn+miss path for it.
+                if not hasattr(layer, "init_from_checkpoint"):
+                    continue
                 if name not in nodes_dict:
                     logger.warning(
                         f"[ckpt] Layer '{name}' not found in checkpoint "
@@ -240,6 +301,19 @@ class LayeredGaussians(nn.Module):
                 layer.init_from_checkpoint(
                     nodes_dict[name], setup_optimizer=setup_optimizer
                 )
+            # T5.4: sky envmap state restore — under either NRE-wrapped key
+            # "model.sky_envmap_state" or unwrapped "sky_envmap_state".
+            sky_state = None
+            if (
+                "model" in checkpoint
+                and isinstance(checkpoint["model"], dict)
+                and "sky_envmap_state" in checkpoint["model"]
+            ):
+                sky_state = checkpoint["model"]["sky_envmap_state"]
+            elif "sky_envmap_state" in checkpoint:
+                sky_state = checkpoint["sky_envmap_state"]
+            if sky_state is not None and "sky_envmap" in self.layers:
+                self.layers["sky_envmap"].load_state_dict(sky_state)
             return
 
         # v1 legacy path: route entire flat dict into background.
@@ -267,20 +341,27 @@ class LayeredGaussians(nn.Module):
 
         Plays the role of MoG.setup_optimizer() but skips conf-driven schedulers
         and per-name LR multipliers (the test only needs get_model_parameters()
-        to pass its assert).
+        to pass its assert). T5.4: non-particle layers (sky_envmap) get a flat
+        Adam over ``.parameters()`` instead of the MoG 6-group split.
         """
-        for layer in self.layers.values():
-            layer.optimizer = torch.optim.Adam(
-                [
-                    {"params": [layer.positions],         "name": "positions"},
-                    {"params": [layer.rotation],          "name": "rotation"},
-                    {"params": [layer.scale],             "name": "scale"},
-                    {"params": [layer.density],           "name": "density"},
-                    {"params": [layer.features_albedo],   "name": "features_albedo"},
-                    {"params": [layer.features_specular], "name": "features_specular"},
-                ],
-                lr=1e-3,
-            )
+        for spec in self.specs:
+            if spec.name not in self.layers:
+                continue
+            layer = self.layers[spec.name]
+            if spec.is_particle_layer:
+                layer.optimizer = torch.optim.Adam(
+                    [
+                        {"params": [layer.positions],         "name": "positions"},
+                        {"params": [layer.rotation],          "name": "rotation"},
+                        {"params": [layer.scale],             "name": "scale"},
+                        {"params": [layer.density],           "name": "density"},
+                        {"params": [layer.features_albedo],   "name": "features_albedo"},
+                        {"params": [layer.features_specular], "name": "features_specular"},
+                    ],
+                    lr=1e-3,
+                )
+            else:
+                layer.optimizer = torch.optim.Adam(layer.parameters(), lr=1e-3)
 
     # ------------------------------------------------------------------ single-layer bridge
     # When the container holds exactly one "background" layer (T1.1 default),
@@ -316,9 +397,48 @@ class LayeredGaussians(nn.Module):
         ts_us = getattr(gpu_batch, "timestamp_us", -1)
         # Multi-layer: fused view + reference layer renderer.
         fused = self.fused_view(timestamp_us=ts_us)
-        ref_layer = next(iter(self.layers.values()))
+        # ref_layer must be a particle layer (sky module has no .renderer).
+        ref_layer = next(
+            self.layers[s.name] for s in self.specs if s.is_particle_layer
+        )
         view = _FusedView(fused, ref_layer)
-        return ref_layer.renderer.render(view, gpu_batch, train, frame_id)
+        outputs = ref_layer.renderer.render(view, gpu_batch, train, frame_id)
+        # T5.4: sky envmap blend (only if sky layer is present in the spec
+        # list). Composites learned sky onto the rendered gaussians using the
+        # tracer's accumulated alpha.
+        return self._blend_sky(outputs, gpu_batch)
+
+    # ------------------------------------------------------------------ T5.4 sky blend
+    def _blend_sky(self, outputs: dict, batch) -> dict:
+        """Composite per-pixel sky RGB onto the Gaussian render using alpha.
+
+        ``rgb_final = rgb_gauss + rgb_sky * (1 - alpha)`` where ``alpha`` is
+        the tracer's accumulated opacity (``outputs["pred_opacity"]``).
+
+        No-op when the sky layer is not in ``self.layers``. Always preserves
+        the original Gaussian RGB under the ``rgb_gaussians`` key so
+        ``get_losses`` can compute a sky-only L1 on the pre-blend signal.
+        """
+        if "sky_envmap" not in self.layers:
+            return outputs
+        sky_module = self.layers["sky_envmap"]
+        # viewdirs in world frame: rays_dir is camera-space when
+        # rays_in_world_space=False; apply T_to_world's rotation only.
+        rays = batch.rays_dir   # [B, H, W, 3]
+        if not getattr(batch, "rays_in_world_space", False):
+            R = batch.T_to_world[..., :3, :3]                # [B, 3, 3]
+            # Broadcast [B, 1, 1, 3, 3] @ [B, H, W, 3, 1] → [B, H, W, 3, 1]
+            rays = (R[:, None, None, :, :] @ rays.unsqueeze(-1)).squeeze(-1)
+        rgb_sky = sky_module(rays)                           # [B, H, W, 3]
+        rgb_gauss = outputs["pred_rgb"]
+        alpha = outputs["pred_opacity"]                      # [B, H, W, 1]
+        rgb_final = rgb_gauss + rgb_sky * (1.0 - alpha)
+        # Shallow copy so we don't mutate the renderer's returned dict.
+        out = dict(outputs)
+        out["rgb_gaussians"] = rgb_gauss
+        out["rgb_sky"] = rgb_sky
+        out["pred_rgb"] = rgb_final
+        return out
 
     def _single_bg_layer(self):
         """Return the bg layer iff this is a single-bg-layer setup, else None."""
@@ -594,7 +714,10 @@ class LayeredGaussians(nn.Module):
             bg.build_acc(rebuild=rebuild)
             return
         for layer in self.layers.values():
-            layer.build_acc(rebuild=rebuild)
+            # T5.4: skip sky module (no build_acc); only particle layers
+            # ship BVH state to OptiX.
+            if hasattr(layer, "build_acc"):
+                layer.build_acc(rebuild=rebuild)
 
     def setup_optimizer(self, state_dict=None) -> None:
         """Multi-layer compat shim: each layer's optimizer is already
@@ -603,13 +726,42 @@ class LayeredGaussians(nn.Module):
 
         Single-bg mode passes through __getattr__ bridge so v1 behaviour
         (state_dict resume from ckpt etc.) is byte-identical.
+
+        T5.4: also attaches an Adam to the sky_envmap module (multi-layer
+        only). The sky lr defaults to 0.01 (drivestudio pvg.yaml) but is
+        overrideable via ``conf.trainer.sky_lr``.
         """
         bg = self._single_bg_layer()
         if bg is not None:
             bg.setup_optimizer(state_dict=state_dict)
             return
-        # Multi-layer: per-layer optimizers already attached via
-        # init_layer_from_points; nothing to do.
+        # Multi-layer: per-particle-layer optimizers already attached via
+        # init_layer_from_points. Sky envmap needs one attached here.
+        if "sky_envmap" in self.layers:
+            sky = self.layers["sky_envmap"]
+            # T5.4: sync sky module to the same device as the first particle
+            # layer's parameters. Particle layers are moved to CUDA inside
+            # init_layer_from_points (positions.to(device=positions.device)),
+            # but sky was constructed in __init__ before the device was known
+            # — without this sync its nn.Linear weights stay on CPU and the
+            # forward fails with "Expected all tensors to be on the same
+            # device". Runs after Trainer.setup_training calls .setup_optimizer().
+            for spec in self.specs:
+                if spec.is_particle_layer:
+                    target_device = self.layers[spec.name].positions.device
+                    sky.to(target_device)
+                    break
+            if getattr(sky, "optimizer", None) is None:
+                trainer_conf = getattr(self.conf, "trainer", None)
+                if trainer_conf is None:
+                    sky_lr = 0.01
+                else:
+                    sky_lr = (
+                        trainer_conf.get("sky_lr", 0.01)
+                        if hasattr(trainer_conf, "get")
+                        else getattr(trainer_conf, "sky_lr", 0.01)
+                    )
+                sky.optimizer = torch.optim.Adam(sky.parameters(), lr=float(sky_lr))
         if state_dict is not None:
             logger.warning(
                 "LayeredGaussians.setup_optimizer: multi-layer mode ignores "

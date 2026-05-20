@@ -1,0 +1,34 @@
+# @package _global_
+#
+# Stage 5 v2 — Background + Road + DynamicRigid + Sky envmap training config.
+# Inherits from v2_full (bg + road + dyn) and adds:
+#   - layers.enabled gains "sky_envmap" — LayeredGaussians instantiates a
+#     SkyEnvmap[Cubemap|MLP] module that blends RGB via (1 - pred_opacity).
+#   - trainer.use_sky_envmap=true — get_losses adds a sky-region L1 term
+#     weighted by lambda_sky.
+#
+# Stage 5 出口门槛 (A800 5k step, 2s, single front camera):
+#   - exit 0; sky_envmap module materialized (param count printed by trainer)
+#   - 全图 PSNR ≥ Stage 4 baseline - 0.5 dB (≥ 25.8 dB; ideal +1~2 dB)
+#   - sky 区 PSNR ≥ 28 dB (per-region metric; trainer adds this in T5.6
+#     evaluation script)
+#   - Rendered sky no longer pitch-black; +Z cubemap face exhibits color
+#     differentiation (visual check via val_step PNG output)
+#
+# Backend selection:
+#   - default (sky_backend: null) → use registry's spec.extra default ("cubemap")
+#   - override at CLI: `... trainer.sky_backend=mlp` if nvdiffrast unavailable
+defaults:
+  - ncore_3dgut_mcmc_v2_full
+  - _self_
+
+layers:
+  enabled: [background, road, dynamic_rigids, sky_envmap]
+
+trainer:
+  use_sky_envmap: true
+  # sky_backend / sky_resolution left at registry default (cubemap @ 128).
+  # lambda_sky=0.1 is the Stage 5 starting point; bumping to 0.05 is the
+  # mitigation listed in v2_plan.md Risk Register if sky_loss dominates the
+  # gradient.
+  lambda_sky: 0.1
