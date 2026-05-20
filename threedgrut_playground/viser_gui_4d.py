@@ -72,8 +72,11 @@ class Viser4DViewer:
     When ``engine`` is ``None`` we run in "no-gaussian-render" mode: no
     OptiX-backed Gaussian background is drawn (the viewer only shows scene
     primitives + timeline). This is the only viable mode on GPUs without RT
-    cores (A100 / A800 / H100), where ``lib3dgrt_cc.so`` dlopen segfaults
-    during Engine3DGRUT init.
+    cores — specifically the Ampere datacenter SKUs **A100 / A800** (RT
+    cores were intentionally fused off; Hopper-era H100/H800/H200 keep
+    third-gen RT cores and run OptiX fine, as does any RTX consumer card).
+    On RT-less GPUs ``lib3dgrt_cc.so`` dlopen segfaults during Engine3DGRUT
+    init, hence the bypass.
     """
 
     def __init__(self, *, port: int, engine: "Engine3DGRUT | None",
@@ -690,10 +693,13 @@ def main() -> None:
     parser.add_argument("--target_fps", type=float, default=20.0)
     parser.add_argument("--no_gaussian_render", action="store_true",
                         help="Skip Engine3DGRUT init + Gaussian background "
-                             "rendering. Required on GPUs without RT cores "
-                             "(A100 / A800 / H100), where the OptiX extension "
-                             "dlopen segfaults. Scene primitives "
-                             "(ego/cuboid/LiDAR) + timeline still work.")
+                             "rendering. Required on Ampere datacenter SKUs "
+                             "WITHOUT RT cores (A100 / A800), where the OptiX "
+                             "extension dlopen segfaults. Hopper datacenter "
+                             "(H100/H800/H200) and all RTX cards have RT "
+                             "cores and don't need this flag. Scene "
+                             "primitives (ego/cuboid/LiDAR) + timeline still "
+                             "work in this mode.")
     args = parser.parse_args()
 
     if args.no_gaussian_render:

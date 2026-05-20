@@ -591,7 +591,7 @@ flowchart TB
 | **T8.5 Stage 8** cuboid_world_edges identity pose + size=(1,1,1) → 等于 UNIT_CUBE_EDGES | T8.5 ✅ | `test_world_edges_identity_pose_unit_size` (Mac) |
 | **T8.5 Stage 8** cuboid_world_edges 旋转 + 缩放 + 平移正确（z90 swap x/y 范围） | T8.5 ✅ | `test_world_edges_rotation_z90` + `test_world_edges_translation_only` + `test_world_edges_size_scale` (Mac) |
 | **T8.5 Stage 8** instance_color FNV-1a hash 确定性 (相同 tid 永远相同色) | T8.5 ✅ | `test_instance_color_deterministic` (Mac, 跨调用 stable) |
-| **T8.10 Stage 8** --no_gaussian_render 模式跳过 Engine3DGRUT 完全 init (避免 OptiX dlopen segfault on datacenter GPU) | T8.10 ✅ A800 | A800 实测: server listening *:8080 起来, 浏览器拖 timeline scene primitives + frustum 同步动 (无 Gaussian 背景) |
+| **T8.10 Stage 8** --no_gaussian_render 模式跳过 Engine3DGRUT 完全 init (避免 OptiX dlopen segfault on **Ampere datacenter SKU** A100/A800 — RT cores 被 NVIDIA 阉割; Hopper datacenter H100/H800/H200 保留第 3 代 RT cores 不受影响) | T8.10 ✅ A800 | A800 实测: server listening *:8080 起来, 浏览器拖 timeline scene primitives + frustum 同步动 (无 Gaussian 背景) |
 | **T8.11 Stage 8** dyn LiDAR per-track object-local + 每帧 R·local+t world transform 让点云跟 cuboid 动 (复用训练侧 init_dynamic_rigid_layer) | T8.11 ✅ A800 | A800 实测: 48,488 个 object-local 点分布 20 active tracks (cap 5000/track), 994.8 MB ckpt; 浏览器拖 timeline → dyn LiDAR 点云跟 cuboid 飘. `test_dyn_lidar_per_track_local_frame` 验证 schema 完整性 (Mac) |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 

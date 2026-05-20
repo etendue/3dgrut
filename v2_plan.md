@@ -83,7 +83,7 @@ kanban
     [T6.3.a Stage 6 出口 A800 5k cc_PSNR 24.94 +1.7 dB ✅]
     [T6F.1 Ego mask Batch.mask 接通 train+val + 9 测试 ✅ Mac]
     [T6F.2 Metric 双指标 psnr/ssim/lpips full+masked + 7 测试 ✅ Mac]
-    [T6F.3 Stage 6-fix 出口 A800 5k masked PSNR 29.49 (+9 vs full 20.49) ✅]
+    [T6F.3 Stage 6-fix 出口 A800 5k masked PSNR 29.49 "+9 vs full 20.49" ✅]
     [T8.1 engine LayeredGaussians load + timestamp_us 透传 ✅ Mac 3 测试]
     [T8.2 extract_4d_metadata + ckpt viz_4d 注入 ✅ Mac 8 测试]
     [T8.3 viser_gui_4d 骨架 + FourDMetadata + timeline ✅ Mac 8 测试]
@@ -91,8 +91,8 @@ kanban
     [T8.5 scene dynamic tracks polylines + cuboid wireframe ✅ Mac 9 测试]
     [T8.6 dataset --dataset_path lazy fallback ✅ Mac]
     [T8.8 Stage 8 A800 100 step smoke ✅ 70 tracks / ego 2623 / 960 MB]
-    [T8.9 inject_viz_4d CLI (方案 B) ✅ A800 实测 T6F.3 ckpt 31 tracks / 991→995 MB]
-    [T8.10 viser_gui_4d --no_gaussian_render (A800 datacenter GPU 兼容) ✅ 端到端]
+    [T8.9 inject_viz_4d CLI "方案 B" ✅ A800 实测 T6F.3 ckpt 31 tracks / 991→995 MB]
+    [T8.10 viser_gui_4d --no_gaussian_render (Ampere datacenter A100/A800; Hopper H100 不需要) ✅]
     [T8.11 dyn LiDAR per-track local frame + 每帧 transform ✅ 48K 点 / 20 active tracks]
 ```
 
@@ -104,7 +104,7 @@ kanban
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 49 | Stage 0-6 + Stage 6-fix + **Stage 8 viser_gui_4d 完整 8/8 (Mac + A800 端到端浏览器验证)**. Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 8 全套 A800 实测过**: ckpt 双路 (T8.8 训练时写入 70 tracks / T8.9 inject 旧 ckpt 31 tracks) + T8.10 --no_gaussian_render datacenter GPU 兼容 (A800/A100/H100 无 RT cores → OptiX segfault) + T8.11 dyn LiDAR per-track object-local + 每帧 transform 让点云跟 cuboid 一起动 (48K 点 / 20 active tracks). Mac 179/179 PASS 0 回归. 浏览器拖 timeline → ego polyline + frustum + cuboid wireframe + dyn LiDAR 点云全部同步动. |
+| Done ✅ | 49 | Stage 0-6 + Stage 6-fix + **Stage 8 viser_gui_4d 完整 8/8 (Mac + A800 端到端浏览器验证)**. Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 8 全套 A800 实测过**: ckpt 双路 (T8.8 训练时写入 70 tracks / T8.9 inject 旧 ckpt 31 tracks) + T8.10 --no_gaussian_render (Ampere datacenter A100/A800 无 RT cores → OptiX segfault; Hopper H100/H800/H200 有 RT cores 不需要) + T8.11 dyn LiDAR per-track object-local + 每帧 transform 让点云跟 cuboid 一起动 (48K 点 / 20 active tracks). Mac 179/179 PASS 0 回归. 浏览器拖 timeline → ego polyline + frustum + cuboid wireframe + dyn LiDAR 点云全部同步动. |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -164,7 +164,7 @@ kanban
 | **T8.6** | 8 | dataset --dataset_path lazy fallback | 0.5 | ✅ Mac | MOD `viser_gui_4d.py:_load_metadata` (lazy import NCoreDataset + extract_4d_metadata 路径; 无 viz_4d block + dataset_path=None → static fallback warn) |
 | **T8.8** | 8 | Stage 8 A800 100 step smoke + ckpt viz_4d 字段验证 | 0.25 | ✅ A800 | A800 GPU 0, `apps/ncore_3dgut_mcmc_v2_full_4dviz` 100 step. ckpt_last.pt **960.2 MB, 自带 viz_4d schema_v1**, 70 dynamic tracks (5-cam 20s clip), ego 2623 poses, road 200K of 629K, dyn 100K of 135K. 13:18-13:29 总时长 11 min (dyn_init 17min 改进后约 5min). 暴露 + 修复 3 bugs (d15f69e/64ccf95/dffa59f): teardown 顺序 + 顶层 config + datasets.make 工厂. |
 | **T8.9** | 8 | inject_viz_4d CLI 工具（方案 B 一次性注入旧 ckpt） | 0.25 | ✅ **A800 端到端** | NEW `threedgrut/viz/inject.py` (~165 行: inject_viz_4d + _populate_tracks_from_dataset + _extract_conf 兼容旧 v2 ckpt 顶层无 config 的嵌套布局) · MOD `threedgrut_playground/README_4D.md` (加方案 B 章节) · NEW `threedgrut/tests/test_inject_viz_4d.py` (5 测试). **A800 实测 (T6F.3 ckpt v2_egomask_fix_20260520_113746)**: 991.3MB 旧 ckpt → 1m50s 注入 → 995.1MB (+3.8MB 元数据), viz_4d schema_v1, 31 tracks (与 T4.5 baseline 完全吻合), sample track automobile size=[4.09, 1.87, 1.61]m, ego 51 poses + primary cam fov_y=2.441 rad, road_xyz 200K/629K, dyn_xyz 100K/135K, ts range 88-1988 ms (duration_sec=2.0 对齐) |
-| **T8.10** | 8 | viser_gui_4d --no_gaussian_render 模式 (datacenter GPU 兼容) | 0.25 | ✅ **A800 端到端** | A800/A100/H100 等无 RT cores 的卡 OptiX 扩展 dlopen 时 segfault. MOD `viser_gui_4d.py`: --no_gaussian_render flag 跳过 Engine3DGRUT 实例化, 主循环只跑 _play_tick + scene primitives. UI 隐藏 Resolution/Near/Far/FPS 控件. **A800 实测**: server listening *:8080 起来, 浏览器拖 timeline → ego/cuboid/LiDAR/frustum 全部动起来 (无 Gaussian 背景) |
+| **T8.10** | 8 | viser_gui_4d --no_gaussian_render 模式 (Ampere datacenter GPU 兼容) | 0.25 | ✅ **A800 端到端** | **仅 Ampere datacenter SKU (A100/A800)** RT cores 被 NVIDIA 阉割导致 OptiX dlopen segfault. Hopper datacenter (H100/H800/H200, 第 3 代 RT cores) + RTX 系列 + workstation A5000/A6000 都有 RT cores, 不需要此 flag. MOD `viser_gui_4d.py`: --no_gaussian_render flag 跳过 Engine3DGRUT 实例化, 主循环只跑 _play_tick + scene primitives. UI 隐藏 Resolution/Near/Far/FPS 控件. **A800 实测**: server listening *:8080 起来, 浏览器拖 timeline → ego/cuboid/LiDAR/frustum 全部动起来 (无 Gaussian 背景) |
 | **T8.11** | 8 | dynamic LiDAR per-track object-local frame + per-frame transform | 0.25 | ✅ **A800 端到端** | T8.10 暴露视觉 bug: cuboid 移动但 dyn LiDAR 点云不动 (static world union). 修复复用训练侧 `init_dynamic_rigid_layer` 路径: MOD `viz/metadata.py:_extract_lidar` 调用它产 per-track local pts + track_ids + track_names; NEW schema 字段 `dynamic_local_xyz/track_ids/track_names`; MOD `FourDMetadata.has_per_track_dyn_lidar()` helper; MOD `viser_gui_4d`: `_build_dyn_lidar_world(frame_idx)` 每帧 R·local+t + instance_color 着色, `_update_dynamic_lidar` remove+add point_cloud. NEW `lidar_dynamic_pts_per_track` config 默认 5000. **A800 实测**: 48,488 个 object-local 点分布在 20 个 active tracks (cap 5000/track), 994.8 MB ckpt, 浏览器拖 timeline → dyn LiDAR 点云跟着 cuboid 飘. NEW `test_dyn_lidar_per_track_local_frame` 测试 |
 | | | **合计** | **30.0** | | |
 
@@ -181,7 +181,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
-| 8 | viser_gui_4d (4D viz) | **10/10 ✅ A800 浏览器端到端** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 datacenter GPU 兼容). inject_viz_4d CLI 方案 B 一次性注入. **A800 浏览器实测**: T8.10+T8.11 起 viser server *:8080, Mac ssh -L 转发, 拖 timeline → ego/frustum/cuboid/**dyn LiDAR 点云同步随 track 动**. Mac 179/179 PASS 0 回归. |
+| 8 | viser_gui_4d (4D viz) | **10/10 ✅ A800 浏览器端到端** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容; Hopper H100 不需要). inject_viz_4d CLI 方案 B 一次性注入. **A800 浏览器实测**: T8.10+T8.11 起 viser server *:8080, Mac ssh -L 转发, 拖 timeline → ego/frustum/cuboid/**dyn LiDAR 点云同步随 track 动**. Mac 179/179 PASS 0 回归. |
 
 ### 1.4 依赖关系图
 

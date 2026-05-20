@@ -35,7 +35,7 @@ python train.py --config-name apps/ncore_3dgut_mcmc_v2_full \
 
 ### 2. 启动 4D viewer
 
-**有 RT cores（RTX 系列）**：
+**有 RT cores**（所有 RTX 卡 + **Hopper datacenter H100/H800/H200** + Blackwell B100/B200 + Ampere workstation RTX A5000/A6000）：
 
 ```bash
 python -m threedgrut_playground.viser_gui_4d \
@@ -44,7 +44,7 @@ python -m threedgrut_playground.viser_gui_4d \
     --port 8080
 ```
 
-**无 RT cores（A100 / A800 / H100 等 datacenter ML 卡）**：必须加 `--no_gaussian_render`，否则 OptiX 扩展 dlopen 时 segfault。
+**无 RT cores**（**Ampere datacenter A100 / A800** —— NVIDIA 故意把 RT cores 阉割，给 RTX 系列让位）：必须加 `--no_gaussian_render`，否则 OptiX 扩展 dlopen 时 segfault。注意 H100 跟 A100 同属 datacenter 但**架构不同**（Hopper vs Ampere），H100 保留了第 3 代 RT cores，**不需要**此 flag。
 
 ```bash
 python -m threedgrut_playground.viser_gui_4d \
@@ -256,7 +256,17 @@ pip install viser==1.0.0
 
 ### `OptiX dlopen segfault` / `lib3dgrt_cc.so` 加载崩溃
 
-GPU 没 RT cores（A100/A800/H100 等 datacenter ML 卡）。加 `--no_gaussian_render` 跳过 Engine3DGRUT 即可。这是 OptiX BVH traversal 在没有 RT cores 的 GPU 上的硬性限制，不是 3dgrut bug。
+GPU 没 RT cores。具体来说：**Ampere datacenter SKU（A100 / A800）NVIDIA 故意把 RT cores 阉割**，所以 OptiX BVH traversal 在这两个卡上 segfault。加 `--no_gaussian_render` 跳过 Engine3DGRUT 即可。
+
+| 架构 | 卡型 | RT cores | OptiX | 需要 `--no_gaussian_render` |
+|---|---|---|---|---|
+| Ampere datacenter | **A100 / A800** | ❌ | ❌ | ✅ 必加 |
+| Hopper datacenter | H100 / H800 / H200 | ✅ 第 3 代 | ✅ | ❌ |
+| Blackwell datacenter | B100 / B200 | ✅ 第 4 代 | ✅ | ❌ |
+| RTX consumer | 3090 / 4090 / 5090 | ✅ | ✅ | ❌ |
+| Workstation | RTX A5000 / A6000 | ✅ | ✅ | ❌ |
+
+NVIDIA NRE-GA 容器（`nvcr.io/nvidia/nre/nre-ga`）官方推荐 H100，正是因为 H100 有 RT cores 能跑 viser playground 完整 Gaussian 渲染。这是 3dgrut 不是 bug 而是 GPU 硬件 spec 差异。
 
 ### Dynamic LiDAR 点云不随 cuboid 动（T8.11 之前 bug）
 
