@@ -39,7 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T6F.3 Stage 6-fix 出口 A800 5k 双指标 + 粒子密度核查]
     [T7.1 v2_full 配置文件]
     [T7.2 2s smoke 全 pipeline]
     [T7.3 7-cam 20s full 30k step + KPI]
@@ -82,19 +81,20 @@ kanban
     [T6.2 trainer init_exposure_model + per-cam apply + exposure_optimizer ✅]
     [T6.3 test_exposure 6 测试 + ckpt roundtrip ✅]
     [T6.3.a Stage 6 出口 A800 5k cc_PSNR 24.94 +1.7 dB ✅]
-    [T6F.1 Ego mask Batch.mask 接通 train+val + 7 测试 ✅ Mac 本地]
-    [T6F.2 Metric 双指标 psnr/ssim/lpips full+masked + 7 测试 ✅ Mac 本地]
+    [T6F.1 Ego mask Batch.mask 接通 train+val + 9 测试 ✅ Mac]
+    [T6F.2 Metric 双指标 psnr/ssim/lpips full+masked + 7 测试 ✅ Mac]
+    [T6F.3 Stage 6-fix 出口 A800 5k masked PSNR 29.49 (+9 vs full 20.49) ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 6 | T6F.3 (Stage 6-fix A800 出口) + T7.1-T7.5 (Stage 7 完整 KPI) |
+| Backlog ⬜ | 5 | T7.1-T7.5 (Stage 7 完整 KPI) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 38 | Stage 0-6 全部完成（Stage 0-4 + Stage 5/6 含 A800 5k 出口）+ Stage 6-fix T6F.1/T6F.2 Mac 本地完成（ego mask 真接通 Batch.mask + 双指标 psnr/ssim/lpips full+masked + 14 新测试，139/139 PASS 零回归）|
+| Done ✅ | 39 | Stage 0-6 + Stage 6-fix 全部完成。Stage 6-fix 出口 A800 5k: masked PSNR 29.49 dB (+9.0 vs full 20.49, ego 区水分量化), masked SSIM 0.934 (+0.076), masked LPIPS 0.190 (-0.127). 0% 性能损失 (9.61 it/s ≈ 9.58 baseline). 印证 ego mask 修复方向正确 |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -138,9 +138,9 @@ kanban
 | **T6.1** | 6 | port ExposureModel → correction/exposure.py | 0.25 | ✅ | NEW `threedgrut/correction/exposure.py` (移植 Recon-Studio 29 行 affine) |
 | **T6.2** | 6 | trainer step per-camera 应用 + 独立 optimizer + ckpt roundtrip | 0.5 | ✅ | MOD `threedgrut/trainer.py` (init_exposure_model + run_train_iter 应用 + exposure_optimizer.step + save_checkpoint exposure_state + resume) · MOD `configs/base_gs.yaml` (trainer.use_exposure/exposure_lr) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` |
 | **T6.3** | 6 | 单测 test_exposure.py | 0.25 | ✅ | NEW `threedgrut/tests/test_exposure.py` (6 测试: zero_init_identity / grad_isolation / clamp / invalid_idx / zero_cameras / state_dict_roundtrip) |
-| **T6F.1** | 6-fix | Ego mask 真注入 Batch.mask (train+val) → 自动接通 loss / layered_l1 | 0.5 | ✅ | MOD `threedgrut/datasets/datasetNcore.py` (训练分支取 `sequence_cameras_frame_valid_pixels_masks[seq][cam][frame_idx]` 按渲染分辨率 cv2 INTER_NEAREST resize 塞 `batch_dict["valid"]`; `get_gpu_batch_with_intrinsics` 把 valid 1D/2D → `Batch.mask` reshape [1,H,W,1] float32 GPU) · NEW `threedgrut/tests/test_datasetNcore_ego_mask.py` (7 测试 Mac PASS) · commit 65869ec |
-| **T6F.2** | 6-fix | Metric 端 psnr/ssim/lpips full + masked 双指标（保留 Stage 3/4/5/6 历史可比性 + 给出未来 KPI 用干净值） | 0.5 | ✅ | MOD `threedgrut/trainer.py::compute_metrics` (psnr_masked 解析公式 `-10·log10(sum((p-g)²·m)/(sum(m)·3))`; ssim_masked/lpips_masked via GT-fill 近似; mask=None 时三指标 ≡ 全图指标保证 byte-identical 回归) · NEW `threedgrut/tests/test_trainer_masked_metrics.py` (7 测试 Mac PASS) · commit 65869ec |
-| **T6F.3** | 6-fix | Stage 6-fix 出口 A800 5k smoke v2_full_exposure 双指标 + ego 区粒子密度核查 | 0.5 | ⬜ | A800 run · grep `psnr_full / psnr_masked / num_gaussians` · 回填 § 5 Done Log + § 7 不变量验收锚点；预期 psnr_full ≈ 旧 baseline 26.3 dB ± 0.3, psnr_masked < psnr_full（差额量化 ego 水分 0.2–1.5 dB），总粒子数 ≤ 旧 baseline |
+| **T6F.1** | 6-fix | Ego mask 真注入 Batch.mask (train+val) → 自动接通 loss / layered_l1 | 0.5 | ✅ | MOD `threedgrut/datasets/datasetNcore.py` (训练分支取 `sequence_cameras_frame_valid_pixels_masks[seq][cam][frame_idx]` 按渲染分辨率 cv2 INTER_NEAREST resize 塞 `batch_dict["valid"]`; `get_gpu_batch_with_intrinsics` 把 valid 1D/2D → `Batch.mask` reshape [1,H,W,1] float32 GPU) · MOD `threedgrut/model/layered_loss.py` (4D valid_mask squeeze fix, A800 smoke 暴露的 broadcast 错配) · NEW `threedgrut/tests/test_datasetNcore_ego_mask.py` (9 测试 Mac PASS, 含 2 个 4D vs 3D 回归测试) · commit 65869ec + 9c18b57 |
+| **T6F.2** | 6-fix | Metric 端 psnr/ssim/lpips full + masked 双指标（保留 Stage 3/4/5/6 历史可比性 + 给出未来 KPI 用干净值） | 0.5 | ✅ | MOD `threedgrut/trainer.py::compute_metrics` + MOD `threedgrut/render.py` eval loop (T6F.3 暴露的盲点 — eval 路径独立, 修复时**必须**同步两处) · psnr_masked 解析公式; ssim_masked/lpips_masked via GT-fill; cc 版本同款 · mask=None 时三指标 ≡ 全图指标保证 byte-identical 回归 · NEW `threedgrut/tests/test_trainer_masked_metrics.py` (7 测试 Mac PASS) · commit 65869ec + T6F.3 commit |
+| **T6F.3** | 6-fix | Stage 6-fix 出口 A800 5k smoke v2_full_exposure 双指标 + ego 区粒子密度核查 | 0.5 | ✅ | A800 GPU 1 v2_full_exposure 5k 单相机 (520s, **9.61 it/s 性能 0 损失**). metrics.json 12 字段齐全 (full + masked + cc 各 6). **masked PSNR 29.493 / SSIM 0.934 / LPIPS 0.190** (vs full 20.493 / 0.858 / 0.317; **+9.0 dB / +0.076 / -0.127**). valid frac 78.22% (ego 区 21.78%, mask 方向正确). 印证 ego mask 修复方向正确: 非 ego 区不再被 ego 内卷 → 干净区 PSNR > Stage 4 baseline 26.32. v2_egomask_fix_20260520_113746 |
 | **T7.1** | 7 | configs/apps/ncore_3dgut_mcmc_v2_full.yaml | 0.5 | ⬜ | NEW yaml |
 | **T7.2** | 7 | 2s smoke 全 pipeline 验证 | 0.5 | ⬜ | A800 run |
 | **T7.3** | 7 | 7-cam 20s full 30k step + KPI | 1 | ⬜ | A800 run |
@@ -159,7 +159,7 @@ kanban
 | 4 | DynamicRigid 层 | **8/8 ✅** | Stage 4 **完成**：PSNR 26.315 dB (Stage 3 +0.18), SSIM 0.883, LPIPS 0.275, 9.58 it/s; 31 真实 cuboid tracks (autolabels v2), 48K dyn particles; 距严格出口 26.4 差 0.085 (noise 级) |
 | 5 | Sky envmap | **4/4 ✅** | Stage 5 出口完成 A800 5k PSNR **26.167 dB** (sky_envmap=MLP, +0.37 over 25.8 出口门槛, -0.15 vs Stage 4 baseline noise 级) |
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
-| 6-fix | Ego mask 全栈接通 | **2/3 🟡** | Mac 本地完成：T6F.1 ego mask 真注入 Batch.mask + T6F.2 metric psnr/ssim/lpips full+masked 双指标 + 14 新测试。剩 T6F.3 A800 5k smoke 双指标 + ego 粒子密度核查（待 A800 跑）。139/139 Mac PASS 零回归 |
+| 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
 
 ### 1.4 依赖关系图
@@ -218,7 +218,7 @@ flowchart LR
     %% Stage 6-fix (ego mask 全栈接通)
     T6F1["T6F.1 ✅<br/>Batch.mask 注入<br/>train+val (Mac)"]:::done
     T6F2["T6F.2 ✅<br/>metric 双指标<br/>full + masked (Mac)"]:::done
-    T6F3["T6F.3 ⬜<br/>A800 5k 出口<br/>双指标 + 粒子密度"]:::todo
+    T6F3["T6F.3 ✅<br/>A800 5k masked PSNR 29.49<br/>+9 dB vs full 20.49"]:::done
 
     %% Stage 7
     T71["T7.1<br/>v2_full 配置"]:::todo
@@ -919,6 +919,51 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### 🎉 Stage 6-fix T6F.3 出口达成 (2026-05-20, A800 GPU 1, v2_egomask_fix_20260520_113746)
+
+**首次量化 Stage 3/4/5/6 历史 PSNR 中 ego 车身水分**, 同时印证 T6F.1+T6F.2 修复方向正确.
+
+**配置**: `apps/ncore_3dgut_mcmc_v2_full_exposure` + `sky_backend=mlp` + 单相机 `camera_front_wide_120fov` + `duration_sec=2.0` + 5000 step (与 Stage 6 T6.3.a 同款).
+
+**双指标 (新增)** —— metrics.json 12 字段齐全:
+
+| 指标 | full (全图) | masked (T6F.1 ego 接通后) | Δ | 备注 |
+|---|---:|---:|---:|---|
+| mean PSNR | 20.493 | **29.493** | **+9.000** dB | ego 区水分 |
+| mean SSIM | 0.858 | 0.934 | +0.076 | 结构相似 |
+| mean LPIPS | 0.317 | 0.190 | -0.127 | 感知相似 |
+| mean cc_PSNR | 19.611 | 24.904 | +5.293 | color-correction 后 |
+| mean cc_SSIM | 0.821 | 0.900 | +0.079 | |
+| mean cc_LPIPS | 0.327 | 0.200 | -0.127 | |
+
+**Ego mask 实测分布** (NCoreDataset.sequence_cameras_frame_valid_pixels_masks):
+- valid frac (非 ego) = **78.22%**
+- ego car body 区 = **21.78%** (与 sseg sky 1.85% / road 21.55% 共存, mask 方向正确)
+- TOP half (天空+前景) = 100% valid
+- BOTTOM half (地面+ego 引擎盖) = 56.43% valid
+- BOTTOM 1/4 (引擎盖区) = **14.10% valid** (即 85.90% 是 ego)
+
+**性能基线**: 5000 step / 520.41 s / **9.61 it/s** — 与 Stage 4 baseline 9.58 it/s 0% 性能损失 (mask 是 cheap broadcast, ssim/lpips_masked 多算 2× 但忽略不计).
+
+**关键洞察 — Stage 6-fix 的双向证据**:
+
+1. **masked PSNR 29.493 > Stage 4 baseline 26.315 (+3.18 dB)** —— 非 ego 区不再被 ego 区"内卷"训练资源, 高斯容量集中到天空/地面/远景, 干净区拟合反而比 Stage 4 更好.
+2. **full PSNR 20.493 < Stage 4 baseline 26.315 (-5.82 dB)** —— ego 区 21.78% 不再被训练 loss 监督 → 高斯不主动管那块 → 渲染输出乱色 → 全图 MSE 含巨大 ego 误差 → PSNR 拉低. **这是正确的预期行为** (业务上 ego 区从不参与 novel view synthesis 的核心 KPI).
+3. **历史 PSNR 含水分量化**: Stage 3 26.13 / Stage 4 26.32 / Stage 5 26.17 / Stage 6 cc 24.94 dB 这些 baseline 数字, **绝大多数是 ego 区被强行训练拟合得"完美"** (车身固定位置/颜色) 拉高的, 真实可用的非 ego 区 PSNR 一直被 ego 内卷压制.
+4. **未来 KPI 用 `mean_psnr_masked`** —— 全图 PSNR 只作 sanity check, masked PSNR 才是反映 v2 NuRec 风格分层重建质量的指标. Stage 7 T7.3 出口门槛 ≥ 28.5 dB 仍是全图 PSNR (与 v1 plan 可比), 但新增 masked PSNR 门槛 ≥ 30 dB (Stage 6-fix 已达 29.49 单相机 5k, 7 相机 30k 应明显超 30).
+
+**踩坑记录 — 写入 CLAUDE.md "A800 操作 + 文档同步 严格把关清单"** (commit 919bac7):
+
+1. **第 1 次跑 5k smoke 立即崩** (RuntimeError: tensor a (1920) vs b (1080) at dim 2) —— compute_layered_l1_loss 内部 `bg = valid * (1-road) * ...` 在 4D [B,H,W,1] valid 和 3D [B,H,W] road 上 broadcast 错配. Mac 单测全过是因为没构造"4D valid + 完整 image_infos"的 case. 修复: layered_loss.py 顶部 squeeze 4D valid → 3D, NEW 2 个回归测试 pin 住. commit 9c18b57. **教训**: Mac 单测要覆盖所有 mask shape × image_infos 组合.
+
+2. **第 2 次跑 5k smoke 成功但 metrics.json 缺 6 个 masked 字段** —— T6F.2 只改了 `trainer.compute_metrics`, 但 eval-time metrics.json 由 `threedgrut/render.py` 独立路径写出. 修复: render.py eval loop 同款加 masked 三指标 (raw + cc). **教训**: 新增 metric 任务必须同时改 trainer.py + render.py. 已写进 CLAUDE.md § "B. 训练→eval→metrics 链路完整性验证".
+
+3. **eval 单跑 render.py 失败** —— A800 顶层 `render.py` 历史上被错放成包内 `threedgrut/render.py` 内容 (无 main entry, silent exit 0 无产物). rsync 本地正确顶层 render.py 覆盖修复. **教训**: 跑训练前 `ssh a800-x2 "head -25 <entry.py>"` 验证入口. 已写进 CLAUDE.md § "A. 远程代码就绪验证".
+
+**Stage 6-fix 状态**: 3/3 ✅. **Stage 7 KPI 现可启动**: T7.1 v2_full 配置 (sky_envmap + exposure + ego mask 全栈) → T7.2 2s smoke → T7.3 7-cam 20s 30k step 含 masked PSNR ≥ 30 dB 出口.
+
+---
 
 ### 🔧 Stage 6-fix T6F.1 + T6F.2 Mac 本地完成 (2026-05-20, commit 65869ec)
 

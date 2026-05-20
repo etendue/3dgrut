@@ -216,6 +216,15 @@ class Renderer:
         cc_psnr = []
         cc_ssim = []
         cc_lpips = []
+        # T6F.2: masked 双指标（Stage 6-fix）—— Batch.mask 由 NCoreDataset
+        # 注入 ego mask 后非 None；NeRF/Colmap 等 dataset mask=None 时直接
+        # 复制全图值保证 byte-identical 回归. masked-cc 同理.
+        psnr_masked = []
+        ssim_masked = []
+        lpips_masked = []
+        cc_psnr_masked = []
+        cc_ssim_masked = []
+        cc_lpips_masked = []
         inference_time = []
 
         best_psnr = -1.0
@@ -303,6 +312,49 @@ class Renderer:
                 ).item()
             )
 
+            # T6F.2: masked PSNR / SSIM / LPIPS (raw + cc)
+            # mask=None (NeRF/Colmap 等): masked 指标 ≡ 全图指标 (byte-identical 回归)
+            # mask 非 None (NCore ego mask): PSNR_masked 解析公式 + SSIM/LPIPS GT-fill 近似
+            mask = gpu_batch.mask  # [B, H, W, 1] 或 None
+            if mask is not None:
+                mask = mask.to(pred_rgb_full.dtype)
+                # PSNR_masked (raw)
+                diff_sq = (pred_rgb_full - rgb_gt_full).pow(2) * mask
+                denom = mask.sum().clamp(min=1.0) * 3
+                mse_masked = diff_sq.sum() / denom
+                psnr_masked.append(
+                    (-10.0 * torch.log10(mse_masked.clamp(min=1e-10))).item()
+                )
+                # PSNR_masked (cc)
+                diff_sq_cc = (pred_rgb_cc - rgb_gt_full).pow(2) * mask
+                mse_masked_cc = diff_sq_cc.sum() / denom
+                cc_psnr_masked.append(
+                    (-10.0 * torch.log10(mse_masked_cc.clamp(min=1e-10))).item()
+                )
+                # SSIM / LPIPS via GT-fill
+                m4d = mask.permute(0, 3, 1, 2)  # [B, 1, H, W]
+                rgb_gt_perm = rgb_gt_full.permute(0, 3, 1, 2)
+                pred_perm = pred_rgb_full.permute(0, 3, 1, 2)
+                pred_perm_clipped = pred_rgb_full.clip(0, 1).permute(0, 3, 1, 2)
+                pred_cc_perm = pred_rgb_cc.permute(0, 3, 1, 2)
+                pred_cc_perm_clipped = pred_rgb_cc.clip(0, 1).permute(0, 3, 1, 2)
+                pred_filled = pred_perm * m4d + rgb_gt_perm * (1.0 - m4d)
+                pred_filled_clipped = pred_perm_clipped * m4d + rgb_gt_perm * (1.0 - m4d)
+                pred_cc_filled = pred_cc_perm * m4d + rgb_gt_perm * (1.0 - m4d)
+                pred_cc_filled_clipped = pred_cc_perm_clipped * m4d + rgb_gt_perm * (1.0 - m4d)
+                ssim_masked.append(criterions["ssim"](pred_filled, rgb_gt_perm).item())
+                lpips_masked.append(criterions["lpips"](pred_filled_clipped, rgb_gt_perm).item())
+                cc_ssim_masked.append(criterions["ssim"](pred_cc_filled, rgb_gt_perm).item())
+                cc_lpips_masked.append(criterions["lpips"](pred_cc_filled_clipped, rgb_gt_perm).item())
+            else:
+                # byte-identical 回归：直接复制全图值
+                psnr_masked.append(psnr[-1])
+                ssim_masked.append(ssim[-1])
+                lpips_masked.append(lpips[-1])
+                cc_psnr_masked.append(cc_psnr[-1])
+                cc_ssim_masked.append(cc_ssim[-1])
+                cc_lpips_masked.append(cc_lpips[-1])
+
             # Record the time
             inference_time.append(outputs["frame_time_ms"])
 
@@ -317,6 +369,13 @@ class Renderer:
         mean_cc_ssim = np.mean(cc_ssim)
         mean_cc_lpips = np.mean(cc_lpips)
         std_psnr = np.std(psnr)
+        # T6F.2: masked aggregates
+        mean_psnr_masked = np.mean(psnr_masked)
+        mean_ssim_masked = np.mean(ssim_masked)
+        mean_lpips_masked = np.mean(lpips_masked)
+        mean_cc_psnr_masked = np.mean(cc_psnr_masked)
+        mean_cc_ssim_masked = np.mean(cc_ssim_masked)
+        mean_cc_lpips_masked = np.mean(cc_lpips_masked)
         mean_inference_time = np.mean(inference_time)
 
         table = dict(
@@ -327,6 +386,9 @@ class Renderer:
             mean_cc_ssim=mean_cc_ssim,
             mean_cc_lpips=mean_cc_lpips,
             std_psnr=std_psnr,
+            # T6F.2 双指标：与全图列并排
+            mean_psnr_masked=mean_psnr_masked,
+            mean_cc_psnr_masked=mean_cc_psnr_masked,
         )
 
         if self.conf.render.enable_kernel_timings:
@@ -340,6 +402,13 @@ class Renderer:
             mean_cc_psnr=float(mean_cc_psnr),
             mean_cc_ssim=float(mean_cc_ssim),
             mean_cc_lpips=float(mean_cc_lpips),
+            # T6F.2 双指标全量进 metrics.json (table 列受宽度限制只显部分)
+            mean_psnr_masked=float(mean_psnr_masked),
+            mean_ssim_masked=float(mean_ssim_masked),
+            mean_lpips_masked=float(mean_lpips_masked),
+            mean_cc_psnr_masked=float(mean_cc_psnr_masked),
+            mean_cc_ssim_masked=float(mean_cc_ssim_masked),
+            mean_cc_lpips_masked=float(mean_cc_lpips_masked),
         )
         metrics_path = os.path.join(self.out_dir, "metrics.json")
         with open(metrics_path, "w") as f:
@@ -355,6 +424,13 @@ class Renderer:
             self.writer.add_scalar("cc_psnr/test", mean_cc_psnr, self.global_step)
             self.writer.add_scalar("cc_ssim/test", mean_cc_ssim, self.global_step)
             self.writer.add_scalar("cc_lpips/test", mean_cc_lpips, self.global_step)
+            # T6F.2: masked aggregates to TB
+            self.writer.add_scalar("psnr_masked/test", mean_psnr_masked, self.global_step)
+            self.writer.add_scalar("ssim_masked/test", mean_ssim_masked, self.global_step)
+            self.writer.add_scalar("lpips_masked/test", mean_lpips_masked, self.global_step)
+            self.writer.add_scalar("cc_psnr_masked/test", mean_cc_psnr_masked, self.global_step)
+            self.writer.add_scalar("cc_ssim_masked/test", mean_cc_ssim_masked, self.global_step)
+            self.writer.add_scalar("cc_lpips_masked/test", mean_cc_lpips_masked, self.global_step)
             self.writer.add_scalar("time/inference/test", mean_inference_time, self.global_step)
 
             if best_psnr_img is not None:
