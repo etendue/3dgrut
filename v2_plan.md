@@ -44,7 +44,6 @@ kanban
     [T7.3 7-cam 20s full 30k step + KPI]
     [T7.4 per-layer cap ablation]
     [T7.5 WP_V2_Report.md + schema]
-    [T8.8 Stage 8 A800 100 step smoke + ckpt viz_4d 字段验证]
   In Progress
   Review
   Blocked
@@ -91,18 +90,19 @@ kanban
     [T8.4 scene ego/LiDAR/frustum/axes ✅ Mac 4 viser_math 测试]
     [T8.5 scene dynamic tracks polylines + cuboid wireframe ✅ Mac 9 测试]
     [T8.6 dataset --dataset_path lazy fallback ✅ Mac]
-    [T8.9 inject_viz_4d CLI 工具 (方案 B 一次性注入) ✅ Mac 5 测试]
+    [T8.8 Stage 8 A800 100 step smoke ✅ 70 tracks / ego 2623 / 960 MB]
+    [T8.9 inject_viz_4d CLI (方案 B) ✅ A800 实测 T6F.3 ckpt 31 tracks / 991→995 MB]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 6 | T7.1-T7.5 (Stage 7 完整 KPI) + T8.8 (Stage 8 A800 smoke) |
+| Backlog ⬜ | 5 | T7.1-T7.5 (Stage 7 完整 KPI) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 46 | Stage 0-6 + Stage 6-fix + **Stage 8 viser_gui_4d (Mac 本地)** 全部完成。Stage 6-fix A800: masked PSNR 29.49 dB (+9.0 vs full 20.49). Stage 8 Mac: 37 新测试通过 (`test_engine_layered_load` 3 + `test_viz_4d_metadata` 8 + `test_viz4d_metadata_loader` 8 + `test_cuboid_wireframe` 9 + `test_viser_math` 4 + `test_inject_viz_4d` 5), 总 178/178 PASS, 0 回归. ckpt['viz_4d'] schema v1 + viser_gui_4d.py 600 行 (timeline + ego + cuboid + LiDAR + dataset fallback) + inject_viz_4d.py CLI (方案 B 一次性注入旧 ckpt) |
+| Done ✅ | 47 | Stage 0-6 + Stage 6-fix + **Stage 8 viser_gui_4d (Mac + A800)** 全部完成. Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 8 双路 4D 数据生成 A800 端到端验证通过**: T8.8 训练时直接写入 (5-cam 20s smoke, 70 tracks / 2623 ego poses / 960 MB) + T8.9 inject 工具一次性注入旧 ckpt (T6F.3 单 cam 2s, 31 tracks / 51 ego poses / 991→995 MB +3.8 MB). Mac 178/178 PASS 0 回归. Stage 8 暴露并修复 3 bugs (teardown 顺序 + 顶层 config + datasets.make 工厂). |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -160,7 +160,7 @@ kanban
 | **T8.4** | 8 | scene D - ego trajectory + frustum + LiDAR + world axes | 0.5 | ✅ Mac | MOD `viser_gui_4d.py:_populate_static_scene` 系列 (_add_world_axes / _add_ego_trajectory spline_catmull_rom / _add_lidar_clouds road+dyn / _update_ego_frustum setter) · NEW `threedgrut_playground/utils/viser_math.py` (mat_to_wxyz Shepperd/Markley + canonical sign) · NEW `threedgrut/tests/test_viser_math.py` (4 测试: identity / 90deg_x / 50 random round-trip / canonical sign) |
 | **T8.5** | 8 | scene E - dynamic tracks polylines + per-frame cuboid wireframe | 0.75 | ✅ Mac | MOD `viser_gui_4d.py:_add_track_trajectories` (一次 add_line_segments 全 tracks polyline 按 class color) + `_build_cuboid_edges` + `_update_active_cuboids` (remove+add 每帧) · NEW `threedgrut_playground/utils/cuboid.py` (UNIT_CUBE_EDGES [12,2,3] + cuboid_world_edges + class_color palette + instance_color FNV-1a hash → HSV→RGB) · NEW `threedgrut/tests/test_cuboid_wireframe.py` (9 测试: edges shape / vertex range / unique pairs / identity / translation / size scale / z90 rotation / class_color / instance_color) |
 | **T8.6** | 8 | dataset --dataset_path lazy fallback | 0.5 | ✅ Mac | MOD `viser_gui_4d.py:_load_metadata` (lazy import NCoreDataset + extract_4d_metadata 路径; 无 viz_4d block + dataset_path=None → static fallback warn) |
-| **T8.8** | 8 | Stage 8 A800 100 step smoke + ckpt viz_4d 字段验证 | 0.25 | ⬜ | A800 run `apps/ncore_3dgut_mcmc_v2_full_4dviz` 100 step → 验证 ckpt['viz_4d'] schema_version=1, len(tracks)>0, ego_N>0, road_xyz.shape[0]<=200000 |
+| **T8.8** | 8 | Stage 8 A800 100 step smoke + ckpt viz_4d 字段验证 | 0.25 | ✅ A800 | A800 GPU 0, `apps/ncore_3dgut_mcmc_v2_full_4dviz` 100 step. ckpt_last.pt **960.2 MB, 自带 viz_4d schema_v1**, 70 dynamic tracks (5-cam 20s clip), ego 2623 poses, road 200K of 629K, dyn 100K of 135K. 13:18-13:29 总时长 11 min (dyn_init 17min 改进后约 5min). 暴露 + 修复 3 bugs (d15f69e/64ccf95/dffa59f): teardown 顺序 + 顶层 config + datasets.make 工厂. |
 | **T8.9** | 8 | inject_viz_4d CLI 工具（方案 B 一次性注入旧 ckpt） | 0.25 | ✅ **A800 端到端** | NEW `threedgrut/viz/inject.py` (~165 行: inject_viz_4d + _populate_tracks_from_dataset + _extract_conf 兼容旧 v2 ckpt 顶层无 config 的嵌套布局) · MOD `threedgrut_playground/README_4D.md` (加方案 B 章节) · NEW `threedgrut/tests/test_inject_viz_4d.py` (5 测试). **A800 实测 (T6F.3 ckpt v2_egomask_fix_20260520_113746)**: 991.3MB 旧 ckpt → 1m50s 注入 → 995.1MB (+3.8MB 元数据), viz_4d schema_v1, 31 tracks (与 T4.5 baseline 完全吻合), sample track automobile size=[4.09, 1.87, 1.61]m, ego 51 poses + primary cam fov_y=2.441 rad, road_xyz 200K/629K, dyn_xyz 100K/135K, ts range 88-1988 ms (duration_sec=2.0 对齐) |
 | | | **合计** | **29.5** | | |
 
@@ -177,7 +177,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
-| 8 | viser_gui_4d (4D viz) | **7/8 ✅ Mac** | Stage 8 Mac 本地完成 (T8.1-T8.6 + T8.9). ckpt['viz_4d'] schema v1 (ego poses + tracks {poses/size/frame_info/class} + LiDAR subsample + viewer_defaults). viser_gui_4d.py: timeline slider/play/loop/speed + ego polyline + per-frame frustum + dynamic tracks polylines (class color) + cuboid wireframe (instance color, remove+add 每帧) + road/dyn LiDAR. inject_viz_4d CLI 工具支持旧 ckpt 一次性注入 4D 元数据 (方案 B). 37 新测试 PASS, 总 178/178 PASS. T8.8 A800 100 step smoke 待跑 |
+| 8 | viser_gui_4d (4D viz) | **8/8 ✅ A800 端到端** | Stage 8 完成 (T8.1-T8.6 + T8.8 + T8.9). ckpt['viz_4d'] schema v1 (ego poses + tracks {poses/size/frame_info/class} + LiDAR subsample + viewer_defaults). viser_gui_4d.py: timeline slider/play/loop/speed + ego polyline + per-frame frustum + dynamic tracks polylines (class color) + cuboid wireframe (instance color, remove+add 每帧) + road/dyn LiDAR + --dataset_path lazy fallback. inject_viz_4d CLI 工具支持旧 ckpt 一次性注入 4D 元数据 (方案 B). **A800 双路实测**: T8.8 训练时写入 (5-cam 20s, 70 tracks / 960 MB) + T8.9 inject 旧 ckpt (T6F.3 单 cam, 31 tracks / +3.8 MB). 37 新测试 + 总 178/178 PASS, 0 回归. |
 
 ### 1.4 依赖关系图
 
@@ -251,8 +251,8 @@ flowchart LR
     T84["T8.4 ✅<br/>ego/LiDAR/frustum"]:::done
     T85["T8.5 ✅<br/>tracks + cuboid"]:::done
     T86["T8.6 ✅<br/>--dataset_path fallback"]:::done
-    T89["T8.9 ✅<br/>inject_viz_4d CLI<br/>(方案 B 一次性注入)"]:::done
-    T88["T8.8<br/>A800 100 step smoke"]:::todo
+    T89["T8.9 ✅<br/>inject_viz_4d CLI<br/>(方案 B + A800 实测)"]:::done
+    T88["T8.8 ✅<br/>A800 100 step smoke<br/>70 tracks / 960 MB"]:::done
 
     T01 --> T11
     T11 --> T12 --> T13 --> T14
