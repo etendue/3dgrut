@@ -533,6 +533,12 @@ flowchart TB
 | **T6.1** invalid idx / num_camera=0 抛清晰异常 | T6.1 ✅ | `test_invalid_camera_idx_raises` + `test_constructor_rejects_zero_cameras` (Mac) |
 | **T6.2** exposure ckpt save/load state_dict roundtrip 字节一致 | T6.2 ✅ | `test_state_dict_roundtrip` (Mac, exposure_a/b float copy 验证) |
 | **T6.2** use_exposure=false 时 byte-identical with Stage 5 (no exposure_model attribute set) | T6.2 ✅ | trainer.exposure_model class default None; 全测试套件 123/123 PASS 维持 byte-identical |
+| **T5.4 / T5.5** sky_envmap_state ckpt save→load 字节一致 (非粒子层走 state_dict() sibling key) | T5.4 ✅ | `test_sky_envmap_state_roundtrip_in_checkpoint` + `test_get_model_parameters_skips_non_particle_layers` (Mac) |
+| **T5.6 A800** Stage 5 出口 5k step PSNR ≥ 25.8 dB | T5.6 ✅ | A800 GPU1 实测: **26.167 dB** (+0.37 over 出口, -0.15 vs Stage 4 baseline 26.315), 943.5s, 5.30 it/s, sky_envmap=MLP backend (nvdiffrast 不可用回退) |
+| **T5.6 A800** ckpt 含 sky_envmap_state (layer0/1/2.weight+bias) 实际训练了 | T5.6 ✅ | layer0.weight norm=19.04 (zero-init=0 → 训练后明显非零) |
+| **T6.3.a A800** Stage 6 出口 exposure_a.std > 0.01 (5-cam 学到 per-cam 差异) | T6.3.a ✅ | A800 GPU0 实测: **exposure_a.std=0.0306** (3× 出口门槛), gains 0.878-0.946 across 5 cams |
+| **T6.3.a A800** sky + exposure 同时启用，ckpt 含 sky_envmap_state + exposure_state 双段共存 | T6.3.a ✅ | A800 实测 ckpt 字段同时存在；3 模块（粒子层 + sky envmap + per-cam exposure）byte-level coexist |
+| **T6.3.a A800** color-correction 净收益 cc_PSNR - raw_PSNR ≥ 0.5 dB (证明 exposure 学到非平凡 affine) | T6.3.a ✅ | A800 实测: cc_PSNR 24.937 - raw_PSNR 23.237 = **+1.7 dB** (远超 0.5) |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 
 ---

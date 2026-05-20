@@ -39,9 +39,6 @@
 ```mermaid
 kanban
   Backlog
-    [T5.1 nvdiffrast 可用性确认 - 待 A800 probe]
-    [T5.6 Stage 5 出口 A800 5k smoke]
-    [T6.3.a Stage 6 出口 A800 5k smoke 多相机]
     [T7.1 v2_full 配置文件]
     [T7.2 2s smoke 全 pipeline]
     [T7.3 7-cam 20s full 30k step + KPI]
@@ -75,23 +72,26 @@ kanban
     [T4.3 _transform_means + fused_view dyn ✅]
     [T4.4 dynamic_mask scanline AABB ✅]
     [T4.5 Stage 4 出口 A800 10k PSNR 26.32 real cuboids + timestamp-aligned ✅]
+    [T5.1 A800 nvdiffrast probe → MLP fallback ✅]
     [T5.2 SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap ✅]
     [T5.3 LayeredGaussians._blend_sky + trainer get_losses sky_loss ✅]
     [T5.4 test_sky_envmap 11 测试 + test_layered_gaussians 6 sky tests ✅]
+    [T5.6 Stage 5 出口 A800 5k PSNR 26.17 dB ✅]
     [T6.1 ExposureModel 移植 Recon-Studio + 6 测试 ✅]
     [T6.2 trainer init_exposure_model + per-cam apply + exposure_optimizer ✅]
     [T6.3 test_exposure 6 测试 + ckpt roundtrip ✅]
+    [T6.3.a Stage 6 出口 A800 5k cc_PSNR 24.94 +1.7 dB ✅]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 8 | T5.1 A800 probe / T5.6 / T6.3.a / T7.1-T7.5 (Stage 7 完整 KPI) |
+| Backlog ⬜ | 5 | T7.1-T7.5 (Stage 7 完整 KPI) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 33 | Stage 0-4 全部完成 + Stage 5/6 Mac 本地完成（含 sky_envmap.py / exposure.py / LayeredGaussians 接入 / trainer get_losses + setup + run_iter / 29 新单测） |
+| Done ✅ | 36 | Stage 0-6 全部完成（Stage 0-4 + Stage 5/6 含 A800 5k 出口：sky_envmap=MLP 26.17 dB, exposure +1.7 dB cc gain）|
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -128,7 +128,7 @@ kanban
 | **T4.3** | 4 | _transform_means + fused_view dynamic 分支 | 1 | ✅ | MOD `layers/layered_model.py` · NEW 5 tests |
 | **T4.4** | 4 | dynamic_mask 纯 PyTorch scanline AABB (D5) | 0.5 | ✅ | NEW `layers/dynamic_mask.py` · NEW 6 tests |
 | **T4.5** | 4 | Stage 4 集成 + A800 出口验收（real cuboids + timestamp-aligned） | 1.5 | ✅ | NEW `tracks_loader.load_tracks_from_ncore_cuboids` · MOD `layered_model.py` (populate_tracks + timestamp-aligned _resolve_pose_idx) · MOD `protocols.Batch.timestamp_us` · MOD `datasetNcore.__getitem__` (train+val timestamp_us) · MOD `trainer.setup_training` (dynamic_rigids 串通) · MOD `mcmc.py` (track_ids buffer sync on add/relocate) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` · **A800 10k PSNR 26.315 dB (+0.18 vs Stage 3), SSIM 0.883, LPIPS 0.275, 9.58 it/s 零性能损失** |
-| **T5.1** | 5 | nvdiffrast.torch 可用性确认 / 降级 SkyModel | 0.5 | ⬜ | A800 env probe **待用户手动跑** |
+| **T5.1** | 5 | nvdiffrast.torch 可用性确认 / 降级 SkyModel | 0.5 | ✅ | A800 probe: nvdiffrast 不可用 (PyPI 镜像无 / GitHub install 被 sandbox 拒) → 用 MLP fallback. CLI `trainer.sky_backend=mlp` 覆盖 (2026-05-20) |
 | **T5.2** | 5 | port EnvLight → correction/sky_envmap.py (含 MLP fallback) | 0.5 | ✅ | NEW `threedgrut/correction/__init__.py` · NEW `threedgrut/correction/sky_envmap.py` (SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap) |
 | **T5.3** | 5 | LayeredGaussians sky 层接入 + trainer sky blending + loss | 1 | ✅ | MOD `threedgrut/layers/layer_spec.py` (+ `extra` field) · MOD `threedgrut/layers/registry.py` (sky_envmap extra={backend,resolution}) · MOD `threedgrut/layers/layered_model.py` (_build_sky_module + _blend_sky + sky optimizer hookup + multi-layer ref_layer particle-only) · MOD `threedgrut/trainer.py` (get_losses sky_loss path) · MOD `threedgrut/model/layered_loss.py` (compute_sky_loss 纯函数) · MOD `configs/base_gs.yaml` (trainer.use_sky_envmap/sky_backend/sky_resolution/sky_lr/lambda_sky) · NEW `configs/apps/ncore_3dgut_mcmc_v2_sky.yaml` |
 | **T5.4** | 5 | 单测 test_sky_envmap.py + LayeredGaussians sky 集成 + sky_loss | 1 | ✅ | NEW `threedgrut/tests/test_sky_envmap.py` (11 测试) · 6 个新测试在 `test_layered_gaussians.py` (sky module / blend extremes / forward 集成) · 6 个新测试在 `test_layered_loss.py` (compute_sky_loss) · 全部 Mac CPU PASS |
@@ -151,8 +151,8 @@ kanban
 | 2 | Layered MCMC | 5/5 ✅ | T2.1: `_get_add_cap()` hook (62fc509) · T2.2: LayeredMCMCStrategy sub-strategy array (7ad883b) · T2.3: layered_mcmc.yaml + trainer dedup (1a0d275) · T2.4: 8 tests + conftest I-1 fix (51540a8/04c9174) · T2.5: fused_view + get_layer_mask + 4 tests (d4841df; carry-over 75ed0e4) |
 | 3 | Road 层 | **10/10 ✅** | Stage 3 **完成**：PSNR 26.133 dB (出口 23.6, +2.5 超额), SSIM 0.879, LPIPS 0.297, 9.54 it/s 零性能损失 |
 | 4 | DynamicRigid 层 | **8/8 ✅** | Stage 4 **完成**：PSNR 26.315 dB (Stage 3 +0.18), SSIM 0.883, LPIPS 0.275, 9.58 it/s; 31 真实 cuboid tracks (autolabels v2), 48K dyn particles; 距严格出口 26.4 差 0.085 (noise 级) |
-| 5 | Sky envmap | **3/4 🟡** | Mac 本地 ✅：SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap + LayeredGaussians sky 接入 + sky_loss 纯函数 + 23 新测试。剩 T5.1 A800 nvdiffrast probe 待用户跑 + T5.6 A800 5k smoke 出口。 |
-| 6 | Exposure | **3/3 ✅** | Mac 本地全部完成：ExposureModel + trainer init/apply/step/ckpt + 6 新测试。剩 T6.3.a A800 5k 5-cam smoke 出口待用户跑（独立 stage 进度，不在 T6.x 计数）。 |
+| 5 | Sky envmap | **4/4 ✅** | Stage 5 出口完成 A800 5k PSNR **26.167 dB** (sky_envmap=MLP, +0.37 over 25.8 出口门槛, -0.15 vs Stage 4 baseline noise 级) |
+| 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
 
 ### 1.4 依赖关系图
@@ -197,11 +197,11 @@ flowchart LR
     T44["T4.4 ✅<br/>dynamic_mask scanline AABB"]:::done
     T45["T4.5 ✅<br/>Stage 4 出口<br/>A800 10k 26.32 dB"]:::done
 
-    %% Stage 5 (3/4 ✅, T5.1 A800 probe 待用户)
-    T51["T5.1<br/>nvdiffrast 探测<br/>(A800 待用户)"]:::todo
+    %% Stage 5 ✅ 全部完成 (commit b38fce8 + A800 GPU1 PSNR 26.17 dB)
+    T51["T5.1 ✅<br/>nvdiffrast probe<br/>→ MLP fallback"]:::done
     T52["T5.2 ✅<br/>sky_envmap.py<br/>(MLP + Cubemap)"]:::done
     T53["T5.3 ✅<br/>sky blend + sky_loss"]:::done
-    T54["T5.4 ✅<br/>23 新测试"]:::done
+    T54["T5.4 ✅<br/>23 新测试 +<br/>ckpt roundtrip"]:::done
 
     %% Stage 6 ✅ Mac 本地完成
     T61["T6.1 ✅<br/>ExposureModel"]:::done
@@ -785,6 +785,71 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### 🎉 Stage 5 + Stage 6 A800 5k step 出口达成 (2026-05-20, A800 GPU 0/1 并行, commit b38fce8)
+
+**Stage 5 (T5.6) GPU 1 5k step 单相机 sky smoke**：
+
+| 指标 | 实测 (v2 Stage 5 sky_envmap=MLP) | 出口门槛 | 备注 |
+|---|---|---|---|
+| Mean PSNR | **26.167 dB** | ≥ 25.8 ✅ (+0.37) | 距 Stage 4 baseline 26.315 仅 -0.15 dB (noise 级) |
+| Mean SSIM | 0.878 | — | Stage 4 baseline 0.883 |
+| Mean LPIPS | 0.302 | — | Stage 4 baseline 0.275 |
+| Mean cc_PSNR | 25.736 | — | color-correction post-process |
+| Training time | 943.51 s (15.7 min) | — | 5000 step |
+| Iter speed | 5.30 it/s | — | 比 Stage 4 9.58 慢 (4 层 + sky blend + num_workers=0) |
+| n_particles | bg 1M + road 200K + dyn 48K + sky MLP ~50K params | — | sky MLP layer0=64×39, layer1=64×103, layer2=3×64 |
+
+- ckpt 含 `sky_envmap_state` (6 个 Linear param tensors, layer0.weight norm=19.04 → MLP 训练了)
+- 配置：`apps/ncore_3dgut_mcmc_v2_sky.yaml` + `trainer.sky_backend=mlp` (CLI overide, nvdiffrast 远端不可用 → MLP backend)
+- 输出：`/root/work/yusun/ncore-nurec/output/smoke_v2_sky_20260520-101019/`
+
+**Stage 6 (T6.3.a) GPU 0 5k step 5 相机 exposure smoke**：
+
+| 指标 | 实测 (sky + exposure 双开) | 出口门槛 | 备注 |
+|---|---|---|---|
+| Mean PSNR | 23.237 dB | (Stage 7 30k 才需 ≥ 28.5) | 5-cam 5k 中间态 |
+| Mean cc_PSNR | **24.937 dB** | — | **color-correction +1.7 dB**（直接证明 exposure 在补偿 cam 间差异）|
+| Mean SSIM | 0.820 | — | std_psnr 2.951 (5-cam 视角差异)|
+| exposure_a.std | **0.0306** | **> 0.01 ✅ (3×)** | 学到非平凡 per-cam gain |
+| exposure_b.std | 0.0288 | > 0 ✅ | 学到非平凡 per-cam bias |
+
+per-camera learned gain（exp(a)）：
+
+| Camera | exposure_a | exposure_b | gain=exp(a) |
+|---|---:|---:|---:|
+| cam0 camera_front_wide_120fov | -0.1304 | -0.0080 | 0.878 (front 暗化 12%) |
+| cam1 camera_rear_tele_30fov   | -0.0649 | -0.0501 | 0.937 |
+| cam2 camera_cross_left_120fov | -0.0549 | +0.0158 | 0.946 |
+| cam3 camera_cross_right_120fov| -0.0609 | -0.0182 | 0.941 |
+| cam4 camera_rear_left_70fov   | -0.0805 | +0.0217 | 0.923 |
+
+- ckpt 含 **`sky_envmap_state` + `exposure_state` 同时**（3 模块协同 — bg+road+dyn 粒子 / sky envmap / per-cam exposure 三者 byte-level coexist in single ckpt）
+- 配置：`apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` + `trainer.sky_backend=mlp`
+- 输出：`/root/work/yusun/ncore-nurec/output/smoke_v2_exp_20260520-101443/`
+
+**T5.1 A800 nvdiffrast 探测结果**：A800 conda env (3dgrut) 不带 nvdiffrast；PyPI 镜像 (Huawei) 无该包；GitHub install 被 sandbox 拒绝 → **Stage 5 落入 MLP fallback 路径**（pre-designed plan）。conf 用 `trainer.sky_backend=mlp` CLI override 即可。Stage 7 可考虑手动 `pip install` nvdiffrast 切换到 cubemap backend（更稳定 sky 表征）。
+
+**实施过程修复（A800 dry-run 发现并 land）**：
+
+1. **设备同步**：sky 模块在 `LayeredGaussians.__init__` 时 CPU 上构造，多层模式下 trainer 不调 `.to(device)` → forward 时 `nn.Linear` 在 CPU 而 `batch.rays_dir` 在 CUDA 报 device mismatch。修复：`setup_optimizer` 多层路径调 `sky.to(target_device)`（target = 首个粒子层的 device）。
+2. **ckpt save 路径**：`LayeredGaussians.get_model_parameters` 旧版用 `layer.get_model_parameters()` for-all-layers，对 sky 模块（不是 MoG）抛 AttributeError。修复：粒子层走 `get_model_parameters`、sky 走 `state_dict()` 存到 sibling key `sky_envmap_state`；`init_from_checkpoint` 同步加 sky load 分支。`setup_optimizer_for_test` 也跟着分粒子/非粒子两条路（粒子层 6 group / sky 一组 flat Adam）。
+3. **5-cam yaml fix**：原 v2_full_exposure.yaml 写了 `camera_rear_wide_120fov` 等名字，9ae151dc clip 实际无此相机（manifest 列：cross_left/right_120fov, front_tele_30fov, front_wide_120fov, rear_left/right_70fov, rear_tele_30fov）。改 yaml 用真实 5 相机环。
+
+**新增 Mac 单测覆盖 ckpt path fix**：
+- `test_sky_envmap_state_roundtrip_in_checkpoint` — sky weights 通过 get_model_parameters → init_from_checkpoint 字节一致 round-trip
+- `test_get_model_parameters_skips_non_particle_layers` — dynamic_deformables / sky 不会出现在 gaussians_nodes 里
+
+**关键不变量验证（A800 端到端）**：
+
+- ✅ `pred_opacity` 路径正确：sky blend `rgb_gauss + rgb_sky*(1-pred_opacity)` 渲染不退化 (Stage 5 PSNR -0.15 vs Stage 4 noise 级)
+- ✅ Mac 单测 36 layered_gaussians + 11 sky_envmap + 6 exposure + 12 layered_loss = 65 测试在 sky/exposure 启用 / 关闭两种模式下均 PASS（byte-identical at runtime when off）
+- ✅ Stage 6 cc_psnr - raw_psnr = +1.7 dB 直接证明 ExposureModel 学到的 per-cam affine 真有效（不是噪声）
+- ✅ sky_envmap_state + exposure_state 在同 ckpt 中共存，resume 时 trainer.init_exposure_model load 自如
+
+**剩余 Stage 7 工作（≥ 7-cam × 20s × 30k step 完整 KPI）**：T7.1-T7.5（仍在 Backlog）。
+
+---
 
 ### 🎉 Stage 5 + Stage 6 Mac 本地完成 (2026-05-19, Mac CPU venv)
 
