@@ -138,8 +138,8 @@ kanban
 | **T6.1** | 6 | port ExposureModel → correction/exposure.py | 0.25 | ✅ | NEW `threedgrut/correction/exposure.py` (移植 Recon-Studio 29 行 affine) |
 | **T6.2** | 6 | trainer step per-camera 应用 + 独立 optimizer + ckpt roundtrip | 0.5 | ✅ | MOD `threedgrut/trainer.py` (init_exposure_model + run_train_iter 应用 + exposure_optimizer.step + save_checkpoint exposure_state + resume) · MOD `configs/base_gs.yaml` (trainer.use_exposure/exposure_lr) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` |
 | **T6.3** | 6 | 单测 test_exposure.py | 0.25 | ✅ | NEW `threedgrut/tests/test_exposure.py` (6 测试: zero_init_identity / grad_isolation / clamp / invalid_idx / zero_cameras / state_dict_roundtrip) |
-| **T6F.1** | 6-fix | Ego mask 真注入 Batch.mask (train+val) → 自动接通 loss / layered_l1 | 0.5 | ✅ | MOD `threedgrut/datasets/datasetNcore.py` (训练分支取 `sequence_cameras_frame_valid_pixels_masks[seq][cam][frame_idx]` 按渲染分辨率 cv2 INTER_NEAREST resize 塞 `batch_dict["valid"]`; `get_gpu_batch_with_intrinsics` 把 valid 1D/2D → `Batch.mask` reshape [1,H,W,1] float32 GPU) · NEW `threedgrut/tests/test_datasetNcore_ego_mask.py` (7 测试: Batch.mask 4D 形状契约 / 3D 拒绝 / 2D valid reshape / 1D valid reshape / layered_l1 ego mask 剔除 / mask=None v1 byte-identical / mask=全1 等价 mask=None) Mac 7/7 PASS |
-| **T6F.2** | 6-fix | Metric 端 psnr/ssim/lpips full + masked 双指标（保留 Stage 3/4/5/6 历史可比性 + 给出未来 KPI 用干净值） | 0.5 | ✅ | MOD `threedgrut/trainer.py::compute_metrics` (psnr_masked 解析公式 `-10·log10(sum((p-g)²·m)/(sum(m)·3))`; ssim_masked/lpips_masked via GT-fill 近似; mask=None 时三指标 ≡ 全图指标保证 byte-identical 回归) · NEW `threedgrut/tests/test_trainer_masked_metrics.py` (7 测试: mask_none_equiv / mask_all_ones_equiv / psnr_uniform_error δ→ -10log10(δ²) / psnr_ignores_invalid_error / ssim_gt_fill 单调改善 / lpips_gt_fill 单调改善 / shape_broadcast) Mac 7/7 PASS |
+| **T6F.1** | 6-fix | Ego mask 真注入 Batch.mask (train+val) → 自动接通 loss / layered_l1 | 0.5 | ✅ | MOD `threedgrut/datasets/datasetNcore.py` (训练分支取 `sequence_cameras_frame_valid_pixels_masks[seq][cam][frame_idx]` 按渲染分辨率 cv2 INTER_NEAREST resize 塞 `batch_dict["valid"]`; `get_gpu_batch_with_intrinsics` 把 valid 1D/2D → `Batch.mask` reshape [1,H,W,1] float32 GPU) · NEW `threedgrut/tests/test_datasetNcore_ego_mask.py` (7 测试 Mac PASS) · commit 65869ec |
+| **T6F.2** | 6-fix | Metric 端 psnr/ssim/lpips full + masked 双指标（保留 Stage 3/4/5/6 历史可比性 + 给出未来 KPI 用干净值） | 0.5 | ✅ | MOD `threedgrut/trainer.py::compute_metrics` (psnr_masked 解析公式 `-10·log10(sum((p-g)²·m)/(sum(m)·3))`; ssim_masked/lpips_masked via GT-fill 近似; mask=None 时三指标 ≡ 全图指标保证 byte-identical 回归) · NEW `threedgrut/tests/test_trainer_masked_metrics.py` (7 测试 Mac PASS) · commit 65869ec |
 | **T6F.3** | 6-fix | Stage 6-fix 出口 A800 5k smoke v2_full_exposure 双指标 + ego 区粒子密度核查 | 0.5 | ⬜ | A800 run · grep `psnr_full / psnr_masked / num_gaussians` · 回填 § 5 Done Log + § 7 不变量验收锚点；预期 psnr_full ≈ 旧 baseline 26.3 dB ± 0.3, psnr_masked < psnr_full（差额量化 ego 水分 0.2–1.5 dB），总粒子数 ≤ 旧 baseline |
 | **T7.1** | 7 | configs/apps/ncore_3dgut_mcmc_v2_full.yaml | 0.5 | ⬜ | NEW yaml |
 | **T7.2** | 7 | 2s smoke 全 pipeline 验证 | 0.5 | ⬜ | A800 run |
@@ -920,7 +920,7 @@ flowchart LR
 
 ## 5. Done Log
 
-### 🔧 Stage 6-fix T6F.1 + T6F.2 Mac 本地完成 (2026-05-20)
+### 🔧 Stage 6-fix T6F.1 + T6F.2 Mac 本地完成 (2026-05-20, commit 65869ec)
 
 修复 v2 链路里 ego mask "加载了但从未流入 loss/metric" 的漏洞：
 - **根因**：`NCoreDataset.__init__` L385-395 加载 ego car mask 并 dilate 缓存到 `sequence_cameras_frame_valid_pixels_masks`，但训练分支 `__getitem__` L806-872 从未读取该缓存；验证分支 L959 取了 `valid` 但 `get_gpu_batch_with_intrinsics` L1273-1367 没把 `valid` 拷贝进 `Batch` → `gpu_batch.mask = None` → trainer L707-709 `if mask is not None` 永远跳过 → ego 车身像素参与 L1 / layered_l1 / PSNR / SSIM / LPIPS。
