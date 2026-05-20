@@ -30,6 +30,9 @@ from kaolin.render.camera import (
     generate_pinhole_rays,
 )
 
+from threedgrut.datasets.protocols import Batch
+from threedgrut.layers.layered_model import LayeredGaussians
+from threedgrut.layers.registry import specs_from_config
 from threedgrut.model.background import BackgroundColor
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.logger import logger
@@ -1000,9 +1003,29 @@ class Engine3DGRUT:
         rendered_results["pred_rgb"] = pred_rgb
         return rendered_results
 
+    def _trace_scene_mog(self, rays_ori: torch.Tensor, rays_dir: torch.Tensor,
+                         *, timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
+        # LayeredGaussians with active dynamic tracks: route through forward()
+        # so per-track SE(3) deformation runs against the supplied timestamp.
+        # rays_ori / rays_dir are already in world frame (free viewer camera);
+        # T_to_world = I + rays_in_world_space=True keeps the renderer from
+        # applying any extra rotation.
+        if isinstance(self.scene_mog, LayeredGaussians) and len(self.scene_mog.tracks_poses) > 0:
+            T_to_world = torch.eye(4, dtype=rays_ori.dtype, device=rays_ori.device)[None]
+            batch = Batch(
+                rays_ori=rays_ori,
+                rays_dir=rays_dir,
+                T_to_world=T_to_world,
+                rays_in_world_space=True,
+                timestamp_us=int(timestamp_us),
+            )
+            return self.scene_mog(batch, train=False)
+        return self.scene_mog.trace(rays_o=rays_ori, rays_d=rays_dir)
+
     @torch.cuda.nvtx.range("render_pass")
     @torch.no_grad()
-    def render_pass(self, camera: Camera, is_first_pass: bool) -> Dict[str, torch.Tensor]:
+    def render_pass(self, camera: Camera, is_first_pass: bool,
+                    *, timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
         """Renders a single frame pass from the provided camera view, with optional progressive effects.
         This method is designed for interactive/real-time rendering scenarios where frame rate is prioritized
         over immediate full quality. It manages an internal state for progressive rendering effects.
@@ -1069,7 +1092,9 @@ class Engine3DGRUT:
                         pred_opacity=torch.zeros_like(rays.rays_ori[:, :, 0:1]),
                     )
                 else:
-                    rb = self.scene_mog.trace(rays_o=rays.rays_ori, rays_d=rays.rays_dir)
+                    rb = self._trace_scene_mog(
+                        rays.rays_ori, rays.rays_dir, timestamp_us=timestamp_us
+                    )
             else:
                 rb = self._render_playground_hybrid(rays.rays_ori, rays.rays_dir)
 
@@ -1142,7 +1167,7 @@ class Engine3DGRUT:
     @torch.cuda.nvtx.range("load_3dgrt_object")
     def load_3dgrt_object(
         self, object_path: str, config_name: str = "apps/colmap_3dgrt.yaml"
-    ) -> Tuple[MixtureOfGaussians, str]:
+    ) -> Tuple["MixtureOfGaussians | LayeredGaussians", str]:
         """Loads a pretrained 3D Gaussian model from various supported file formats.
 
         Supports loading from:
@@ -1185,8 +1210,35 @@ class Engine3DGRUT:
             conf = checkpoint["config"]
             if conf.render["method"] != "3dgrt":
                 conf = load_default_config()
-            model = MixtureOfGaussians(conf)
-            model.init_from_checkpoint(checkpoint, setup_optimizer=False)
+            # v2 LayeredGaussians: detect via use_layered_model flag and route
+            # to the layered container. Falls through to v1 flat MoG path when
+            # the flag is missing / False (back-compat with v1 ckpts).
+            use_layered = bool(conf.get("use_layered_model", False))
+            if use_layered:
+                specs = specs_from_config(conf)
+                scene_extent = float(
+                    checkpoint.get("model", {}).get("scene_extent", 1.0)
+                )
+                model = LayeredGaussians(conf, specs=specs, scene_extent=scene_extent)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
+                # Restore dynamic-rigid track buffers from ckpt["viz_4d"]["tracks"]
+                # so fused_view can SE(3)-transform dynamic positions per timestamp.
+                # Skipped silently when the ckpt has no viz_4d block (e.g. trained
+                # before T8.2) — viewer falls back to static dynamic layer.
+                viz_4d = checkpoint.get("viz_4d")
+                if viz_4d is not None and isinstance(viz_4d, dict):
+                    tracks_dict = viz_4d.get("tracks")
+                    shared_ts = viz_4d.get("tracks_camera_timestamps_us")
+                    if tracks_dict and shared_ts is not None:
+                        # Inject shared timestamps into each track entry so
+                        # _populate_tracks_impl picks them up via its first-track
+                        # scan (single shared buffer across tracks).
+                        first_tid = next(iter(tracks_dict))
+                        tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
+                        model.populate_tracks(tracks_dict)
+            else:
+                model = MixtureOfGaussians(conf)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
             object_name = conf.experiment_name
         elif object_path.endswith(".ingp"):
             conf = load_default_config()

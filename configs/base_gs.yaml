@@ -166,6 +166,18 @@ post_processing:
   # only the controller is trained for these additional steps.
   n_distillation_steps: 5000
 
+# T8.2: 4D viz metadata packed into ckpt['viz_4d'] for viser_gui_4d.
+# enabled=false keeps ckpt byte-identical with pre-T8.2 layouts; flip in
+# downstream configs (e.g. apps/ncore_3dgut_mcmc_v2_full_4dviz.yaml).
+viz_4d:
+  enabled: false
+  include_lidar: true
+  lidar_road_subsample: 200000
+  lidar_dynamic_subsample: 100000
+  default_near: 0.1
+  default_far: 500.0
+  default_resolution: 1024
+
 hydra:
   output_subdir: null
   job:

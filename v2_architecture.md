@@ -445,6 +445,19 @@ flowchart TB
 | `threedgrut/tests/test_dynamic_mask.py` | T4.4 ✅ (6 tests) |
 | `threedgrut/tests/test_sky_envmap.py` | T5.4 ✅ (Stage 5 Mac, 11 测试: base abstract / MLP shape+range+grad / Cubemap shape+orthonormal+no-dep error) |
 | `threedgrut/tests/test_exposure.py` | T6.3 ✅ (Stage 6 Mac, 6 测试: identity / grad_iso / clamp / invalid_idx / zero_cam / ckpt_roundtrip) |
+| `threedgrut/viz/__init__.py` | T8.2 ✅ (Stage 8 Mac, 命名空间) |
+| `threedgrut/viz/metadata.py` | T8.2 ✅ (Stage 8 Mac, ~280 行 extract_4d_metadata + 子函数 + FTheta/pinhole FOV 自适应) |
+| `threedgrut_playground/viser_gui_4d.py` | T8.3-T8.6 ✅ (Stage 8 Mac, ~640 行 Viser4DViewer + 5 folder GUI + play_tick + timeline 互锁 + ego/LiDAR/axes/frustum + tracks polylines + per-frame cuboid wireframe + --dataset_path lazy fallback) |
+| `threedgrut_playground/utils/viz4d_metadata.py` | T8.3 ✅ (Stage 8 Mac, FourDMetadata dataclass + lookup_frame_idx + active_tracks_at + ego_pose_at, 纯 numpy) |
+| `threedgrut_playground/utils/cuboid.py` | T8.5 ✅ (Stage 8 Mac, UNIT_CUBE_EDGES + cuboid_world_edges + class_color palette + instance_color FNV-1a hash → HSV → RGB) |
+| `threedgrut_playground/utils/viser_math.py` | T8.4 ✅ (Stage 8 Mac, mat_to_wxyz Shepperd/Markley + canonical sign + unit-norm cleanup) |
+| `configs/apps/ncore_3dgut_mcmc_v2_full_4dviz.yaml` | T8.2 ✅ (Stage 8 Mac, 继承 v2_full_exposure + viz_4d.enabled=true) |
+| `threedgrut/tests/test_engine_layered_load.py` | T8.1 ✅ (Stage 8 Mac, 3 测试: populate_tracks viz_4d roundtrip / _resolve_pose_idx 二分 / idempotent replace) |
+| `threedgrut/tests/test_viz_4d_metadata.py` | T8.2 ✅ (Stage 8 Mac, 8 测试: extract_smoke / subsample / include_lidar=false / tracks_metadata / no_tracks / no_lidar / unknown_class / ckpt_roundtrip) |
+| `threedgrut/tests/test_viz4d_metadata_loader.py` | T8.3 ✅ (Stage 8 Mac, 8 测试: from_ckpt 解析 / missing block 各种兼容 / lookup_frame_idx 二分 / active_tracks_at / ego_pose_at / empty / no_lidar / torch.save roundtrip) |
+| `threedgrut/tests/test_viser_math.py` | T8.4 ✅ (Stage 8 Mac, 4 测试: identity / 90deg_x / 50 random round-trip / canonical sign) |
+| `threedgrut/tests/test_cuboid_wireframe.py` | T8.5 ✅ (Stage 8 Mac, 9 测试: shape / vertex range / unique pairs / identity / translation / size scale / z90 rotation / class_color / instance_color) |
+| `threedgrut_playground/README_4D.md` | T8.x ✅ (Stage 8 Mac, 用户文档 Quick Start + GUI + ckpt schema + fallback + troubleshooting) |
 | `WP_V2_Report.md` | T7.5 (待办) |
 
 ### 6.2 修改文件
@@ -457,6 +470,10 @@ flowchart TB
 | `threedgrut/model/layered_loss.py` | `compute_layered_l1_loss` (T3.4) + 新增 `compute_sky_loss(rgb_sky, rgb_gt, sky_mask, min_pixels=100)` 纯函数 (Stage 5, T5.3) · **顶部规范化 4D [B,H,W,1] valid_mask squeeze 到 3D [B,H,W] (T6F.1 fix, A800 5k smoke 暴露 broadcast 错配 1920 vs 1080)** | T3.4 ✅ / T5.3 ✅ / T6F.1 ✅ |
 | `threedgrut/render.py` | **eval loop 加 masked psnr/ssim/lpips × raw/cc 共 6 字段 (T6F.2 完整修复 — trainer.compute_metrics 与 render.py eval 路径独立, 必须双改; mask=None 时 byte-identical 复制全图值)** | T6F.2 ✅ |
 | `threedgrut/datasets/datasetNcore.py` | load_aux_masks 参数；`__getitem__` (train+val) 抽 sseg mask + 注入 timestamp_us；`get_gpu_batch_with_intrinsics` 装 image_infos + timestamp_us；`_get_semantic_lidar_points` + `get_road/dynamic_lidar_points` 用 LidarSsegAuxReader；`_ensure_aux_readers` lazy init；**`__getitem__` train 分支从已缓存的 `sequence_cameras_frame_valid_pixels_masks` 取 ego 帧 mask（downsample 走 cv2 INTER_NEAREST）塞 `batch_dict["valid"]`；val 分支已有；`get_gpu_batch_with_intrinsics` 把 valid → `Batch.mask` reshape [1,H,W,1] float32 (T6F.1 ✅ Mac，修复"加载了但 batch 没传出去"的漏洞)** | T3.1.b ✅ / T3.2.b ✅ / T4.5 ✅ / T6F.1 ✅ |
+| `threedgrut/trainer.py` (Stage 8) | `save_checkpoint` 在 `torch.save` 前检测 `conf.viz_4d.enabled` 且 `isinstance(self.model, LayeredGaussians)` → 调 `extract_4d_metadata(model, train_dataset, conf)` 注入 `parameters["viz_4d"]` (try/except 静默 fallback, 失败仅 warn 不阻断主线 ckpt 落盘); enabled=false 时 ckpt 字段集与旧版 byte-identical | T8.2 ✅ |
+| `threedgrut/layers/layered_model.py` (Stage 8) | `_populate_tracks_impl` 新增 `self.tracks_metadata: dict[tid, {class:str, size:Tensor[3]}]` 持久化（class/size 不入 register_buffer，因 str 不支持；纯 Python attr 通过 extract_4d_metadata ride-along 进 ckpt） | T8.2 ✅ |
+| `threedgrut_playground/engine.py` (Stage 8) | `load_3dgrt_object` 增加 v2 LayeredGaussians 分支（检测 `conf.use_layered_model` + `specs_from_config` 构造 + `populate_tracks` from ckpt['viz_4d']['tracks']）; `render_pass` 加 `*, timestamp_us: int = -1` kwarg 关键字默认（旧 viser_gui.py 调用零影响）; `_trace_scene_mog` helper 新增 LayeredGaussians 分支（自构 Batch with T_to_world=I + rays_in_world_space=True + timestamp_us 走 forward, 否则 fallthrough to MoG.trace） | T8.1 ✅ |
+| `configs/base_gs.yaml` (Stage 8) | + `viz_4d` 块: `enabled: false` (默认), `include_lidar: true`, `lidar_road_subsample: 200000`, `lidar_dynamic_subsample: 100000`, `default_near/far/resolution` | T8.2 ✅ |
 | `threedgrut/datasets/__init__.py` | NCoreDataset(load_aux_masks=...) 双路 (train+val) | T3.1.b ✅ |
 | `threedgrut/datasets/protocols.py::Batch` | + image_infos: dict (sky/road/dyn masks GPU) + timestamp_us: int (cam END, 微秒); **mask 字段无 schema 变化（v1 起就有），但 NCore 在 T6F.1 之后才真填充 (类型 float32 [B,H,W,1]) ✅ Mac** | T3.1.b ✅ / T4.5 ✅ / T6F.1 ✅ |
 | `threedgrut/layers/layer_spec.py` | + perturb_scale_mask 字段 (tuple[3] 或 None, T3.4)；+ `extra: dict` field (compare=False keeps hashable, T5.3 sky backend/resolution 载体) | T3.4 ✅ / T5.3 ✅ |
@@ -556,6 +573,24 @@ flowchart TB
 | **T6F.3 A800** valid frac 78.22% (ego 区 21.78%) mask 方向正确, BOTTOM 1/4 valid=14.10% 与 ego 引擎盖物理位置吻合 | T6F.3 ✅ | NCoreDataset 实测 dump 单帧 valid mean 0.7822, 分区分布 (TOP=100%, BOTTOM=56%, BOTTOM_1/4=14%) |
 | **T6F.3 A800** mask 接通 0 性能损失 (9.61 it/s ≈ Stage 4 baseline 9.58 it/s, cheap broadcast) | T6F.3 ✅ | A800 实测 5000 step 520.41 s |
 | **T6F.3 A800** masked PSNR 29.49 > Stage 4 baseline 26.32 (+3.18 dB 干净区) | T6F.3 ✅ | 印证 ego mask 修复带来 lift: 非 ego 区不被 ego 内卷训练资源, 干净区拟合反而比 Stage 4 更好 |
+| **T8.1 Stage 8** v1 ckpt 加载行为不破（旧 viser_gui.py 不需要改） | T8.1 ✅ | `load_3dgrt_object` 只在 `conf.use_layered_model=True` 走新分支，v1 conf 默认 False; engine.py syntax + 144 测试维持 PASS |
+| **T8.1 Stage 8** v2 ckpt + viz_4d 块走 LayeredGaussians + populate_tracks 路径 | T8.1 ✅ | `test_populate_tracks_with_injected_shared_timestamps` (Mac, 模拟 engine 注入 shared ts → populate_tracks) |
+| **T8.1 Stage 8** `_resolve_pose_idx` 二分搜索 timestamp_us → pose buffer idx 边界正确 | T8.1 ✅ | `test_resolve_pose_idx_binary_search_on_timestamp` (Mac, 5 case: 精确/前近/后近/past end clamp/-1 fallback) |
+| **T8.2 Stage 8** `viz_4d.enabled=false` 时 ckpt 字段集与旧版 byte-identical | T8.2 ✅ | trainer.save_checkpoint gate logic + `test_byte_identical_when_disabled` in test_viz_4d_metadata.py (Mac) |
+| **T8.2 Stage 8** `extract_4d_metadata` 在 dataset 无 LiDAR 时不 crash, 字段为 None | T8.2 ✅ | `test_dataset_without_lidar_methods` (Mac) |
+| **T8.2 Stage 8** LiDAR subsample 严格遵守 (1M pts + cap 100K → output 100K) | T8.2 ✅ | `test_subsample_respected` (Mac, road 5000→200 + dyn 3000→100) |
+| **T8.2 Stage 8** `include_lidar=False` 完全跳过 LiDAR 提取 (xyz/rgb 都 None) | T8.2 ✅ | `test_include_lidar_false_skips_clouds` (Mac) |
+| **T8.2 Stage 8** `populate_tracks` 注入 class/size 到 `tracks_metadata` 供 extract surface | T8.2 ✅ | `test_tracks_metadata_populated_via_populate_tracks` + `test_unknown_class_default` (Mac) |
+| **T8.2 Stage 8** ckpt['viz_4d'] torch.save → torch.load roundtrip 字段对齐 | T8.2 ✅ | `test_ckpt_roundtrip` in test_viz_4d_metadata.py + `test_ckpt_roundtrip_via_torch_save` in test_viz4d_metadata_loader.py (Mac) |
+| **T8.3 Stage 8** FourDMetadata.from_ckpt 在 ckpt 无 viz_4d 块时返回 None (优雅降级) | T8.3 ✅ | `test_from_ckpt_none_when_missing` (Mac, 3 case: {} / no-viz_4d / viz_4d=None) |
+| **T8.3 Stage 8** lookup_frame_idx 二分搜索 + 前近/后近选择正确 | T8.3 ✅ | `test_lookup_frame_idx_binary_search` (Mac, 6 case 含 boundary) |
+| **T8.3 Stage 8** active_tracks_at 在 frame_idx 越界时返回空列表 (不抛错) | T8.3 ✅ | `test_active_tracks_at` (Mac, idx=-1 / idx=99) |
+| **T8.4 Stage 8** mat_to_wxyz 对 50 个随机旋转矩阵 round-trip 误差 < 1e-5 | T8.4 ✅ | `test_roundtrip_random_rotations` (Mac, vs scipy-equivalent _quat_to_mat) |
+| **T8.4 Stage 8** mat_to_wxyz canonical sign (w >= 0) — 避免帧间 sign flipping | T8.4 ✅ | `test_canonical_sign_positive_w` (Mac, 180° z 边界) |
+| **T8.5 Stage 8** UNIT_CUBE_EDGES = 12 条独立边 (frozenset of vertex pair 唯一) | T8.5 ✅ | `test_unit_cube_edges_unique_pairs` (Mac) |
+| **T8.5 Stage 8** cuboid_world_edges identity pose + size=(1,1,1) → 等于 UNIT_CUBE_EDGES | T8.5 ✅ | `test_world_edges_identity_pose_unit_size` (Mac) |
+| **T8.5 Stage 8** cuboid_world_edges 旋转 + 缩放 + 平移正确（z90 swap x/y 范围） | T8.5 ✅ | `test_world_edges_rotation_z90` + `test_world_edges_translation_only` + `test_world_edges_size_scale` (Mac) |
+| **T8.5 Stage 8** instance_color FNV-1a hash 确定性 (相同 tid 永远相同色) | T8.5 ✅ | `test_instance_color_deterministic` (Mac, 跨调用 stable) |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 
 ---

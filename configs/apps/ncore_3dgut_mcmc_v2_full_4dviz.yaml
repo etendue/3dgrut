@@ -1,0 +1,24 @@
+# @package _global_
+#
+# Stage 8 v2 — Stage 6 (full + per-camera exposure) + 4D viz metadata packed
+# into ckpt for viser_gui_4d. The viz_4d block carries ego pose trajectory,
+# dynamic-rigid track poses + cuboid sizes, primary-camera FOV/aspect, and
+# subsampled LiDAR road/dynamic points so the new viewer can render the full
+# 4D scene from ckpt alone (no NCore SDK required at viewer time).
+#
+# Stage 8 出口门槛 (A800 100 step smoke):
+#   - exit 0
+#   - ckpt['viz_4d'] present, schema_version=1
+#   - len(viz_4d['tracks']) > 0
+#   - viz_4d['ego']['poses_c2w'].shape[0] > 0
+#   - viz_4d['lidar']['road_xyz'] is not None, .shape[0] <= 200000
+#   - 30k step PSNR ≥ Stage 6 baseline (不退化)
+defaults:
+  - ncore_3dgut_mcmc_v2_full_exposure
+  - _self_
+
+viz_4d:
+  enabled: true
+  include_lidar: true
+  lidar_road_subsample: 200000
+  lidar_dynamic_subsample: 100000

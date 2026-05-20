@@ -44,6 +44,7 @@ kanban
     [T7.3 7-cam 20s full 30k step + KPI]
     [T7.4 per-layer cap ablation]
     [T7.5 WP_V2_Report.md + schema]
+    [T8.8 Stage 8 A800 100 step smoke + ckpt viz_4d 字段验证]
   In Progress
   Review
   Blocked
@@ -84,17 +85,23 @@ kanban
     [T6F.1 Ego mask Batch.mask 接通 train+val + 9 测试 ✅ Mac]
     [T6F.2 Metric 双指标 psnr/ssim/lpips full+masked + 7 测试 ✅ Mac]
     [T6F.3 Stage 6-fix 出口 A800 5k masked PSNR 29.49 (+9 vs full 20.49) ✅]
+    [T8.1 engine LayeredGaussians load + timestamp_us 透传 ✅ Mac 3 测试]
+    [T8.2 extract_4d_metadata + ckpt viz_4d 注入 ✅ Mac 8 测试]
+    [T8.3 viser_gui_4d 骨架 + FourDMetadata + timeline ✅ Mac 8 测试]
+    [T8.4 scene ego/LiDAR/frustum/axes ✅ Mac 4 viser_math 测试]
+    [T8.5 scene dynamic tracks polylines + cuboid wireframe ✅ Mac 9 测试]
+    [T8.6 dataset --dataset_path lazy fallback ✅ Mac]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 5 | T7.1-T7.5 (Stage 7 完整 KPI) |
+| Backlog ⬜ | 6 | T7.1-T7.5 (Stage 7 完整 KPI) + T8.8 (Stage 8 A800 smoke) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 39 | Stage 0-6 + Stage 6-fix 全部完成。Stage 6-fix 出口 A800 5k: masked PSNR 29.49 dB (+9.0 vs full 20.49, ego 区水分量化), masked SSIM 0.934 (+0.076), masked LPIPS 0.190 (-0.127). 0% 性能损失 (9.61 it/s ≈ 9.58 baseline). 印证 ego mask 修复方向正确 |
+| Done ✅ | 45 | Stage 0-6 + Stage 6-fix + **Stage 8 viser_gui_4d (Mac 本地)** 全部完成。Stage 6-fix A800: masked PSNR 29.49 dB (+9.0 vs full 20.49). Stage 8 Mac: 32 新测试通过 (`test_engine_layered_load` 3 + `test_viz_4d_metadata` 8 + `test_viz4d_metadata_loader` 8 + `test_cuboid_wireframe` 9 + `test_viser_math` 4), 总 173/173 PASS, 0 回归. ckpt['viz_4d'] schema v1 + viser_gui_4d.py 600 行 (timeline + ego + cuboid + LiDAR + dataset fallback) |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -146,7 +153,14 @@ kanban
 | **T7.3** | 7 | 7-cam 20s full 30k step + KPI | 1 | ⬜ | A800 run |
 | **T7.4** | 7 | per-layer cap ablation (4 组) | 1 | ⬜ | A800 4× runs |
 | **T7.5** | 7 | WP_V2_Report.md + scene_manifest v2 schema | 1 | ⬜ | NEW report · MOD schema |
-| | | **合计** | **25.5** | | |
+| **T8.1** | 8 | engine load_3dgrt_object 加 LayeredGaussians 分支 + render_pass timestamp_us 透传 | 0.5 | ✅ Mac | MOD `threedgrut_playground/engine.py` (load_3dgrt_object .pt 分支 use_layered_model 检测 + populate_tracks from viz_4d / render_pass timestamp_us kwarg / _trace_scene_mog dispatch LayeredGaussians.forward 路径) · NEW `threedgrut/tests/test_engine_layered_load.py` (3 测试) |
+| **T8.2** | 8 | extract_4d_metadata 模块 + ckpt save 注入 | 0.75 | ✅ Mac | NEW `threedgrut/viz/__init__.py` + `threedgrut/viz/metadata.py` (~280 行: extract_ego / extract_tracks / extract_lidar / detect_primary_camera / extract_defaults) · MOD `threedgrut/layers/layered_model.py:_populate_tracks_impl` (tracks_metadata 字典 class/size) · MOD `threedgrut/trainer.py:save_checkpoint` (viz_4d.enabled gate + try/except 静默 fallback) · MOD `configs/base_gs.yaml` (viz_4d 默认 enabled=false / subsample 200K/100K) · NEW `configs/apps/ncore_3dgut_mcmc_v2_full_4dviz.yaml` · NEW `threedgrut/tests/test_viz_4d_metadata.py` (8 测试: smoke / subsample / include_lidar=false / tracks_metadata / no_tracks / no_lidar / unknown_class / ckpt_roundtrip) |
+| **T8.3** | 8 | viser_gui_4d 骨架 + FourDMetadata + timeline state machine | 0.5 | ✅ Mac | NEW `threedgrut_playground/viser_gui_4d.py` (~640 行: Viser4DViewer 类 + 5 folder GUI + play_tick + _on_time_change 中央调度 + _mirror_ui 抑制回路) · NEW `threedgrut_playground/utils/viz4d_metadata.py` (~150 行 FourDMetadata dataclass + lookup_frame_idx 二分 + active_tracks_at + ego_pose_at nearest) · NEW `threedgrut/tests/test_viz4d_metadata_loader.py` (8 测试) |
+| **T8.4** | 8 | scene D - ego trajectory + frustum + LiDAR + world axes | 0.5 | ✅ Mac | MOD `viser_gui_4d.py:_populate_static_scene` 系列 (_add_world_axes / _add_ego_trajectory spline_catmull_rom / _add_lidar_clouds road+dyn / _update_ego_frustum setter) · NEW `threedgrut_playground/utils/viser_math.py` (mat_to_wxyz Shepperd/Markley + canonical sign) · NEW `threedgrut/tests/test_viser_math.py` (4 测试: identity / 90deg_x / 50 random round-trip / canonical sign) |
+| **T8.5** | 8 | scene E - dynamic tracks polylines + per-frame cuboid wireframe | 0.75 | ✅ Mac | MOD `viser_gui_4d.py:_add_track_trajectories` (一次 add_line_segments 全 tracks polyline 按 class color) + `_build_cuboid_edges` + `_update_active_cuboids` (remove+add 每帧) · NEW `threedgrut_playground/utils/cuboid.py` (UNIT_CUBE_EDGES [12,2,3] + cuboid_world_edges + class_color palette + instance_color FNV-1a hash → HSV→RGB) · NEW `threedgrut/tests/test_cuboid_wireframe.py` (9 测试: edges shape / vertex range / unique pairs / identity / translation / size scale / z90 rotation / class_color / instance_color) |
+| **T8.6** | 8 | dataset --dataset_path lazy fallback | 0.5 | ✅ Mac | MOD `viser_gui_4d.py:_load_metadata` (lazy import NCoreDataset + extract_4d_metadata 路径; 无 viz_4d block + dataset_path=None → static fallback warn) |
+| **T8.8** | 8 | Stage 8 A800 100 step smoke + ckpt viz_4d 字段验证 | 0.25 | ⬜ | A800 run `apps/ncore_3dgut_mcmc_v2_full_4dviz` 100 step → 验证 ckpt['viz_4d'] schema_version=1, len(tracks)>0, ego_N>0, road_xyz.shape[0]<=200000 |
+| | | **合计** | **29.25** | | |
 
 ### 1.3 当前 Stage 状态汇总
 
@@ -161,6 +175,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI | 0/5 ⬜ | — |
+| 8 | viser_gui_4d (4D viz) | **6/7 ✅ Mac** | Stage 8 Mac 本地完成 (T8.1-T8.6). ckpt['viz_4d'] schema v1 (ego poses + tracks {poses/size/frame_info/class} + LiDAR subsample + viewer_defaults). viser_gui_4d.py: timeline slider/play/loop/speed + ego polyline + per-frame frustum + dynamic tracks polylines (class color) + cuboid wireframe (instance color, remove+add 每帧) + road/dyn LiDAR. 32 新测试 PASS, 总 173/173 PASS. T8.8 A800 100 step smoke 待跑 |
 
 ### 1.4 依赖关系图
 
@@ -227,6 +242,15 @@ flowchart LR
     T74["T7.4<br/>ablation (若 PSNR < 28)"]:::todo
     T75["T7.5<br/>WP_V2_Report"]:::todo
 
+    %% Stage 8 (Mac 本地完成, 待 A800 smoke)
+    T81["T8.1 ✅<br/>engine LayeredGaussians<br/>+ timestamp_us"]:::done
+    T82["T8.2 ✅<br/>extract_4d_metadata<br/>+ ckpt viz_4d"]:::done
+    T83["T8.3 ✅<br/>viser_gui_4d 骨架<br/>+ FourDMetadata"]:::done
+    T84["T8.4 ✅<br/>ego/LiDAR/frustum"]:::done
+    T85["T8.5 ✅<br/>tracks + cuboid"]:::done
+    T86["T8.6 ✅<br/>--dataset_path fallback"]:::done
+    T88["T8.8<br/>A800 100 step smoke"]:::todo
+
     T01 --> T11
     T11 --> T12 --> T13 --> T14
     T11 --> T15
@@ -274,6 +298,18 @@ flowchart LR
     T73 -. PSNR < 28 .-> T74
     T74 --> T75
     T73 --> T75
+
+    %% Stage 8 chain (independent of Stage 7, takes any v2 ckpt)
+    T63 --> T81
+    T81 --> T82
+    T81 --> T83
+    T82 --> T83
+    T83 --> T84
+    T83 --> T85
+    T82 --> T86
+    T83 --> T86
+    T82 --> T88
+    T83 --> T88
 
     classDef todo fill:#f5f5f5,stroke:#999,color:#333
     classDef wip  fill:#fff3cd,stroke:#bf8700,stroke-width:3px,color:#7a4d00
@@ -919,6 +955,53 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### 🎬 Stage 8 — viser_gui_4d 4D 场景可视化 (2026-05-20, Mac 本地, T8.1-T8.6 完整链路)
+
+把 v2 LayeredGaussians 训完的 4D 场景拉到浏览器:用户拖 timeline → Gaussian 背景里的车跟着动、绿色 ego polyline + 当前 t 时刻相机 frustum、所有 dynamic track 历史折线(class color)、当前 t 时刻 active cuboid wireframe(instance color)、road / dynamic LiDAR overlay。所有 4D 元素从 ckpt['viz_4d'] 直接读,viewer 不依赖 NCore SDK / dataset 重加载 (无 viz_4d 时可选 `--dataset_path` lazy fallback)。
+
+**ckpt schema 扩展** (向后兼容三档: v2+viz_4d 完整 / v2 无 viz_4d static fallback / v1 等价原 viser_gui):
+
+```python
+ckpt["viz_4d"] = {
+    "schema_version": 1,
+    "ego": {poses_c2w[N,4,4], frame_timestamps_us[N], primary_camera_id/fov_y_rad/aspect},
+    "tracks": {tid: {poses[F,4,4], size[3], frame_info[F bool], class}},
+    "tracks_camera_timestamps_us": [F] int64,
+    "lidar": {road_xyz/road_rgb/dynamic_xyz/dynamic_rgb (subsample), road_n_total, ...},
+    "viewer_defaults": {initial_c2w, near/far/resolution, t_us_first/last},
+}
+```
+
+体积评估 (F=1500/K=179/road 200K/dyn 100K): tracks 17 MB + LiDAR 18 MB + ego 0.7 MB ≈ **+35 MB** (v2 主体 500 MB-2 GB 中可接受). `viz_4d.enabled=false` (默认) → ckpt 与旧版 byte-identical.
+
+**改动清单** (commit 待 push):
+
+| Path | 操作 | 说明 |
+|---|---|---|
+| [threedgrut_playground/engine.py](threedgrut_playground/engine.py) | MOD | `load_3dgrt_object` 加 `use_layered_model` 分支构造 LayeredGaussians + populate_tracks from viz_4d; `render_pass` 加 `*, timestamp_us=-1` kwarg; `_trace_scene_mog` dispatch LayeredGaussians.forward 路径 (T_to_world=I + rays_in_world_space=True) |
+| [threedgrut/trainer.py:1116](threedgrut/trainer.py) | MOD | `save_checkpoint` 在 `torch.save` 前注入 `viz_4d` (try/except 静默 fallback) |
+| [threedgrut/layers/layered_model.py:670](threedgrut/layers/layered_model.py) | MOD | `_populate_tracks_impl` 新增 `self.tracks_metadata: dict[tid, {class, size}]` 持久化 |
+| `threedgrut/viz/__init__.py` | NEW | 命名空间 |
+| `threedgrut/viz/metadata.py` | NEW | ~280 行: `extract_4d_metadata` + `_extract_ego/tracks/lidar/defaults` + `_detect_primary_camera` (FTheta / pinhole 自适应) |
+| `threedgrut_playground/viser_gui_4d.py` | NEW | ~640 行: `Viser4DViewer` 类 + 5 GUI folder (Static Render/Timeline/Visibility) + `_play_tick` wallclock-driven 实时 + `_on_time_change` 中央调度 + `_mirror_ui` 抑制 slider 回路 + scene primitives 全套 + `_load_metadata` lazy fallback |
+| `threedgrut_playground/utils/viz4d_metadata.py` | NEW | `FourDMetadata` dataclass (pure numpy, 测试友好) + `from_ckpt` + `lookup_frame_idx` 二分 + `active_tracks_at` + `ego_pose_at` |
+| `threedgrut_playground/utils/cuboid.py` | NEW | `UNIT_CUBE_EDGES` [12,2,3] + `cuboid_world_edges(pose, size)` + `class_color` palette + `instance_color` FNV-1a hash → HSV → RGB |
+| `threedgrut_playground/utils/viser_math.py` | NEW | `mat_to_wxyz` Shepperd/Markley + 4 分支 + canonical sign (w>=0) + unit-norm round-off cleanup |
+| `configs/base_gs.yaml` | MOD | 加 `viz_4d` 块: `enabled=false` (默认), `include_lidar=true`, `lidar_road_subsample=200000`, `lidar_dynamic_subsample=100000`, `default_near/far/resolution` |
+| `configs/apps/ncore_3dgut_mcmc_v2_full_4dviz.yaml` | NEW | 继承 `..._v2_full_exposure` + 翻 `viz_4d.enabled=true` |
+| `threedgrut/tests/test_engine_layered_load.py` | NEW | 3 测试 (populate_tracks viz_4d roundtrip / `_resolve_pose_idx` 二分 / idempotent replace) |
+| `threedgrut/tests/test_viz_4d_metadata.py` | NEW | 8 测试 (smoke / subsample / include_lidar=false / tracks_metadata / no_tracks / no_lidar / unknown_class / ckpt_roundtrip) |
+| `threedgrut/tests/test_viz4d_metadata_loader.py` | NEW | 8 测试 (`from_ckpt` 解析 / 各种 missing block 兼容 / `lookup_frame_idx` 二分 / `active_tracks_at` / `ego_pose_at` nearest / empty / no_lidar / torch.save 真 roundtrip) |
+| `threedgrut/tests/test_viser_math.py` | NEW | 4 测试 (identity / 90° x / 50 random round-trip / canonical sign) |
+| `threedgrut/tests/test_cuboid_wireframe.py` | NEW | 9 测试 (shape / vertex range / unique pairs / identity / translation / size scale / z90 rotation / class_color / instance_color) |
+| `threedgrut_playground/README_4D.md` | NEW | 用户文档 (Quick Start + GUI 控件说明 + ckpt schema + fallback + troubleshooting) |
+
+**Mac 单测**: 32 新测试 PASS, **总 173/173 PASS**, 0 回归.
+
+**剩余 (Backlog)**: T8.8 A800 100 step smoke + ckpt['viz_4d'] 字段验证 (脚本已写在 `viser-3d-purrfect-whisper.md` plan 文件)
+
+---
 
 ### 🎉 Stage 6-fix T6F.3 出口达成 (2026-05-20, A800 GPU 1, v2_egomask_fix_20260520_113746)
 

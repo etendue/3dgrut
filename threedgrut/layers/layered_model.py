@@ -685,6 +685,12 @@ class LayeredGaussians(nn.Module):
             self.register_buffer("tracks_camera_timestamps_us",
                                  shared_ts, persistent=True)
 
+        # T8.2: track-level metadata (class label, cuboid size) that the viz_4d
+        # ckpt block needs but the C++ tracer never consumes. Stored as a plain
+        # Python dict (not register_buffer) since classes are str and sizes are
+        # tiny 3-vectors — ride-along with save_checkpoint via extract_4d_metadata.
+        if not hasattr(self, "tracks_metadata"):
+            object.__setattr__(self, "tracks_metadata", {})
         for tid, info in tracks.items():
             poses = info["poses"] if isinstance(info, dict) else info[0]
             active = (info["active"] if isinstance(info, dict) and "active" in info
@@ -701,6 +707,20 @@ class LayeredGaussians(nn.Module):
                                  persistent=True)
             self.tracks_poses[tid] = getattr(self, buf_pose_name)
             self.tracks_active[tid] = getattr(self, buf_active_name)
+            # T8.2 — capture class/size when supplied by the loader. Falls back
+            # silently when absent (e.g. legacy callers / partial dicts) so we
+            # never block the existing pose+active contract.
+            if isinstance(info, dict):
+                meta = {}
+                if "class" in info:
+                    meta["class"] = str(info["class"])
+                if "size" in info:
+                    sz = info["size"]
+                    meta["size"] = (sz.detach().to(dtype=torch.float32, device="cpu")
+                                    if torch.is_tensor(sz)
+                                    else torch.as_tensor(sz, dtype=torch.float32))
+                if meta:
+                    self.tracks_metadata[tid] = meta
 
     # ------------------------------------------------------------------ T3.5.b trainer compat
     def build_acc(self, rebuild: bool = True) -> None:

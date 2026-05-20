@@ -1154,6 +1154,22 @@ class Trainer3DGRUT:
                 "optimizer": self.exposure_optimizer.state_dict(),
             }
 
+        # T8.2: 4D viz metadata for viser_gui_4d. Only written when explicitly
+        # enabled via conf.viz_4d.enabled — keeps v1 ckpts byte-identical with
+        # pre-T8.2 layouts. Failure logs a warning but never aborts the save.
+        viz_conf = self.conf.get("viz_4d", {}) if hasattr(self.conf, "get") else {}
+        if (isinstance(self.model, LayeredGaussians)
+                and viz_conf
+                and bool(viz_conf.get("enabled", False) if hasattr(viz_conf, "get") else False)
+                and self.train_dataset is not None):
+            try:
+                from threedgrut.viz.metadata import extract_4d_metadata
+                parameters["viz_4d"] = extract_4d_metadata(
+                    self.model, self.train_dataset, self.conf
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[viz_4d] extract_4d_metadata failed, skipping: {e}")
+
         os.makedirs(os.path.join(out_dir, f"ours_{int(global_step)}"), exist_ok=True)
         if not last_checkpoint:
             ckpt_path = os.path.join(out_dir, f"ours_{int(global_step)}", f"ckpt_{global_step}.pt")
