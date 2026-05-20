@@ -67,9 +67,16 @@ def get_c2w(camera: "viser.CameraHandle") -> np.ndarray:
 
 
 class Viser4DViewer:
-    """4D viewer for v2 LayeredGaussians ckpts."""
+    """4D viewer for v2 LayeredGaussians ckpts.
 
-    def __init__(self, *, port: int, engine: Engine3DGRUT,
+    When ``engine`` is ``None`` we run in "no-gaussian-render" mode: no
+    OptiX-backed Gaussian background is drawn (the viewer only shows scene
+    primitives + timeline). This is the only viable mode on GPUs without RT
+    cores (A100 / A800 / H100), where ``lib3dgrt_cc.so`` dlopen segfaults
+    during Engine3DGRUT init.
+    """
+
+    def __init__(self, *, port: int, engine: "Engine3DGRUT | None",
                  metadata: Optional[FourDMetadata],
                  target_fps: float = 20.0):
         self.engine = engine
@@ -125,37 +132,52 @@ class Viser4DViewer:
     # ---------------------------------------------------------------- engine
     def _clear_engine_meshes(self) -> None:
         """Drop the default Engine3DGRUT mesh primitives so we render the
-        scene cleanly (mirrors viser_gui.py:set_initial_mesh)."""
+        scene cleanly (mirrors viser_gui.py:set_initial_mesh).
+
+        No-op when no engine (no-gaussian-render mode).
+        """
+        if self.engine is None:
+            return
         for mesh_name in list(self.engine.primitives.objects.keys()):
             self.engine.primitives.remove_primitive(mesh_name)
 
     # ---------------------------------------------------------------- GUI
     def _build_static_gui(self) -> None:
-        """Resolution / near / far / FPS — equivalent to the v1 viser_gui."""
-        defaults = {
-            "resolution": 1024, "near": 0.1, "far": 1000.0,
-        }
-        if self.meta is not None:
-            # Viewer defaults from ckpt (T8.2 viewer_defaults block).
-            defaults["near"] = float(getattr(self, "_near", None) or 0.1)
+        """Resolution / near / far / FPS — only when Gaussian rendering is on.
 
-        folder = self.server.gui.add_folder("Static Render")
+        In no-gaussian-render mode (engine=None) we only expose Reset View,
+        since resolution/near/far/fps are render-side controls with no effect
+        on scene primitives.
+        """
+        folder = self.server.gui.add_folder("Render Controls")
         with folder:
             self.reset_view_button = self.server.gui.add_button("Reset View")
-            self.resolution_slider = self.server.gui.add_slider(
-                "Resolution", min=384, max=4096, step=2, initial_value=1024)
-            self.near_plane_slider = self.server.gui.add_slider(
-                "Near", min=0.1, max=30, step=0.5, initial_value=0.1)
-            self.far_plane_slider = self.server.gui.add_slider(
-                "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0)
-            self.fps = self.server.gui.add_text("FPS", initial_value="-1",
-                                                disabled=True)
+            if self.engine is not None:
+                self.resolution_slider = self.server.gui.add_slider(
+                    "Resolution", min=384, max=4096, step=2, initial_value=1024)
+                self.near_plane_slider = self.server.gui.add_slider(
+                    "Near", min=0.1, max=30, step=0.5, initial_value=0.1)
+                self.far_plane_slider = self.server.gui.add_slider(
+                    "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0)
+                self.fps = self.server.gui.add_text("FPS", initial_value="-1",
+                                                    disabled=True)
+            else:
+                self.server.gui.add_text(
+                    "Mode",
+                    initial_value="scene primitives only (no Gaussian render)",
+                    disabled=True,
+                )
+                self.resolution_slider = None
+                self.near_plane_slider = None
+                self.far_plane_slider = None
+                self.fps = None
 
-        for slider in (self.resolution_slider, self.near_plane_slider,
-                       self.far_plane_slider):
-            @slider.on_update
-            def _(_, _self=self):
-                _self.need_update = True
+        if self.engine is not None:
+            for slider in (self.resolution_slider, self.near_plane_slider,
+                           self.far_plane_slider):
+                @slider.on_update
+                def _(_, _self=self):
+                    _self.need_update = True
 
         @self.reset_view_button.on_click
         def _(_):
@@ -481,8 +503,19 @@ class Viser4DViewer:
 
     @torch.no_grad()
     def update(self) -> None:
-        """Outer render loop: advance timeline, then re-render if dirty."""
+        """Outer render loop: advance timeline, then re-render if dirty.
+
+        In no-gaussian-render mode (engine is None) we still tick the timeline
+        — scene primitives + frustum stay live — but skip the Gaussian
+        background pass entirely (no Engine3DGRUT means no OptiX, the whole
+        point of this mode).
+        """
         self._play_tick()
+        if self.engine is None:
+            # Scene primitives auto-update via _on_time_change; nothing to
+            # render every frame here.
+            self.need_update = False
+            return
         if not self.need_update:
             return
         interval = 0.0
@@ -517,7 +550,7 @@ class Viser4DViewer:
                 continue
             client.scene.set_background_image(img, format="jpeg")
         self.render_times.append(interval)
-        if self.render_times:
+        if self.render_times and self.fps is not None:
             self.fps.value = f"{1.0 / max(np.mean(self.render_times), 1e-6):.3g}"
         self.need_update = False
 
@@ -576,14 +609,25 @@ def main() -> None:
                         help="Optional NCore dataset path for 4D fallback when ckpt has no viz_4d.")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--target_fps", type=float, default=20.0)
+    parser.add_argument("--no_gaussian_render", action="store_true",
+                        help="Skip Engine3DGRUT init + Gaussian background "
+                             "rendering. Required on GPUs without RT cores "
+                             "(A100 / A800 / H100), where the OptiX extension "
+                             "dlopen segfaults. Scene primitives "
+                             "(ego/cuboid/LiDAR) + timeline still work.")
     args = parser.parse_args()
 
-    engine = Engine3DGRUT(
-        gs_object=args.gs_object,
-        mesh_assets_folder=args.mesh_assets,
-        envmap_assets_folder=args.envmap_assets,
-        default_config=args.default_gs_config,
-    )
+    if args.no_gaussian_render:
+        engine = None
+        print("[viz_4d] --no_gaussian_render: skipping Engine3DGRUT "
+              "(scene primitives + timeline only)")
+    else:
+        engine = Engine3DGRUT(
+            gs_object=args.gs_object,
+            mesh_assets_folder=args.mesh_assets,
+            envmap_assets_folder=args.envmap_assets,
+            default_config=args.default_gs_config,
+        )
     # Need ckpt dict for metadata; re-load explicitly (engine loaded model only).
     if args.gs_object.endswith(".pt"):
         ckpt = torch.load(args.gs_object, weights_only=False)
