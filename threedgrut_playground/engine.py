@@ -1218,9 +1218,16 @@ class Engine3DGRUT:
                     if isinstance(p, dict) and "config" in p:
                         conf = p["config"]
                         break
+            # v1 (non-layered) playground only supports the 3dgrt render method;
+            # for ckpts trained with 3dgut we historically reload colmap_3dgrt
+            # defaults so the rasterizer-trained model can still render via the
+            # ray tracer. v2 LayeredGaussians ckpts must keep their own conf
+            # (use_layered_model + layers.enabled + per-layer kernel params),
+            # so the reload only fires for the v1 path.
+            use_layered_ckpt = bool(conf.get("use_layered_model", False)) if conf else False
             if conf is None:
                 conf = load_default_config()
-            elif conf.render["method"] != "3dgrt":
+            elif not use_layered_ckpt and conf.render["method"] != "3dgrt":
                 conf = load_default_config()
             # v2 LayeredGaussians: detect via use_layered_model flag and route
             # to the layered container. Falls through to v1 flat MoG path when
