@@ -43,6 +43,14 @@ def compute_layered_l1_loss(
     """
     l1_chan = (rgb_pred - rgb_gt).abs().mean(dim=-1)  # mean over channels → [...,]
 
+    # T6F.1 fix: valid_mask 由 NCoreDataset 注入时是 [B, H, W, 1]（对齐
+    # protocols.Batch.__post_init__ 4D 契约 + RGB broadcast），但 l1_chan 是
+    # [B, H, W]、image_infos 三 mask 也是 [B, H, W]。这里把 4D valid_mask
+    # squeeze 最后维到 3D，与 l1_chan / image_infos 形状对齐避免 broadcast
+    # 错配（compute_sky_loss 用对称 unsqueeze 思路对齐 RGB）.
+    if valid_mask is not None and valid_mask.dim() == l1_chan.dim() + 1 and valid_mask.shape[-1] == 1:
+        valid_mask = valid_mask.squeeze(-1)
+
     if image_infos is None or "sky_mask" not in image_infos:
         # v1 byte-identical fallback
         if valid_mask is not None:

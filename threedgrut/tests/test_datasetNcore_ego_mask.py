@@ -159,6 +159,53 @@ def test_layered_l1_valid_mask_none_is_v1_byte_identical():
     assert loss.item() == pytest.approx(expected.item(), abs=1e-7)
 
 
+def test_layered_l1_accepts_4d_valid_mask_with_image_infos():
+    """T6F.1 回归（A800 5k smoke 暴露的 bug 2026-05-20）：
+
+    Batch.mask 形状是 [B, H, W, 1] (protocols 4D 契约 + RGB broadcast 需要)，
+    而 image_infos 的 sky/road/dyn 是 [B, H, W] (T3.1.b). 老版本
+    `compute_layered_l1_loss` line 70 `bg = valid * (1-road) * ...` 会 broadcast
+    错配 (1920 vs 1080). 修复：函数顶部 squeeze 4D valid_mask 最后维到 3D.
+
+    本测试以 [B, H, W, 1] valid_mask + 完整 image_infos 调用，验证不再爆.
+    """
+    B, H, W = 1, 8, 16
+    rgb_pred = torch.rand(B, H, W, 3)
+    rgb_gt = torch.rand(B, H, W, 3)
+    image_infos = {
+        "sky_mask": torch.zeros(B, H, W),
+        "road_mask": torch.zeros(B, H, W),
+        "dyn_mask_sseg": torch.zeros(B, H, W),
+    }
+    # 注意：[B, H, W, 1] 而不是 [B, H, W]，模拟真实 Batch.mask
+    valid_mask_4d = torch.ones(B, H, W, 1, dtype=torch.float32)
+    # 应当不抛 RuntimeError("size of tensor a (W) must match tensor b (H) at dim 2")
+    loss = compute_layered_l1_loss(
+        rgb_pred, rgb_gt, image_infos=image_infos, valid_mask=valid_mask_4d
+    )
+    assert loss.dim() == 0  # scalar
+    assert torch.isfinite(loss)
+
+
+def test_layered_l1_4d_and_3d_valid_mask_numerically_equivalent():
+    """T6F.1 回归：4D [B,H,W,1] 和 3D [B,H,W] valid_mask 应数值等价 (squeeze 一致)."""
+    B, H, W = 1, 8, 16
+    torch.manual_seed(7)
+    rgb_pred = torch.rand(B, H, W, 3)
+    rgb_gt = torch.rand(B, H, W, 3)
+    image_infos = {
+        "sky_mask": (torch.rand(B, H, W) > 0.7).float(),
+        "road_mask": (torch.rand(B, H, W) > 0.6).float(),
+        "dyn_mask_sseg": (torch.rand(B, H, W) > 0.8).float(),
+    }
+    valid_3d = (torch.rand(B, H, W) > 0.3).float()
+    valid_4d = valid_3d.unsqueeze(-1)
+
+    loss_3d = compute_layered_l1_loss(rgb_pred, rgb_gt, image_infos=image_infos, valid_mask=valid_3d)
+    loss_4d = compute_layered_l1_loss(rgb_pred, rgb_gt, image_infos=image_infos, valid_mask=valid_4d)
+    assert loss_3d.item() == pytest.approx(loss_4d.item(), abs=1e-7)
+
+
 def test_layered_l1_all_valid_mask_equivalent_to_no_mask():
     """T6F.1 退化测：valid_mask 全 1 应等价于 valid_mask=None（数值上同 .mean()）.
 
