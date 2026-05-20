@@ -1092,8 +1092,13 @@ class Trainer3DGRUT:
             )
             logger.info(f"📊 PPISP report saved to: {ppisp_report_dir}")
 
-        self.teardown_dataloaders()
+        # T8.2: save_checkpoint needs self.train_dataset to extract viz_4d
+        # metadata, so it must run BEFORE teardown_dataloaders. v1 behavior
+        # is unchanged (teardown is a memory release, order doesn't affect
+        # the ckpt blob; test_last loads its own renderer dataset from
+        # conf.path).
         self.save_checkpoint(last_checkpoint=True)
+        self.teardown_dataloaders()
 
         # Evaluate on test set
         if conf.test_last:
@@ -1157,15 +1162,19 @@ class Trainer3DGRUT:
         # T8.2: 4D viz metadata for viser_gui_4d. Only written when explicitly
         # enabled via conf.viz_4d.enabled — keeps v1 ckpts byte-identical with
         # pre-T8.2 layouts. Failure logs a warning but never aborts the save.
+        # getattr() guards against teardown_dataloaders having del'd it (the
+        # final last_checkpoint path used to run teardown first — fixed by
+        # reordering at line 1095, but stay defensive).
         viz_conf = self.conf.get("viz_4d", {}) if hasattr(self.conf, "get") else {}
+        train_ds = getattr(self, "train_dataset", None)
         if (isinstance(self.model, LayeredGaussians)
                 and viz_conf
                 and bool(viz_conf.get("enabled", False) if hasattr(viz_conf, "get") else False)
-                and self.train_dataset is not None):
+                and train_ds is not None):
             try:
                 from threedgrut.viz.metadata import extract_4d_metadata
                 parameters["viz_4d"] = extract_4d_metadata(
-                    self.model, self.train_dataset, self.conf
+                    self.model, train_ds, self.conf
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[viz_4d] extract_4d_metadata failed, skipping: {e}")
