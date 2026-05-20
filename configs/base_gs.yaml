@@ -173,7 +173,12 @@ viz_4d:
   enabled: false
   include_lidar: true
   lidar_road_subsample: 200000
-  lidar_dynamic_subsample: 100000
+  # T8.11: dynamic LiDAR is stored per-track (object-local frame) so the
+  # viewer can transform points back to world every frame, keeping them
+  # glued to the moving cuboid. Cap is PER TRACK; legacy
+  # lidar_dynamic_subsample (total) is kept as fallback in extract_4d_metadata.
+  lidar_dynamic_pts_per_track: 5000
+  lidar_dynamic_subsample: 100000   # legacy / fallback heuristic
   default_near: 0.1
   default_far: 500.0
   default_resolution: 1024

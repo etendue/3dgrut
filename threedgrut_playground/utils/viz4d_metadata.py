@@ -43,10 +43,14 @@ class FourDMetadata:
     tracks_camera_timestamps_us: np.ndarray  # (F,) int64
     road_xyz: Optional[np.ndarray]
     road_rgb: Optional[np.ndarray]
-    dyn_xyz:  Optional[np.ndarray]
+    dyn_xyz:  Optional[np.ndarray]           # legacy world-frame union
     dyn_rgb:  Optional[np.ndarray]
     road_n_total: Optional[int]
     dyn_n_total: Optional[int]
+    # T8.11 per-track local-frame dyn LiDAR (None for pre-T8.11 ckpts)
+    dyn_local_xyz: Optional[np.ndarray]      # (N, 3) float32, object-local
+    dyn_track_ids: Optional[np.ndarray]      # (N,) int64, index into dyn_track_names
+    dyn_track_names: Optional[list]          # [K] tid strings, idx → name
     initial_c2w: np.ndarray
     t_us_first: int
     t_us_last: int
@@ -96,6 +100,9 @@ class FourDMetadata:
             dyn_rgb=_to_np(lidar.get("dynamic_rgb")),
             road_n_total=lidar.get("road_n_total"),
             dyn_n_total=lidar.get("dynamic_n_total"),
+            dyn_local_xyz=_to_np(lidar.get("dynamic_local_xyz")),
+            dyn_track_ids=_to_np(lidar.get("dynamic_track_ids")),
+            dyn_track_names=lidar.get("dynamic_track_names"),
             initial_c2w=initial.astype(np.float32),
             t_us_first=int(defaults.get("t_us_first", 0)),
             t_us_last=int(defaults.get("t_us_last", 0)),
@@ -109,7 +116,24 @@ class FourDMetadata:
         return int(self.tracks_camera_timestamps_us.shape[0])
 
     def has_lidar(self) -> bool:
-        return self.road_xyz is not None or self.dyn_xyz is not None
+        return (
+            self.road_xyz is not None
+            or self.dyn_xyz is not None
+            or self.dyn_local_xyz is not None
+        )
+
+    def has_per_track_dyn_lidar(self) -> bool:
+        """True if T8.11 per-track object-local dyn LiDAR is present.
+
+        Enables the viewer's per-frame transform path (LiDAR points follow
+        the cuboid). Falls back to a static world-frame snapshot otherwise.
+        """
+        return (
+            self.dyn_local_xyz is not None
+            and self.dyn_track_ids is not None
+            and self.dyn_track_names is not None
+            and self.dyn_local_xyz.shape[0] > 0
+        )
 
     # ---- timeline lookups ---------------------------------------------------
     def lookup_frame_idx(self, t_us: int) -> int:

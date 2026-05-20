@@ -186,43 +186,109 @@ def _extract_tracks(model) -> tuple[dict, Optional[torch.Tensor]]:
 
 
 # --------------------------------------------------------------------- lidar
-def _extract_lidar(dataset, conf, *, road_subsample: Optional[int],
-                   dyn_subsample: Optional[int]) -> dict:
-    """Pull road + dynamic LiDAR point clouds with optional subsample.
+def _model_to_instance_pts_dict(model) -> dict:
+    """Build the {tid: {poses, size, frame_info}} dict expected by
+    ``init_dynamic_rigid_layer`` from a populated LayeredGaussians model."""
+    out: dict[str, dict] = {}
+    tracks_poses = getattr(model, "tracks_poses", {}) or {}
+    tracks_active = getattr(model, "tracks_active", {}) or {}
+    tracks_metadata = getattr(model, "tracks_metadata", {}) or {}
+    for tid, poses in tracks_poses.items():
+        active = tracks_active.get(tid)
+        meta = tracks_metadata.get(tid, {})
+        size = meta.get("size")
+        if size is None:
+            size = torch.zeros(3, dtype=torch.float32)
+        out[tid] = {
+            "poses":      poses,
+            "size":       size,
+            "frame_info": active if active is not None else torch.ones(
+                poses.shape[0], dtype=torch.bool),
+        }
+    return out
 
-    The functions ``dataset.get_road_lidar_points()`` / ``get_dynamic_lidar_points()``
-    return ``(xyz[M, 3] torch.Tensor, rgb[M, 3] | None)``. Subsampling uses
-    torch.randperm (deterministic across runs only if a generator is seeded
-    upstream).
+
+def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int],
+                   dyn_pts_per_track: int) -> dict:
+    """Pull road LiDAR (static) + dynamic LiDAR (per-track object-local).
+
+    Road LiDAR stays in world frame (it IS the static ground). Dynamic LiDAR
+    is re-projected into each track's object-local frame via
+    ``init_dynamic_rigid_layer``, so the viewer can transform back to world
+    every frame using the current track pose — keeping points glued to the
+    moving cuboid.
+
+    Schema:
+      road_xyz / road_rgb:                      world-frame, static
+      dynamic_local_xyz / dynamic_track_ids:    object-local per-track
+      dynamic_track_names:                      idx → tid name mapping
+      dynamic_xyz / dynamic_rgb (legacy):       world-frame union (v1 viewer
+                                                fallback; deprecated for
+                                                animated playback)
     """
     out: dict[str, Any] = {
-        "road_xyz": None, "road_rgb": None, "road_n_total": None, "road_subsample": None,
+        "road_xyz": None, "road_rgb": None,
+        "road_n_total": None, "road_subsample": None,
+        # New per-track local schema (T8.11)
+        "dynamic_local_xyz": None,
+        "dynamic_track_ids": None,
+        "dynamic_track_names": None,
+        "dynamic_pts_per_track": None,
+        # Legacy world-frame (v1 viewer fallback)
         "dynamic_xyz": None, "dynamic_rgb": None,
         "dynamic_n_total": None, "dynamic_subsample": None,
     }
 
-    def _pull(name: str, getter_name: str, k: Optional[int]) -> None:
-        try:
-            getter = getattr(dataset, getter_name, None)
-            if getter is None:
-                return
+    # ---- road: world-frame static ----
+    try:
+        getter = getattr(dataset, "get_road_lidar_points", None)
+        if getter is not None:
             xyz, rgb = getter()
-            if xyz is None or xyz.numel() == 0:
-                return
-            n_total = int(xyz.shape[0])
-            xyz_s = _subsample(xyz, k)
-            out[f"{name}_xyz"] = _to_cpu_float32(xyz_s)
-            if rgb is not None and rgb.numel() > 0:
-                rgb_s = rgb[: xyz_s.shape[0]] if (k is None or n_total <= k) \
-                    else rgb[torch.randperm(n_total)[:k]]
-                out[f"{name}_rgb"] = _to_cpu_float32(rgb_s)
-            out[f"{name}_n_total"] = n_total
-            out[f"{name}_subsample"] = int(xyz_s.shape[0])
-        except Exception as e:
-            logger.warning(f"[viz_4d] LiDAR extraction for '{name}' failed: {e}")
+            if xyz is not None and xyz.numel() > 0:
+                n_total = int(xyz.shape[0])
+                xyz_s = _subsample(xyz, road_subsample)
+                out["road_xyz"] = _to_cpu_float32(xyz_s)
+                if rgb is not None and rgb.numel() > 0:
+                    rgb_s = rgb[: xyz_s.shape[0]] if (
+                        road_subsample is None or n_total <= road_subsample
+                    ) else rgb[torch.randperm(n_total)[:road_subsample]]
+                    out["road_rgb"] = _to_cpu_float32(rgb_s)
+                out["road_n_total"] = n_total
+                out["road_subsample"] = int(xyz_s.shape[0])
+    except Exception as e:
+        logger.warning(f"[viz_4d] road LiDAR extraction failed: {e}")
 
-    _pull("road", "get_road_lidar_points", road_subsample)
-    _pull("dynamic", "get_dynamic_lidar_points", dyn_subsample)
+    # ---- dynamic: per-track object-local (T8.11) ----
+    try:
+        getter = getattr(dataset, "get_dynamic_lidar_points", None)
+        if getter is None:
+            return out
+        dyn_xyz_world, dyn_rgb = getter()
+        if dyn_xyz_world is None or dyn_xyz_world.numel() == 0:
+            return out
+
+        # Populate per-track object-local via the same routine the trainer's
+        # dynamic_rigid layer uses (mutates instance_pts_dict in place).
+        from threedgrut.layers.dynamic_rigid_init import init_dynamic_rigid_layer
+        instance_pts_dict = _model_to_instance_pts_dict(model)
+        if not instance_pts_dict:
+            # No tracks → keep just the legacy world-frame union for fallback.
+            out["dynamic_xyz"] = _to_cpu_float32(dyn_xyz_world)
+            out["dynamic_n_total"] = int(dyn_xyz_world.shape[0])
+            out["dynamic_subsample"] = int(dyn_xyz_world.shape[0])
+            return out
+        local_pts, track_ids, track_names = init_dynamic_rigid_layer(
+            instance_pts_dict, dyn_xyz_world, max_pts_per_track=dyn_pts_per_track,
+        )
+        out["dynamic_local_xyz"] = _to_cpu_float32(local_pts)
+        out["dynamic_track_ids"] = _to_cpu_int64(track_ids)
+        out["dynamic_track_names"] = list(track_names)
+        out["dynamic_pts_per_track"] = int(dyn_pts_per_track)
+        out["dynamic_n_total"] = int(dyn_xyz_world.shape[0])
+        out["dynamic_subsample"] = int(local_pts.shape[0])
+    except Exception as e:
+        logger.warning(f"[viz_4d] dynamic LiDAR extraction failed: {e}")
+
     return out
 
 
@@ -278,10 +344,23 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
         viz_conf.get("lidar_road_subsample", 200_000)
         if hasattr(viz_conf, "get") else 200_000
     )
-    dyn_subsample = (
-        viz_conf.get("lidar_dynamic_subsample", 100_000)
-        if hasattr(viz_conf, "get") else 100_000
+    # T8.11: dynamic LiDAR is now per-track (object-local) so the cap is per
+    # track, not total. 5000 pts/track × ~30-100 tracks ≈ 150-500K total, on
+    # par with the old 100K total but enough headroom for dense long-active
+    # tracks. Backward-compatible config key:
+    # `lidar_dynamic_pts_per_track` first, fall back to legacy
+    # `lidar_dynamic_subsample` / 20 as a heuristic if user only set total.
+    dyn_pts_per_track = (
+        viz_conf.get("lidar_dynamic_pts_per_track", None)
+        if hasattr(viz_conf, "get") else None
     )
+    if dyn_pts_per_track is None:
+        legacy_total = (
+            viz_conf.get("lidar_dynamic_subsample", 100_000)
+            if hasattr(viz_conf, "get") else 100_000
+        )
+        # rough split — driving clips average ~30-50 tracks, want ~5K each
+        dyn_pts_per_track = max(1_000, int(legacy_total) // 20)
 
     dataset_type = "ncore"
     sequence_id = str(getattr(dataset, "sequence_id", "unknown"))
@@ -290,9 +369,9 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
     tracks, shared_ts = _extract_tracks(model)
     if include_lidar:
         lidar = _extract_lidar(
-            dataset, conf,
+            dataset, model, conf,
             road_subsample=int(road_subsample),
-            dyn_subsample=int(dyn_subsample),
+            dyn_pts_per_track=int(dyn_pts_per_track),
         )
     else:
         # include_lidar=False → skip LiDAR entirely; viewer renders without
@@ -300,6 +379,8 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
         lidar = {
             "road_xyz": None, "road_rgb": None,
             "road_n_total": None, "road_subsample": None,
+            "dynamic_local_xyz": None, "dynamic_track_ids": None,
+            "dynamic_track_names": None, "dynamic_pts_per_track": None,
             "dynamic_xyz": None, "dynamic_rgb": None,
             "dynamic_n_total": None, "dynamic_subsample": None,
         }

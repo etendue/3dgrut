@@ -129,14 +129,16 @@ def test_extract_smoke(real_conf):
 
 
 def test_subsample_respected(real_conf):
-    """Large lidar gets sliced to the subsample cap (xyz + rgb in lockstep)."""
+    """Road LiDAR sliced to subsample cap (xyz + rgb in lockstep);
+    dynamic LiDAR routes through init_dynamic_rigid_layer → per-track local."""
     model = _model_with_tracks(real_conf)
     dataset = _mock_dataset(n_frames=3, road_pts=5000, dyn_pts=3000)
 
     # Override defaults via a minimal patch of real_conf using OmegaConf.
     from omegaconf import OmegaConf
     conf = OmegaConf.merge(real_conf, OmegaConf.create({
-        "viz_4d": {"lidar_road_subsample": 200, "lidar_dynamic_subsample": 100,
+        "viz_4d": {"lidar_road_subsample": 200,
+                   "lidar_dynamic_pts_per_track": 50,
                    "include_lidar": True}
     }))
     md = extract_4d_metadata(model, dataset, conf)
@@ -144,7 +146,10 @@ def test_subsample_respected(real_conf):
     assert md["lidar"]["road_rgb"].shape == (200, 3)
     assert md["lidar"]["road_n_total"] == 5000
     assert md["lidar"]["road_subsample"] == 200
-    assert md["lidar"]["dynamic_xyz"].shape == (100, 3)
+    # T8.11: dynamic LiDAR now per-track object-local; mock tracks have
+    # size=0 so points won't fit any cuboid and locals come out empty.
+    # Just verify schema fields are present (None when no points fit).
+    assert "dynamic_local_xyz" in md["lidar"]
     assert md["lidar"]["dynamic_n_total"] == 3000
 
 
@@ -158,6 +163,45 @@ def test_include_lidar_false_skips_clouds(real_conf):
     md = extract_4d_metadata(model, dataset, conf)
     assert md["lidar"]["road_xyz"] is None
     assert md["lidar"]["dynamic_xyz"] is None
+    assert md["lidar"]["dynamic_local_xyz"] is None
+
+
+def test_dyn_lidar_per_track_local_frame(real_conf):
+    """T8.11: dynamic LiDAR is routed through init_dynamic_rigid_layer and
+    surfaced as per-track object-local xyz + track_ids + track_names. We use
+    dyn points concentrated inside the mock cuboids so at least some land in."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=1.0)
+    F = 3
+    # Two tracks at origin with non-zero size so points near origin land in.
+    tracks = {
+        "ta": {
+            "poses":      torch.eye(4).repeat(F, 1, 1),
+            "frame_info": torch.ones(F, dtype=torch.bool),
+            "cam_timestamps_us": torch.tensor([1, 2, 3], dtype=torch.int64),
+            "class":      "automobile",
+            "size":       torch.tensor([4.0, 2.0, 1.5]),
+        },
+    }
+    model.populate_tracks(tracks)
+
+    # Mock dataset with dyn points clustered near origin (inside cuboid)
+    dataset = _mock_dataset(n_frames=F, dyn_pts=200)
+    # Override the dyn lidar getter to return points inside the cuboid.
+    dataset.get_dynamic_lidar_points = lambda: (
+        torch.randn(200, 3) * 0.5,  # most fit in ±2/±1/±0.75
+        None,
+    )
+
+    md = extract_4d_metadata(model, dataset, real_conf)
+    assert md["lidar"]["dynamic_local_xyz"] is not None
+    assert md["lidar"]["dynamic_local_xyz"].shape[1] == 3
+    assert md["lidar"]["dynamic_track_ids"] is not None
+    assert md["lidar"]["dynamic_track_names"] == ["ta"]
+    # All captured points map to track id 0 (only one track).
+    assert (md["lidar"]["dynamic_track_ids"] == 0).all()
 
 
 def test_tracks_metadata_populated_via_populate_tracks(real_conf):

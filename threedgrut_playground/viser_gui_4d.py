@@ -350,7 +350,21 @@ class Viser4DViewer:
                 colors=colors.astype(np.float32),
                 point_size=0.04,
             )
-        if self.meta.dyn_xyz is not None and self.meta.dyn_xyz.size > 0:
+        # Dynamic LiDAR: T8.11 prefers per-track object-local points so the
+        # cloud follows the cuboid at each frame (added per-frame in
+        # _update_dynamic_lidar). Fall back to static world-frame union only
+        # when the per-track block is absent (legacy ckpts).
+        if self.meta.has_per_track_dyn_lidar():
+            # Precompute lookup: track_name → indices of dyn_local_xyz rows
+            # belonging to it. Lets _build_dyn_lidar_world avoid scanning the
+            # full track_ids array every frame.
+            names = self.meta.dyn_track_names or []
+            track_ids = self.meta.dyn_track_ids
+            self._dyn_idx_by_track: dict[str, np.ndarray] = {
+                tid: np.where(track_ids == i)[0] for i, tid in enumerate(names)
+            }
+        elif self.meta.dyn_xyz is not None and self.meta.dyn_xyz.size > 0:
+            # Legacy static fallback.
             colors = (self.meta.dyn_rgb
                       if self.meta.dyn_rgb is not None
                       else np.broadcast_to(
@@ -364,6 +378,70 @@ class Viser4DViewer:
                 point_size=0.06,
             )
             self.h_dyn_pts.visible = False
+
+    def _build_dyn_lidar_world(self, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """Transform per-track object-local dyn LiDAR points to world frame
+        using each track's pose at ``frame_idx``. Only includes tracks that
+        are active at this frame.
+
+        Returns:
+            (pts[N, 3], colors[N, 3]) — empty arrays when no active tracks
+            or per-track block is absent.
+        """
+        assert self.meta is not None
+        if (not self.meta.has_per_track_dyn_lidar()
+                or not hasattr(self, "_dyn_idx_by_track")):
+            return (np.zeros((0, 3), dtype=np.float32),
+                    np.zeros((0, 3), dtype=np.float32))
+        active = self.meta.active_tracks_at(frame_idx)
+        if not active:
+            return (np.zeros((0, 3), dtype=np.float32),
+                    np.zeros((0, 3), dtype=np.float32))
+        local_xyz = self.meta.dyn_local_xyz
+        pts_list: list[np.ndarray] = []
+        col_list: list[np.ndarray] = []
+        for tid in active:
+            idxs = self._dyn_idx_by_track.get(tid)
+            if idxs is None or idxs.size == 0:
+                continue
+            pose = self.meta.tracks[tid]["poses"][frame_idx]   # (4, 4)
+            R = pose[:3, :3]
+            t = pose[:3, 3]
+            local = local_xyz[idxs]                            # (M, 3)
+            world = (local @ R.T) + t                          # (M, 3)
+            pts_list.append(world.astype(np.float32))
+            color = np.array(instance_color(tid), dtype=np.float32)
+            col_list.append(np.broadcast_to(color, world.shape).astype(np.float32).copy())
+        if not pts_list:
+            return (np.zeros((0, 3), dtype=np.float32),
+                    np.zeros((0, 3), dtype=np.float32))
+        return np.concatenate(pts_list, axis=0), np.concatenate(col_list, axis=0)
+
+    def _update_dynamic_lidar(self, frame_idx: int) -> None:
+        """Per-frame refresh of /lidar/dynamic_active by remove+add.
+
+        Skipped entirely when per-track block is absent (legacy ckpts keep
+        their static world-frame snapshot from _add_lidar_clouds).
+        """
+        if self.meta is None or not self.meta.has_per_track_dyn_lidar():
+            return
+        pts, cols = self._build_dyn_lidar_world(frame_idx)
+        # Carry forward user's visibility toggle when re-adding.
+        prev_visible = (self.h_dyn_pts.visible
+                        if self.h_dyn_pts is not None
+                        else True)
+        if self.h_dyn_pts is not None:
+            self.h_dyn_pts.remove()
+            self.h_dyn_pts = None
+        if pts.shape[0] == 0:
+            return
+        self.h_dyn_pts = self.server.scene.add_point_cloud(
+            "/lidar/dynamic_active",
+            points=pts,
+            colors=cols,
+            point_size=0.06,
+        )
+        self.h_dyn_pts.visible = prev_visible
 
     def _add_track_trajectories(self) -> None:
         """All tracks' active-frame polylines as one batched line_segments."""
@@ -406,6 +484,7 @@ class Viser4DViewer:
         self._update_ego_frustum(t_us)
         frame_idx = self.meta.lookup_frame_idx(t_us)
         self._update_active_cuboids(frame_idx)
+        self._update_dynamic_lidar(frame_idx)
         self._mirror_ui(t_us, frame_idx)
         self.need_update = True
 
