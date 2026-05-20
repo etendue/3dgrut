@@ -131,7 +131,7 @@ def inject_viz_4d(ckpt_path: str, dataset_path: str | None,
     conf = OmegaConf.merge(conf, OmegaConf.create({"path": dataset_path}))
 
     # Lazy import so machines without NCore SDK / kaolin don't crash on `import`.
-    from threedgrut.datasets.datasetNcore import NCoreDataset
+    from threedgrut import datasets
     from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.registry import specs_from_config
     from threedgrut.viz.metadata import extract_4d_metadata
@@ -146,9 +146,12 @@ def inject_viz_4d(ckpt_path: str, dataset_path: str | None,
         f"{[s.name for s in specs]}"
     )
 
-    # Build dataset (train split — only need its metadata accessors).
+    # Build dataset via the same factory the trainer uses; matches the per-key
+    # arg unpacking (NCoreDataset doesn't accept a DictConfig directly).
     logger.info(f"[inject] loading NCore dataset: {dataset_path}")
-    train_ds = NCoreDataset(conf, split="train")
+    train_ds, _val_ds = datasets.make(
+        name=conf.dataset.type, config=conf, ray_jitter=None
+    )
     train_ds._init_worker()
 
     # Repopulate dynamic-rigid tracks from the NCore cuboid autolabels so
