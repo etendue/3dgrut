@@ -42,7 +42,7 @@ import torch
 
 from threedgrut.utils.logger import logger
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # T8.13: ego.primary_camera_intrinsics_FTheta + primary_camera_resolution
 
 
 # --------------------------------------------------------------------- helpers

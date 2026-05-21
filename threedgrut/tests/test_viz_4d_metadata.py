@@ -99,12 +99,20 @@ def _model_with_tracks(real_conf, *, with_metadata: bool = True):
 
 
 # ----------------------------------------------------------------- tests
+def test_schema_version_is_2(real_conf):
+    # T8.13: viz_4d schema bumped to v2 with FTheta dict + resolution.
+    model = _model_with_tracks(real_conf)
+    dataset = _mock_dataset(n_frames=3)
+    md = extract_4d_metadata(model, dataset, real_conf)
+    assert md["schema_version"] == 2
+
+
 def test_extract_smoke(real_conf):
     model = _model_with_tracks(real_conf)
     dataset = _mock_dataset(n_frames=5)
     md = extract_4d_metadata(model, dataset, real_conf)
 
-    assert md["schema_version"] == SCHEMA_VERSION == 1
+    assert md["schema_version"] == SCHEMA_VERSION
     assert md["dataset_type"] == "ncore"
     assert md["sequence_id"] == "test_seq"
     # ego
@@ -276,6 +284,6 @@ def test_ckpt_roundtrip(tmp_path, real_conf):
     path = tmp_path / "smoke.pt"
     torch.save(ckpt, path)
     reloaded = torch.load(path, weights_only=False)
-    assert reloaded["viz_4d"]["schema_version"] == 1
+    assert reloaded["viz_4d"]["schema_version"] == SCHEMA_VERSION
     assert set(reloaded["viz_4d"]["tracks"].keys()) == set(md["tracks"].keys())
     assert reloaded["viz_4d"]["lidar"]["road_xyz"].shape == md["lidar"]["road_xyz"].shape
