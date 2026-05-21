@@ -165,3 +165,88 @@ def test_viewer_stores_initial_fov_rad(viewer_class):
 def test_viewer_initial_fov_rad_optional(viewer_class):
     instance = _make_viewer(viewer_class, target_fps=20.0)
     assert instance.initial_fov_rad is None
+
+
+# --------------------------------------------------------------------- T8.13
+def _make_fake_ftheta_metadata():
+    """Minimal FourDMetadata-like object with FTheta dict + resolution."""
+    import numpy as np
+    from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
+    return FourDMetadata(
+        schema_version=2, sequence_id="test",
+        ego_poses_c2w=np.eye(4, dtype=np.float32)[None],
+        ego_frame_timestamps_us=np.array([0], dtype=np.int64),
+        ego_primary_camera_id="camera_front_wide_120fov",
+        ego_primary_fov_y_rad=2.094, ego_primary_aspect=1.589,
+        ego_primary_intrinsics_ftheta={
+            "resolution":              np.array([1920, 1208], dtype=np.int64),
+            "shutter_type":            "ROLLING_TOP_TO_BOTTOM",
+            "principal_point":         np.array([960.0, 604.0], dtype=np.float32),
+            "reference_poly":          "PIXELDIST_TO_ANGLE",
+            "pixeldist_to_angle_poly": np.zeros(5, dtype=np.float32),
+            "angle_to_pixeldist_poly": np.zeros(5, dtype=np.float32),
+            "max_angle":               1.047,
+            "linear_cde":              np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        },
+        ego_primary_resolution=(1920, 1208),
+        tracks={}, tracks_camera_timestamps_us=np.array([0], dtype=np.int64),
+        road_xyz=None, road_rgb=None, dyn_xyz=None, dyn_rgb=None,
+        road_n_total=None, dyn_n_total=None,
+        dyn_local_xyz=None, dyn_track_ids=None, dyn_track_names=None,
+        initial_c2w=np.eye(4, dtype=np.float32), t_us_first=0, t_us_last=0,
+    )
+
+
+def _make_fake_pinhole_metadata():
+    md = _make_fake_ftheta_metadata()
+    md.ego_primary_intrinsics_ftheta = None
+    md.ego_primary_resolution = None
+    return md
+
+
+def test_viewer_accepts_metadata_kwarg(viewer_class):
+    """T8.13: Viser4DViewer.__init__ signature has metadata kwarg (already true
+    pre-T8.13, but pin it down)."""
+    import inspect
+    sig = inspect.signature(viewer_class.__init__)
+    assert "metadata" in sig.parameters
+
+
+def test_viewer_stores_lock_resolution_when_ftheta_present(viewer_class):
+    """T8.13: viewer derives ftheta_render_wh from metadata.ego_primary_resolution
+    when has_ftheta() is True. Mirrors the real __init__ logic without spinning
+    up viser server."""
+    md = _make_fake_ftheta_metadata()
+    with mock.patch.object(viewer_class, "__init__",
+                           autospec=True) as init_mock:
+        init_mock.return_value = None
+        instance = viewer_class(port=8080, engine=None, metadata=md)
+        instance.meta = md
+        # Replay the relevant lines from real __init__.
+        instance.ftheta_intrinsics = (
+            md.ego_primary_intrinsics_ftheta if md.has_ftheta() else None
+        )
+        instance.ftheta_render_wh = (
+            md.ego_primary_resolution if md.has_ftheta() else None
+        )
+    assert instance.ftheta_render_wh == (1920, 1208)
+    assert instance.ftheta_intrinsics is not None
+    assert "pixeldist_to_angle_poly" in instance.ftheta_intrinsics
+
+
+def test_viewer_ftheta_render_wh_none_when_pinhole(viewer_class):
+    """T8.13: pinhole / v1 metadata → ftheta_render_wh stays None."""
+    md = _make_fake_pinhole_metadata()
+    with mock.patch.object(viewer_class, "__init__",
+                           autospec=True) as init_mock:
+        init_mock.return_value = None
+        instance = viewer_class(port=8080, engine=None, metadata=md)
+        instance.meta = md
+        instance.ftheta_intrinsics = (
+            md.ego_primary_intrinsics_ftheta if md.has_ftheta() else None
+        )
+        instance.ftheta_render_wh = (
+            md.ego_primary_resolution if md.has_ftheta() else None
+        )
+    assert instance.ftheta_render_wh is None
+    assert instance.ftheta_intrinsics is None

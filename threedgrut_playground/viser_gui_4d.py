@@ -88,6 +88,22 @@ class Viser4DViewer:
         self.meta = metadata
         self.port = port
         self.target_fps = target_fps
+        # T8.13: when FourDMetadata carries FTheta polynomial intrinsics
+        # (viz_4d schema_v2), the viewer pipes them straight into
+        # engine.render_pass and locks the rendered W×H to the trained
+        # resolution. FTheta principal_point is in pixel coords, so changing
+        # W/H without re-scaling polynomial params would desync projection.
+        # Pinhole / non-FTheta ckpts keep the user-resizable behavior.
+        self.ftheta_intrinsics: Optional[dict] = (
+            metadata.ego_primary_intrinsics_ftheta
+            if metadata is not None and metadata.has_ftheta()
+            else None
+        )
+        self.ftheta_render_wh: Optional[tuple] = (
+            metadata.ego_primary_resolution
+            if metadata is not None and metadata.has_ftheta()
+            else None
+        )
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -190,6 +206,16 @@ class Viser4DViewer:
                 @slider.on_update
                 def _(_, _self=self):
                     _self.need_update = True
+            # T8.13: FTheta mode locks render W×H to trained resolution
+            # (principal_point is in pixels); hide the slider + show why.
+            if self.ftheta_render_wh is not None:
+                self.resolution_slider.visible = False
+                with folder:
+                    w, h = self.ftheta_render_wh
+                    self.server.gui.add_markdown(
+                        f"⚠️ **FTheta 模式**: render W×H 锁定到 "
+                        f"`{w}×{h}` (训练分辨率)，不可调节。"
+                    )
 
         @self.reset_view_button.on_click
         def _(_):
@@ -605,7 +631,8 @@ class Viser4DViewer:
     def fast_render(self, kaolin_camera: Camera) -> np.ndarray:
         """Run engine for one Gaussian pass; return RGB uint8 frame."""
         out = self.engine.render_pass(
-            kaolin_camera, is_first_pass=True, timestamp_us=self._t_us_current
+            kaolin_camera, is_first_pass=True, timestamp_us=self._t_us_current,
+            fisheye_intrinsics=self.ftheta_intrinsics,  # T8.13
         )
         rgba = torch.cat([out["rgb"], out["opacity"]], dim=-1)
         rgba = torch.clamp(rgba, 0.0, 1.0)
@@ -632,8 +659,13 @@ class Viser4DViewer:
         interval = 0.0
         for client in self.server.get_clients().values():
             try:
-                W = self.resolution_slider.value
-                H = int(self.resolution_slider.value / client.camera.aspect)
+                # T8.13 FTheta path locks W×H to trained resolution; pinhole
+                # path keeps the user-controllable slider (T8.12 behavior).
+                if self.ftheta_render_wh is not None:
+                    W, H = self.ftheta_render_wh
+                else:
+                    W = self.resolution_slider.value
+                    H = int(self.resolution_slider.value / client.camera.aspect)
                 view_matrix = get_c2w(client.camera)
                 fov_y = client.camera.fov
                 near = self.near_plane_slider.value
@@ -784,6 +816,17 @@ def main() -> None:
     else:
         ckpt = {}
     metadata = _load_metadata(ckpt, args.dataset_path, args.default_gs_config)
+    # T8.13: announce projection path so vast.ai / A800 operator sees
+    # at a glance whether FTheta or pinhole approximation is in effect.
+    if metadata is not None and metadata.has_ftheta():
+        ft = metadata.ego_primary_intrinsics_ftheta
+        print(f"[T8.13] FTheta intrinsics 已加载 "
+              f"(resolution={metadata.ego_primary_resolution}, "
+              f"max_angle={ft['max_angle']:.3f}rad). "
+              f"GUI resolution slider 已锁定到训练分辨率。")
+    else:
+        print("[T8.13] 无 FTheta intrinsics, 走 pinhole approximation 路径 "
+              "(T8.12 行为).")
     viewer = Viser4DViewer(
         port=args.port, engine=engine, metadata=metadata,
         target_fps=args.target_fps,
