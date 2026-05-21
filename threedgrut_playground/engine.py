@@ -39,6 +39,7 @@ from threedgrut.utils.logger import logger
 from threedgrut_playground.tracer import Tracer
 from threedgrut_playground.utils.depth_of_field import DepthOfField
 from threedgrut_playground.utils.environment import Environment
+from threedgrut_playground.utils.ftheta_intrinsics import ftheta_dict_to_tensors
 from threedgrut_playground.utils.kaolin_future.fisheye import generate_fisheye_rays
 from threedgrut_playground.utils.kaolin_future.transform import ObjectTransform
 from threedgrut_playground.utils.mesh_io import (
@@ -1005,46 +1006,50 @@ class Engine3DGRUT:
 
     def _trace_scene_mog(self, rays_ori: torch.Tensor, rays_dir: torch.Tensor,
                          *, camera: Optional[Camera] = None,
+                         fisheye_intrinsics: Optional[dict] = None,
                          timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
         # LayeredGaussians with active dynamic tracks: route through forward()
         # so per-track SE(3) deformation runs against the supplied timestamp.
         #
-        # T8.12 fix: Pre-fix this path built Batch with only rays + T_to_world=I
+        # T8.12: Pre-fix this path built Batch with only rays + T_to_world=I
         # + rays_in_world_space=True + NO intrinsics. 3dgut UT rasterizer
-        # raises "Camera intrinsics unavailable" on first render → viser
-        # crashes the moment a browser connects. Fix: contract matches
-        # NCoreDataset.get_gpu_batch_with_intrinsics so we render through the
-        # same kernel path as train.py / render.py:
-        #   - rays_ori / rays_dir are CAMERA-space (origin at 0, dir is the
-        #     pinhole-projected pixel direction in camera frame)
+        # raised "Camera intrinsics unavailable" → viser crashed on connect.
+        # Fix: contract matches NCoreDataset.get_gpu_batch_with_intrinsics:
+        #   - rays_ori / rays_dir CAMERA-space
         #   - T_to_world = camera c2w (4x4)
-        #   - rays_in_world_space = False (kernel uses T_to_world to put rays
-        #     into world frame and inverts to W2C for Gaussian projection)
+        #   - rays_in_world_space = False
         #   - intrinsics = [fx, fy, cx, cy] pinhole approximation
         #
-        # T8.13 (open): pinhole intrinsics here is an approximation that
-        # works for non-fisheye ckpts. For fisheye-trained ckpts (NCore
-        # camera_front_wide_120fov uses FTheta polynomial), the projection is
-        # geometrically wrong → Gaussians render as a "tunnel motion-blur"
-        # blur rather than the actual scene. Full fix requires extending
-        # viz_4d schema to carry fisheye polynomial + dispatching to
-        # `Batch.intrinsics_FThetaCameraModelParameters` here, see v2_plan.md
-        # § 1.1 T8.13 backlog. Until then viser_gui_4d only renders correct
-        # geometry for pinhole-trained ckpts.
+        # T8.13: when ``fisheye_intrinsics`` is supplied (viz_4d schema_v2
+        # ckpt with FTheta polynomial; viser_gui_4d FourDMetadata.has_ftheta()
+        # path), we route it into ``Batch.intrinsics_FThetaCameraModelParameters``
+        # instead of pinhole ``intrinsics``. 3dgut UT rasterizer at
+        # threedgut_tracer/tracer.py:471 then projects Gaussian covariances
+        # through the trained FTheta polynomial, matching render.py output.
+        # Pinhole and FTheta paths are mutually exclusive (the dispatching
+        # kernel checks intrinsics_FThetaCameraModelParameters before falling
+        # through to plain intrinsics; we keep one of the two None).
         #
-        # kaolin's _raygen_pinhole returns WORLD-space rays (origins =
-        # camera.position, dirs = R_c2w @ camera_local_dir). We undo that to
-        # get camera-space rays so the kernel handles the rest consistently.
+        # kaolin's _raygen_pinhole returns WORLD-space rays. We undo that to
+        # camera-space so the kernel handles the rest consistently.
         if isinstance(self.scene_mog, LayeredGaussians) and len(self.scene_mog.tracks_poses) > 0:
             intrinsics = None
+            ftheta_intrinsics_t = None
             T_to_world = torch.eye(4, dtype=rays_ori.dtype, device=rays_ori.device)[None]
             rays_in_world = True
             rays_ori_use = rays_ori
             rays_dir_use = rays_dir
             if camera is not None:
-                cx = float(camera.width) / 2.0 + float(camera.x0)
-                cy = float(camera.height) / 2.0 + float(camera.y0)
-                intrinsics = [float(camera.focal_x), float(camera.focal_y), cx, cy]
+                if fisheye_intrinsics is not None:
+                    # T8.13 FTheta path: defer projection to 3dgut UT rasterizer
+                    # via Batch.intrinsics_FThetaCameraModelParameters.
+                    ftheta_intrinsics_t = ftheta_dict_to_tensors(
+                        fisheye_intrinsics, device=rays_ori.device
+                    )
+                else:
+                    cx = float(camera.width) / 2.0 + float(camera.x0)
+                    cy = float(camera.height) / 2.0 + float(camera.y0)
+                    intrinsics = [float(camera.focal_x), float(camera.focal_y), cx, cy]
                 # Build c2w (kaolin stores whatever we pass as view_matrix
                 # verbatim; viser_gui_4d passes c2w in).
                 c2w_t = camera.view_matrix().to(
@@ -1054,13 +1059,9 @@ class Engine3DGRUT:
                     c2w_t = c2w_t.unsqueeze(0)
                 T_to_world = c2w_t
                 rays_in_world = False
-                # Convert kaolin's world-space rays back to camera-space:
-                #   world_ori = R_c2w @ 0 + t = t  (camera position)
-                #   world_dir = R_c2w @ cam_dir
-                # → cam_ori = 0, cam_dir = R_c2w^T @ world_dir = R_w2c @ world_dir
+                # Convert kaolin's world-space rays back to camera-space.
                 R_c2w = c2w_t[0, :3, :3]                 # [3,3]
                 R_w2c = R_c2w.transpose(0, 1)            # [3,3]
-                # rays_dir: [B, H, W, 3] → apply R_w2c to last dim
                 rays_dir_use = torch.einsum("ij,bhwj->bhwi", R_w2c, rays_dir.contiguous())
                 rays_ori_use = torch.zeros_like(rays_ori)
             batch = Batch(
@@ -1069,6 +1070,7 @@ class Engine3DGRUT:
                 T_to_world=T_to_world,
                 rays_in_world_space=rays_in_world,
                 intrinsics=intrinsics,
+                intrinsics_FThetaCameraModelParameters=ftheta_intrinsics_t,
                 timestamp_us=int(timestamp_us),
             )
             return self.scene_mog(batch, train=False)
@@ -1077,7 +1079,9 @@ class Engine3DGRUT:
     @torch.cuda.nvtx.range("render_pass")
     @torch.no_grad()
     def render_pass(self, camera: Camera, is_first_pass: bool,
-                    *, timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
+                    *, timestamp_us: int = -1,
+                    fisheye_intrinsics: Optional[dict] = None,
+                    ) -> Dict[str, torch.Tensor]:
         """Renders a single frame pass from the provided camera view, with optional progressive effects.
         This method is designed for interactive/real-time rendering scenarios where frame rate is prioritized
         over immediate full quality. It manages an internal state for progressive rendering effects.
@@ -1145,7 +1149,9 @@ class Engine3DGRUT:
                     )
                 else:
                     rb = self._trace_scene_mog(
-                        rays.rays_ori, rays.rays_dir, camera=camera, timestamp_us=timestamp_us
+                        rays.rays_ori, rays.rays_dir, camera=camera,
+                        fisheye_intrinsics=fisheye_intrinsics,
+                        timestamp_us=timestamp_us,
                     )
             else:
                 rb = self._render_playground_hybrid(rays.rays_ori, rays.rays_dir)
