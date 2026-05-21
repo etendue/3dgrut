@@ -67,8 +67,22 @@ def _subsample(t: torch.Tensor, k: Optional[int]) -> torch.Tensor:
 
 
 # --------------------------------------------------------------------- ego
-def _detect_primary_camera(dataset) -> tuple[str, float, float]:
-    """Return (camera_id, fov_y_rad, aspect) for the first camera in dataset.camera_ids.
+def _detect_primary_camera(dataset):
+    """Return (camera_id, fov_y_rad, aspect, ftheta_dict, resolution).
+
+    T8.13: tuple expanded from 3 to 5. ``ftheta_dict`` is the 8-key
+    params_dict that NCoreDataset.get_camera_intrinsics produces for
+    FTheta cameras (see datasetNcore.py:1467-1477) — it is consumed
+    verbatim by the 3dgut UT rasterizer in threedgut_tracer/tracer.py:471
+    via ``_3dgut_plugin.fromFThetaCameraModelParameters``. None for
+    pinhole / non-FTheta cameras (viewer falls back to pinhole approx).
+    ``resolution`` is the (W, H) int tuple of the trained camera —
+    viser_gui_4d locks render dims to this for FTheta ckpts because
+    principal_point is in pixel coords.
+
+    FTheta detection is duck-typed (``get_parameters`` + ``max_angle``)
+    so Mac tests don't need the NCore SDK; production NCore datasets
+    satisfy the same surface.
 
     Mirrors the FOV math in datasetNcore.create_dataset_camera_visualization
     (line 1531-1546): FTheta uses 2 * max_angle; pinhole-style uses
@@ -77,14 +91,16 @@ def _detect_primary_camera(dataset) -> tuple[str, float, float]:
     fallback_id = "primary"
     fallback_fov = 0.78  # ~45°
     fallback_aspect = 16.0 / 9.0
+    fallback_resolution = (1, 1)
 
     try:
         camera_id = dataset.camera_ids[0]
         seq_id = dataset.sequence_id
         camera_model = dataset.sequence_camera_models[seq_id][camera_id]
-        w = float(camera_model.resolution[0].item())
-        h = float(camera_model.resolution[1].item())
-        aspect = w / h if h > 0 else fallback_aspect
+        w = int(camera_model.resolution[0].item())
+        h = int(camera_model.resolution[1].item())
+        aspect = (w / h) if h > 0 else fallback_aspect
+        resolution = (w, h)
 
         # FTheta (fisheye-ish) vs pinhole — match dataset's own branching.
         max_angle = getattr(camera_model, "max_angle", None)
@@ -96,10 +112,32 @@ def _detect_primary_camera(dataset) -> tuple[str, float, float]:
             fov_y = 2.0 * float(max_angle)
         else:
             fov_y = fallback_fov
-        return str(camera_id), float(fov_y), float(aspect)
+
+        # T8.13: extract FTheta polynomial params_dict for ckpt persistence.
+        # Duck-type on get_parameters() + max_angle so this works without
+        # NCore SDK (Mac tests). The 8 keys mirror datasetNcore.py:1467-1477.
+        ftheta_dict = None
+        if max_angle is not None and hasattr(camera_model, "get_parameters"):
+            try:
+                params = camera_model.get_parameters()
+                ftheta_dict = {
+                    "resolution":              _to_cpu_int64(torch.as_tensor(params.resolution)).numpy(),
+                    "shutter_type":            params.shutter_type.name,
+                    "principal_point":         _to_cpu_float32(torch.as_tensor(params.principal_point)).numpy(),
+                    "reference_poly":          params.reference_poly.name,
+                    "pixeldist_to_angle_poly": _to_cpu_float32(torch.as_tensor(params.pixeldist_to_angle_poly)).numpy(),
+                    "angle_to_pixeldist_poly": _to_cpu_float32(torch.as_tensor(params.angle_to_pixeldist_poly)).numpy(),
+                    "max_angle":               float(params.max_angle),
+                    "linear_cde":              _to_cpu_float32(torch.as_tensor(params.linear_cde)).numpy(),
+                }
+            except Exception as e:
+                logger.warning(f"[viz_4d] FTheta intrinsics extraction failed: {e}; ftheta_dict=None")
+                ftheta_dict = None
+
+        return str(camera_id), float(fov_y), float(aspect), ftheta_dict, resolution
     except Exception as e:
         logger.warning(f"[viz_4d] primary camera detection fell back to defaults: {e}")
-        return fallback_id, fallback_fov, fallback_aspect
+        return fallback_id, fallback_fov, fallback_aspect, None, fallback_resolution
 
 
 def _extract_ego(dataset, conf) -> dict:
@@ -108,7 +146,10 @@ def _extract_ego(dataset, conf) -> dict:
     Only the primary camera (camera_ids[0]) is exported. Multi-camera support
     is left to v2.x — viz GUI shows a single moving frustum.
     """
-    primary_id, fov_y, aspect = _detect_primary_camera(dataset)
+    primary_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
+    # ftheta_dict / resolution are written into the returned ego block below
+    # (Task 2). For now we just unpack to keep the call site honest.
+    _ = (ftheta_dict, resolution)
 
     poses_np = dataset.get_poses()
     poses_c2w = torch.from_numpy(np.asarray(poses_np, dtype=np.float32))

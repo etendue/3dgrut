@@ -40,8 +40,17 @@ def real_conf():
 
 
 def _mock_dataset(*, n_frames: int = 5, road_pts: int = 1000,
-                  dyn_pts: int = 500, with_lidar: bool = True):
-    """Build a duck-typed dataset matching NCoreDataset's viz_4d surface."""
+                  dyn_pts: int = 500, with_lidar: bool = True,
+                  camera_type: str = "pinhole"):
+    """Build a duck-typed dataset matching NCoreDataset's viz_4d surface.
+
+    ``camera_type``:
+      - ``"pinhole"`` (default): camera_model has ``focal_length`` →
+        _detect_primary_camera goes through the pinhole branch and
+        ftheta_dict is None.
+      - ``"ftheta"``: camera_model has ``max_angle`` + ``get_parameters()``
+        returning the 8-key FTheta params object. T8.13 path.
+    """
     poses = np.eye(4, dtype=np.float32)[None].repeat(n_frames, axis=0)
     poses[:, 0, 3] = np.arange(n_frames, dtype=np.float32)
     frame_indices = np.arange(n_frames)
@@ -49,10 +58,30 @@ def _mock_dataset(*, n_frames: int = 5, road_pts: int = 1000,
     # NCore sensor.frames_timestamps_us has [N, 2] (START / END columns).
     raw_ts = np.stack([timestamps_us - 100, timestamps_us], axis=1)
 
-    camera_model = SimpleNamespace(
-        resolution=torch.tensor([1600.0, 900.0]),
-        focal_length=torch.tensor([1200.0, 1200.0]),
-    )
+    if camera_type == "ftheta":
+        # T8.13 fixture: duck-type FTheta camera_model + get_parameters().
+        ftheta_params = SimpleNamespace(
+            resolution=torch.tensor([1920, 1208], dtype=torch.int64),
+            shutter_type=SimpleNamespace(name="ROLLING_TOP_TO_BOTTOM"),
+            principal_point=torch.tensor([960.0, 604.0]),
+            reference_poly=SimpleNamespace(name="PIXELDIST_TO_ANGLE"),
+            pixeldist_to_angle_poly=torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0]),
+            angle_to_pixeldist_poly=torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0]),
+            max_angle=1.047,
+            linear_cde=torch.tensor([1.0, 0.0, 0.0]),
+        )
+        camera_model = SimpleNamespace(
+            resolution=torch.tensor([1920.0, 1208.0]),
+            max_angle=1.047,
+            get_parameters=lambda: ftheta_params,
+            # Class identity tag so _detect_primary_camera duck-type guard works.
+            _is_ftheta_mock=True,
+        )
+    else:
+        camera_model = SimpleNamespace(
+            resolution=torch.tensor([1600.0, 900.0]),
+            focal_length=torch.tensor([1200.0, 1200.0]),
+        )
     camera_sensor = SimpleNamespace(frames_timestamps_us=raw_ts)
     seq_id = "test_seq"
     ds = SimpleNamespace(
@@ -105,6 +134,34 @@ def test_schema_version_is_2(real_conf):
     dataset = _mock_dataset(n_frames=3)
     md = extract_4d_metadata(model, dataset, real_conf)
     assert md["schema_version"] == 2
+
+
+def test_detect_primary_camera_returns_ftheta_dict_for_ncore(real_conf):
+    # T8.13: FTheta camera_model → 8-key dict returned + resolution tuple.
+    from threedgrut.viz.metadata import _detect_primary_camera
+    dataset = _mock_dataset(n_frames=3, camera_type="ftheta")
+    cam_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
+    assert cam_id == "front_long"
+    assert ftheta_dict is not None
+    expected_keys = {
+        "resolution", "shutter_type", "principal_point", "reference_poly",
+        "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+        "linear_cde",
+    }
+    assert set(ftheta_dict.keys()) == expected_keys
+    assert resolution == (1920, 1208)
+    assert ftheta_dict["shutter_type"] == "ROLLING_TOP_TO_BOTTOM"
+    assert ftheta_dict["reference_poly"] == "PIXELDIST_TO_ANGLE"
+    assert ftheta_dict["max_angle"] == pytest.approx(1.047)
+
+
+def test_detect_primary_camera_returns_none_ftheta_for_pinhole(real_conf):
+    # T8.13: pinhole camera_model → ftheta_dict is None, resolution still set.
+    from threedgrut.viz.metadata import _detect_primary_camera
+    dataset = _mock_dataset(n_frames=3, camera_type="pinhole")
+    cam_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
+    assert ftheta_dict is None
+    assert resolution == (1600, 900)
 
 
 def test_extract_smoke(real_conf):
