@@ -14,22 +14,35 @@ from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 
 # ---------------------------------------------------------- helpers
 def _make_viz_block(F: int = 5, N_ego: int = 6, road_pts: int = 100,
-                    dyn_pts: int = 50) -> dict:
+                    dyn_pts: int = 50, *, with_ftheta: bool = False) -> dict:
+    ego: dict = {
+        "poses_c2w": torch.stack(
+            [torch.eye(4) for _ in range(N_ego)]
+        ),
+        "frame_timestamps_us": torch.tensor(
+            [1000 * (i + 1) for i in range(N_ego)], dtype=torch.int64
+        ),
+        "primary_camera_id":        "front_long",
+        "primary_camera_fov_y_rad": 0.65,
+        "primary_camera_aspect":    1.78,
+    }
+    if with_ftheta:
+        ego["primary_camera_intrinsics_FTheta"] = {
+            "resolution":              np.array([1920, 1208], dtype=np.int64),
+            "shutter_type":            "ROLLING_TOP_TO_BOTTOM",
+            "principal_point":         np.array([960.0, 604.0], dtype=np.float32),
+            "reference_poly":          "PIXELDIST_TO_ANGLE",
+            "pixeldist_to_angle_poly": np.zeros(5, dtype=np.float32),
+            "angle_to_pixeldist_poly": np.zeros(5, dtype=np.float32),
+            "max_angle":               1.047,
+            "linear_cde":              np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        }
+        ego["primary_camera_resolution"] = (1920, 1208)
     return {
-        "schema_version": 1,
+        "schema_version": 2 if with_ftheta else 1,
         "dataset_type":   "ncore",
         "sequence_id":    "seq_x",
-        "ego": {
-            "poses_c2w": torch.stack(
-                [torch.eye(4) for _ in range(N_ego)]
-            ),
-            "frame_timestamps_us": torch.tensor(
-                [1000 * (i + 1) for i in range(N_ego)], dtype=torch.int64
-            ),
-            "primary_camera_id":        "front_long",
-            "primary_camera_fov_y_rad": 0.65,
-            "primary_camera_aspect":    1.78,
-        },
+        "ego": ego,
         "tracks": {
             "t0": {
                 "poses":      torch.eye(4).repeat(F, 1, 1),
@@ -88,6 +101,35 @@ def test_from_ckpt_basic_fields():
     assert md.has_lidar() is True
     assert md.road_xyz.shape == (100, 3)
     assert md.dyn_xyz.shape == (50, 3)
+
+
+def test_from_ckpt_loads_ftheta_dict_v2():
+    # T8.13: schema_v2 ckpt with FTheta dict → FourDMetadata exposes it.
+    md = FourDMetadata.from_ckpt({"viz_4d": _make_viz_block(with_ftheta=True)})
+    assert md is not None
+    assert md.schema_version == 2
+    assert md.ego_primary_intrinsics_ftheta is not None
+    assert "pixeldist_to_angle_poly" in md.ego_primary_intrinsics_ftheta
+    assert md.ego_primary_resolution == (1920, 1208)
+    assert md.has_ftheta() is True
+
+
+def test_has_ftheta_false_for_v1_ckpt():
+    # Backward compat: v1 ckpt without FTheta keys → has_ftheta() False, no crash.
+    md = FourDMetadata.from_ckpt({"viz_4d": _make_viz_block(with_ftheta=False)})
+    assert md is not None
+    assert md.ego_primary_intrinsics_ftheta is None
+    assert md.ego_primary_resolution is None
+    assert md.has_ftheta() is False
+
+
+def test_has_ftheta_false_when_dict_missing_keys():
+    # Malformed FTheta dict (missing required key) → has_ftheta() False (guard).
+    viz = _make_viz_block(with_ftheta=True)
+    del viz["ego"]["primary_camera_intrinsics_FTheta"]["max_angle"]
+    md = FourDMetadata.from_ckpt({"viz_4d": viz})
+    assert md.ego_primary_intrinsics_ftheta is not None  # dict still loaded
+    assert md.has_ftheta() is False  # but accessor refuses incomplete dict
 
 
 def test_lookup_frame_idx_binary_search():

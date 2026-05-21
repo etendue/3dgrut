@@ -39,6 +39,13 @@ class FourDMetadata:
     ego_primary_camera_id: str
     ego_primary_fov_y_rad: float
     ego_primary_aspect: float
+    # T8.13 (schema_v2): full FTheta polynomial intrinsics + locked render
+    # resolution. None for pinhole / non-FTheta cameras (schema_v1 ckpts).
+    # When ``has_ftheta()`` is True the viewer wires this dict into
+    # ``Batch.intrinsics_FThetaCameraModelParameters`` for 3dgut UT
+    # rasterizer fisheye projection (matching render.py's geometry).
+    ego_primary_intrinsics_ftheta: Optional[dict]
+    ego_primary_resolution: Optional[tuple]  # (W, H) int tuple
     tracks: dict[str, dict]               # tid → {poses, size, frame_info, class}
     tracks_camera_timestamps_us: np.ndarray  # (F,) int64
     road_xyz: Optional[np.ndarray]
@@ -92,6 +99,12 @@ class FourDMetadata:
             ego_primary_camera_id=str(ego.get("primary_camera_id", "primary")),
             ego_primary_fov_y_rad=float(ego.get("primary_camera_fov_y_rad", 0.78)),
             ego_primary_aspect=float(ego.get("primary_camera_aspect", 1.78)),
+            ego_primary_intrinsics_ftheta=ego.get("primary_camera_intrinsics_FTheta"),
+            ego_primary_resolution=(
+                tuple(int(x) for x in ego["primary_camera_resolution"])
+                if ego.get("primary_camera_resolution") is not None
+                else None
+            ),
             tracks=tracks,
             tracks_camera_timestamps_us=shared_ts,
             road_xyz=_to_np(lidar.get("road_xyz")),
@@ -114,6 +127,28 @@ class FourDMetadata:
 
     def n_frames(self) -> int:
         return int(self.tracks_camera_timestamps_us.shape[0])
+
+    def has_ftheta(self) -> bool:
+        """True if FTheta polynomial intrinsics + matching resolution are
+        present and complete (all 8 required keys + (W, H) tuple).
+
+        Viewer uses this to decide between FTheta projection path (3dgut
+        UT rasterizer via ``Batch.intrinsics_FThetaCameraModelParameters``)
+        and pinhole fallback (kaolin ``Camera.from_args`` fov approx).
+        """
+        REQUIRED_KEYS = {
+            "resolution", "shutter_type", "principal_point", "reference_poly",
+            "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+            "linear_cde",
+        }
+        d = self.ego_primary_intrinsics_ftheta
+        if d is None or not isinstance(d, dict):
+            return False
+        if not REQUIRED_KEYS.issubset(d.keys()):
+            return False
+        if self.ego_primary_resolution is None:
+            return False
+        return True
 
     def has_lidar(self) -> bool:
         return (
