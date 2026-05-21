@@ -108,7 +108,9 @@ ssh -N -T -o ControlMaster=no -o ControlPath=none \
 
 ✅ **FTheta-trained ckpts 现已支持视觉匹配 render.py**。schema_v2 起 `viz_4d.ego` 持久化完整 8-key FTheta polynomial intrinsics (`resolution / shutter_type / principal_point / reference_poly / pixeldist_to_angle_poly / angle_to_pixeldist_poly / max_angle / linear_cde`) + `primary_camera_resolution`。当 ckpt 含这些字段时，viser_gui_4d 自动启用 FTheta 分支，调用 3dgut UT rasterizer 走 `Batch.intrinsics_FThetaCameraModelParameters` 投影路径（kernel 在 `threedgut_tracer/tracer.py:471` 已原生支持，本任务全 Python 改动）。
 
-⚠️ **限制**: render W×H 锁定到训练分辨率（FTheta principal_point 是像素坐标，分辨率改了就错位）。`resolution_slider` 在 FTheta 模式下自动隐藏 + GUI 显示提示。
+⚠️ **限制 1**: render W×H 锁定到训练分辨率（FTheta principal_point 是像素坐标，分辨率改了就错位）。`resolution_slider` 在 FTheta 模式下自动隐藏 + GUI 显示提示。
+
+⚠️ **限制 2 — GS view-extrapolation degradation（GS 通病，非 T8.13 bug）**: 在 ego 训练轨迹附近（Reset View 后 / timeline 拖到训练帧 ego pose）渲染清晰；用户 viser orbit 自由飞离训练相机轨迹后**视觉质量急剧下降**（motion blur / 几何错位）。原因：Gaussian Splatting 训练时 over-fit 训练视角，离开训练分布无监督 → 协方差投影乱伸缩。Mitigations：(a) 用 Reset View 按钮回到 initial_c2w；(b) 用 timeline 切换到任意训练帧的 ego pose（沿训练轨迹移动，质量保持）；(c) 未来可加 GUI lock 强制相机沿 `ego_poses_c2w` spline 插值（T8.13 follow-up backlog）。
 
 **启动日志区分**:
 - `[T8.13] FTheta intrinsics 已加载 (resolution=(W,H), max_angle=...)` —— v2 FTheta 路径
