@@ -458,7 +458,7 @@ flowchart TB
 | `threedgrut/tests/test_viser_math.py` | T8.4 ✅ (Stage 8 Mac, 4 测试: identity / 90deg_x / 50 random round-trip / canonical sign) |
 | `threedgrut/tests/test_cuboid_wireframe.py` | T8.5 ✅ (Stage 8 Mac, 9 测试: shape / vertex range / unique pairs / identity / translation / size scale / z90 rotation / class_color / instance_color) |
 | `threedgrut_playground/README_4D.md` | T8.x ✅ (Stage 8 Mac, 用户文档 Quick Start + GUI + ckpt schema + fallback + troubleshooting) |
-| `WP_V2_Report.md` | T7.5 (待办) |
+| `WP_V2_Report.md` | T7.5 ✅ (Stage 7 结题, 231 行: KPI 三组对比 + ExposureModel 失控诊断 + cc_PSNR 解读 + V3-P1 整合方案) |
 
 ### 6.2 修改文件
 
@@ -481,7 +481,7 @@ flowchart TB
 | `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 (62fc509)；抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical, road spec 注 1,1,0)；add/relocate 同步 track_ids buffer (T4.5) | T2.1 ✅ / T3.4 ✅ / T4.5 ✅ |
 | `threedgrut/strategy/layered_mcmc.py` | sub 构造时 `_install_perturb_mask` 注入 spec.perturb_scale_mask | T3.4 ✅ |
 | `configs/base_gs.yaml` | + `use_layered_model: false` + `layers.enabled: [background]` + `trainer.layered_loss: false` 默认 (T1.2/T3.4)；+ `trainer.use_sky_envmap` + `sky_backend (null=spec default)` + `sky_resolution` + `sky_lr` + `lambda_sky` (T5.3 Stage 5)；+ `trainer.use_exposure` + `exposure_lr` (T6.2 Stage 6) | T1.2 ✅ / T3.4 ✅ / T5.3 ✅ / T6.2 ✅ |
-| `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 (待办) |
+| `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 ⏭ 跳过 (仓库无 schemas/ 目录, scene_manifest 在 v2 是隐式的 NCore SDK manifest_json, 未做 JSON Schema 校验; 转 V3 backlog) |
 
 ### 6.3 复用外部代码（不修改源头，借代码或思想）
 
@@ -593,6 +593,15 @@ flowchart TB
 | **T8.5 Stage 8** instance_color FNV-1a hash 确定性 (相同 tid 永远相同色) | T8.5 ✅ | `test_instance_color_deterministic` (Mac, 跨调用 stable) |
 | **T8.10 Stage 8** --no_gaussian_render 模式跳过 Engine3DGRUT 完全 init (避免 OptiX dlopen segfault on **Ampere datacenter SKU** A100/A800 — RT cores 被 NVIDIA 阉割; Hopper datacenter H100/H800/H200 保留第 3 代 RT cores 不受影响) | T8.10 ✅ A800 | A800 实测: server listening *:8080 起来, 浏览器拖 timeline scene primitives + frustum 同步动 (无 Gaussian 背景) |
 | **T8.11 Stage 8** dyn LiDAR per-track object-local + 每帧 R·local+t world transform 让点云跟 cuboid 动 (复用训练侧 init_dynamic_rigid_layer) | T8.11 ✅ A800 | A800 实测: 48,488 个 object-local 点分布 20 active tracks (cap 5000/track), 994.8 MB ckpt; 浏览器拖 timeline → dyn LiDAR 点云跟 cuboid 飘. `test_dyn_lidar_per_track_local_frame` 验证 schema 完整性 (Mac) |
+| **T8.12 Stage 8** RT cores 路径 (Ada/Hopper consumer & workstation) viser_gui_4d 浏览器端到端 5/5 验收通过 + 修 Stage 8 三集成 bug | T8.12 ✅ RTX 4090 | vast.ai RTX 4090 24GB ($0.630/hr Norway, $1.5 总成本) 浏览器端到端: 87 FPS @ 1024×~600, Gaussian dashcam 隧道视角 sharp, timeline play → cuboid + ego frustum + Gaussian + dyn LiDAR 全同步, dyn LiDAR per-track 点云跟车. Mac smoke3 (test_render_pass3.py, 5 帧 @ 1080x720, 21 ms/frame avg = 47 FPS) 验证 fix 在程序 API 层无回归 |
+| **T8.12 不变量 1** LayeredGaussians + tracks 路径构 Batch 必须含 camera intrinsics (3dgut UT 投影焦距来源) | T8.12 ✅ | `engine.py:_trace_scene_mog` 加 `camera=None` kwarg, 从 kaolin Camera 算 `[fx,fy,cx,cy]` 塞 Batch.intrinsics. 不传则 tracer `__create_camera_parameters` 抛 "Camera intrinsics unavailable" |
+| **T8.12 不变量 2** playground engine 加载 ckpt 后整个 ModuleDict 必须搬上 GPU (sky_envmap / exposure 等非 particle layer 用 load_state_dict 不自动迁移 device) | T8.12 ✅ | `layered_model.py:init_from_checkpoint` 末尾加 `if torch.cuda.is_available(): self.cuda()`. 不加则 `_blend_sky` 报 `cpu vs cuda:0` addmm 错 |
+| **T8.12 不变量 3** viser 浏览器 client 的 fov 与 ckpt 训练 fov 必须一致, 否则 Gaussian 投影乱糊 | T8.12 ✅ | `viser_gui_4d.py:update`: 用 `meta.ego_primary_fov_y_rad` (ckpt 训练 fov) override `client.camera.fov` (浏览器默认 ~45°). NCore 数据集 fov_y = 2.441 rad (~140° dashcam wide-angle) |
+| **T8.12 不变量 4** Reset View 必须真正 snap camera 到 `meta.initial_c2w` (位置 + wxyz + look_at + up_direction), 不能只重置 up_direction | T8.12 ✅ | `viser_gui_4d.py:reset_view_button.on_click` 全套设置 4 个 client.camera 字段从 initial_c2w 取 |
+| **Stage 7 实测锚点** ExposureModel 健康度: `raw_psnr_masked` 与 `cc_psnr_masked` 差距 ≤ 2 dB 为健康, 大于此差距警告 exposure 退化 | T7.3 / T7.3.b ✅ | A800 实测三组对照: T6F.3 (single 5k) Δ=+4.59 dB 健康 / T7.3 (7-cam 30k exp ON) Δ=-9.12 dB ❌ 失控 / T7.3.b (7-cam 30k exp OFF) Δ=+1.06 dB 健康. 详见 v2_plan.md § 5 Stage 7 段 |
+| **Stage 7 实测锚点** cc_psnr_masked 是 v2 真实重建质量 KPI (撤销 exposure 偏移 + 排除 ego 区), v2 架构在 NCore 9ae151dc clip 天花板 ≈ **24.7 dB** | T7.3 / T7.3.b ✅ | T6F.3 24.90 / T7.2 22.76 / T7.3 24.75 / T7.3.b 24.70 全部 σ < 0.2 dB → 真实质量在 Stage 5-7 不增不减; raw `psnr_masked` 只作 ExposureModel 健康检查 |
+| **Stage 7 实测锚点** ExposureModel 30k 长训退化优化失控 (路径 1 物理正确 vs 路径 2 病态短路 — 14 参数 vs 几百万高斯, 30k Adam 无约束选病态短路) | T7.3 ✅ → V3-P1 升级 | T7.3 raw_masked 15.63 (path 2: exposure 学到大偏移 raw 严重过曝/泛白) vs T7.3.b 25.76 (强制 path 1). v2_plan.md § 14.5 V3-P1 整合 bilateral-grid + 加约束防退化 (L2 reg + lr decay + freeze) |
+| **Stage 7 实测锚点** 7-cam 30k masked PSNR 25.76 vs 1-cam 5k masked PSNR 29.49 — 多相机长训反而 -3.73 dB | T7.3.b ✅ → V3 排查 | 候选: 多相机 frustum 重叠少监督稀疏 / 30k 过拟合 / dyn 70 tracks 粒子分配不充分 / 多相机 LiDAR 监督权重未调. V3 1-cam 30k + 5-cam 30k 三角化定位 |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
 
 ---

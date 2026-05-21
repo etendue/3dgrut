@@ -10,6 +10,47 @@
 #   - exposure_model.exposure_a.detach().std() > 0.01 (learned per-cam offsets)
 #   - 全图 PSNR ≥ Stage 5 同 5-cam baseline (不退化)
 #   - rear / 侧 cam PSNR > Stage 5 同 cam baseline + 0.3 dB
+#
+# ──────────────────────────────────────────────────────────────────────────
+# Stage 7 复用入口 (T7.1, 2026-05-20 plan stage-7-tranquil-brook)
+# ──────────────────────────────────────────────────────────────────────────
+# 该 yaml 已实质等价于 v2 plan 中 "v2_full + sky + exposure" 全栈, 故 Stage 7
+# 直接复用, 不新建 yaml. Stage 7 通过 CLI override 注入 7-cam + 长 clip + 30k:
+#   python train.py --config-name apps/ncore_3dgut_mcmc_v2_full_exposure \
+#     n_iterations=30000 \
+#     'dataset.camera_ids=[camera_front_wide_120fov,camera_front_tele_30fov,
+#       camera_cross_left_120fov,camera_cross_right_120fov,
+#       camera_rear_left_70fov,camera_rear_right_70fov,
+#       camera_rear_tele_30fov]' \
+#     trainer.sky_backend=mlp   # A800 nvdiffrast 不可用 → MLP fallback
+#
+# Stage 7 出口门槛 (A800 30k step, 7-cam 20s):
+#   - mean_psnr_full ≥ 28.5 (软出口, 与 v1 plan 可比)
+#   - mean_psnr_masked ≥ 30 (硬出口, 反映真实重建质量, T6F.3 baseline 29.49)
+#   - road region PSNR ≥ 32, dynamic vehicle PSNR ≥ 25
+#   - 训练时间 ≤ 60 min (A800 9.61 it/s × 30000 ≈ 52 min + eval)
+#
+# ──────────────────────────────────────────────────────────────────────────
+# Stage 7 结题警告 (2026-05-21, plan stage-7-tranquil-brook 实证)
+# ──────────────────────────────────────────────────────────────────────────
+# ⚠️ ExposureModel 在 7-cam 30k 长训中实测【退化优化失控】:
+#   - T7.3 run (本配置, exposure ON): raw psnr_masked = 15.63 dB ❌ (远低 30 目标)
+#   - T7.3.b ablation (use_exposure=false): raw psnr_masked = 25.76 dB (+10.13 dB)
+#   - 但 cc_psnr_masked 两组几乎一致 (24.75 vs 24.70, σ < 0.2 dB noise 级)
+#   - 实证: 真实重建质量没差, 只是 raw RGB 被 exposure 推到大幅偏色彩空间
+#
+# 退化机制: 30k Adam × 14 参数 × 无约束 → 模型选择病态短路 "高斯学个大概 +
+# exposure 补偿全部偏差" (path 2 更快收敛 vs path 1 物理正确). 详见
+# v2_plan.md § 5 "Stage 7 软出口结题" + WP_V2_Report.md § 四 + § 14.5 V3-P1.
+#
+# 【V3-P1 修复前推荐配置】 (Stage 7 出口推荐):
+#   python train.py --config-name apps/ncore_3dgut_mcmc_v2_full_exposure \
+#     n_iterations=30000 trainer.use_exposure=false trainer.sky_backend=mlp \
+#     'dataset.camera_ids=[<7 cam>]'
+#
+# 【V3-P1 整合任务】: bilateral-grid color correction (Recon-Studio port) +
+# ExposureModel 退化修复 (L2 reg + lr cosine decay + 2-stage freeze step>2000).
+# v2_plan.md § 14.5 V3-P1 升级版任务卡详述. 预估 3-5 天, V3 启动优先级最高.
 defaults:
   - ncore_3dgut_mcmc_v2_sky
   - _self_
