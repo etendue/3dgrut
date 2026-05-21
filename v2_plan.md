@@ -45,11 +45,11 @@ kanban
   Blocked
   Done
     [T8.12-FIX CLI 基建 + vast.ai 4090 视觉验收 + 诊断锚定 T8.13 必走 ✅]
-    [T7.1 复用 v2_full_exposure (注释 Stage 7 入口) + 7-cam Hydra dump ✅]
+    [T7.1 复用 v2_full_exposure （注释 Stage 7 入口） + 7-cam Hydra dump ✅]
     [T7.2 A800 1-cam 1k smoke 9.71 it/s / masked 26.38 / 12 字段 metrics ✅]
     [T7.3 A800 7-cam 30k 51 min raw masked 15.63 ❌ → 暴露 exposure 失控]
     [T7.3.b A800 7-cam 30k exposure OFF 证伪 raw masked 25.76 +10.13 dB ✅]
-    [T7.4 跳过 (根因不在 cap, 转 V3-P1 bilateral grid 整合) ⏭]
+    [T7.4 跳过 （根因不在 cap, 转 V3-P1 bilateral grid 整合） ⏭]
     [T7.5 WP_V2_Report.md + v2_plan/architecture 同步 + git commit ✅]
     [T0.1 A800 环境验证 smoke 24.12 dB ✅]
     [T1.1 LayeredGaussians 容器 NRE schema ✅]
@@ -95,9 +95,9 @@ kanban
     [T8.6 dataset --dataset_path lazy fallback ✅ Mac]
     [T8.8 Stage 8 A800 100 step smoke ✅ 70 tracks / ego 2623 / 960 MB]
     [T8.9 inject_viz_4d CLI "方案 B" ✅ A800 实测 T6F.3 ckpt 31 tracks / 991→995 MB]
-    [T8.10 viser_gui_4d --no_gaussian_render (Ampere datacenter A100/A800; Hopper H100 不需要) ✅]
+    [T8.10 viser_gui_4d --no_gaussian_render （Ampere datacenter A100/A800; Hopper H100 不需要） ✅]
     [T8.11 dyn LiDAR per-track local frame + 每帧 transform ✅ 48K 点 / 20 active tracks]
-    [T8.12 vast.ai RTX 4090 验证 viser_gui_4d ⚠️ 部分通过 (Bug #1+#2 修, fisheye 内参遗漏待 T8.13)]
+    [T8.12 vast.ai RTX 4090 验证 viser_gui_4d ⚠️ 部分通过 （Bug #1+#2 修, fisheye 内参遗漏待 T8.13） ]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
