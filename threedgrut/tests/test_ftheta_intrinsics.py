@@ -33,19 +33,22 @@ def test_none_passthrough():
     assert ftheta_dict_to_tensors(None) is None
 
 
-def test_numpy_int_array_to_int64():
+def test_numpy_int_array_to_list_int():
+    # T8.13: _3dgut_plugin binding declares list[int] FixedSize(2), NOT
+    # tensor/ndarray. Convert numpy int arrays → plain Python list[int].
     d = ftheta_dict_to_tensors(_fake_ftheta_dict_numpy())
-    assert torch.is_tensor(d["resolution"])
-    assert d["resolution"].dtype == torch.int64
-    assert d["resolution"].tolist() == [1920, 1208]
+    assert isinstance(d["resolution"], list)
+    assert all(isinstance(x, int) for x in d["resolution"])
+    assert d["resolution"] == [1920, 1208]
 
 
-def test_numpy_float_arrays_to_float32():
+def test_numpy_float_arrays_to_list_float():
+    # T8.13: principal_point / *_poly / linear_cde → list[float].
     d = ftheta_dict_to_tensors(_fake_ftheta_dict_numpy())
     for k in ("principal_point", "pixeldist_to_angle_poly",
               "angle_to_pixeldist_poly", "linear_cde"):
-        assert torch.is_tensor(d[k]), k
-        assert d[k].dtype == torch.float32, k
+        assert isinstance(d[k], list), k
+        assert all(isinstance(x, float) for x in d[k]), k
 
 
 def test_scalar_pass_through():
@@ -57,20 +60,23 @@ def test_scalar_pass_through():
     assert d["max_angle"] == pytest.approx(1.047)
 
 
-def test_existing_torch_tensor_moved_to_device():
+def test_torch_tensor_also_converted_to_list():
+    # Backward compat: if caller passes torch.Tensor, also normalize to list.
     src = {
         "resolution": torch.tensor([1920, 1208], dtype=torch.int64),
         "principal_point": torch.tensor([960.0, 604.0]),
         "max_angle": 1.0,
         "shutter_type": "GLOBAL",
         "reference_poly": "PIXELDIST_TO_ANGLE",
-        "pixeldist_to_angle_poly": torch.zeros(5),
-        "angle_to_pixeldist_poly": torch.zeros(5),
+        "pixeldist_to_angle_poly": torch.zeros(6),
+        "angle_to_pixeldist_poly": torch.zeros(6),
         "linear_cde": torch.tensor([1.0, 0.0, 0.0]),
     }
     out = ftheta_dict_to_tensors(src, device="cpu")
-    assert out["resolution"].device.type == "cpu"
-    assert torch.equal(out["resolution"], torch.tensor([1920, 1208], dtype=torch.int64))
+    assert out["resolution"] == [1920, 1208]
+    assert isinstance(out["resolution"][0], int)
+    assert isinstance(out["principal_point"], list)
+    assert isinstance(out["principal_point"][0], float)
 
 
 def test_all_8_required_keys_preserved():

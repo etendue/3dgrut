@@ -39,7 +39,10 @@ from threedgrut.utils.logger import logger
 from threedgrut_playground.tracer import Tracer
 from threedgrut_playground.utils.depth_of_field import DepthOfField
 from threedgrut_playground.utils.environment import Environment
-from threedgrut_playground.utils.ftheta_intrinsics import ftheta_dict_to_tensors
+from threedgrut_playground.utils.ftheta_intrinsics import (
+    ftheta_dict_to_tensors,
+    ftheta_pixels_to_camera_rays,
+)
 from threedgrut_playground.utils.kaolin_future.fisheye import generate_fisheye_rays
 from threedgrut_playground.utils.kaolin_future.transform import ObjectTransform
 from threedgrut_playground.utils.mesh_io import (
@@ -1046,24 +1049,45 @@ class Engine3DGRUT:
                     ftheta_intrinsics_t = ftheta_dict_to_tensors(
                         fisheye_intrinsics, device=rays_ori.device
                     )
+                    # T8.13 critical fix: training-side rays come from
+                    # camera_model.pixels_to_camera_rays (FTheta polynomial
+                    # inverse). kaolin's pinhole raygen produces totally
+                    # different rays_dir → Gaussians sample wrong angular
+                    # region → tunnel motion-blur output. Re-derive rays
+                    # from the FTheta polynomial right here so the contract
+                    # matches NCoreDataset._lazy_worker_gpu_cache (rays_ori=0,
+                    # rays_dir=FTheta camera-space, rays_in_world_space=False).
+                    rays_np = ftheta_pixels_to_camera_rays(fisheye_intrinsics)
+                    rays_dir_use = torch.from_numpy(rays_np).to(
+                        device=rays_ori.device, dtype=rays_ori.dtype
+                    ).unsqueeze(0)  # [1, H, W, 3]
+                    rays_ori_use = torch.zeros_like(rays_dir_use)
+                    # Build c2w → T_to_world (viser_gui_4d passes c2w in).
+                    c2w_t = camera.view_matrix().to(
+                        rays_ori.device, dtype=rays_ori.dtype
+                    )
+                    if c2w_t.ndim == 2:
+                        c2w_t = c2w_t.unsqueeze(0)
+                    T_to_world = c2w_t
+                    rays_in_world = False
                 else:
                     cx = float(camera.width) / 2.0 + float(camera.x0)
                     cy = float(camera.height) / 2.0 + float(camera.y0)
                     intrinsics = [float(camera.focal_x), float(camera.focal_y), cx, cy]
-                # Build c2w (kaolin stores whatever we pass as view_matrix
-                # verbatim; viser_gui_4d passes c2w in).
-                c2w_t = camera.view_matrix().to(
-                    rays_ori.device, dtype=rays_ori.dtype
-                )
-                if c2w_t.ndim == 2:
-                    c2w_t = c2w_t.unsqueeze(0)
-                T_to_world = c2w_t
-                rays_in_world = False
-                # Convert kaolin's world-space rays back to camera-space.
-                R_c2w = c2w_t[0, :3, :3]                 # [3,3]
-                R_w2c = R_c2w.transpose(0, 1)            # [3,3]
-                rays_dir_use = torch.einsum("ij,bhwj->bhwi", R_w2c, rays_dir.contiguous())
-                rays_ori_use = torch.zeros_like(rays_ori)
+                    # Build c2w (kaolin stores whatever we pass as view_matrix
+                    # verbatim; viser_gui_4d passes c2w in).
+                    c2w_t = camera.view_matrix().to(
+                        rays_ori.device, dtype=rays_ori.dtype
+                    )
+                    if c2w_t.ndim == 2:
+                        c2w_t = c2w_t.unsqueeze(0)
+                    T_to_world = c2w_t
+                    rays_in_world = False
+                    # Convert kaolin's world-space rays back to camera-space.
+                    R_c2w = c2w_t[0, :3, :3]                 # [3,3]
+                    R_w2c = R_c2w.transpose(0, 1)            # [3,3]
+                    rays_dir_use = torch.einsum("ij,bhwj->bhwi", R_w2c, rays_dir.contiguous())
+                    rays_ori_use = torch.zeros_like(rays_ori)
             batch = Batch(
                 rays_ori=rays_ori_use,
                 rays_dir=rays_dir_use,
