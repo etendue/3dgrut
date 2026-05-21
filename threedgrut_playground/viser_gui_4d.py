@@ -23,6 +23,7 @@ Three fallback modes (matches Task G):
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -81,11 +82,17 @@ class Viser4DViewer:
 
     def __init__(self, *, port: int, engine: "Engine3DGRUT | None",
                  metadata: Optional[FourDMetadata],
-                 target_fps: float = 20.0):
+                 target_fps: float = 20.0,
+                 initial_fov_rad: Optional[float] = None):
         self.engine = engine
         self.meta = metadata
         self.port = port
         self.target_fps = target_fps
+        # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
+        # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
+        # client.camera.fov = math.radians(90); we never did and used viser's
+        # default (~80°) which interacts poorly with FTheta-trained Gaussians.
+        self.initial_fov_rad = initial_fov_rad
         self.render_times: deque[float] = deque(maxlen=3)
 
         # Timeline state
@@ -128,6 +135,8 @@ class Viser4DViewer:
             if self.meta is not None:
                 client.camera.wxyz = mat_to_wxyz(self.meta.initial_c2w)
                 client.camera.position = self.meta.initial_c2w[:3, 3]
+            if self.initial_fov_rad is not None:
+                client.camera.fov = float(self.initial_fov_rad)
             @client.camera.on_update
             def _(_):
                 self.need_update = True
@@ -207,6 +216,8 @@ class Viser4DViewer:
                 client.camera.up_direction = (
                     tf.SO3(client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
                 )
+                if self.initial_fov_rad is not None:
+                    client.camera.fov = float(self.initial_fov_rad)
 
     def _build_timeline_gui(self) -> None:
         """Time slider + Play/Pause/Loop/Speed (only when metadata present)."""
@@ -718,6 +729,31 @@ def main() -> None:
                              "cores and don't need this flag. Scene "
                              "primitives (ego/cuboid/LiDAR) + timeline still "
                              "work in this mode.")
+    # T8.12-FIX (Phase A.2 + A.5): explicit viser fov + optional fisheye
+    # raygen switch. Reference repo (tools/viser_multilayer_nurec.py) uses
+    # --fov_deg=90 hard-set for fisheye-trained ckpts and renders cleanly via
+    # pinhole approximation. Our engine already has _raygen_fisheye gated by
+    # engine.camera_type; we just never wire it through viser_gui_4d. These
+    # flags let A800/vast.ai operator A/B-test pinhole-90 vs fisheye-120
+    # without code edits.
+    parser.add_argument("--initial_fov_deg", type=float, default=90.0,
+                        help="Initial viser client camera vertical fov (deg). "
+                             "Default 90 matches reference repo "
+                             "tools/viser_multilayer_nurec.py. Set explicitly "
+                             "to test e.g. 60 / 75 / 120; viser UI still lets "
+                             "the user override at runtime.")
+    parser.add_argument("--camera_type", type=str, default="Pinhole",
+                        choices=["Pinhole", "Fisheye"],
+                        help="Engine raygen mode. 'Pinhole' (default) matches "
+                             "T8.12 + reference repo behavior. 'Fisheye' "
+                             "routes through engine._raygen_fisheye + "
+                             "generate_fisheye_rays; use with --camera_fov_deg "
+                             "matching training (e.g. 120 for NCore "
+                             "camera_front_wide_120fov).")
+    parser.add_argument("--camera_fov_deg", type=float, default=None,
+                        help="Engine fisheye fov (deg). Only used when "
+                             "--camera_type=Fisheye. Defaults to "
+                             "--initial_fov_deg when omitted.")
     args = parser.parse_args()
 
     if args.no_gaussian_render:
@@ -731,6 +767,17 @@ def main() -> None:
             envmap_assets_folder=args.envmap_assets,
             default_config=args.default_gs_config,
         )
+        # T8.12-FIX: opt-in fisheye raygen for FTheta-trained ckpts. Reference
+        # repo + our T8.12 stuck with pinhole; this hook lets operators flip
+        # without rebuilding the engine.
+        if args.camera_type == "Fisheye":
+            fisheye_fov_deg = (args.camera_fov_deg
+                               if args.camera_fov_deg is not None
+                               else args.initial_fov_deg)
+            engine.camera_type = "Fisheye"
+            engine.camera_fov = float(fisheye_fov_deg)
+            print(f"[viz_4d] engine.camera_type=Fisheye, "
+                  f"engine.camera_fov={fisheye_fov_deg}°")
     # Need ckpt dict for metadata; re-load explicitly (engine loaded model only).
     if args.gs_object.endswith(".pt"):
         ckpt = torch.load(args.gs_object, weights_only=False)
@@ -740,6 +787,7 @@ def main() -> None:
     viewer = Viser4DViewer(
         port=args.port, engine=engine, metadata=metadata,
         target_fps=args.target_fps,
+        initial_fov_rad=math.radians(args.initial_fov_deg),
     )
     while True:
         start = time.time()
