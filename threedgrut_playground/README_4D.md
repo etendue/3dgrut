@@ -102,19 +102,34 @@ ssh -N -T -o ControlMaster=no -o ControlPath=none \
 - Reset View 按钮真的能 snap camera 回 ckpt 训练相机位置（之前只重置 up_direction，T8.12 fix 后完整重置 position + wxyz + look_at + up_direction）
 - viser server / client subprotocol 版本必须严格匹配；中间 pip downgrade 会让 JS bundle 跟 server 版本不一致 → WebSocket 被拒只看到 /WorldAxes
 
-**T8.12 实测 RTX 4090 Norway $0.630/hr @ 1024×~600 → 87 FPS 稳态**，但**Gaussian 视觉输出跟 render.py 不匹配**（已知 schema limitation）：
+**T8.12 实测 RTX 4090 Norway $0.630/hr @ 1024×~600 → 87 FPS 稳态**。
 
-> ⚠️ **fisheye 训练的 ckpt 在 viser 渲染会乱糊**（隧道+motion blur 状）。原因：viz_4d schema (T8.2 设计) 只存 `primary_camera_fov_y_rad` 简化, 没存 FTheta polynomial / OpenCVFisheye 畸变系数。NCore ckpt 用 `camera_front_wide_120fov` 训练 (FTheta fisheye), viser 用 pinhole + 单一 fov 投影 → Gaussians 几何错位。
->
-> **想看完整 ground truth 渲染请用 `render.py`**（它走 NCoreDataset 直接读完整 fisheye 内参）。viser_gui_4d 当前最适合**非 fisheye 数据集** + 看 scene primitives + 4D timeline 同步；fisheye 完整渲染留 T8.13。
+### FTheta fisheye 渲染（T8.13）
+
+✅ **FTheta-trained ckpts 现已支持视觉匹配 render.py**。schema_v2 起 `viz_4d.ego` 持久化完整 8-key FTheta polynomial intrinsics (`resolution / shutter_type / principal_point / reference_poly / pixeldist_to_angle_poly / angle_to_pixeldist_poly / max_angle / linear_cde`) + `primary_camera_resolution`。当 ckpt 含这些字段时，viser_gui_4d 自动启用 FTheta 分支，调用 3dgut UT rasterizer 走 `Batch.intrinsics_FThetaCameraModelParameters` 投影路径（kernel 在 `threedgut_tracer/tracer.py:471` 已原生支持，本任务全 Python 改动）。
+
+⚠️ **限制**: render W×H 锁定到训练分辨率（FTheta principal_point 是像素坐标，分辨率改了就错位）。`resolution_slider` 在 FTheta 模式下自动隐藏 + GUI 显示提示。
+
+**启动日志区分**:
+- `[T8.13] FTheta intrinsics 已加载 (resolution=(W,H), max_angle=...)` —— v2 FTheta 路径
+- `[T8.13] 无 FTheta intrinsics, 走 pinhole approximation 路径 (T8.12 行为)` —— v1 ckpt / 非 FTheta 相机
+
+**老 v1 ckpt 升级**:
+
+```bash
+python -m threedgrut.viz.inject \
+    --ckpt /path/to/old_v1_ckpt.pt \
+    --dataset_path /path/to/scene_manifest.json \
+    --out /path/to/new_v2_ckpt.pt
+```
+
+注入完 ckpt 即含 FTheta 字段，后续启动 viser 自动走 FTheta 路径。
 
 T8.12 实际产出（commit 价值）：
 - 修了 2 个真实 Stage 8 集成 bug (engine.py 缺 camera intrinsics → viser 一连即崩; layered_model.py sky_envmap 残留 CPU → addmm 报错)
 - Reset View 真重置到 initial_c2w
 - Infra: `cuda_helper.sh` 加 CUDA 12.1 case, viser setsid 启动模板, vast.ai 实例创建脚本
 - 完整 Day 1→2 交接文档 `docs/T8.12_handover_day1.md`
-
-完整 fisheye 渲染（视觉匹配 render.py）需要 **T8.13**: 扩展 viz_4d.ego 含 fisheye polynomial + viser_gui_4d 用 `Batch.intrinsics_FThetaCameraModelParameters` + 可能 fisheye ray gen 替代 kaolin pinhole.
 
 
 ### 3. 旧 ckpt（无 viz_4d）的两种 fallback

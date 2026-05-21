@@ -39,11 +39,11 @@
 ```mermaid
 kanban
   Backlog
-    [T8.13 viz_4d schema 扩展 fisheye/FTheta 内参 + viser fisheye 投影 → 匹配 render.py 输出 ⬜ 必走 — T8.12-FIX vast.ai 实测确认 pinhole/equirectangular fisheye 都不足, FTheta polynomial 必需]
   In Progress
   Review
   Blocked
   Done
+    [T8.13 viz_4d schema_v2 FTheta polynomial 8-key 内参 + viser FTheta 投影 ✅ Mac + A800 验证, vast.ai 视觉验收待运行]
     [T8.12-FIX CLI 基建 + vast.ai 4090 视觉验收 + 诊断锚定 T8.13 必走 ✅]
     [T7.1 复用 v2_full_exposure （注释 Stage 7 入口） + 7-cam Hydra dump ✅]
     [T7.2 A800 1-cam 1k smoke 9.71 it/s / masked 26.38 / 12 字段 metrics ✅]
@@ -104,11 +104,11 @@ kanban
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 1 | T8.13 必走 — T8.12-FIX vast.ai 实测确认 pinhole/equirectangular fisheye 都不足, **必须 FTheta polynomial schema 扩展才能匹配 render.py** |
+| Backlog ⬜ | 0 | — |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 55 | Stage 0-6 + Stage 6-fix + **Stage 7 软出口结题 (T7.1-T7.5 + T7.3.b ablation)** + **Stage 8 viser_gui_4d 11/12 ⚠️ + T8.12-FIX ✅** (T8.12-FIX vast.ai California 4090 1h $0.98 实测**诊断锚定**: Phase A.2 pinhole fov 校正与历史 fov 试验同形态 → **fov 假设证伪**; Phase A.5 Fisheye 120° equirectangular **结构性突破** → 椭圆 fisheye + cuboid 合理位置, 但内容仍模糊因 equirectangular ≠ FTheta polynomial → **T8.13 必走**. 参考 repo `thinkpad:/home/yusun/repo/3dgrut/tools/viser_multilayer_nurec.py` 用 pinhole 渲染清晰是因 nurec 数据非 wide-FOV FTheta, 不适用我们 camera_front_wide_120fov. **根因结构**: 3dgut UT rasterizer 用 intrinsics (非 rays) 投影 Gaussian 协方差到屏幕, FTheta-trained Gaussian 只能匹配 FTheta intrinsics). Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 7 实测**: T7.3 7-cam 30k exposure ON raw masked **15.63 ❌**, T7.3.b exposure OFF raw masked **25.76** (+10.13 dB), 但**两组 cc_psnr_masked 几乎一致** (24.75 / 24.70) → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平, **ExposureModel 在 30k 长训中退化优化失控** (退化成"高斯学个大概+exposure 补偿"二元解), 不增不减真实质量. Stage 7 软出口判定 ✅ + T7.4 cap ablation 跳过 (根因不在 cap) + **V3-P1 升级为整合任务**: bilateral-grid + ExposureModel 退化修复合并研究. Mac 189/189 PASS (+1 skip, +10 T8.12-FIX 新增) 0 回归. |
+| Done ✅ | 56 | Stage 0-6 + Stage 6-fix + **Stage 7 软出口结题 (T7.1-T7.5 + T7.3.b ablation)** + **Stage 8 viser_gui_4d 11/12 ⚠️ + T8.12-FIX ✅** (T8.12-FIX vast.ai California 4090 1h $0.98 实测**诊断锚定**: Phase A.2 pinhole fov 校正与历史 fov 试验同形态 → **fov 假设证伪**; Phase A.5 Fisheye 120° equirectangular **结构性突破** → 椭圆 fisheye + cuboid 合理位置, 但内容仍模糊因 equirectangular ≠ FTheta polynomial → **T8.13 必走**. 参考 repo `thinkpad:/home/yusun/repo/3dgrut/tools/viser_multilayer_nurec.py` 用 pinhole 渲染清晰是因 nurec 数据非 wide-FOV FTheta, 不适用我们 camera_front_wide_120fov. **根因结构**: 3dgut UT rasterizer 用 intrinsics (非 rays) 投影 Gaussian 协方差到屏幕, FTheta-trained Gaussian 只能匹配 FTheta intrinsics). Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 7 实测**: T7.3 7-cam 30k exposure ON raw masked **15.63 ❌**, T7.3.b exposure OFF raw masked **25.76** (+10.13 dB), 但**两组 cc_psnr_masked 几乎一致** (24.75 / 24.70) → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平, **ExposureModel 在 30k 长训中退化优化失控** (退化成"高斯学个大概+exposure 补偿"二元解), 不增不减真实质量. Stage 7 软出口判定 ✅ + T7.4 cap ablation 跳过 (根因不在 cap) + **V3-P1 升级为整合任务**: bilateral-grid + ExposureModel 退化修复合并研究. Mac 189/189 PASS (+1 skip, +10 T8.12-FIX 新增) 0 回归. |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -171,6 +171,7 @@ kanban
 | **T8.9** | 8 | inject_viz_4d CLI 工具（方案 B 一次性注入旧 ckpt） | 0.25 | ✅ **A800 端到端** | NEW `threedgrut/viz/inject.py` (~165 行: inject_viz_4d + _populate_tracks_from_dataset + _extract_conf 兼容旧 v2 ckpt 顶层无 config 的嵌套布局) · MOD `threedgrut_playground/README_4D.md` (加方案 B 章节) · NEW `threedgrut/tests/test_inject_viz_4d.py` (5 测试). **A800 实测 (T6F.3 ckpt v2_egomask_fix_20260520_113746)**: 991.3MB 旧 ckpt → 1m50s 注入 → 995.1MB (+3.8MB 元数据), viz_4d schema_v1, 31 tracks (与 T4.5 baseline 完全吻合), sample track automobile size=[4.09, 1.87, 1.61]m, ego 51 poses + primary cam fov_y=2.441 rad, road_xyz 200K/629K, dyn_xyz 100K/135K, ts range 88-1988 ms (duration_sec=2.0 对齐) |
 | **T8.10** | 8 | viser_gui_4d --no_gaussian_render 模式 (Ampere datacenter GPU 兼容) | 0.25 | ✅ **A800 端到端** | **仅 Ampere datacenter SKU (A100/A800)** RT cores 被 NVIDIA 阉割导致 OptiX dlopen segfault. Hopper datacenter (H100/H800/H200, 第 3 代 RT cores) + RTX 系列 + workstation A5000/A6000 都有 RT cores, 不需要此 flag. MOD `viser_gui_4d.py`: --no_gaussian_render flag 跳过 Engine3DGRUT 实例化, 主循环只跑 _play_tick + scene primitives. UI 隐藏 Resolution/Near/Far/FPS 控件. **A800 实测**: server listening *:8080 起来, 浏览器拖 timeline → ego/cuboid/LiDAR/frustum 全部动起来 (无 Gaussian 背景) |
 | **T8.11** | 8 | dynamic LiDAR per-track object-local frame + per-frame transform | 0.25 | ✅ **A800 端到端** | T8.10 暴露视觉 bug: cuboid 移动但 dyn LiDAR 点云不动 (static world union). 修复复用训练侧 `init_dynamic_rigid_layer` 路径: MOD `viz/metadata.py:_extract_lidar` 调用它产 per-track local pts + track_ids + track_names; NEW schema 字段 `dynamic_local_xyz/track_ids/track_names`; MOD `FourDMetadata.has_per_track_dyn_lidar()` helper; MOD `viser_gui_4d`: `_build_dyn_lidar_world(frame_idx)` 每帧 R·local+t + instance_color 着色, `_update_dynamic_lidar` remove+add point_cloud. NEW `lidar_dynamic_pts_per_track` config 默认 5000. **A800 实测**: 48,488 个 object-local 点分布在 20 个 active tracks (cap 5000/track), 994.8 MB ckpt, 浏览器拖 timeline → dyn LiDAR 点云跟着 cuboid 飘. NEW `test_dyn_lidar_per_track_local_frame` 测试 |
+| **T8.13** | 8 | viz_4d schema_v2 FTheta polynomial 8-key 内参 + viser_gui_4d FTheta 投影 + engine fisheye_intrinsics 分支 | 1 | ✅ **Mac+A800** (vast.ai 待) | 3dgut UT rasterizer 在 `tracer.py:471` 已原生支持 FTheta (`fromFThetaCameraModelParameters`), 本任务 **全 Python 改动**: viz_4d SCHEMA_VERSION 1→2 + `ego.primary_camera_intrinsics_FTheta` 持久化 8-key dict (`resolution / shutter_type / principal_point / reference_poly / pixeldist_to_angle_poly / angle_to_pixeldist_poly / max_angle / linear_cde`) + `primary_camera_resolution`. **改动文件**: `threedgrut/viz/metadata.py` (SCHEMA_VERSION=2 + `_detect_primary_camera` 5-tuple + `_extract_ego` 新字段, duck-type 不依赖 NCore SDK), `threedgrut_playground/utils/viz4d_metadata.py` (`FourDMetadata` 加 `ego_primary_intrinsics_ftheta` + `ego_primary_resolution` + `has_ftheta()` 8-key 守卫), NEW `threedgrut_playground/utils/ftheta_intrinsics.py` (`ftheta_dict_to_tensors` pure-CPU helper numpy→torch), `threedgrut_playground/engine.py` (`_trace_scene_mog` + `render_pass` 加 `fisheye_intrinsics: Optional[dict]` kwarg → `Batch.intrinsics_FThetaCameraModelParameters`, 与 pinhole 互斥), `threedgrut_playground/viser_gui_4d.py` (`Viser4DViewer` 持 `ftheta_intrinsics/ftheta_render_wh` + `update()` 锁 W×H + `fast_render` 透传 + `_build_static_gui` slider 隐藏 + markdown 提示 + `main()` 启动日志区分). **Mac**: 全量 **206 PASS + 1 skip 0 回归** (旧 189 + 新 17: schema_v2 + detect_ftheta×2 + extract_ftheta×2 + loader×3 + ftheta_helper×6 + viewer×3 + inject_roundtrip×1). **A800 实测**: 旧 v2 ckpt `v2_egomask_fix_20260520_113746` → `python -m threedgrut.viz.inject` ~1m50s 注入完成 → schema_v2 + 8 FTheta keys + `resolution=(1920,1080)` + `max_angle=1.221rad` (= 70° 半视场 ≈ 140° 全视场, 与 `camera_front_wide_120fov` 一致) + `shutter_type=ROLLING_TOP_TO_BOTTOM` + `linear_cde shape=(3,)`. viser `--no_gaussian_render` smoke 启动日志精准输出 `[T8.13] FTheta intrinsics 已加载 (resolution=(1920, 1080), max_angle=1.221rad). GUI resolution slider 已锁定到训练分辨率。`. **Resolution 锁定**: FTheta `principal_point` 是像素坐标, render W×H 不能改, viser slider 自动 visible=False + markdown 提示. **vast.ai 4090 视觉验收**: 待用户决定 (复用 `scripts/t8_12_fix_vast_create.sh` + `scripts/t8_12_fix_vast_smoke.sh`, 预算 ~$1, 视觉清晰即过). Commits 385627f / 6b0389d / 170435a / db1c50a / c2ce1f1 / 36d6933 / fc4d7bc |
 | **T8.12-FIX** | 8 | viser_gui_4d --initial_fov_deg + --camera_type + --camera_fov_deg CLI flags + vast.ai 视觉验收 → 诊断锚定 T8.13 必走 | 0.5 | ✅ **CLI 基建完成 + 诊断完成** | 远端参考 `thinkpad:/home/yusun/repo/3dgrut/tools/viser_multilayer_nurec.py:280` 同样处理 fisheye-trained nurec 用 `client.camera.fov = math.radians(90)` 硬设 + 纯 pinhole `make_rays` 渲染清晰. **改动**: `viser_gui_4d.py` 加 3 CLI flags + `Viser4DViewer.__init__` 加 `initial_fov_rad` kwarg + `_on_connect` / Reset View 显式设 `client.camera.fov` + engine 实例化后可选 `engine.camera_type=Fisheye / engine.camera_fov=<deg>` 走已存在 `_raygen_fisheye` 路径. **Mac**: NEW `test_viser_gui_4d_fov.py` 10/10 PASS + 全量 189/189 PASS 0 回归. **vast.ai California 4090 实测** ($0.908/hr × 1h = $0.98): **Phase A.2 (pinhole 90°) 与历史 fov 45/75/140 同形态 → fov 假设证伪**; **Phase A.5 (Fisheye 120° equirectangular) 结构性突破 → 椭圆 fisheye + cuboid 合理位置 (但 equirectangular ≠ FTheta polynomial 所以内容仍糊)**. 诊断锚定 **Phase C (T8.13 FTheta schema 扩展) 必然路径**——本仓库 3dgut UT rasterizer 通过 intrinsics (而非 rays) 投影 Gaussian 协方差到 2D 屏幕, FTheta-trained Gaussian 形状只能用 FTheta intrinsics 才能正确投影. |
 | **T8.12** | 8 | vast.ai RTX 4090 验证 viser_gui_4d 完整 Gaussian 渲染 + 修 Stage 8 集成 bug | 0.5 | ⚠️ **部分通过** | vast.ai RTX 4090 24GB (Norway, $0.630/hr). **修了 2 个真实 Stage 8 bug**: **Bug #1** `engine.py:_trace_scene_mog` LayeredGaussians 路径构 Batch 缺 camera intrinsics → 3dgut tracer `__create_camera_parameters` 抛 `Camera intrinsics unavailable` viser 一连即崩; fix: 从 kaolin Camera 取 [fx,fy,cx,cy] 塞 Batch.intrinsics + 真实 c2w as T_to_world + camera-space rays 匹配 NCoreDataset.get_gpu_batch_with_intrinsics contract. **Bug #2** `layered_model.py:init_from_checkpoint` 完后 SkyEnvmapMLP 残留 CPU → `_blend_sky` 路径 `cpu vs cuda` addmm 报错; fix: 末尾 `self.cuda()` 把整个 ModuleDict 搬上 GPU. **Reset View 改进**: snap camera 到 `meta.initial_c2w` (position+wxyz+look_at+up_direction). **Infra fix**: `scripts/cuda_helper.sh` 加 CUDA 12.1 case + viser nohup 不持久 → setsid 子 shell; NEW `docs/T8.12_handover_day1.md`. **Pipeline 验证**: viser RTX 4090 87 FPS 跑通 + scene primitives (cuboid/LiDAR/ego frustum) 全同步 + timeline 推进 cuboid + dyn LiDAR 跟车飘. **未达预期点 → T8.13**: viz_4d schema (T8.2 设计) 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial / distortion coeffs. NCore ckpt 用 `camera_front_wide_120fov` (FTheta fisheye) 训练, viser 用 pinhole 投影 → Gaussians 视觉是远景隧道 motion-blur 乱糊, 跟 render.py 输出的清晰街景 (含 fisheye 桶形畸变) 完全不是同一视角. 用户对比图实证此 gap. Bug #3 fov override 因 pinhole 140° 退化已撤. **完整 fisheye 渲染留 T8.13** (扩展 viz_4d schema 含 FTheta + viser_gui_4d 用 fisheye intrinsics). **T8.12 实例 37188673 已销毁** (~$1.5 总成本) |
 | | | **合计** | **30.0** | | |
@@ -188,7 +189,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI 软出口 | **5/5 ✅** (T7.4 跳过) | Stage 7 软出口结题. T7.1 复用 v2_full_exposure (无新 yaml) + 7-cam Hydra dump 通过. T7.2 A800 1-cam 1k smoke masked 26.38 / 9.71 it/s. **T7.3 A800 7-cam 30k 51 min raw masked 15.63 ❌ 但 cc_psnr_masked 24.75 OK → 暴露 ExposureModel 长训退化优化失控. T7.3.b A800 同配置 + use_exposure=false ablation 证伪: raw masked 25.76 (+10.13 dB), cc_psnr_masked 24.70 (vs T7.3 24.75 -0.05 dB noise 级)** → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平. **T7.4 cap ablation 跳过** (根因不在 cap). T7.5 WP_V2_Report.md (231 行) + v2_plan/architecture 同步, ExposureModel 失控 + bilateral-grid 合并 V3-P1 整合任务 (§ 14.5) |
-| 8 | viser_gui_4d (4D viz) | **11/12 ⚠️ pipeline 通, fisheye 渲染留 T8.13** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容). inject_viz_4d CLI 方案 B 一次性注入. **A800 + vast.ai RTX 4090 双路实测**: A800 走 --no_gaussian_render bypass; RT cores (T8.12, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通**但**视觉不匹配 render.py**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.12 发现的 schema gap**: `viz_4d.ego` 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial. NCore ckpt 训练用 `camera_front_wide_120fov` (FTheta fisheye), viser 用 pinhole 投影 → Gaussians 乱糊不是 ground truth → T8.13 backlog (扩展 schema + viser fisheye 投影). Mac 179/179 PASS 0 回归. |
+| 8 | viser_gui_4d (4D viz) | **12/12 ✅ + vast.ai 视觉验收 pending** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容). inject_viz_4d CLI 方案 B 一次性注入. **A800 + vast.ai RTX 4090 双路实测**: A800 走 --no_gaussian_render bypass; RT cores (T8.12, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通**但**视觉不匹配 render.py**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.12 发现的 schema gap**: `viz_4d.ego` 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial. NCore ckpt 训练用 `camera_front_wide_120fov` (FTheta fisheye), viser 用 pinhole 投影 → Gaussians 乱糊不是 ground truth → T8.13 backlog (扩展 schema + viser fisheye 投影). Mac 179/179 PASS 0 回归. |
 
 ### 1.4 依赖关系图
 
@@ -972,6 +973,50 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### ✅ T8.13 — viz_4d schema_v2 FTheta polynomial 持久化 + viser_gui_4d FTheta 投影 (2026-05-21, Mac 本地 + A800, plan t8-13-flickering-dragon)
+
+**触发**: T8.12 + T8.12-FIX 实测诊断锚定 — 3dgut UT rasterizer 用 intrinsics 投影 Gaussian 协方差，FTheta-trained Gaussian 必须 FTheta intrinsics 才能正确投影；pinhole / equirectangular 都产生双重扭曲。Phase C 是必然路径。
+
+**核心发现 (减小工作量)**: 3dgut UT rasterizer 在 [tracer.py:471-487](threedgut_tracer/tracer.py:471) 已经原生支持 FTheta — 只要 `gpu_batch.intrinsics_FThetaCameraModelParameters` 是 8-key dict，kernel 自动调 `_3dgut_plugin.fromFThetaCameraModelParameters`。**整个 T8.13 是纯 Python 改动**（无 C++/CUDA 代码改动，无 OptiX 编译）。
+
+**改动文件 (8 files, 10 commits)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut/viz/metadata.py` | SCHEMA_VERSION 1→2; `_detect_primary_camera` 3-tuple → 5-tuple 加 `(ftheta_dict, resolution)`; FTheta 提取走 duck-type (`hasattr(get_parameters) + max_angle`, 不依赖 NCore SDK); `_extract_ego` 写入 `primary_camera_intrinsics_FTheta` + `primary_camera_resolution` |
+| `threedgrut_playground/utils/viz4d_metadata.py` | `FourDMetadata` 加 `ego_primary_intrinsics_ftheta: Optional[dict]` + `ego_primary_resolution: Optional[tuple]` 字段 + `from_ckpt` 解析 (v1 ckpt 安静回退 None) + `has_ftheta()` accessor (8 required keys + resolution 全在才返 True) |
+| `threedgrut_playground/utils/ftheta_intrinsics.py` (NEW) | `ftheta_dict_to_tensors(d, device)` pure-CPU helper: numpy int→torch int64, numpy float→torch float32, scalar/str/None 透传. Mac 可独立单测 (engine.py 顶层 import kaolin 在 Mac 不可加载) |
+| `threedgrut_playground/engine.py` | `_trace_scene_mog` 加 `fisheye_intrinsics: Optional[dict] = None` keyword-only kwarg (与 pinhole intrinsics 互斥). ftheta dict 非 None → 转 tensor 塞 `Batch.intrinsics_FThetaCameraModelParameters`, pinhole intrinsics 留 None; None → 维持 T8.12 pinhole 行为. `render_pass` 透传同名 kwarg (向后兼容默认 None) |
+| `threedgrut_playground/viser_gui_4d.py` | `Viser4DViewer.__init__` 从 metadata 派生 `self.ftheta_intrinsics` + `self.ftheta_render_wh`; `fast_render` 透传给 `render_pass`; `update()` 在 FTheta 模式下 `W,H = self.ftheta_render_wh` 锁训练分辨率 (绕过 resolution_slider/aspect); `_build_static_gui` FTheta 模式下 `resolution_slider.visible=False` + 加 markdown 提示; `main()` 启动日志区分 "[T8.13] FTheta intrinsics 已加载" vs "走 pinhole approximation (T8.12 行为)" |
+| `threedgrut/tests/test_viz_4d_metadata.py` | `_mock_dataset(camera_type=)` 加 FTheta 变体; 5 个新测试: schema_v2 / detect_ftheta / detect_pinhole_none / extract_ego_ftheta / extract_ego_pinhole_none |
+| `threedgrut/tests/test_viz4d_metadata_loader.py` | `_make_viz_block(with_ftheta=)` 选项; 3 个新测试: from_ckpt_loads_ftheta_v2 / has_ftheta_false_v1 / has_ftheta_false_malformed |
+| `threedgrut/tests/test_ftheta_intrinsics.py` (NEW) | 6 个 helper 单测覆盖: None / int64 / float32 / scalar / device-move / 8-key 完整性 |
+| `threedgrut/tests/test_viser_gui_4d_fov.py` | `_make_fake_ftheta_metadata` + `_make_fake_pinhole_metadata` helpers; 3 个新测试: viewer_accepts_metadata / lock_resolution_when_ftheta / wh_none_when_pinhole |
+| `threedgrut/tests/test_inject_viz_4d.py` | 新 test_inject_extract_to_ckpt_roundtrip_preserves_ftheta (Mac proxy for inject e2e) |
+| `threedgrut_playground/README_4D.md` | 移除 fisheye 限制警告, 替换为 "FTheta-trained ckpts 现已支持视觉匹配 render.py" + 老 v1 ckpt 升级命令 (`python -m threedgrut.viz.inject`) + W×H 锁定说明 |
+
+**Resolution 策略** (用户决策): 锁到训练值 (FTheta `principal_point` 是像素坐标, 改 W×H 会与 polynomial 系数错位). 后续 v3 backlog 可考虑按 `image_domain_scale` 实时缩放解锁 GUI.
+
+**Mac 验证**: pytest threedgrut/tests/ **206 passed + 1 skipped, 0 回归** (189 旧 + 17 新). 全程 TDD: 每个 task 先写 failing test → 实现 → PASS → commit.
+
+**A800 端到端实测**:
+- ckpt source: `v2_egomask_fix_20260520_113746/.../ckpt_last.pt` (Stage 6-fix T6F.3 baseline, 5k smoke)
+- inject 命令: `python -m threedgrut.viz.inject --ckpt <old> --dataset_path <manifest> --out <new>`, 用时 ~1m50s
+- 生成 ckpt 验证: `schema_version=2`, ego.primary_camera_intrinsics_FTheta 含 8 keys, `resolution=(1920,1080)`, `shutter_type=ROLLING_TOP_TO_BOTTOM`, `reference_poly=PIXELDIST_TO_ANGLE`, `max_angle=1.221rad` (= 70° 半视场 ≈ 140° 全视场 与 `camera_front_wide_120fov` 一致), `principal_point=[960.32, 545.43]`, `linear_cde shape=(3,)`
+- viser smoke (`--no_gaussian_render` Ampere 兼容路径) 启动日志精准命中: `[T8.13] FTheta intrinsics 已加载 (resolution=(1920, 1080), max_angle=1.221rad). GUI resolution slider 已锁定到训练分辨率。`
+- 31 dynamic tracks + ego_N=51 + road 200k pts 全 schema 完整 (T8.11 per-track local-frame dyn LiDAR 也兼容)
+
+**vast.ai RTX 4090 视觉验收 (待用户决定何时跑)**:
+- 复用 `scripts/t8_12_fix_vast_create.sh` + `t8_12_fix_vast_smoke.sh` (~$1 预算)
+- 启动 viser 后无需传任何额外 flag (FTheta 走 metadata 自动启用)
+- 验收门槛 (用户决策): 视觉清晰即过 — Gaussian 渲染呈现可识别街景 + fisheye 桶形畸变 + cuboid 位置合理 + timeline 推进同步; 与 render.py PNG 形态肉眼一致
+
+**Plan**: `/Users/etendue/.claude/plans/t8-13-flickering-dragon.md` (10 task, 7 step-by-step commit ✅ Mac, 8 A800, vast.ai pending)
+
+**Commits**: 385627f (schema bump) / 6b0389d (_detect_primary_camera 5-tuple) / 170435a (_extract_ego 新字段) / db1c50a (FourDMetadata accessor) / c2ce1f1 (engine fisheye_intrinsics + ftheta_dict_to_tensors helper) / 36d6933 (viser_gui_4d 透传 + 锁) / fc4d7bc (inject roundtrip Mac proxy) / + 本 commit docs
+
+---
 
 ### 🎁 Stage 7 软出口结题 — 7-cam 30k + exposure 失控诊断 + V3-P1 整合 bilateral-grid (2026-05-21, A800 GPU 1, plan stage-7-tranquil-brook)
 
