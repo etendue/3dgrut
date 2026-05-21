@@ -169,10 +169,27 @@ Claude 可以**直接通过 `ssh a800-x2` 访问 A800 GPU 主机**执行训练 /
 - 数据集路径：`/root/work/yusun/ncore-nurec/data/ncore/clips/...`
 - 输出路径：`/root/work/yusun/ncore-nurec/output/...`
 - 推荐 GPU：`export CUDA_VISIBLE_DEVICES=0` 或 `1`，看 `nvidia-smi` 选空闲卡
-- conda env：`conda activate 3dgrut`
 - 内存配置：`export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 
-执行模式：用 `Bash` 工具单条 `ssh a800-x2 << 'EOF' ... EOF` 心跳；长任务（≥ 5 min）用 `run_in_background=true`，Claude 会被自动通知完成；用 `tee /tmp/<run>.log` 同步 grep "PSNR" / 错误。
+### ⚠️ conda env 激活（每次 ssh 必须）
+
+**ssh non-interactive shell 不继承 conda PATH**——直接 `conda activate 3dgrut` 或 `python ...` 会报 `conda: command not found` / `python: command not found`。每个 `ssh a800-x2` 命令开头都必须先 source conda init：
+
+```bash
+ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut && cd /root/work/yusun/repo/3dgrut && python -c "..." '
+```
+
+或一次性导 env PATH（跑训练 / pytest 推荐，让 slangc 等 env 内工具都可见）：
+
+```bash
+ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work/yusun/repo/3dgrut && python train.py ...'
+```
+
+历史踩坑（v2_plan.md L950-955）：仅设 `CUDA_VISIBLE_DEVICES` 但不 source conda init 会触发 `FileNotFoundError: 'slangc'`（slangc 装在 env 内）。
+
+可用 conda envs（`conda info --envs`）：`base`（miniforge3）/ `3dgrut`（主开发环境）/ `drivestudio` / `j6`（~/.bashrc 默认）。
+
+执行模式：用 `Bash` 工具单条 `ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut && ...'` 心跳；长任务（≥ 5 min）用 `run_in_background=true`，Claude 会被自动通知完成；用 `tee /tmp/<run>.log` 同步 grep "PSNR" / 错误。
 
 **触发同步 plan/architecture 时机不变**：远程任务跑完后，把实际 PSNR / commit hash / iter speed 等写回 v2_plan.md § 5 Done Log + v2_architecture.md § 7 关键不变量。
 
