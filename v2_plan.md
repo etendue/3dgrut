@@ -1029,6 +1029,8 @@ flowchart LR
 - 实测**清晰城市街景**: probe 直接 render_pass 输出 `docs/T8.13_vast_artifacts/after_fix_clear_streetview.png` 可识别街景 + fisheye 桶形畸变 + "HEAT" 广告牌 + 白车 + 路灯柱 + 楼宇 + 圆形 vignette 黑边 — 与 T8.12 motion blur tunnel 形态完全不同, 与 render.py ground truth 同形态. 3 张关键过程截图归档 `docs/T8.13_vast_artifacts/`.
 - linear_cde 仿射修正暂时跳过 (实测 `[1.0016, 0, 0]` 近 identity, 仅 0.16% scaling, 影响 < ε; 完整 NCore convention 不明留 T8.13 follow-up).
 
+**用户实测反馈** (2026-05-21): 在 ego 训练轨迹附近 (Reset View / timeline 训练帧 pose) 渲染**清晰 + 速度快** ✅; viser orbit 离开训练相机轨迹后 **视觉质量急剧下降**——这是 **Gaussian Splatting 通病** (view-extrapolation degradation), 非 T8.13 bug. 现有 mitigation: Reset View 按钮 (T8.12 snap initial_c2w) + Timeline 切换 ego pose. **Follow-up backlog**: GUI lock 强制相机沿 `ego_poses_c2w` Catmull-Rom spline 插值, 防用户飞离训练分布.
+
 **Plan**: `/Users/etendue/.claude/plans/t8-13-flickering-dragon.md` (10 task 全部 ✅, Mac+A800+vast.ai 三路全验证通过)
 
 **Commits**: 385627f (schema bump) / 6b0389d (_detect_primary_camera 5-tuple) / 170435a (_extract_ego 新字段) / db1c50a (FourDMetadata accessor) / c2ce1f1 (engine fisheye_intrinsics + ftheta_dict_to_tensors helper) / 36d6933 (viser_gui_4d 透传 + 锁) / fc4d7bc (inject roundtrip Mac proxy) / d952caf (docs 同步) / 53d3ac9 (CLAUDE.md A800 conda 提级) / **25c6ec3 (Phase D 关键修复 — ftheta_pixels_to_camera_rays + list binding)** / 7549b19 (vast.ai 3 截图归档)
