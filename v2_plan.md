@@ -43,7 +43,7 @@ kanban
   Review
   Blocked
   Done
-    [T8.13 viz_4d schema_v2 FTheta polynomial 8-key 内参 + viser FTheta 投影 ✅ Mac + A800 验证, vast.ai 视觉验收待运行]
+    [T8.13 viz_4d schema_v2 FTheta polynomial 8-key 内参 + viser FTheta 投影 ✅ Mac + A800 + vast.ai 4090 视觉验收三路全过]
     [T8.12-FIX CLI 基建 + vast.ai 4090 视觉验收 + 诊断锚定 T8.13 必走 ✅]
     [T7.1 复用 v2_full_exposure （注释 Stage 7 入口） + 7-cam Hydra dump ✅]
     [T7.2 A800 1-cam 1k smoke 9.71 it/s / masked 26.38 / 12 字段 metrics ✅]
@@ -1012,9 +1012,26 @@ flowchart LR
 - 启动 viser 后无需传任何额外 flag (FTheta 走 metadata 自动启用)
 - 验收门槛 (用户决策): 视觉清晰即过 — Gaussian 渲染呈现可识别街景 + fisheye 桶形畸变 + cuboid 位置合理 + timeline 推进同步; 与 render.py PNG 形态肉眼一致
 
-**Plan**: `/Users/etendue/.claude/plans/t8-13-flickering-dragon.md` (10 task, 7 step-by-step commit ✅ Mac, 8 A800, vast.ai pending)
+**vast.ai 4090 视觉验收 ✅** (Norway 实例 37216612, $0.669/hr, ~1.5h, 总成本 ~$1.5):
+- Phase D 上 vast.ai 后暴露两个 deployment-only bug:
+  - **Bug 1**: `_3dgut_plugin.fromFThetaCameraModelParameters` C++ binding 期望
+    `list[int]/list[float] FixedSize` 不是 `torch.Tensor` → TypeError 后 viser
+    thread executor shutdown crash. Fix: `ftheta_dict_to_tensors` 转 plain list
+    不再 → torch.Tensor.
+  - **Bug 2**: viser 端用 kaolin pinhole `engine.raygen` 给 `rays_dir`, 但训练时
+    NCoreDataset `datasetNcore.py:400` 用 `camera_model.pixels_to_camera_rays()`
+    FTheta polynomial 反演每像素方向. pinhole vs FTheta rays mismatch → Gaussian
+    SH/depth 采样错角度 → "远景隧道 motion blur 乱糊". Fix: 新
+    `ftheta_pixels_to_camera_rays(ftheta_dict) → (H,W,3) np.ndarray` 在 viewer
+    端 numpy 重实现 NCore FTheta polynomial pixel→ray (Horner polynomial,
+    sin/cos equidistant projection, 不依赖 NCore SDK), `_trace_scene_mog`
+    FTheta 分支不调 kaolin raygen 直接用此函数生成 rays_dir.
+- 实测**清晰城市街景**: probe 直接 render_pass 输出 `docs/T8.13_vast_artifacts/after_fix_clear_streetview.png` 可识别街景 + fisheye 桶形畸变 + "HEAT" 广告牌 + 白车 + 路灯柱 + 楼宇 + 圆形 vignette 黑边 — 与 T8.12 motion blur tunnel 形态完全不同, 与 render.py ground truth 同形态. 3 张关键过程截图归档 `docs/T8.13_vast_artifacts/`.
+- linear_cde 仿射修正暂时跳过 (实测 `[1.0016, 0, 0]` 近 identity, 仅 0.16% scaling, 影响 < ε; 完整 NCore convention 不明留 T8.13 follow-up).
 
-**Commits**: 385627f (schema bump) / 6b0389d (_detect_primary_camera 5-tuple) / 170435a (_extract_ego 新字段) / db1c50a (FourDMetadata accessor) / c2ce1f1 (engine fisheye_intrinsics + ftheta_dict_to_tensors helper) / 36d6933 (viser_gui_4d 透传 + 锁) / fc4d7bc (inject roundtrip Mac proxy) / + 本 commit docs
+**Plan**: `/Users/etendue/.claude/plans/t8-13-flickering-dragon.md` (10 task 全部 ✅, Mac+A800+vast.ai 三路全验证通过)
+
+**Commits**: 385627f (schema bump) / 6b0389d (_detect_primary_camera 5-tuple) / 170435a (_extract_ego 新字段) / db1c50a (FourDMetadata accessor) / c2ce1f1 (engine fisheye_intrinsics + ftheta_dict_to_tensors helper) / 36d6933 (viser_gui_4d 透传 + 锁) / fc4d7bc (inject roundtrip Mac proxy) / d952caf (docs 同步) / 53d3ac9 (CLAUDE.md A800 conda 提级) / **25c6ec3 (Phase D 关键修复 — ftheta_pixels_to_camera_rays + list binding)** / 7549b19 (vast.ai 3 截图归档)
 
 ---
 
