@@ -20,6 +20,15 @@ case "$CUDA_VERSION" in
         # Pin PyTorch to 2.4.0 — latest version with pre-built Kaolin cu118 wheel
         TORCH_VERSION="==2.4.0"
         ;;
+    12.1.1 | 12.1)
+        export CUDA_FULL_VERSION="12.1.1"
+        export CUDA_RUNFILE_URL="https://developer.download.nvidia.com/compute/cuda/12.1.1/local_installers/cuda_12.1.1_530.30.02_linux.run"
+        export MAX_GCC_VERSION=12
+        export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX"
+        # T8.12: vast.ai pytorch:2.4.0-cuda12.1-cudnn9-devel ships CUDA 12.1.
+        # PyTorch cu121 + Kaolin cu121 wheels both exist on official mirrors.
+        TORCH_VERSION="==2.4.0"
+        ;;
     12.4.1 | 12.4)
         export CUDA_FULL_VERSION="12.4.1"
         export CUDA_RUNFILE_URL="https://developer.download.nvidia.com/compute/cuda/${CUDA_FULL_VERSION}/local_installers/cuda_${CUDA_FULL_VERSION}_550.54.15_linux.run"

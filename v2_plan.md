@@ -39,6 +39,7 @@
 ```mermaid
 kanban
   Backlog
+    [T8.13 viz_4d schema 扩展 fisheye/FTheta 内参 + viser fisheye 投影 → 匹配 render.py 输出]
   In Progress
   Review
   Blocked
@@ -95,18 +96,18 @@ kanban
     [T8.9 inject_viz_4d CLI "方案 B" ✅ A800 实测 T6F.3 ckpt 31 tracks / 991→995 MB]
     [T8.10 viser_gui_4d --no_gaussian_render (Ampere datacenter A100/A800; Hopper H100 不需要) ✅]
     [T8.11 dyn LiDAR per-track local frame + 每帧 transform ✅ 48K 点 / 20 active tracks]
-    [T8.12 vast.ai RTX 4090 验证 viser_gui_4d 完整 Gaussian 渲染 ✅ 5/5 + 修 3 Stage 8 集成 bug]
+    [T8.12 vast.ai RTX 4090 验证 viser_gui_4d ⚠️ 部分通过 (Bug #1+#2 修, fisheye 内参遗漏待 T8.13)]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | 0 | — |
+| Backlog ⬜ | 1 | T8.13 (viz_4d schema 扩展 fisheye/FTheta 内参 + viser fisheye 投影) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 54 | Stage 0-6 + Stage 6-fix + **Stage 7 软出口结题 (T7.1-T7.5 + T7.3.b ablation)** + Stage 8 viser_gui_4d 完整 11/11. Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 7 实测**: T7.3 7-cam 30k exposure ON raw masked **15.63 ❌**, T7.3.b exposure OFF raw masked **25.76** (+10.13 dB), 但**两组 cc_psnr_masked 几乎一致** (24.75 / 24.70) → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平, **ExposureModel 在 30k 长训中退化优化失控** (退化成"高斯学个大概+exposure 补偿"二元解), 不增不减真实质量. Stage 7 软出口判定 ✅ + T7.4 cap ablation 跳过 (根因不在 cap) + **V3-P1 升级为整合任务**: bilateral-grid + ExposureModel 退化修复合并研究. Stage 8 全套 A800+RT cores 实测过. Mac 181/181 PASS 0 回归. |
+| Done ✅ | 54 | Stage 0-6 + Stage 6-fix + **Stage 7 软出口结题 (T7.1-T7.5 + T7.3.b ablation)** + **Stage 8 viser_gui_4d 11/12 ⚠️** (T8.12 部分通过: pipeline 接通 + Bug #1+#2 修, fisheye 内参遗漏致 Gaussian 渲染 ≠ render.py ground truth → T8.13 backlog). Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 7 实测**: T7.3 7-cam 30k exposure ON raw masked **15.63 ❌**, T7.3.b exposure OFF raw masked **25.76** (+10.13 dB), 但**两组 cc_psnr_masked 几乎一致** (24.75 / 24.70) → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平, **ExposureModel 在 30k 长训中退化优化失控** (退化成"高斯学个大概+exposure 补偿"二元解), 不增不减真实质量. Stage 7 软出口判定 ✅ + T7.4 cap ablation 跳过 (根因不在 cap) + **V3-P1 升级为整合任务**: bilateral-grid + ExposureModel 退化修复合并研究. **Stage 8 T8.12 部分通过**: 修了 Stage 8 真实集成 bug (engine.py 缺 camera intrinsics → 一连即崩 / layered_model.py sky_envmap 残留 CPU → addmm 报错), Pipeline 在 vast.ai RTX 4090 87 FPS 跑通; **但 viz_4d schema 只存 fov_y 没存 fisheye polynomial**, viser 用 pinhole 投影 fisheye-trained Gaussians → 视觉乱糊不是 ground truth, 需 T8.13 扩展 schema 真修. Mac 181/181 PASS 0 回归. |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -169,7 +170,7 @@ kanban
 | **T8.9** | 8 | inject_viz_4d CLI 工具（方案 B 一次性注入旧 ckpt） | 0.25 | ✅ **A800 端到端** | NEW `threedgrut/viz/inject.py` (~165 行: inject_viz_4d + _populate_tracks_from_dataset + _extract_conf 兼容旧 v2 ckpt 顶层无 config 的嵌套布局) · MOD `threedgrut_playground/README_4D.md` (加方案 B 章节) · NEW `threedgrut/tests/test_inject_viz_4d.py` (5 测试). **A800 实测 (T6F.3 ckpt v2_egomask_fix_20260520_113746)**: 991.3MB 旧 ckpt → 1m50s 注入 → 995.1MB (+3.8MB 元数据), viz_4d schema_v1, 31 tracks (与 T4.5 baseline 完全吻合), sample track automobile size=[4.09, 1.87, 1.61]m, ego 51 poses + primary cam fov_y=2.441 rad, road_xyz 200K/629K, dyn_xyz 100K/135K, ts range 88-1988 ms (duration_sec=2.0 对齐) |
 | **T8.10** | 8 | viser_gui_4d --no_gaussian_render 模式 (Ampere datacenter GPU 兼容) | 0.25 | ✅ **A800 端到端** | **仅 Ampere datacenter SKU (A100/A800)** RT cores 被 NVIDIA 阉割导致 OptiX dlopen segfault. Hopper datacenter (H100/H800/H200, 第 3 代 RT cores) + RTX 系列 + workstation A5000/A6000 都有 RT cores, 不需要此 flag. MOD `viser_gui_4d.py`: --no_gaussian_render flag 跳过 Engine3DGRUT 实例化, 主循环只跑 _play_tick + scene primitives. UI 隐藏 Resolution/Near/Far/FPS 控件. **A800 实测**: server listening *:8080 起来, 浏览器拖 timeline → ego/cuboid/LiDAR/frustum 全部动起来 (无 Gaussian 背景) |
 | **T8.11** | 8 | dynamic LiDAR per-track object-local frame + per-frame transform | 0.25 | ✅ **A800 端到端** | T8.10 暴露视觉 bug: cuboid 移动但 dyn LiDAR 点云不动 (static world union). 修复复用训练侧 `init_dynamic_rigid_layer` 路径: MOD `viz/metadata.py:_extract_lidar` 调用它产 per-track local pts + track_ids + track_names; NEW schema 字段 `dynamic_local_xyz/track_ids/track_names`; MOD `FourDMetadata.has_per_track_dyn_lidar()` helper; MOD `viser_gui_4d`: `_build_dyn_lidar_world(frame_idx)` 每帧 R·local+t + instance_color 着色, `_update_dynamic_lidar` remove+add point_cloud. NEW `lidar_dynamic_pts_per_track` config 默认 5000. **A800 实测**: 48,488 个 object-local 点分布在 20 个 active tracks (cap 5000/track), 994.8 MB ckpt, 浏览器拖 timeline → dyn LiDAR 点云跟着 cuboid 飘. NEW `test_dyn_lidar_per_track_local_frame` 测试 |
-| **T8.12** | 8 | vast.ai RTX 4090 验证 viser_gui_4d 完整 Gaussian 渲染 (RT cores 路径) + 修 Stage 8 集成 bug | 0.5 | ✅ **RTX 4090 端到端** | vast.ai RTX 4090 24GB (Norway, $0.630/hr, Ada Lovelace 第 3 代 RT cores), 总成本 ~$1.5 (~¥10). 验收 5/5 通过 @ 1024×~600 / 87 FPS (远超 ≥10 目标). 暴露并修复 Stage 8 三个集成 bug + 两个 infra 问题: **Bug #1** `engine.py:_trace_scene_mog` LayeredGaussians 路径构 Batch 缺 camera intrinsics → 3dgut tracer `__create_camera_parameters` 抛错; fix: 从 kaolin Camera 取 [fx,fy,cx,cy] 塞 Batch.intrinsics. **Bug #2** `layered_model.py:init_from_checkpoint` 完后 SkyEnvmapMLP 残留 CPU → `_blend_sky` 路径 cpu vs cuda addmm 报错; fix: 末尾 `self.cuda()` 把整个 ModuleDict 搬上 GPU. **Bug #3** `viser_gui_4d.py:update` 给 kaolin Camera 用 `client.camera.fov` (浏览器默认 ~45°) 而非 ckpt 训练 fov (2.441 rad / 140°) → 3dgut UT 投影焦距错 → Gaussian 严重模糊; fix: override `fov_y = meta.ego_primary_fov_y_rad`. **Reset View 改进**: snap camera 到 `meta.initial_c2w` (position+wxyz+look_at). **Infra fix**: `scripts/cuda_helper.sh` 加 CUDA 12.1 case (vast.ai pytorch:cu121 镜像); viser nohup 不持久 → setsid 子 shell 脱离父 ssh. NEW `docs/T8.12_handover_day1.md` 详细 Day 1→2 交接 |
+| **T8.12** | 8 | vast.ai RTX 4090 验证 viser_gui_4d 完整 Gaussian 渲染 + 修 Stage 8 集成 bug | 0.5 | ⚠️ **部分通过** | vast.ai RTX 4090 24GB (Norway, $0.630/hr). **修了 2 个真实 Stage 8 bug**: **Bug #1** `engine.py:_trace_scene_mog` LayeredGaussians 路径构 Batch 缺 camera intrinsics → 3dgut tracer `__create_camera_parameters` 抛 `Camera intrinsics unavailable` viser 一连即崩; fix: 从 kaolin Camera 取 [fx,fy,cx,cy] 塞 Batch.intrinsics + 真实 c2w as T_to_world + camera-space rays 匹配 NCoreDataset.get_gpu_batch_with_intrinsics contract. **Bug #2** `layered_model.py:init_from_checkpoint` 完后 SkyEnvmapMLP 残留 CPU → `_blend_sky` 路径 `cpu vs cuda` addmm 报错; fix: 末尾 `self.cuda()` 把整个 ModuleDict 搬上 GPU. **Reset View 改进**: snap camera 到 `meta.initial_c2w` (position+wxyz+look_at+up_direction). **Infra fix**: `scripts/cuda_helper.sh` 加 CUDA 12.1 case + viser nohup 不持久 → setsid 子 shell; NEW `docs/T8.12_handover_day1.md`. **Pipeline 验证**: viser RTX 4090 87 FPS 跑通 + scene primitives (cuboid/LiDAR/ego frustum) 全同步 + timeline 推进 cuboid + dyn LiDAR 跟车飘. **未达预期点 → T8.13**: viz_4d schema (T8.2 设计) 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial / distortion coeffs. NCore ckpt 用 `camera_front_wide_120fov` (FTheta fisheye) 训练, viser 用 pinhole 投影 → Gaussians 视觉是远景隧道 motion-blur 乱糊, 跟 render.py 输出的清晰街景 (含 fisheye 桶形畸变) 完全不是同一视角. 用户对比图实证此 gap. Bug #3 fov override 因 pinhole 140° 退化已撤. **完整 fisheye 渲染留 T8.13** (扩展 viz_4d schema 含 FTheta + viser_gui_4d 用 fisheye intrinsics). **T8.12 实例 37188673 已销毁** (~$1.5 总成本) |
 | | | **合计** | **30.0** | | |
 
 ### 1.3 当前 Stage 状态汇总
@@ -185,7 +186,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI 软出口 | **5/5 ✅** (T7.4 跳过) | Stage 7 软出口结题. T7.1 复用 v2_full_exposure (无新 yaml) + 7-cam Hydra dump 通过. T7.2 A800 1-cam 1k smoke masked 26.38 / 9.71 it/s. **T7.3 A800 7-cam 30k 51 min raw masked 15.63 ❌ 但 cc_psnr_masked 24.75 OK → 暴露 ExposureModel 长训退化优化失控. T7.3.b A800 同配置 + use_exposure=false ablation 证伪: raw masked 25.76 (+10.13 dB), cc_psnr_masked 24.70 (vs T7.3 24.75 -0.05 dB noise 级)** → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平. **T7.4 cap ablation 跳过** (根因不在 cap). T7.5 WP_V2_Report.md (231 行) + v2_plan/architecture 同步, ExposureModel 失控 + bilateral-grid 合并 V3-P1 整合任务 (§ 14.5) |
-| 8 | viser_gui_4d (4D viz) | **11/11 ✅ RT cores 端到端** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.12). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容). inject_viz_4d CLI 方案 B 一次性注入. **A800 + vast.ai RTX 4090 双路实测**: A800 走 --no_gaussian_render bypass; RT cores (T8.12, RTX 4090 Norway, $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染端到端 5/5 通过. **T8.12 顺手修 Stage 8 三个集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py) / viser browser fov 误用 (viser_gui_4d.py) — 三处 fix 与 Bug 见 § 5 Stage 8 Done Log. Mac 179/179 PASS 0 回归. |
+| 8 | viser_gui_4d (4D viz) | **11/12 ⚠️ pipeline 通, fisheye 渲染留 T8.13** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容). inject_viz_4d CLI 方案 B 一次性注入. **A800 + vast.ai RTX 4090 双路实测**: A800 走 --no_gaussian_render bypass; RT cores (T8.12, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通**但**视觉不匹配 render.py**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.12 发现的 schema gap**: `viz_4d.ego` 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial. NCore ckpt 训练用 `camera_front_wide_120fov` (FTheta fisheye), viser 用 pinhole 投影 → Gaussians 乱糊不是 ground truth → T8.13 backlog (扩展 schema + viser fisheye 投影). Mac 179/179 PASS 0 回归. |
 
 ### 1.4 依赖关系图
 
@@ -1049,55 +1050,61 @@ a800-x2:/root/work/yusun/ncore-nurec/output/stage7_noexp_20260521-102930/.../ckp
 
 ---
 
-### 🎯 T8.12 — vast.ai RTX 4090 端到端验证 viser_gui_4d 完整 Gaussian 渲染 + 修 3 Stage 8 集成 bug (2026-05-21, RTX 4090 Norway, eason_3dgrut_t8_12_viz4d_d2)
+### ⚠️ T8.12 — vast.ai RTX 4090 viser_gui_4d 部分通过: pipeline 接通 + 2 个真实 bug 修复, fisheye 渲染留 T8.13 (2026-05-21, RTX 4090 Norway, eason_3dgrut_t8_12_viz4d_d2)
 
-vast.ai RTX 4090 24GB (Ada Lovelace 第 3 代 RT cores, Norway, $0.630/hr) 完整 Gaussian 渲染端到端验证. **5/5 验收通过** @ 1024×~600 / **87.5 FPS** (远超 ≥10 FPS 目标). 实例 ID 37188673 (Day 1 用过的 37136461 已销毁), 总成本 ~$1.5 (~¥10). 暴露并修复 3 个 Stage 8 集成 bug + 2 个 infra 问题, **代码 5 文件 + 1 doc commit**.
+vast.ai RTX 4090 24GB (Ada Lovelace 第 3 代 RT cores, Norway, $0.630/hr) 端到端验证. **Pipeline 部分通过** @ 1024×~600 / **87 FPS** (远超 ≥10 FPS 目标). 实例 ID 37188673 (Day 1 用过的 37136461 已销毁), 总成本 ~$1.5 (~¥10).
 
-**RT cores 路径首次端到端通=验证 T8.10 设计假设成立**: A800 走 `--no_gaussian_render` 是因 Ampere datacenter RT cores 被阉割, T8.12 在 RTX 4090 (Ada Lovelace) 上不加 flag 完整渲染验证了 H100/RTX 系列都能跑的设计前提.
+**实测结果**:
 
-**5 项验收**:
-
-| # | 验收点 | 实测 |
+| 项 | 状态 | 备注 |
 |---|---|---|
-| 1 | 浏览器加载 + 连接 viser server | ✅ Connected (绿色 icon), GUI 三 folder (Render Controls / Timeline / Visibility) 全显示 |
-| 2 | 拖相机看到 Gaussian 背景图 (车/路/天) | ✅ 清晰的车前隧道 dashcam 视角 + 运动模糊 (匹配 smoke4 reference) |
-| 3 | 拖 Timeline: Gaussian + cuboid + dyn LiDAR 三者同步 | ✅ Play → Time 88429 → 511922 → 1238456 us, ego frustum (绿色) + cuboids (蓝/粉/白 wireframe) + Gaussian 全部同步动 |
-| 4 | FPS @ ≥10 | ✅ **87.5 FPS @ 1024×~600** (空载稳态), 拖动期间 ~45 FPS |
-| 5 | dyn LiDAR 跟车飘 | ✅ Visibility 勾 Dynamic LiDAR → 每个 cuboid 旁有 per-track instance-color 点云, 推 Timeline 时随 cuboid 走 |
+| viser server 启动 + WebSocket | ✅ | 修了真实 bug 才能跑起来 (Bug #1+#2) |
+| 浏览器加载 + GUI 三 folder 显示 | ✅ | Render Controls / Timeline / Visibility 全显 |
+| Scene primitives (cuboid/LiDAR/ego frustum) 显示 + timeline 同步 | ✅ | 跟 A800 --no_gaussian_render 模式一致, viser 端坐标系正确 |
+| dyn LiDAR per-track 点云跟 cuboid 飘 | ✅ | T8.11 fix 在 RT cores 路径也正确 |
+| Gaussian 渲染 pipeline 不崩 | ✅ | Bug #1 + #2 修完, 87 FPS 稳态 |
+| **Gaussian 渲染输出匹配 render.py ground truth** | **❌** | **用户对比图实证: render.py 出清晰街景含楼/车/柱+fisheye 桶形畸变, viser 出远景隧道 motion-blur 乱糊, 完全不是同一相机视角** |
 
-**Stage 8 集成 Bug 三件套 + Fix 一表**:
+**根因 (Day 2 深挖发现的 schema gap)**:
 
-| Bug | 症状 | Root Cause | Fix 文件 / 行 |
+- `viz_4d.ego` (T8.2 设计) 只存 `primary_camera_fov_y_rad = 2.441` 和 `primary_camera_id = camera_front_wide_120fov` — NCore 数据集用 **FTheta fisheye polynomial + 大畸变**, viz_4d 把它简化成单个 fov_y_rad 丢掉了所有多项式系数和畸变参数
+- viser_gui_4d 没法走数据集 (脱依赖设计), 只能用 viz_4d 里的 fov_y_rad 构 pinhole 内参
+- ckpt 的 Gaussians 是按 fisheye 投影优化的, viser 用 pinhole + 140° fov 看 (focal_y=131 px, 退化区) → Gaussians 投影到错的像素 scale → 视觉是"远景隧道 motion-blur"乱码
+- render.py 走 NCoreDataset.get_gpu_batch_with_intrinsics() 直接读完整 FTheta 多项式, 所以渲染对
+
+**修法 (T8.13 backlog)**: viz_4d schema 扩展 `ego.primary_camera_intrinsics` 含完整 FTheta polynomial / OpenCVFisheye distortion coeffs; viser_gui_4d 用 `Batch.intrinsics_FThetaCameraModelParameters` 而非 pinhole 简化; 可能还需要 fisheye ray gen 替代 kaolin pinhole. 预估 0.5-1 d.
+
+**实际修了的 2 个真实 Stage 8 bug** (T8.12 不可或缺的产出):
+
+| Bug | 症状 | Root Cause | Fix |
 |---|---|---|---|
-| #1 camera intrinsics 缺失 | viser 一连上就崩, log: `AttributeError: 'Batch' object has no attribute 'keys'` (实际是 ValueError 错误信息 f-string 自己崩) → 真正错误 "Camera intrinsics unavailable" | T8.1 给 `LayeredGaussians + tracks` 路径构 `Batch` 时只塞 rays_ori/dir + T_to_world=I + rays_in_world_space=True, 但 3dgut UT 光栅器需要 camera intrinsics 做投影 | `threedgrut_playground/engine.py:_trace_scene_mog`: 加 `camera=None` kwarg, 从 kaolin Camera 取 `[float(focal_x), float(focal_y), W/2+x0, H/2+y0]` 塞 Batch.intrinsics |
-| #2 SkyEnvmapMLP 残留 CPU | 修完 #1 后, viser 不崩但每帧 render 报 `RuntimeError: Expected cpu and cuda:0` 在 `sky_envmap.py:105 F.relu(self.layer0(enc))` | `LayeredGaussians.init_from_checkpoint` 用 `load_state_dict(sky_state)` 加载 saved CPU tensors 后 `nn.Module` 自身没 `.cuda()`. Trainer/eval 路径有显式 `model.cuda()` 兜底, playground engine 路径 (`Engine3DGRUT.load_3dgrt_object`) 没. **smoke1/2 测过没暴露** 是因为 ckpt 命中 `_single_bg_layer()` 快路径 bypass 了 `_blend_sky` | `threedgrut/layers/layered_model.py:init_from_checkpoint`: 末尾加 `if torch.cuda.is_available(): self.cuda()` 把整个 ModuleDict 搬上 GPU |
-| #3 viser browser fov ≠ ckpt fov | 修完 #1+#2 后 Gaussian 出图但**严重模糊** (用户截图: 像隔层毛玻璃看到的隧道); scene primitives 显示正常 | 3dgut UT 用 Batch.intrinsics 的 focal_y 算投影; viser_gui_4d 把 `client.camera.fov` (浏览器默认 ~45°) 给 kaolin Camera, 但 ckpt 训练时 primary camera fov_y = **2.441 rad ≈ 140°** (车载 dashcam wide-angle). 焦距对不上 → Gaussians 投影到错的像素 scale → 模糊 | `threedgrut_playground/viser_gui_4d.py:update`: `fov_y = meta.ego_primary_fov_y_rad if meta else client.camera.fov` |
-| 加: Reset View 不真重置 | 用户按 Reset View 视角没变 | `reset_view_button.on_click` 只重置 `up_direction`, 不恢复 `initial_c2w` | `viser_gui_4d.py:reset_view_button.on_click`: snap camera.position + wxyz + look_at + up_direction 全部从 `meta.initial_c2w` 重置 |
+| **#1 camera intrinsics 缺失** | viser 一连即崩 `AttributeError: 'Batch' object has no attribute 'keys'` (其实是 ValueError 错误 f-string 自崩, 真错是 `Camera intrinsics unavailable`) | T8.1 给 LayeredGaussians+tracks 路径构 Batch 只塞 rays + T_to_world=I + rays_in_world_space=True, 但 3dgut UT 光栅器需要 camera intrinsics 做投影 | `threedgrut_playground/engine.py:_trace_scene_mog`: 加 `camera=None` kwarg + 从 kaolin Camera 取 [fx,fy,cx,cy] 塞 Batch.intrinsics + 真 c2w as T_to_world + camera-space rays 匹配 NCoreDataset.get_gpu_batch_with_intrinsics contract (即使 pinhole 是 T8.13 待替换的近似, contract 对就值得 commit) |
+| **#2 SkyEnvmapMLP 残留 CPU** | 修完 #1 后 viser 不崩但每帧 render 报 `RuntimeError: Expected cpu and cuda:0` 在 `sky_envmap.py:105 F.relu(self.layer0(enc))` | `LayeredGaussians.init_from_checkpoint` 用 `load_state_dict(sky_state)` 加载 CPU tensors 后 nn.Module 没 `.cuda()`. Trainer/eval 路径有 `model.cuda()` 兜底, playground engine 路径 (`Engine3DGRUT.load_3dgrt_object`) 没 | `threedgrut/layers/layered_model.py:init_from_checkpoint`: 末尾加 `if torch.cuda.is_available(): self.cuda()` |
+| Reset View 改进 | 按按钮视角没变 | 只 reset up_direction, 不恢复 initial_c2w | `viser_gui_4d.py:reset_view_button.on_click`: snap camera.position + wxyz + look_at + up_direction 全部从 `meta.initial_c2w` |
 
-**Infra Fix (踩坑 + 修)**:
+**已撤销的 "Bug #3 fov override"**: Day 2 中途以为 viser browser fov (~45°) ≠ ckpt fov (140°) 是糊的根因, 加了 override 用 ckpt fov. 实测无效 (pinhole 30°/45°/60°/90°/140° 全部一样糊), 因为根因是 pinhole vs fisheye 而不是 fov. 已撤回不 commit.
 
-- **CUDA 12.1 不在 cuda_helper.sh 支持列表**: vast.ai `pytorch:2.4.0-cuda12.1-cudnn9-devel` 镜像 CUDA 12.1, 但 `scripts/cuda_helper.sh` 原来只支持 11.8 / 12.4 / 12.6 / 12.8 / 13.0. PyTorch cu121 wheel + Kaolin cu121 wheel 都存在, 加 12.1 case (TORCH_VERSION=2.4.0 / TORCH_CUDA_ARCH_LIST=7.5;8.0;8.6;8.9;9.0+PTX) 即可.
-- **nohup 不持久 (vast.ai container 特性)**: `nohup python -m ... &; disown` 起的 viser 进程在 parent ssh 退出后会被回收. 换 `setsid bash -c '...' < /dev/null > /dev/null 2>&1 &` 完全脱离父进程会话, 进程持久存活.
-- **viser 1.0.27 ↔ 1.0.29 客户端版本 mismatch**: viser server (Python) 在 WebSocket 握手时校验客户端 subprotocol `viser-v<version>`, 不匹配就拒绝. 中间 pip downgrade 后 React 客户端 JS bundle (内联 zstd 压缩) 跟服务端版本对不上 → 浏览器只能看到 `/WorldAxes` (server 发的 49 messages 全被拒绝). 临时 monkey-patch `viser/infra/_infra.py` 把 `if client_version_str != viser.__version__` 改成 `if False:` 绕过 (生产用应该 pin 同一版本).
-- **rsync over ssh 必须 `-e "ssh -T"`**: ssh config 里 `RequestTTY force` 跟 rsync binary stream 不兼容, 错误特征 `unexpected tag 103 (0x6e797372)`.
+**Infra 踩坑 (这次记下避免下次重蹈)**:
 
-**代码改动清单** (5 files + 1 doc):
+- **CUDA 12.1 不在 cuda_helper.sh 支持列表**: vast.ai `pytorch:2.4.0-cuda12.1-cudnn9-devel` 镜像 CUDA 12.1, 原 cuda_helper.sh 只 11.8/12.4/12.6/12.8/13.0. 加 12.1 case (TORCH_VERSION=2.4.0 / TORCH_CUDA_ARCH_LIST=7.5;8.0;8.6;8.9;9.0+PTX), commit
+- **nohup 不持久**: vast.ai container 里 `nohup ... &; disown` 起的 viser 进程在 parent ssh 退出后被回收. 换 `setsid bash -c '...' < /dev/null > /dev/null 2>&1 &` 完全脱离父 session
+- **viser 1.0.27 ↔ 1.0.29 客户端版本 mismatch**: viser server 在 WebSocket 握手校验客户端 subprotocol `viser-v<version>`, 不匹配就拒绝. 中间 pip downgrade 后 React 客户端 JS bundle (内联 zstd 压缩) 跟 server 版本对不上 → 浏览器只看到 /WorldAxes. 用 `pip install --force-reinstall viser==<server_ver>` 修, 或保持 server/client 版本一致
+- **rsync over ssh 必须 `-e "ssh -T"`**: ssh config 里 `RequestTTY force` 跟 rsync binary stream 不兼容, 错误 `unexpected tag 103 (0x6e797372)`
+- **smoke 测试一定要 `_clear_engine_meshes()`**: 否则走 `_render_playground_hybrid` 静态路径 (无 timestamp_us), 测不到 `_trace_scene_mog`. Day 2 中段花了 1h 才发现这个
+
+**代码改动清单** (4 files + 1 doc, T8.12 commit):
 
 | Path | 改动 |
 |---|---|
-| `threedgrut_playground/engine.py` | `_trace_scene_mog` 加 `camera=None` kwarg + 从 kaolin Camera 算 intrinsics 塞 Batch (Bug #1) |
-| `threedgrut/layers/layered_model.py` | `init_from_checkpoint` 末尾加 `self.cuda()` (Bug #2) |
-| `threedgrut_playground/viser_gui_4d.py` | `update()` override fov_y (Bug #3) + Reset View snap initial_c2w + traceback 诊断增强 |
+| `threedgrut_playground/engine.py` | `_trace_scene_mog` 加 `camera=None` kwarg, 从 kaolin Camera 算 [fx,fy,cx,cy] + 真 c2w + camera-space rays 匹配 dataset contract (Bug #1; pinhole 近似, T8.13 替换为 fisheye) |
+| `threedgrut/layers/layered_model.py` | `init_from_checkpoint` 末尾 `self.cuda()` (Bug #2) |
+| `threedgrut_playground/viser_gui_4d.py` | Reset View 真重置到 initial_c2w (4 个 camera 字段) |
 | `scripts/cuda_helper.sh` | 加 CUDA 12.1.1 / 12.1 case |
-| `docs/T8.12_handover_day1.md` (NEW) | Day 1 → Day 2 交接文档 (Bug 全分析, 重建脚本, 决策点) |
+| `docs/T8.12_handover_day1.md` (NEW) | Day 1 → Day 2 交接 + 完整 bug 分析 + 重建脚本 |
 
-**Mac 单测无回归** (179 个 test, 仍 179 PASS, 0 regression).
+**Mac 单测无回归** (179/179 PASS, 0 regression).
 
-**关键不变量** (回填 § 7 / arch §7):
-
-- **RT cores 路径完整 Gaussian 渲染**: viser_gui_4d 在带 RT cores 的 GPU (Ada/Hopper/Ampere consumer/workstation) 上端到端通过, 浏览器拖 timeline 看到 Gaussian + cuboid + dyn LiDAR + ego frustum 全部同步.
-- **camera fov 必须用 ckpt 训练 fov**: 否则 3dgut UT 投影焦距错位 → Gaussian 看似乱糊. Bug #3 的 fix 是这个不变量的 enforcement.
-- **playground engine load 后必须 `.cuda()`**: 否则 sky/exposure 等非 particle layer 残留 CPU, 任何混合 cpu+cuda tensor 操作会崩.
+**v3 backlog 入 T8.13**: viz_4d schema 扩展 fisheye/FTheta 内参 + viser 走 fisheye 投影路径. 完成后 viser 应能匹配 render.py 输出 (含 fisheye 桶形畸变).
 
 ---
 

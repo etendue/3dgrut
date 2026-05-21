@@ -60,6 +60,63 @@ ssh -L 8080:localhost:8080 a800-x2
 # 浏览器 http://localhost:8080
 ```
 
+### 2b. vast.ai 租 RT cores GPU 完整 Gaussian 渲染（T8.12 实测路径）
+
+如果手里只有 Ampere datacenter A100/A800 但需要看完整 Gaussian 渲染（不只 scene primitives），最便宜路径是租 vast.ai 上带 RT cores 的 GPU。**RTX 4090 24GB** 完全够用且最便宜（$0.5-0.8/hr，1h 即可完成验证），Ada Lovelace 第 3 代 RT cores OptiX 兼容。
+
+```bash
+# Mac 端: vastai CLI 创建实例
+VASTAI=/path/to/.venv/bin/vastai
+API_KEY=<your-vast-api-key>
+
+# 1. 搜便宜 4090 (按 $/hr 排序)
+"$VASTAI" search offers \
+    "gpu_name=RTX_4090 num_gpus=1 cpu_cores>=8 cpu_ram>=32 disk_space>=80 reliability>0.95 rentable=true" \
+    --storage 80 --raw --api-key "$API_KEY"
+
+# 2. 创建实例 (image 必须是 cuda12.1 + devel; cuda_helper.sh 已加 12.1 case)
+"$VASTAI" create instance <OFFER_ID> \
+    --image pytorch/pytorch:2.4.0-cuda12.1-cudnn9-devel \
+    --disk 80 --label my_viser_4d --ssh --direct --api-key "$API_KEY"
+
+# 3. 注入 ssh key, ssh -tt 进去, 装 uv + opencv libs + 跑 install_env_uv.sh, 装 viser
+#    (详见 docs/T8.12_handover_day1.md §5.2 完整脚本)
+
+# 4. 启动 viser (必须 setsid 脱离 ssh 会话; nohup 在 vast.ai container 不持久)
+setsid bash -c 'python -m threedgrut_playground.viser_gui_4d \
+    --gs_object /root/ckpt_with_viz_4d_v2.pt \
+    --default_gs_config apps/ncore_3dgut_mcmc.yaml \
+    --port 8080 > /tmp/viser.log 2>&1' < /dev/null &
+disown
+
+# 5. Mac 端 ssh -L 转发, 浏览器开 http://localhost:8080
+ssh -N -T -o ControlMaster=no -o ControlPath=none \
+    -L 8080:localhost:8080 my-vast-instance
+```
+
+**踩坑 / 实测要点**（T8.12 整理）:
+
+- vast.ai pytorch:cu121 镜像 CUDA 12.1 不在原 `scripts/cuda_helper.sh` 支持列表（11.8/12.4/12.6/12.8/13.0），已加 12.1 case
+- **必须用 `setsid` 而非 `nohup`** 启动 viser；vast.ai container `nohup` 会被回收
+- rsync over ssh 必须 `-e "ssh -T"`，否则 RequestTTY force 跟二进制流不兼容
+- Reset View 按钮真的能 snap camera 回 ckpt 训练相机位置（之前只重置 up_direction，T8.12 fix 后完整重置 position + wxyz + look_at + up_direction）
+- viser server / client subprotocol 版本必须严格匹配；中间 pip downgrade 会让 JS bundle 跟 server 版本不一致 → WebSocket 被拒只看到 /WorldAxes
+
+**T8.12 实测 RTX 4090 Norway $0.630/hr @ 1024×~600 → 87 FPS 稳态**，但**Gaussian 视觉输出跟 render.py 不匹配**（已知 schema limitation）：
+
+> ⚠️ **fisheye 训练的 ckpt 在 viser 渲染会乱糊**（隧道+motion blur 状）。原因：viz_4d schema (T8.2 设计) 只存 `primary_camera_fov_y_rad` 简化, 没存 FTheta polynomial / OpenCVFisheye 畸变系数。NCore ckpt 用 `camera_front_wide_120fov` 训练 (FTheta fisheye), viser 用 pinhole + 单一 fov 投影 → Gaussians 几何错位。
+>
+> **想看完整 ground truth 渲染请用 `render.py`**（它走 NCoreDataset 直接读完整 fisheye 内参）。viser_gui_4d 当前最适合**非 fisheye 数据集** + 看 scene primitives + 4D timeline 同步；fisheye 完整渲染留 T8.13。
+
+T8.12 实际产出（commit 价值）：
+- 修了 2 个真实 Stage 8 集成 bug (engine.py 缺 camera intrinsics → viser 一连即崩; layered_model.py sky_envmap 残留 CPU → addmm 报错)
+- Reset View 真重置到 initial_c2w
+- Infra: `cuda_helper.sh` 加 CUDA 12.1 case, viser setsid 启动模板, vast.ai 实例创建脚本
+- 完整 Day 1→2 交接文档 `docs/T8.12_handover_day1.md`
+
+完整 fisheye 渲染（视觉匹配 render.py）需要 **T8.13**: 扩展 viz_4d.ego 含 fisheye polynomial + viser_gui_4d 用 `Batch.intrinsics_FThetaCameraModelParameters` + 可能 fisheye ray gen 替代 kaolin pinhole.
+
+
 ### 3. 旧 ckpt（无 viz_4d）的两种 fallback
 
 如果手里只有训好的旧 v2 ckpt（没有 `viz_4d` 块），有两条路径可选。

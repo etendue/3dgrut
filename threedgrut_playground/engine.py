@@ -1004,19 +1004,71 @@ class Engine3DGRUT:
         return rendered_results
 
     def _trace_scene_mog(self, rays_ori: torch.Tensor, rays_dir: torch.Tensor,
-                         *, timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
+                         *, camera: Optional[Camera] = None,
+                         timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
         # LayeredGaussians with active dynamic tracks: route through forward()
         # so per-track SE(3) deformation runs against the supplied timestamp.
-        # rays_ori / rays_dir are already in world frame (free viewer camera);
-        # T_to_world = I + rays_in_world_space=True keeps the renderer from
-        # applying any extra rotation.
+        #
+        # T8.12 fix: Pre-fix this path built Batch with only rays + T_to_world=I
+        # + rays_in_world_space=True + NO intrinsics. 3dgut UT rasterizer
+        # raises "Camera intrinsics unavailable" on first render → viser
+        # crashes the moment a browser connects. Fix: contract matches
+        # NCoreDataset.get_gpu_batch_with_intrinsics so we render through the
+        # same kernel path as train.py / render.py:
+        #   - rays_ori / rays_dir are CAMERA-space (origin at 0, dir is the
+        #     pinhole-projected pixel direction in camera frame)
+        #   - T_to_world = camera c2w (4x4)
+        #   - rays_in_world_space = False (kernel uses T_to_world to put rays
+        #     into world frame and inverts to W2C for Gaussian projection)
+        #   - intrinsics = [fx, fy, cx, cy] pinhole approximation
+        #
+        # T8.13 (open): pinhole intrinsics here is an approximation that
+        # works for non-fisheye ckpts. For fisheye-trained ckpts (NCore
+        # camera_front_wide_120fov uses FTheta polynomial), the projection is
+        # geometrically wrong → Gaussians render as a "tunnel motion-blur"
+        # blur rather than the actual scene. Full fix requires extending
+        # viz_4d schema to carry fisheye polynomial + dispatching to
+        # `Batch.intrinsics_FThetaCameraModelParameters` here, see v2_plan.md
+        # § 1.1 T8.13 backlog. Until then viser_gui_4d only renders correct
+        # geometry for pinhole-trained ckpts.
+        #
+        # kaolin's _raygen_pinhole returns WORLD-space rays (origins =
+        # camera.position, dirs = R_c2w @ camera_local_dir). We undo that to
+        # get camera-space rays so the kernel handles the rest consistently.
         if isinstance(self.scene_mog, LayeredGaussians) and len(self.scene_mog.tracks_poses) > 0:
+            intrinsics = None
             T_to_world = torch.eye(4, dtype=rays_ori.dtype, device=rays_ori.device)[None]
+            rays_in_world = True
+            rays_ori_use = rays_ori
+            rays_dir_use = rays_dir
+            if camera is not None:
+                cx = float(camera.width) / 2.0 + float(camera.x0)
+                cy = float(camera.height) / 2.0 + float(camera.y0)
+                intrinsics = [float(camera.focal_x), float(camera.focal_y), cx, cy]
+                # Build c2w (kaolin stores whatever we pass as view_matrix
+                # verbatim; viser_gui_4d passes c2w in).
+                c2w_t = camera.view_matrix().to(
+                    rays_ori.device, dtype=rays_ori.dtype
+                )
+                if c2w_t.ndim == 2:
+                    c2w_t = c2w_t.unsqueeze(0)
+                T_to_world = c2w_t
+                rays_in_world = False
+                # Convert kaolin's world-space rays back to camera-space:
+                #   world_ori = R_c2w @ 0 + t = t  (camera position)
+                #   world_dir = R_c2w @ cam_dir
+                # → cam_ori = 0, cam_dir = R_c2w^T @ world_dir = R_w2c @ world_dir
+                R_c2w = c2w_t[0, :3, :3]                 # [3,3]
+                R_w2c = R_c2w.transpose(0, 1)            # [3,3]
+                # rays_dir: [B, H, W, 3] → apply R_w2c to last dim
+                rays_dir_use = torch.einsum("ij,bhwj->bhwi", R_w2c, rays_dir.contiguous())
+                rays_ori_use = torch.zeros_like(rays_ori)
             batch = Batch(
-                rays_ori=rays_ori,
-                rays_dir=rays_dir,
+                rays_ori=rays_ori_use,
+                rays_dir=rays_dir_use,
                 T_to_world=T_to_world,
-                rays_in_world_space=True,
+                rays_in_world_space=rays_in_world,
+                intrinsics=intrinsics,
                 timestamp_us=int(timestamp_us),
             )
             return self.scene_mog(batch, train=False)
@@ -1093,7 +1145,7 @@ class Engine3DGRUT:
                     )
                 else:
                     rb = self._trace_scene_mog(
-                        rays.rays_ori, rays.rays_dir, timestamp_us=timestamp_us
+                        rays.rays_ori, rays.rays_dir, camera=camera, timestamp_us=timestamp_us
                     )
             else:
                 rb = self._render_playground_hybrid(rays.rays_ori, rays.rays_dir)

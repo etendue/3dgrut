@@ -314,6 +314,17 @@ class LayeredGaussians(nn.Module):
                 sky_state = checkpoint["sky_envmap_state"]
             if sky_state is not None and "sky_envmap" in self.layers:
                 self.layers["sky_envmap"].load_state_dict(sky_state)
+            # T8.12 fix: ckpt state_dicts hold CPU tensors and load_state_dict
+            # does not migrate device. Trainer-path eval always calls
+            # ``model.cuda()`` after construction so this is invisible there;
+            # the playground engine path (Engine3DGRUT.load_3dgrt_object) does
+            # NOT call .cuda(), so SkyEnvmapMLP layer weights stay on CPU and
+            # the multi-layer _blend_sky path crashes with ``cpu vs cuda:0``
+            # in addmm on first browser render. Migrate the whole ModuleDict
+            # here so all entry points (trainer, eval, playground,
+            # inject_viz_4d) see a consistent device state.
+            if torch.cuda.is_available():
+                self.cuda()
             return
 
         # v1 legacy path: route entire flat dict into background.

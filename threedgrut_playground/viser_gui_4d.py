@@ -186,6 +186,24 @@ class Viser4DViewer:
         def _(_):
             self.need_update = True
             for client in self.server.get_clients().values():
+                # T8.12 fix: snap camera back to ckpt's initial_c2w so user
+                # sees the dashcam viewpoint matching the training cameras
+                # (Gaussian Splatting fails to generalize far from training
+                # cameras → garbage if user drifts to aerial view).
+                if self.meta is not None:
+                    client.camera.position = self.meta.initial_c2w[:3, 3]
+                    client.camera.wxyz = mat_to_wxyz(self.meta.initial_c2w)
+                    # Set look_at along camera forward; viser uses orbit
+                    # controls so look_at anchors the rotation pivot.
+                    R = self.meta.initial_c2w[:3, :3]
+                    forward_cam = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+                    forward_world = R @ forward_cam
+                    client.camera.look_at = (
+                        self.meta.initial_c2w[:3, 3] + 10.0 * forward_world
+                    )
+                # Re-apply up vector after wxyz update so orbit controls
+                # don't snap to default world-up (which is wrong for NCore
+                # convention where camera +Y = world -Z = gravity down).
                 client.camera.up_direction = (
                     tf.SO3(client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
                 )
