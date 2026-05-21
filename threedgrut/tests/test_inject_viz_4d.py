@@ -66,6 +66,50 @@ def test_populate_tracks_no_dynamic_layer():
     assert n == 0
 
 
+def test_inject_extract_to_ckpt_roundtrip_preserves_ftheta(tmp_path, monkeypatch):
+    """T8.13 inject contract (Mac proxy): inject_viz_4d's core path is
+    ``extract_4d_metadata(model, ds, conf) → ckpt['viz_4d'] = md →
+    torch.save/load``. The full pipeline needs NCore SDK + kaolin (A800
+    territory; covered by Task 8), but the FTheta dict survival through the
+    extract + serialization layer is what this Mac test pins down.
+
+    Mirrors what inject.py:165 does (``ckpt['viz_4d'] = md`` + torch.save),
+    minus the LayeredGaussians init + populate_tracks (covered elsewhere).
+    """
+    # Reuse the FTheta mock fixture pattern from test_viz_4d_metadata.
+    from threedgrut.tests.test_viz_4d_metadata import _mock_dataset, _model_with_tracks
+    from threedgrut.viz.metadata import extract_4d_metadata
+    from hydra import compose, initialize_config_dir
+
+    _CONFIG_DIR = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "configs")
+    )
+    with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
+        conf = compose(config_name="apps/ncore_3dgut_mcmc")
+
+    model = _model_with_tracks(conf)
+    dataset = _mock_dataset(n_frames=4, camera_type="ftheta")
+    md = extract_4d_metadata(model, dataset, conf)
+
+    ckpt = {"config": OmegaConf.create({"use_layered_model": True}),
+            "model": {"gaussians_nodes": {}, "scene_extent": 1.0},
+            "viz_4d": md}
+    p = tmp_path / "ftheta_ckpt.pt"
+    torch.save(ckpt, p)
+    loaded = torch.load(p, weights_only=False)
+
+    # T8.13 contract: v2 schema + 8 FTheta keys + (W, H) tuple survive save/load.
+    assert loaded["viz_4d"]["schema_version"] == 2
+    ego = loaded["viz_4d"]["ego"]
+    assert ego["primary_camera_intrinsics_FTheta"] is not None
+    assert set(ego["primary_camera_intrinsics_FTheta"].keys()) >= {
+        "resolution", "max_angle", "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly", "linear_cde", "principal_point",
+        "shutter_type", "reference_poly",
+    }
+    assert tuple(ego["primary_camera_resolution"]) == (1920, 1208)
+
+
 def test_inject_preserves_existing_keys(tmp_path):
     """Round-trip: pre-injected viz_4d ckpt survives torch.save / torch.load.
 
