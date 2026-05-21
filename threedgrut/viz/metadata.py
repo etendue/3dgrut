@@ -147,9 +147,6 @@ def _extract_ego(dataset, conf) -> dict:
     is left to v2.x — viz GUI shows a single moving frustum.
     """
     primary_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
-    # ftheta_dict / resolution are written into the returned ego block below
-    # (Task 2). For now we just unpack to keep the call site honest.
-    _ = (ftheta_dict, resolution)
 
     poses_np = dataset.get_poses()
     poses_c2w = torch.from_numpy(np.asarray(poses_np, dtype=np.float32))
@@ -186,6 +183,11 @@ def _extract_ego(dataset, conf) -> dict:
         "primary_camera_id":        primary_id,
         "primary_camera_fov_y_rad": fov_y,
         "primary_camera_aspect":    aspect,
+        # T8.13: full FTheta polynomial intrinsics for viser_gui_4d → 3dgut UT
+        # rasterizer fisheye projection. None for pinhole / non-FTheta cameras
+        # (viewer falls back to existing pinhole approximation path).
+        "primary_camera_intrinsics_FTheta": ftheta_dict,
+        "primary_camera_resolution":        resolution,
     }
 
 

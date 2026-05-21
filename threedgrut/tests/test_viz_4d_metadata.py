@@ -164,6 +164,30 @@ def test_detect_primary_camera_returns_none_ftheta_for_pinhole(real_conf):
     assert resolution == (1600, 900)
 
 
+def test_extract_ego_writes_ftheta_dict_to_ckpt(real_conf):
+    # T8.13: ckpt['viz_4d'].ego carries the 8-key FTheta dict + (W,H) tuple.
+    model = _model_with_tracks(real_conf)
+    dataset = _mock_dataset(n_frames=3, camera_type="ftheta")
+    md = extract_4d_metadata(model, dataset, real_conf)
+    ego = md["ego"]
+    assert ego["primary_camera_intrinsics_FTheta"] is not None
+    assert set(ego["primary_camera_intrinsics_FTheta"].keys()) == {
+        "resolution", "shutter_type", "principal_point", "reference_poly",
+        "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+        "linear_cde",
+    }
+    assert ego["primary_camera_resolution"] == (1920, 1208)
+
+
+def test_extract_ego_ftheta_none_for_pinhole_dataset(real_conf):
+    # T8.13: pinhole-only dataset → FTheta dict absent / None, resolution still set.
+    model = _model_with_tracks(real_conf)
+    dataset = _mock_dataset(n_frames=3, camera_type="pinhole")
+    md = extract_4d_metadata(model, dataset, real_conf)
+    assert md["ego"].get("primary_camera_intrinsics_FTheta") is None
+    assert md["ego"].get("primary_camera_resolution") == (1600, 900)
+
+
 def test_extract_smoke(real_conf):
     model = _model_with_tracks(real_conf)
     dataset = _mock_dataset(n_frames=5)
