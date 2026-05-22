@@ -200,6 +200,15 @@ class LayeredGaussians(nn.Module):
         object.__setattr__(self, "conf", conf)
         object.__setattr__(self, "specs", list(specs))
         object.__setattr__(self, "scene_extent", scene_extent)
+        # Inference-only filter for viser_gui_4d's "Gaussian Layers" toggles.
+        # Default: every contributing layer enabled (particle layers + sky_envmap);
+        # GUI callbacks mutate via wholesale set replacement so the render loop
+        # always observes a consistent snapshot. Never persisted in state_dict.
+        default_enabled = {
+            s.name for s in specs
+            if (s.is_particle_layer or s.name == "sky_envmap")
+        }
+        object.__setattr__(self, "enabled_layer_names", default_enabled)
         # nn.ModuleDict so .to(device) / state_dict() recurse into layers.
         self.layers: nn.ModuleDict = nn.ModuleDict()
         for spec in specs:
@@ -395,6 +404,10 @@ class LayeredGaussians(nn.Module):
         """
         bg = self._single_bg_layer()
         if bg is not None:
+            # Viser layer toggle: in the v1-equivalent single-bg path, "off"
+            # means "render nothing"; sky has no entry in this setup.
+            if "background" not in self.enabled_layer_names:
+                return self._empty_render(gpu_batch)
             return bg(gpu_batch, train=train, frame_id=frame_id)
 
         # T4.5: use absolute camera END timestamp_us from the batch as the
@@ -407,17 +420,41 @@ class LayeredGaussians(nn.Module):
         # batch lacks timestamp_us (non-NCore datasets / inference).
         ts_us = getattr(gpu_batch, "timestamp_us", -1)
         # Multi-layer: fused view + reference layer renderer.
-        fused = self.fused_view(timestamp_us=ts_us)
         # ref_layer must be a particle layer (sky module has no .renderer).
+        # When viser toggles disable every particle layer we skip the OptiX
+        # pass entirely and let _blend_sky composite onto a blank canvas.
         ref_layer = next(
-            self.layers[s.name] for s in self.specs if s.is_particle_layer
+            (self.layers[s.name] for s in self.specs
+             if s.is_particle_layer and s.name in self.enabled_layer_names),
+            None,
         )
+        if ref_layer is None:
+            return self._blend_sky(self._empty_render(gpu_batch), gpu_batch)
+        fused = self.fused_view(timestamp_us=ts_us)
         view = _FusedView(fused, ref_layer)
         outputs = ref_layer.renderer.render(view, gpu_batch, train, frame_id)
         # T5.4: sky envmap blend (only if sky layer is present in the spec
         # list). Composites learned sky onto the rendered gaussians using the
         # tracer's accumulated alpha.
         return self._blend_sky(outputs, gpu_batch)
+
+    # ------------------------------------------------------------------ empty render
+    def _empty_render(self, gpu_batch) -> dict:
+        """Zero-RGB / zero-alpha render dict for the all-layers-disabled case.
+
+        Returned when viser_gui_4d's per-layer toggles leave no particle layer
+        enabled, so we never call ``ref_layer.renderer.render`` on an empty
+        fused view (avoids an OptiX pass and undefined renderer behavior).
+        Sky compositing in ``_blend_sky`` still runs on top of this, so a
+        sky-only image is recoverable when only background/road/dyn are off.
+        """
+        B, H, W = gpu_batch.rays_dir.shape[:3]
+        device = gpu_batch.rays_dir.device
+        return {
+            "pred_rgb":     torch.zeros(B, H, W, 3, device=device),
+            "pred_opacity": torch.zeros(B, H, W, 1, device=device),
+            "pred_dist":    torch.zeros(B, H, W, 1, device=device),
+        }
 
     # ------------------------------------------------------------------ T5.4 sky blend
     def _blend_sky(self, outputs: dict, batch) -> dict:
@@ -430,7 +467,8 @@ class LayeredGaussians(nn.Module):
         the original Gaussian RGB under the ``rgb_gaussians`` key so
         ``get_losses`` can compute a sky-only L1 on the pre-blend signal.
         """
-        if "sky_envmap" not in self.layers:
+        if ("sky_envmap" not in self.layers
+                or "sky_envmap" not in self.enabled_layer_names):
             return outputs
         sky_module = self.layers["sky_envmap"]
         # viewdirs in world frame: rays_dir is camera-space when
@@ -490,6 +528,10 @@ class LayeredGaussians(nn.Module):
         for spec in self.specs:
             if not spec.is_particle_layer:
                 continue
+            # Viser layer toggle: skip disabled particle layers so their
+            # tensors never reach OptiX (cleanest + cheapest "hide" semantics).
+            if spec.name not in self.enabled_layer_names:
+                continue
             layer = self.layers[spec.name]
             for n in _FORWARD_PARAM_NAMES:
                 v = getattr(layer, n)
@@ -505,6 +547,16 @@ class LayeredGaussians(nn.Module):
                         timestamp_us=timestamp_us, frame_id=frame_id,
                     )
                 pieces[n].append(v)
+        # All particle layers disabled → return 0-row tensors with correct
+        # trailing dims so callers (and _FusedView consumers) never trip on
+        # torch.cat([]). forward() short-circuits before reaching this path
+        # in the all-off case, but a defensive guard here lets fused_view be
+        # called independently (e.g. from tests).
+        first_param = next(iter(_FORWARD_PARAM_NAMES))
+        if not pieces[first_param]:
+            ref = next(iter(self.layers.values()))
+            return {n: getattr(ref, n).new_zeros((0,) + getattr(ref, n).shape[1:])
+                    for n in _FORWARD_PARAM_NAMES}
         return {n: torch.cat(pieces[n], dim=0) for n in _FORWARD_PARAM_NAMES}
 
     # ------------------------------------------------------------------ T4.5 transform_means (timestamp-aligned)

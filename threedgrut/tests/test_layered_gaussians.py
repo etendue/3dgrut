@@ -934,3 +934,150 @@ def test_get_model_parameters_skips_non_particle_layers(real_conf):
     model.setup_optimizer_for_test()
     params = model.get_model_parameters()
     assert list(params["gaussians_nodes"].keys()) == ["background"]
+
+
+# ============================================================================
+# viser_gui_4d "Gaussian Layers" toggle — runtime layer enable/disable.
+# Backs the GUI control in viser_gui_4d.py:_build_static_gui; GUI mutates
+# self.enabled_layer_names via wholesale set replacement.
+# ============================================================================
+def test_enabled_layer_names_default_includes_all_contributing(real_conf):
+    """Default enabled set covers every layer that actually contributes to
+    the rendered image: all particle layers + sky_envmap (if present).
+    dynamic_deformables stub is excluded (is_particle_layer=False, no module)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background",    layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",          layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000),
+        LayerSpec(name="sky_envmap",    layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    assert model.enabled_layer_names == {
+        "background", "road", "dynamic_rigids", "sky_envmap",
+    }
+
+
+def test_fused_view_skips_disabled_layer(real_conf):
+    """Disabling a particle layer drops its particles from the concat. With
+    bg(100) + road(50) enabled → 150 rows; disable road → 100 rows from bg only."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_from_checkpoint(
+        {"gaussians_nodes": {
+            "background": _v1_shape_dict(N=100, conf=real_conf),
+            "road":       _v1_shape_dict(N=50,  conf=real_conf),
+        }},
+        setup_optimizer=False,
+    )
+
+    assert model.fused_view()["positions"].shape == (150, 3)
+    # Wholesale set replacement — mirrors the viser_gui_4d callback pattern.
+    object.__setattr__(
+        model, "enabled_layer_names",
+        model.enabled_layer_names - {"road"},
+    )
+    fused = model.fused_view()
+    assert fused["positions"].shape == (100, 3)
+    assert torch.equal(fused["positions"], model.layers["background"].positions)
+
+
+def test_fused_view_all_disabled_returns_zero_particle(real_conf):
+    """All particle layers disabled → fused_view returns 0-row tensors with
+    correct trailing dims so consumers never trip on torch.cat([])."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_from_checkpoint(
+        {"gaussians_nodes": {
+            "background": _v1_shape_dict(N=100, conf=real_conf),
+            "road":       _v1_shape_dict(N=50,  conf=real_conf),
+        }},
+        setup_optimizer=False,
+    )
+    object.__setattr__(model, "enabled_layer_names", set())
+    fused = model.fused_view()
+    assert fused["positions"].shape == (0, 3)
+    assert fused["rotation"].shape == (0, 4)
+    assert fused["scale"].shape == (0, 3)
+    assert fused["density"].shape == (0, 1)
+    # features_specular trailing dim borrowed from a real layer (sh dependent).
+    ref = model.layers["background"]
+    assert fused["features_specular"].shape == (0, ref.features_specular.shape[1])
+
+
+def test_forward_all_disabled_returns_empty_render(real_conf, monkeypatch):
+    """forward() with every particle layer disabled must NOT call ref renderer.
+    Returns _empty_render (zero RGB / opacity) and then blends sky on top
+    (no-op when sky is also disabled, which is the default for this spec set)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
+                  scale_prior=(0.1, 0.1, 0.001)),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    model.init_layer_from_points("background", torch.randn(10, 3),
+                                 setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(10, 3),
+                                 setup_optimizer=False)
+
+    # Trip-wire on both layers' renderers — neither should be called when
+    # everything is off.
+    for layer in model.layers.values():
+        monkeypatch.setattr(
+            layer.renderer, "render",
+            lambda *a, **kw: pytest.fail(
+                "renderer.render must not run when all particle layers disabled"
+            ),
+        )
+    object.__setattr__(model, "enabled_layer_names", set())
+
+    out = model(_make_fake_batch(H=4, W=4), train=False, frame_id=0)
+    assert "pred_rgb" in out
+    assert out["pred_rgb"].shape == (1, 4, 4, 3)
+    assert torch.all(out["pred_rgb"] == 0)
+    assert torch.all(out["pred_opacity"] == 0)
+
+
+def test_blend_sky_skipped_when_sky_disabled(real_conf):
+    """sky_envmap disabled via enabled_layer_names → _blend_sky is a no-op
+    (no rgb_sky / rgb_gaussians keys added). Mirrors the viser checkbox
+    flipping sky off while keeping particle layers on."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
+                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
+                  extra={"backend": "mlp"}),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    object.__setattr__(
+        model, "enabled_layer_names",
+        model.enabled_layer_names - {"sky_envmap"},
+    )
+    batch = _make_fake_batch(H=4, W=4)
+    rgb_gauss = torch.rand(1, 4, 4, 3)
+    outputs = {
+        "pred_rgb":     rgb_gauss.clone(),
+        "pred_opacity": torch.zeros(1, 4, 4, 1),  # alpha=0 would normally pull sky in
+    }
+    out = model._blend_sky(outputs, batch)
+    assert out is outputs
+    assert "rgb_sky" not in out
+    assert "rgb_gaussians" not in out
+    assert torch.equal(out["pred_rgb"], rgb_gauss)

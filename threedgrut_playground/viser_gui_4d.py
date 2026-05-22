@@ -43,6 +43,7 @@ except ImportError:
 import kaolin
 from kaolin.render.camera import Camera
 
+from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.utils.misc import quaternion_to_so3
 from threedgrut_playground.engine import Engine3DGRUT
 from threedgrut_playground.utils.cuboid import (
@@ -216,6 +217,47 @@ class Viser4DViewer:
                         f"⚠️ **FTheta 模式**: render W×H 锁定到 "
                         f"`{w}×{h}` (训练分辨率)，不可调节。"
                     )
+
+        # Per-layer Gaussian render toggles. Nested as a sub-folder under
+        # Render Controls so users find them next to Near/Far/Resolution.
+        # Skipped for v1 ckpts (scene_mog is MixtureOfGaussians, no .specs)
+        # and no-gaussian-render mode (engine=None) where nothing renders.
+        self.layer_checkboxes: dict = {}
+        if self.engine is not None and isinstance(
+            getattr(self.engine, "scene_mog", None), LayeredGaussians
+        ):
+            scene_mog = self.engine.scene_mog
+            with folder:
+                gaussian_layers_folder = self.server.gui.add_folder(
+                    "Gaussian Layers"
+                )
+            with gaussian_layers_folder:
+                for spec in scene_mog.specs:
+                    # dynamic_deformables: registry stub, no module in
+                    # self.layers; skip silently.
+                    if not spec.is_particle_layer and spec.name != "sky_envmap":
+                        continue
+                    if spec.name not in scene_mog.layers:
+                        continue
+                    cb = self.server.gui.add_checkbox(
+                        spec.name, initial_value=True
+                    )
+                    self.layer_checkboxes[spec.name] = cb
+
+                    @cb.on_update
+                    def _(_, _self=self, _name=spec.name, _cb=cb):
+                        mog = _self.engine.scene_mog
+                        new_set = set(mog.enabled_layer_names)
+                        if bool(_cb.value):
+                            new_set.add(_name)
+                        else:
+                            new_set.discard(_name)
+                        # Wholesale replace (not in-place mutate) so a render
+                        # iterating self.specs sees an atomic flip under GIL.
+                        object.__setattr__(
+                            mog, "enabled_layer_names", new_set
+                        )
+                        _self.need_update = True
 
         @self.reset_view_button.on_click
         def _(_):
