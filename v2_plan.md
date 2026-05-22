@@ -98,6 +98,7 @@ kanban
     [T8.10 viser_gui_4d --no_gaussian_render （Ampere datacenter A100/A800; Hopper H100 不需要） ✅]
     [T8.11 dyn LiDAR per-track local frame + 每帧 transform ✅ 48K 点 / 20 active tracks]
     [T8.12 vast.ai RTX 4090 验证 viser_gui_4d ⚠️ 部分通过 （Bug #1+#2 修, fisheye 内参遗漏待 T8.13） ]
+    [T8.14 viser_gui_4d "Gaussian Layers" 运行时按层开关 (background/road/dynamic_rigids/sky_envmap) ✅ Mac 200/200 PASS, vast.ai 4090 视觉验收待启动]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
@@ -108,7 +109,7 @@ kanban
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
-| Done ✅ | 56 | Stage 0-6 + Stage 6-fix + **Stage 7 软出口结题 (T7.1-T7.5 + T7.3.b ablation)** + **Stage 8 viser_gui_4d 11/12 ⚠️ + T8.12-FIX ✅** (T8.12-FIX vast.ai California 4090 1h $0.98 实测**诊断锚定**: Phase A.2 pinhole fov 校正与历史 fov 试验同形态 → **fov 假设证伪**; Phase A.5 Fisheye 120° equirectangular **结构性突破** → 椭圆 fisheye + cuboid 合理位置, 但内容仍模糊因 equirectangular ≠ FTheta polynomial → **T8.13 必走**. 参考 repo `thinkpad:/home/yusun/repo/3dgrut/tools/viser_multilayer_nurec.py` 用 pinhole 渲染清晰是因 nurec 数据非 wide-FOV FTheta, 不适用我们 camera_front_wide_120fov. **根因结构**: 3dgut UT rasterizer 用 intrinsics (非 rays) 投影 Gaussian 协方差到屏幕, FTheta-trained Gaussian 只能匹配 FTheta intrinsics). Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 7 实测**: T7.3 7-cam 30k exposure ON raw masked **15.63 ❌**, T7.3.b exposure OFF raw masked **25.76** (+10.13 dB), 但**两组 cc_psnr_masked 几乎一致** (24.75 / 24.70) → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平, **ExposureModel 在 30k 长训中退化优化失控** (退化成"高斯学个大概+exposure 补偿"二元解), 不增不减真实质量. Stage 7 软出口判定 ✅ + T7.4 cap ablation 跳过 (根因不在 cap) + **V3-P1 升级为整合任务**: bilateral-grid + ExposureModel 退化修复合并研究. Mac 189/189 PASS (+1 skip, +10 T8.12-FIX 新增) 0 回归. |
+| Done ✅ | 57 | Stage 0-6 + Stage 6-fix + **Stage 7 软出口结题 (T7.1-T7.5 + T7.3.b ablation)** + **Stage 8 viser_gui_4d 11/12 ⚠️ + T8.12-FIX ✅ + T8.13 ✅ + T8.14 ✅** (T8.14 viser GUI 增强 "Gaussian Layers" 运行时按层开关: Render Controls 下嵌套子 folder, 每层一个 checkbox, 取消勾选 → fused_view/_blend_sky 阶段直接跳过 → 不进 OptiX, 干净 + 零开销; LayeredGaussians 新增 enabled_layer_names: Set[str] + _empty_render 兜底, viser_gui_4d _build_static_gui 注入子 folder + isinstance/engine 守卫. 5 新单测全 PASS, 全套 200/200 + 1 skip 0 回归. T8.12-FIX vast.ai California 4090 1h $0.98 实测**诊断锚定**: Phase A.2 pinhole fov 校正与历史 fov 试验同形态 → **fov 假设证伪**; Phase A.5 Fisheye 120° equirectangular **结构性突破** → 椭圆 fisheye + cuboid 合理位置, 但内容仍模糊因 equirectangular ≠ FTheta polynomial → **T8.13 必走**. **根因结构**: 3dgut UT rasterizer 用 intrinsics (非 rays) 投影 Gaussian 协方差到屏幕, FTheta-trained Gaussian 只能匹配 FTheta intrinsics). Stage 6-fix A800: masked PSNR 29.49 dB. **Stage 7 实测**: T7.3 7-cam 30k exposure ON raw masked **15.63 ❌**, T7.3.b exposure OFF raw masked **25.76** (+10.13 dB), 但**两组 cc_psnr_masked 几乎一致** (24.75 / 24.70) → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平, **ExposureModel 在 30k 长训中退化优化失控** (退化成"高斯学个大概+exposure 补偿"二元解), 不增不减真实质量. Stage 7 软出口判定 ✅ + T7.4 cap ablation 跳过 (根因不在 cap) + **V3-P1 升级为整合任务**: bilateral-grid + ExposureModel 退化修复合并研究. |
 
 ### 1.2 任务级看板（按 Subtask）
 
@@ -174,7 +175,8 @@ kanban
 | **T8.13** | 8 | viz_4d schema_v2 FTheta polynomial 8-key 内参 + viser_gui_4d FTheta 投影 + engine fisheye_intrinsics 分支 | 1 | ✅ **Mac+A800** (vast.ai 待) | 3dgut UT rasterizer 在 `tracer.py:471` 已原生支持 FTheta (`fromFThetaCameraModelParameters`), 本任务 **全 Python 改动**: viz_4d SCHEMA_VERSION 1→2 + `ego.primary_camera_intrinsics_FTheta` 持久化 8-key dict (`resolution / shutter_type / principal_point / reference_poly / pixeldist_to_angle_poly / angle_to_pixeldist_poly / max_angle / linear_cde`) + `primary_camera_resolution`. **改动文件**: `threedgrut/viz/metadata.py` (SCHEMA_VERSION=2 + `_detect_primary_camera` 5-tuple + `_extract_ego` 新字段, duck-type 不依赖 NCore SDK), `threedgrut_playground/utils/viz4d_metadata.py` (`FourDMetadata` 加 `ego_primary_intrinsics_ftheta` + `ego_primary_resolution` + `has_ftheta()` 8-key 守卫), NEW `threedgrut_playground/utils/ftheta_intrinsics.py` (`ftheta_dict_to_tensors` pure-CPU helper numpy→torch), `threedgrut_playground/engine.py` (`_trace_scene_mog` + `render_pass` 加 `fisheye_intrinsics: Optional[dict]` kwarg → `Batch.intrinsics_FThetaCameraModelParameters`, 与 pinhole 互斥), `threedgrut_playground/viser_gui_4d.py` (`Viser4DViewer` 持 `ftheta_intrinsics/ftheta_render_wh` + `update()` 锁 W×H + `fast_render` 透传 + `_build_static_gui` slider 隐藏 + markdown 提示 + `main()` 启动日志区分). **Mac**: 全量 **206 PASS + 1 skip 0 回归** (旧 189 + 新 17: schema_v2 + detect_ftheta×2 + extract_ftheta×2 + loader×3 + ftheta_helper×6 + viewer×3 + inject_roundtrip×1). **A800 实测**: 旧 v2 ckpt `v2_egomask_fix_20260520_113746` → `python -m threedgrut.viz.inject` ~1m50s 注入完成 → schema_v2 + 8 FTheta keys + `resolution=(1920,1080)` + `max_angle=1.221rad` (= 70° 半视场 ≈ 140° 全视场, 与 `camera_front_wide_120fov` 一致) + `shutter_type=ROLLING_TOP_TO_BOTTOM` + `linear_cde shape=(3,)`. viser `--no_gaussian_render` smoke 启动日志精准输出 `[T8.13] FTheta intrinsics 已加载 (resolution=(1920, 1080), max_angle=1.221rad). GUI resolution slider 已锁定到训练分辨率。`. **Resolution 锁定**: FTheta `principal_point` 是像素坐标, render W×H 不能改, viser slider 自动 visible=False + markdown 提示. **vast.ai 4090 视觉验收**: 待用户决定 (复用 `scripts/t8_12_fix_vast_create.sh` + `scripts/t8_12_fix_vast_smoke.sh`, 预算 ~$1, 视觉清晰即过). Commits 385627f / 6b0389d / 170435a / db1c50a / c2ce1f1 / 36d6933 / fc4d7bc |
 | **T8.12-FIX** | 8 | viser_gui_4d --initial_fov_deg + --camera_type + --camera_fov_deg CLI flags + vast.ai 视觉验收 → 诊断锚定 T8.13 必走 | 0.5 | ✅ **CLI 基建完成 + 诊断完成** | 远端参考 `thinkpad:/home/yusun/repo/3dgrut/tools/viser_multilayer_nurec.py:280` 同样处理 fisheye-trained nurec 用 `client.camera.fov = math.radians(90)` 硬设 + 纯 pinhole `make_rays` 渲染清晰. **改动**: `viser_gui_4d.py` 加 3 CLI flags + `Viser4DViewer.__init__` 加 `initial_fov_rad` kwarg + `_on_connect` / Reset View 显式设 `client.camera.fov` + engine 实例化后可选 `engine.camera_type=Fisheye / engine.camera_fov=<deg>` 走已存在 `_raygen_fisheye` 路径. **Mac**: NEW `test_viser_gui_4d_fov.py` 10/10 PASS + 全量 189/189 PASS 0 回归. **vast.ai California 4090 实测** ($0.908/hr × 1h = $0.98): **Phase A.2 (pinhole 90°) 与历史 fov 45/75/140 同形态 → fov 假设证伪**; **Phase A.5 (Fisheye 120° equirectangular) 结构性突破 → 椭圆 fisheye + cuboid 合理位置 (但 equirectangular ≠ FTheta polynomial 所以内容仍糊)**. 诊断锚定 **Phase C (T8.13 FTheta schema 扩展) 必然路径**——本仓库 3dgut UT rasterizer 通过 intrinsics (而非 rays) 投影 Gaussian 协方差到 2D 屏幕, FTheta-trained Gaussian 形状只能用 FTheta intrinsics 才能正确投影. |
 | **T8.12** | 8 | vast.ai RTX 4090 验证 viser_gui_4d 完整 Gaussian 渲染 + 修 Stage 8 集成 bug | 0.5 | ⚠️ **部分通过** | vast.ai RTX 4090 24GB (Norway, $0.630/hr). **修了 2 个真实 Stage 8 bug**: **Bug #1** `engine.py:_trace_scene_mog` LayeredGaussians 路径构 Batch 缺 camera intrinsics → 3dgut tracer `__create_camera_parameters` 抛 `Camera intrinsics unavailable` viser 一连即崩; fix: 从 kaolin Camera 取 [fx,fy,cx,cy] 塞 Batch.intrinsics + 真实 c2w as T_to_world + camera-space rays 匹配 NCoreDataset.get_gpu_batch_with_intrinsics contract. **Bug #2** `layered_model.py:init_from_checkpoint` 完后 SkyEnvmapMLP 残留 CPU → `_blend_sky` 路径 `cpu vs cuda` addmm 报错; fix: 末尾 `self.cuda()` 把整个 ModuleDict 搬上 GPU. **Reset View 改进**: snap camera 到 `meta.initial_c2w` (position+wxyz+look_at+up_direction). **Infra fix**: `scripts/cuda_helper.sh` 加 CUDA 12.1 case + viser nohup 不持久 → setsid 子 shell; NEW `docs/T8.12_handover_day1.md`. **Pipeline 验证**: viser RTX 4090 87 FPS 跑通 + scene primitives (cuboid/LiDAR/ego frustum) 全同步 + timeline 推进 cuboid + dyn LiDAR 跟车飘. **未达预期点 → T8.13**: viz_4d schema (T8.2 设计) 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial / distortion coeffs. NCore ckpt 用 `camera_front_wide_120fov` (FTheta fisheye) 训练, viser 用 pinhole 投影 → Gaussians 视觉是远景隧道 motion-blur 乱糊, 跟 render.py 输出的清晰街景 (含 fisheye 桶形畸变) 完全不是同一视角. 用户对比图实证此 gap. Bug #3 fov override 因 pinhole 140° 退化已撤. **完整 fisheye 渲染留 T8.13** (扩展 viz_4d schema 含 FTheta + viser_gui_4d 用 fisheye intrinsics). **T8.12 实例 37188673 已销毁** (~$1.5 总成本) |
-| | | **合计** | **30.0** | | |
+| **T8.14** | 8 | viser_gui_4d "Gaussian Layers" 运行时按层开关 (Render Controls 嵌套子 folder) | 0.25 | ✅ **Mac** (vast.ai 视觉验收待) | 用户痛点: 调 4D 场景时无法单独关掉某层验证 (动态刚体单独看 / 背景无 sky 时纯净外观 / sky cubemap 出问题临时屏蔽). **实现**: MOD `threedgrut/layers/layered_model.py` (`__init__` 新增 `enabled_layer_names: Set[str]` 默认全 enabled + `_empty_render(gpu_batch)` 辅助方法 + `forward` 双兜底 single-bg fast path + ref_layer None case + `fused_view` 跳过禁用层 + 0-row tensor 兜底 + `_blend_sky` 检查 sky 开关) + MOD `threedgrut_playground/viser_gui_4d.py` (`_build_static_gui` 在 Render Controls 内 `with folder:` 嵌套创建 "Gaussian Layers" 子 folder, 遍历 `scene_mog.specs` 给每个 particle layer + sky_envmap 加 checkbox; closure 用 `_self/_name/_cb` 默认参数绑定; callback 整体替换 enabled_layer_names 而非 in-place mutate, GIL 保证原子). **守卫**: v1 ckpt (`MixtureOfGaussians` 无 `.specs`) / `--no_gaussian_render` (engine=None) / dynamic_deformables 占位符 全部 isinstance + filter 跳过. **不持久化**: `set` 不进 state_dict, 仅 GUI session 状态. **零性能损失** (默认全开 → 行为与改动前完全相同, 仅用户取消勾选时 fused_view concat 列表变短). **测试**: NEW 5 测试在 test_layered_gaussians.py (default_includes_all_contributing / skips_disabled_layer / all_disabled_returns_zero_particle / forward_all_disabled_returns_empty_render with renderer.render 反向断言 / blend_sky_skipped_when_sky_disabled). **Mac 全套 200 passed + 1 skipped 0 回归**. AST 解析两改动文件 OK. vast.ai 4090 视觉验收待用户启动 (toggle 4 张截图归档). 跳过 ckpt save/load, 不动 trainer, 不改 render_pass 签名 |
+| | | **合计** | **30.25** | | |
 
 ### 1.3 当前 Stage 状态汇总
 
@@ -189,7 +191,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI 软出口 | **5/5 ✅** (T7.4 跳过) | Stage 7 软出口结题. T7.1 复用 v2_full_exposure (无新 yaml) + 7-cam Hydra dump 通过. T7.2 A800 1-cam 1k smoke masked 26.38 / 9.71 it/s. **T7.3 A800 7-cam 30k 51 min raw masked 15.63 ❌ 但 cc_psnr_masked 24.75 OK → 暴露 ExposureModel 长训退化优化失控. T7.3.b A800 同配置 + use_exposure=false ablation 证伪: raw masked 25.76 (+10.13 dB), cc_psnr_masked 24.70 (vs T7.3 24.75 -0.05 dB noise 级)** → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平. **T7.4 cap ablation 跳过** (根因不在 cap). T7.5 WP_V2_Report.md (231 行) + v2_plan/architecture 同步, ExposureModel 失控 + bilateral-grid 合并 V3-P1 整合任务 (§ 14.5) |
-| 8 | viser_gui_4d (4D viz) | **12/12 ✅ + vast.ai 视觉验收 pending** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️). ckpt['viz_4d'] schema v1: ego poses + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容). inject_viz_4d CLI 方案 B 一次性注入. **A800 + vast.ai RTX 4090 双路实测**: A800 走 --no_gaussian_render bypass; RT cores (T8.12, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通**但**视觉不匹配 render.py**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.12 发现的 schema gap**: `viz_4d.ego` 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial. NCore ckpt 训练用 `camera_front_wide_120fov` (FTheta fisheye), viser 用 pinhole 投影 → Gaussians 乱糊不是 ground truth → T8.13 backlog (扩展 schema + viser fisheye 投影). Mac 179/179 PASS 0 回归. |
+| 8 | viser_gui_4d (4D viz) | **14/14 ✅ + vast.ai 视觉验收 pending** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️, T8.12-FIX ✅, T8.13 ✅ FTheta, **T8.14 ✅ "Gaussian Layers" 运行时按层开关**). ckpt['viz_4d'] schema v2: ego poses + FTheta 8-key intrinsics (T8.13) + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容) + **Render Controls 下嵌套 "Gaussian Layers" 子 folder 每层 checkbox (T8.14, 取消勾选直接跳过 fused_view/_blend_sky 不进 OptiX)**. inject_viz_4d CLI 方案 B 一次性注入 (T8.9). **A800 + vast.ai RTX 4090 双路实测**: A800 走 `--no_gaussian_render` bypass (Ampere datacenter SKU 无 RT cores → OptiX dlopen segfault, **A800 做不了高斯渲染**, 验收必须 vast.ai 4090+ 或本机 RTX); RT cores (T8.12+T8.13, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通 + T8.13 后视觉与 render.py 同形态清晰街景**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.13 闭环 schema gap**: `viz_4d.ego.primary_camera_intrinsics_FTheta` 8-key + viser FTheta 投影. **T8.14 闭环用户调试痛点**: 按层开关让用户在浏览器侧调试单层. Mac 全套 **200 passed + 1 skipped 0 回归** (含 T8.14 新增 5 测试). |
 
 ### 1.4 依赖关系图
 
@@ -973,6 +975,64 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### ✅ T8.14 — viser_gui_4d "Gaussian Layers" 运行时按层开关 (2026-05-22, Mac 本地, plan threedgrut-playground-viser-gui-4d-py-g-pure-knuth)
+
+**用户触发**: 调 4D 场景时无法单独验证某一层 — 想看动态刚体单独画面、想看背景在无 sky 时的纯净外观、A800 上 sky cubemap 出问题想临时屏蔽，目前都做不到。需要在浏览器侧给每个 Gaussian 层一个 checkbox 即时开关。
+
+**核心约束**: 不动训练侧 / 不持久化到 ckpt / 不改 `engine.render_pass` 签名 / v1 ckpt + `--no_gaussian_render` 必须无回归 / 全开默认行为字节一致.
+
+**改动文件 (3 files, +244 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut/layers/layered_model.py` | `LayeredGaussians.__init__` 注入 `enabled_layer_names: Set[str]` 默认 = 全部 particle layer + sky_envmap（用 `object.__setattr__` 绕 `nn.Module.__setattr__`, 与已有 `conf/specs/tracks_poses` 同 pattern, `set` 不进 state_dict）；新增 `_empty_render(gpu_batch) → {pred_rgb/opacity/dist 全 0}` 辅助方法（兜底所有 particle 层都关的场景，避免对空 fused view 调 OptiX）；`forward` 双兜底：① single-bg fast path 进入前检查 `"background" in enabled` 否则返 `_empty_render`；② `ref_layer = next(... generator, None)` + `if ref_layer is None: return _blend_sky(_empty_render(...), ...)` 让 sky 仍可合成；`fused_view` spec 循环加 `if spec.name not in enabled: continue` + cat 前 `if pieces[positions] == []` 返回 0-row tensors 用 `ref.new_zeros((0,) + trailing_shape)` 避免 `torch.cat([])` RuntimeError；`_blend_sky` 加 `or "sky_envmap" not in enabled` 短路 |
+| `threedgrut_playground/viser_gui_4d.py` | import `LayeredGaussians`；`_build_static_gui` 在 Render Controls folder 内 `with folder:` 嵌套新建 "Gaussian Layers" 子 folder（与 FTheta markdown 同 nesting pattern）；isinstance 守卫 + `self.engine is not None` 守卫跳过 v1 ckpt 和 no_gaussian_render；遍历 `scene_mog.specs` 给每个 `is_particle_layer or name=="sky_envmap"` 且在 `scene_mog.layers` 中的 spec 加 checkbox；callback 用 `_self=self, _name=spec.name, _cb=cb` 默认参数绑定避免 closure 陷阱；callback 内 **整体替换** `enabled_layer_names`（`object.__setattr__(mog, "enabled_layer_names", new_set)`）而非 in-place mutate，GIL 保证渲染线程读到的 set 永远一致；设 `self.need_update = True` 触发下一帧 |
+| `threedgrut/tests/test_layered_gaussians.py` | NEW 5 测试: `test_enabled_layer_names_default_includes_all_contributing`（默认含所有 particle layer + sky_envmap）/ `test_fused_view_skips_disabled_layer`（bg+road=150 行 → disable road → 100 行）/ `test_fused_view_all_disabled_returns_zero_particle`（全关返回 0-row + 各 trailing dim 正确）/ `test_forward_all_disabled_returns_empty_render`（monkeypatch 两层 `renderer.render` 反向断言未被调用，pred_rgb/opacity 全 0）/ `test_blend_sky_skipped_when_sky_disabled`（禁用 sky → `_blend_sky` no-op, pred_rgb ≡ rgb_gauss, 无 rgb_sky/rgb_gaussians key） |
+
+**关键设计决策（用户已确认）**:
+
+| 选择 | 决定 | 理由 |
+|---|---|---|
+| UI 位置 | Render Controls 下嵌套子 folder | 用户原话 "在渲染设置菜单"；与 Resolution/Near/Far 同层级语义 |
+| 显示哪些层 | 全部 `specs` 中存在的（含 sky_envmap） | `dynamic_deformables` 自动跳过（is_particle_layer=False 且不在 `self.layers`） |
+| 实现方式 | LayeredGaussians 跳过禁用层 | 不进 OptiX 干净 + 零开销；vs alpha=0 mask（多分配 + 慢）/ render_pass 加参数（多一层 API 转发） |
+| GUI 实现 | viser scene tree 不能挂 Gaussian | Gaussian 是 `set_background_image` 出来的图，不是场景节点 → 只能用 GUI 折叠面板 |
+
+**边界处理**:
+
+| 场景 | 行为 |
+|---|---|
+| v1 ckpt (`MixtureOfGaussians`, 无 `.specs`) | folder 不创建（isinstance 守卫） |
+| `--no_gaussian_render` (engine=None) | folder 不创建（engine 守卫） |
+| 单 bg 层 LayeredGaussians | 单个 background checkbox；关掉 → 全黑 |
+| 全 particle 关, sky 开 | `_empty_render` + `_blend_sky` 合成 → 满屏 sky（alpha=0） |
+| 全层（含 sky）关 | `_empty_render` 后 `_blend_sky` 早 return → 全黑 |
+| 仅关 bg，dynamic_rigids 开 | `fused_view` cat 剩余层；renderer 正常 |
+| `dynamic_deformables` 占位符 | 不在 `self.layers` filter 跳过 → 无 checkbox |
+
+**风险评估**:
+
+- **autograd**: `viser_gui_4d.fast_render` 在 `torch.no_grad()` 内，`set` 控制流不参与梯度，安全
+- **多线程**: viser callback 与 render loop 异步 → 整体 set 替换 + GIL 原子性保证；in-flight render 看旧 set，下一帧看新 set，无锁
+- **state_dict 污染**: `set` 不进 `nn.Module.state_dict()`（已有 `conf/specs/tracks_poses` 同 pattern 验证）
+- **single-bg fast path 字节一致性**: 默认全 enabled → 与改动前完全相同；仅用户取消勾选时偏离
+
+**Mac 验证**: `pytest threedgrut/tests/`：
+- `test_layered_gaussians.py` → **41/41 PASS**（36 原有 + 5 新增）
+- 全套 (200 个测试) → **200 passed + 1 skipped 0 回归**
+- AST 解析改动两文件 → OK
+
+**vast.ai 4090 视觉验收（待用户启动）**:
+- **A800 不可用**：用户实测 confirm A800 做不了高斯渲染（Ampere datacenter SKU RT cores 阉割 → OptiX dlopen segfault, T8.10 已记录）
+- 路径：vast.ai 4090 复用 `scripts/t8_12_fix_vast_create.sh` + `t8_12_fix_vast_smoke.sh` 模式，~$1 预算
+- 验收门槛: 在 ckpt 含 sky_envmap 的 v2 4D ckpt 上：(a) 默认全勾 → 与改动前同图（清晰街景）；(b) 取消 background → 仅剩动态刚体悬空 + sky；(c) 取消 dynamic_rigids → 街景空场无车；(d) 取消 sky_envmap → 天空变黑；(e) 全取消 → 全黑。4 张关键过程截图归档
+
+**Plan**: `/Users/etendue/.claude/plans/threedgrut-playground-viser-gui-4d-py-g-pure-knuth.md` (10 task 全部 ✅, Mac 阶段完成；vast.ai 视觉验收待用户启动)
+
+**Commits**: (本地 stage, 待统一 commit)
+
+---
 
 ### ✅ T8.13 — viz_4d schema_v2 FTheta polynomial 持久化 + viser_gui_4d FTheta 投影 (2026-05-21, Mac 本地 + A800, plan t8-13-flickering-dragon)
 
