@@ -118,6 +118,10 @@ class Viser4DViewer:
         self._is_loop: bool = True
         self._speed: float = 1.0
         self._last_tick_wallclock: float = time.time()
+        # Bug 1 fix: Play 模式下让 viser client camera 跟随 ego_pose_at(t_us)
+        # 飘 (默认 OFF, free-orbit 保持原行为). 见 plan
+        # /Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md Phase B
+        self._follow_ego_enabled: bool = False
 
         # Slider-mutation guard so programmatic updates don't re-fire the
         # on_update callback into an infinite loop.
@@ -351,6 +355,12 @@ class Viser4DViewer:
                 "Road LiDAR", self.meta.road_xyz is not None)
             self.show_dyn_pts   = self.server.gui.add_checkbox("Dynamic LiDAR", False)
             self.show_axes      = self.server.gui.add_checkbox("World axes", False)
+            # Bug 1 fix: Follow Ego — Play 时把 viser client camera 自动 snap
+            # 到 ego_pose_at(t_us). 默认 OFF 保留 free-orbit, 勾选立刻同步一次
+            # (避免要等下一次 slider/play tick).
+            self.show_follow_ego = self.server.gui.add_checkbox(
+                "Follow Ego", False
+            )
 
         @self.show_ego_traj.on_update
         def _(_):
@@ -386,6 +396,13 @@ class Viser4DViewer:
         def _(_):
             if self.h_world_axes is not None:
                 self.h_world_axes.visible = bool(self.show_axes.value)
+
+        @self.show_follow_ego.on_update
+        def _(_):
+            self._follow_ego_enabled = bool(self.show_follow_ego.value)
+            if self._follow_ego_enabled:
+                self._snap_clients_to_ego(self._t_us_current)
+                self.need_update = True
 
     # ---------------------------------------------------------------- scene
     def _populate_static_scene(self) -> None:
@@ -586,6 +603,10 @@ class Viser4DViewer:
         self._update_active_cuboids(frame_idx)
         self._update_dynamic_lidar(frame_idx)
         self._mirror_ui(t_us, frame_idx)
+        # Bug 1 fix: if Follow Ego is on, snap viewer cameras to the new
+        # ego pose so Play visibly tracks the trajectory.
+        if self._follow_ego_enabled:
+            self._snap_clients_to_ego(t_us)
         self.need_update = True
 
     def _mirror_ui(self, t_us: int, frame_idx: int) -> None:
@@ -606,6 +627,29 @@ class Viser4DViewer:
         pose = self.meta.ego_pose_at(t_us)
         self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
         self.h_ego_frustum.position = pose[:3, 3]
+
+    def _snap_clients_to_ego(self, t_us: int) -> None:
+        """Snap every connected viser client's free camera onto the ego pose
+        at ``t_us``. Mirrors Reset View's wxyz/position/look_at/up_direction
+        writes (see _build_static_gui Reset View handler) but uses the
+        per-frame ego pose instead of meta.initial_c2w.
+
+        No-op when metadata absent (v1 ckpt static-3D mode) or no clients.
+        """
+        if self.meta is None:
+            return
+        pose = self.meta.ego_pose_at(t_us)
+        R = pose[:3, :3]
+        # NCore camera convention: +Z_cam = forward, +Y_cam = down. Match the
+        # Reset View handler (_build_static_gui line 273-285) so Follow Ego
+        # behaves like an automated Reset View at each frame.
+        forward_world = R @ np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        up_world = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
+        for client in self.server.get_clients().values():
+            client.camera.wxyz = mat_to_wxyz(pose)
+            client.camera.position = pose[:3, 3]
+            client.camera.look_at = pose[:3, 3] + 10.0 * forward_world
+            client.camera.up_direction = up_world
 
     def _build_cuboid_edges(self, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
         assert self.meta is not None
@@ -743,6 +787,154 @@ class Viser4DViewer:
 # =========================================================================== #
 #                          Loader + main                                       #
 # =========================================================================== #
+def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
+    """Emit [T8.13-DIAG] block to terminal once on startup to anchor the
+    4-bug investigation tracked in
+    /Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md
+    (Phase A). Output is read-only — no GUI / render side effects.
+
+    Four sections, each guarded so absence of feature doesn't crash:
+      A.1  layer registry + enabled_layer_names + checkbox bindings (Bug 3)
+      A.2  viz_4d time range + train.duration_sec + per-track frame_info (Bug 4)
+      A.3  ego_pose_at(t_us_first) vs meta.initial_c2w sanity      (Bug 1)
+      A.4  FTheta vs viser-pinhole projection asymmetry warning    (Bug 2)
+    """
+    print("[T8.13-DIAG] ============================================================")
+
+    # ---- A.1 Layer registry --------------------------------------------------
+    print("[T8.13-DIAG] A.1 Layer registry (Bug 3 evidence):")
+    engine = viewer.engine
+    if engine is None or not hasattr(engine, "scene_mog"):
+        print("[T8.13-DIAG]   - engine=None (no_gaussian_render); skipping")
+    else:
+        mog = engine.scene_mog
+        if isinstance(mog, LayeredGaussians):
+            specs = list(mog.specs)
+            enabled = set(getattr(mog, "enabled_layer_names", set()))
+            print(f"[T8.13-DIAG]   - scene_mog type: LayeredGaussians "
+                  f"({len(specs)} specs, {len(mog.layers)} modules)")
+            for spec in specs:
+                in_layers = spec.name in mog.layers
+                n_particles = 0
+                if in_layers and hasattr(mog.layers[spec.name], "positions"):
+                    try:
+                        n_particles = int(mog.layers[spec.name].positions.shape[0])
+                    except Exception:
+                        n_particles = -1
+                print(f"[T8.13-DIAG]     - {spec.name:24s} "
+                      f"is_particle={spec.is_particle_layer!s:5s}  "
+                      f"in_layers={in_layers!s:5s}  "
+                      f"n_particles={n_particles}  "
+                      f"in_enabled={spec.name in enabled!s}")
+            print(f"[T8.13-DIAG]   - enabled_layer_names: {sorted(enabled)}")
+            # Bug 3 prior observation 321: tracks_poses is a python dict that
+            # _populate_tracks_impl writes only in __init__; init_from_checkpoint
+            # does NOT repopulate it. If empty, dynamic_rigid Gaussians render
+            # at object-local frame regardless of toggle → user perceives "no
+            # effect". Surface size here to confirm/refute.
+            tracks_poses = getattr(mog, "tracks_poses", None)
+            if isinstance(tracks_poses, dict):
+                print(f"[T8.13-DIAG]   - tracks_poses dict: "
+                      f"{len(tracks_poses)} tracks "
+                      f"(empty after ckpt load → known Bug 3 root cause hint)")
+            else:
+                print(f"[T8.13-DIAG]   - tracks_poses: {type(tracks_poses).__name__}")
+        else:
+            print(f"[T8.13-DIAG]   - scene_mog type: {type(mog).__name__} "
+                  f"(v1 MixtureOfGaussians, no layers)")
+    cbs = getattr(viewer, "layer_checkboxes", {}) or {}
+    print(f"[T8.13-DIAG]   - viser checkboxes registered: "
+          f"{[(n, bool(cb.value)) for n, cb in cbs.items()]}")
+
+    # ---- A.2 viz_4d time range ----------------------------------------------
+    print("[T8.13-DIAG] A.2 viz_4d time range (Bug 4 evidence):")
+    md = viewer.meta
+    if md is None:
+        print("[T8.13-DIAG]   - metadata=None (v1 ckpt static mode); skipping")
+    else:
+        dur_us = md.t_us_last - md.t_us_first
+        print(f"[T8.13-DIAG]   - schema_version:      {md.schema_version}")
+        print(f"[T8.13-DIAG]   - t_us_first:          {md.t_us_first} us "
+              f"({md.t_us_first / 1e6:.3f} s)")
+        print(f"[T8.13-DIAG]   - t_us_last:           {md.t_us_last} us "
+              f"({md.t_us_last / 1e6:.3f} s)")
+        print(f"[T8.13-DIAG]   - duration:            {dur_us / 1e6:.3f} s")
+        print(f"[T8.13-DIAG]   - n_ego_frames:        "
+              f"{md.ego_frame_timestamps_us.shape[0]}")
+        print(f"[T8.13-DIAG]   - n_track_frames:      {md.n_frames()}")
+        # Best-effort: read training duration_sec / seek_offset_sec from
+        # ckpt['config'] (OmegaConf DictConfig in v2 ckpts).
+        cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
+        if cfg is not None:
+            try:
+                from omegaconf import OmegaConf  # local import: optional
+                dur_sec = OmegaConf.select(cfg, "dataset.train.duration_sec",
+                                            default="<unset>")
+                seek_sec = OmegaConf.select(cfg, "dataset.train.seek_offset_sec",
+                                             default="<unset>")
+                iters = OmegaConf.select(cfg, "n_iterations", default="<unset>")
+                print(f"[T8.13-DIAG]   - cfg.dataset.train.duration_sec:    "
+                      f"{dur_sec}")
+                print(f"[T8.13-DIAG]   - cfg.dataset.train.seek_offset_sec: "
+                      f"{seek_sec}")
+                print(f"[T8.13-DIAG]   - cfg.n_iterations:                  "
+                      f"{iters}")
+            except Exception as e:
+                print(f"[T8.13-DIAG]   - cfg parse failed: {e!r}")
+        else:
+            print("[T8.13-DIAG]   - cfg: <ckpt has no 'config' key>")
+        # Per-track frame_info coverage (first 5 tracks).
+        print(f"[T8.13-DIAG]   - per-track frame_info coverage "
+              f"(first 5 of {md.n_tracks()} tracks):")
+        for i, (tid, t) in enumerate(md.tracks.items()):
+            if i >= 5:
+                break
+            fi = t.get("frame_info")
+            if fi is None or fi.size == 0:
+                print(f"[T8.13-DIAG]     - {tid}: <empty frame_info>")
+                continue
+            n_active = int(fi.sum())
+            n_total = int(fi.size)
+            active_idx = np.where(fi)[0]
+            rng = (f"[{int(active_idx[0])}, {int(active_idx[-1])}]"
+                   if active_idx.size > 0 else "[]")
+            print(f"[T8.13-DIAG]     - {tid}: active "
+                  f"{n_active}/{n_total} ({100.0 * n_active / max(n_total, 1):.1f}%) "
+                  f"range={rng}")
+
+    # ---- A.3 ego_pose vs initial_c2w ----------------------------------------
+    print("[T8.13-DIAG] A.3 Camera vs ego pose @ t_us_first (Bug 1 evidence):")
+    if md is None:
+        print("[T8.13-DIAG]   - metadata=None; skipping")
+    else:
+        ep = md.ego_pose_at(md.t_us_first)
+        ic = md.initial_c2w
+        dpos = float(np.linalg.norm(ep[:3, 3] - ic[:3, 3]))
+        print(f"[T8.13-DIAG]   - ego_pose_at(t_us_first)[:3,3]: "
+              f"{ep[:3, 3].tolist()}")
+        print(f"[T8.13-DIAG]   - meta.initial_c2w[:3,3]:        "
+              f"{ic[:3, 3].tolist()}")
+        print(f"[T8.13-DIAG]   - delta:                         {dpos:.3f} m "
+              f"({'OK' if dpos < 1.0 else 'WARN >1m suggests metadata stale'})")
+
+    # ---- A.4 FTheta vs pinhole asymmetry ------------------------------------
+    print("[T8.13-DIAG] A.4 Projection model (Bug 2 evidence):")
+    if md is None:
+        print("[T8.13-DIAG]   - metadata=None; viser draws pinhole only")
+    elif md.has_ftheta():
+        print("[T8.13-DIAG]   - engine path (Gaussian):  FTheta polynomial "
+              "(8-key intrinsics)")
+        print("[T8.13-DIAG]   - viser scene primitives:  pinhole "
+              "(kaolin Camera.fov)")
+        print("[T8.13-DIAG]   - WARN: cuboid/frustum/lidar drawn by viser "
+              "frontend may not align with FTheta Gaussian backdrop, "
+              "especially near image periphery. See plan Phase D for fix.")
+    else:
+        print("[T8.13-DIAG]   - engine path + viser:     pinhole (consistent, "
+              "alignment should hold)")
+    print("[T8.13-DIAG] ============================================================")
+
+
 def _load_metadata(ckpt: dict, dataset_path: Optional[str],
                    default_config: str) -> Optional[FourDMetadata]:
     """Try ckpt['viz_4d'] first; fall back to dataset on-the-fly extract."""
@@ -874,6 +1066,13 @@ def main() -> None:
         target_fps=args.target_fps,
         initial_fov_rad=math.radians(args.initial_fov_deg),
     )
+    # Phase A diagnostic block — one-shot startup print, no GUI/render side
+    # effects. See plan v2-t8-13-t8-14-bug-happy-starfish.md for the 4-bug
+    # anchor points each section maps to.
+    try:
+        _print_startup_diagnostics(viewer, ckpt)
+    except Exception as e:
+        print(f"[T8.13-DIAG] diagnostics failed (non-fatal): {e!r}")
     while True:
         start = time.time()
         viewer.update()
