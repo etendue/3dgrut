@@ -262,6 +262,15 @@ class Viser4DViewer:
                             mog, "enabled_layer_names", new_set
                         )
                         _self.need_update = True
+                        # Bug 3 runtime instrumentation: print the toggle
+                        # event + post-write enabled_layer_names so the log
+                        # gives ground-truth evidence about whether the
+                        # callback actually fired and whether the wholesale
+                        # set replacement reached the server-side mog.
+                        # Confirms or refutes "GUI state desync" hypothesis.
+                        print(f"[BUG3-DIAG] toggle layer='{_name}' "
+                              f"value={bool(_cb.value)} → enabled_layer_names="
+                              f"{sorted(new_set)}", flush=True)
 
         @self.reset_view_button.on_click
         def _(_):

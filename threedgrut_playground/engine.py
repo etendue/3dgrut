@@ -1035,7 +1035,19 @@ class Engine3DGRUT:
         #
         # kaolin's _raygen_pinhole returns WORLD-space rays. We undo that to
         # camera-space so the kernel handles the rest consistently.
-        if isinstance(self.scene_mog, LayeredGaussians) and len(self.scene_mog.tracks_poses) > 0:
+        # T8.13/T8.14 follow-up Bug 3 fix: route every LayeredGaussians through
+        # forward() / fused_view() regardless of tracks_poses population.
+        # Original guard `and len(self.scene_mog.tracks_poses) > 0` silently
+        # fell through to `self.scene_mog.trace(...)` (the v1 MoG path) when
+        # tracks_poses dict was empty after checkpoint load — bypassing the
+        # entire enabled_layer_names filter and making viser_gui_4d's
+        # "Gaussian Layers" toggle a no-op even though the LayeredGaussians
+        # type check passed. fused_view() itself handles tracks_poses being
+        # empty (the dynamic-rigid pose transform is gated separately on
+        # `len(self.tracks_poses) > 0` at layered_model.py:542), so removing
+        # the guard is safe in both populated and empty states.
+        # Anchor: obs 346 (Bug Root Cause Confirmed: tracks_poses Guard).
+        if isinstance(self.scene_mog, LayeredGaussians):
             intrinsics = None
             ftheta_intrinsics_t = None
             T_to_world = torch.eye(4, dtype=rays_ori.dtype, device=rays_ori.device)[None]
