@@ -99,7 +99,8 @@ class LayeredMCMCStrategy(BaseStrategy):
         (default false) so v2 baseline training stays byte-identical until
         the dynfix yaml flips it on.
         """
-        trainer_conf = getattr(self.config, "trainer", None)
+        # BaseStrategy stores config under ``self.conf`` (base.py:25).
+        trainer_conf = getattr(self.conf, "trainer", None)
         if trainer_conf is None:
             return
         cfg = (

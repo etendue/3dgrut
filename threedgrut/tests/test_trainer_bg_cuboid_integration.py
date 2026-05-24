@@ -60,7 +60,7 @@ def _build_strategy(conf, model):
     from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
 
     stub = types.SimpleNamespace()
-    stub.config = conf
+    stub.conf = conf
     stub.model = model
     bound = LayeredMCMCStrategy._maybe_clamp_dynamic_rigids.__get__(stub)
     return bound, stub
