@@ -56,6 +56,16 @@ trainer:
   lambda_sky: 0.1
   use_exposure: false
   exposure_lr: 1.0e-3
+  # T8/B3 — Background-layer opacity penalty + cuboid-aware dyn mask + dyn
+  # position clamp. Default off so v2 baseline training byte-identical with
+  # pre-B3 ckpts. Flip `enabled: true` in dynfix yaml (see
+  # ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml).
+  bg_dyn_cuboid_penalty:
+    enabled: false
+    lambda: 0.05                # max penalty weight after warmup
+    lambda_warmup_iters: 5000   # linear 0 → lambda over this many iters
+    use_cuboid_mask: true       # fill image_infos["dyn_mask_cuboid"] for layered L1
+    dyn_clamp_to_cuboid: false  # in-place dynamic_rigids positions clamp post-MCMC
 
 enable_writer: true
 writer:

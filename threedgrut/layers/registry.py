@@ -11,6 +11,7 @@ To add a new layer:
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import List
 
 from omegaconf import DictConfig
@@ -57,6 +58,9 @@ def specs_from_config(conf: DictConfig) -> List[LayerSpec]:
     Args:
         conf: top-level Hydra conf with optional conf.layers.enabled list.
               Falls back to ["background"] if not present (v1 single-layer mode).
+              T8/B3: also reads ``conf.layers.overrides.<name>.<field>`` to
+              tweak per-layer registry defaults (e.g. ``max_n_particles``)
+              from yaml without forking STANDARD_LAYERS.
 
     Returns:
         List of LayerSpec preserving the order given in conf.layers.enabled.
@@ -64,7 +68,10 @@ def specs_from_config(conf: DictConfig) -> List[LayerSpec]:
     Raises:
         ValueError: if conf.layers.enabled contains a name not in STANDARD_LAYERS.
     """
-    enabled = list(conf.get("layers", {}).get("enabled", ["background"]))
+    layers_conf = conf.get("layers", {}) or {}
+    enabled = list(layers_conf.get("enabled", ["background"]))
+    overrides = layers_conf.get("overrides", {}) or {}
+    valid_fields = {f.name for f in dataclasses.fields(LayerSpec)}
     specs: List[LayerSpec] = []
     for name in enabled:
         if name not in STANDARD_LAYERS:
@@ -72,5 +79,19 @@ def specs_from_config(conf: DictConfig) -> List[LayerSpec]:
                 f"Unknown layer name '{name}' in conf.layers.enabled. "
                 f"Available: {sorted(STANDARD_LAYERS.keys())}"
             )
-        specs.append(STANDARD_LAYERS[name])
+        spec = STANDARD_LAYERS[name]
+        per_layer = overrides.get(name)
+        if per_layer is not None:
+            # Filter to known fields so a typo doesn't silently no-op.
+            patch = {}
+            for k, v in dict(per_layer).items():
+                if k not in valid_fields:
+                    raise ValueError(
+                        f"Unknown LayerSpec field '{k}' in "
+                        f"conf.layers.overrides.{name}; valid: {sorted(valid_fields)}"
+                    )
+                patch[k] = v
+            if patch:
+                spec = dataclasses.replace(spec, **patch)
+        specs.append(spec)
     return specs

@@ -1,0 +1,39 @@
+# @package _global_
+#
+# T8/B3 fix variant of `ncore_3dgut_mcmc_v2_full_4dviz`:
+#
+#   * Enables `bg_dyn_cuboid_penalty` — bg-layer opacity is penalised when
+#     particles fall inside an active dynamic-rigid cuboid (3D world-frame
+#     mask), so MCMC `relocate_gaussians` reassigns them to donors and the
+#     `dynamic_rigids` layer takes over the cuboid interior.
+#   * Enables `use_cuboid_mask` — `image_infos["dyn_mask_cuboid"]` is filled
+#     per batch via FTheta cuboid projection (precise, no sseg leak from
+#     untracked vehicles); `compute_layered_l1_loss` prefers cuboid over sseg.
+#   * Enables `dyn_clamp_to_cuboid` — `LayeredMCMCStrategy._post_optimizer_step`
+#     clamps `dynamic_rigids.positions` back into `|local| ≤ size/2` after MCMC.
+#   * Bumps `dynamic_rigids.max_n_particles` 200k → 700k so the dyn layer has
+#     room to densify into the volumes the bg layer is vacating (Plan-agent
+#     Q2 risk-mitigation: avoid "穿洞" where bg走人但dyn接不上).
+#
+# Acceptance gate (5k smoke):
+#   - `bg_inside_pct` (from scripts/diagnose_bg_in_cuboid.py): baseline 10.17%
+#     → fix-ckpt ≤ 2% (≥5× drop).
+#   - `dynamic_rigids` total particle count: 200k → ≥ 400k.
+#   - `psnr_masked` ≥ baseline `24.65 - 0.3 = 24.35 dB`.
+
+defaults:
+  - ncore_3dgut_mcmc_v2_full_4dviz
+  - _self_
+
+trainer:
+  bg_dyn_cuboid_penalty:
+    enabled: true
+    lambda: 0.05
+    lambda_warmup_iters: 5000
+    use_cuboid_mask: true
+    dyn_clamp_to_cuboid: true
+
+layers:
+  overrides:
+    dynamic_rigids:
+      max_n_particles: 700000
