@@ -1,7 +1,7 @@
 # T8 viser_gui_4d Bug List
 
-**最后更新：** 2026-05-24 10:52 GMT+8
-**对应代码版本：** main @ `b1752b3` (FTheta uint64 fix) + `d965b00` (Bug 3 guard removal) + `209886c` (Follow Ego)
+**最后更新：** 2026-05-24 13:13 GMT+8
+**对应代码版本：** main @ pending B2 commit + `46e643f` (B6/B7/B8) + `b1752b3` (B9 FTheta uint64) + `d965b00` (B3 guard removal) + `209886c` (B1 Follow Ego)
 **Plan 文档：** [`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
 
 ---
@@ -59,7 +59,7 @@
 | ID | 名称 | 现状 | 优先级 |
 |---|---|---|---|
 | B1 | Play 时视角不跟 ego | ✅ **已修** (commit 209886c) | — |
-| B2 | cuboid 与 Gaussian 不重合 | ⚠️ **待修** (FTheta vs pinhole 投影) | P1 |
+| B2 | cuboid 与 Gaussian 不重合 | ✅ **已修** (FTheta forward projection overlay) | — |
 | B3 | dynamic_rigids toggle 无效 | ⚠️ **代码侧已修但行为仍异常** | P1 |
 | B4 | 训练只覆盖 ~2s 短 clip | ✅ **已修** (commit 1.9s → 19.9s 全时长 30k 重训) | — |
 | B5 | inject CLI 不该是新 ckpt 必需步骤 | ⚠️ **新 bug** | P2 |
@@ -87,22 +87,30 @@
 
 ---
 
-### ⚠️ B2 — cuboid 与 Gaussian 不重合（待修，P1）
+### ✅ B2 — cuboid 与 Gaussian 不重合（已修）
 
 **现象**：浏览器画面上 cuboid wireframe 与 Gaussian 渲染的真实物体（如白色卡车）在屏幕坐标上**偏移**，越靠边缘偏得越远。
-**根因（已确认）**：投影模型不一致
-- Gaussian backdrop 由 engine 走 **FTheta polynomial 多项式投影**（鱼眼，桶形畸变，140° FOV）
-- viser 自己画的 `add_line_segments` cuboid 走 **pinhole 投影**（Kaolin Camera fov）
-- 两套投影对同一个 3D 点会算出不同的 2D 像素位置
-- 诊断块 A.4 段已警告此点
+**根因**：投影模型不一致 —— Gaussian backdrop 走 FTheta polynomial 鱼眼投影，viser `add_line_segments` 走 pinhole 投影。
 
-**修法（Phase D-a）**：
-- 新增 `threedgrut_playground/utils/ftheta_projector.py`，用 polynomial helper 在 Python 端把 cuboid 3D 边投到 FTheta 2D 像素
-- 渲染到 RGBA overlay 图，叠加在 Gaussian backdrop 之上
-- 关闭 viser line_segments 的 cuboid/frustum/track 路径
-- 工作量：~0.5d
+**Spec**：[docs/superpowers/specs/2026-05-24-b2-ftheta-cuboid-overlay-design.md](docs/superpowers/specs/2026-05-24-b2-ftheta-cuboid-overlay-design.md)
+**Phase 0 calibration log**：[docs/T8_artifacts/B2_calibration_probe_log.md](docs/T8_artifacts/B2_calibration_probe_log.md)
+**视觉验证截图**：[docs/T8_artifacts/B2_backdrop_clean.png](docs/T8_artifacts/B2_backdrop_clean.png) / [B2_blended_clean.png](docs/T8_artifacts/B2_blended_clean.png)
 
-**用户实测**：✅ 未修（FTheta ckpt 上仍偏移）。
+**修复**：
+- **Phase 0 calibration probe**：ThinkPad 实测 4 组 (FLIP × poly order × linear_cde) 候选，pin 死 D 组合：`c2w_cv = c2w_viser @ diag([1, 1, -1, 1])` (Z-only flip，viser ego pose 是 +Y down + Z backward 混合约定，不需翻 Y) + `angle_to_pixeldist_poly` 升幂 Horner + `linear_cde` 跳过（≈ identity）。
+- **新增 3 个模块**（pure numpy，可 Mac 单测）：
+  - `threedgrut_playground/utils/ftheta_projector.py` — `FthetaForwardProjector` 类，3D world → FTheta 2D pixel + visibility mask
+  - `threedgrut_playground/utils/overlay_renderer.py` — `OverlayRenderer` (PIL.ImageDraw 画 polyline) + `alpha_blend`
+  - `threedgrut_playground/utils/viser_overlay_compositor.py` — `Viser4DOverlayCompositor` 编排 project → render → blend
+- **`viser_gui_4d.py` 集成**：
+  - FTheta 模式下 `update()` 在 `set_background_image` 前调 compositor 合成 cuboid/track/ego_traj overlay
+  - FTheta 模式下 skip `add_line_segments` 路径（cuboid/track/ego_traj），避免浏览器双重渲染 pinhole 偏移框
+  - 新增 GUI Visibility checkbox "FTheta overlay (debug)" (默认 ON, 可关闭对照)
+  - Pinhole 模式行为不变（零回归）
+- **Mac 单测**：13 个新单测 (7 projector + 9 renderer + 4 compositor)，全 PASS；总 241 PASS / 1 skipped / 0 regression
+- **ThinkPad 视觉验证**：通过 dump backdrop+blended PNG 对照，cuboid 绿框 ≤ ~5 px 偏移贴合 backdrop 上 truck/pedestrian/car footprint。
+
+**用户实测**：✅ 已确认（dump 截图验证）。
 
 ---
 
@@ -273,9 +281,9 @@ NCore FTheta `params.resolution` 是 `numpy.uint64`（e.g. `[1920, 1080]`），t
 ## 提交计划
 
 按优先级合并：
-1. **下一个 PR**：B6 (ego trajectory dedupe) + B7 (cuboid visibility preserve) + B8 (待澄清, 同源 fix) — 都改 metadata.py / viser_gui_4d.py，一致主题
-2. **再下一个 PR**：B2 (FTheta cuboid overlay) — 工作量较大（~0.5d），独立 PR
-3. **持续**：B3 训练侧研究（与 V3-P1 合并）
+1. ✅ **PR #1 (commit 46e643f)**：B6 (ego trajectory dedupe) + B7 (cuboid visibility preserve) + B8 (LiDAR init state) — 一致主题
+2. ✅ **PR #2 (pending commit)**：B2 (FTheta cuboid overlay) — 独立 PR，新增 3 个 utils 模块 + 13 单测 + viser_gui_4d 集成
+3. **下一个 PR**：B3 训练侧研究（与 V3-P1 合并）—— 离线诊断脚本统计 background 层粒子在 cuboid 内占比
 4. **验证**：B5 在下次训练（不需要 inject）
 
 ## 验证步骤模板

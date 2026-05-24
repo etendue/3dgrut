@@ -52,6 +52,10 @@ from threedgrut_playground.utils.cuboid import (
     instance_color,
 )
 from threedgrut_playground.utils.viser_math import mat_to_wxyz
+from threedgrut_playground.utils.viser_overlay_compositor import (
+    PolylineLayerSpec,
+    Viser4DOverlayCompositor,
+)
 from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 
 
@@ -105,6 +109,19 @@ class Viser4DViewer:
             if metadata is not None and metadata.has_ftheta()
             else None
         )
+        # B2: FTheta cuboid overlay path — projects cuboid/track/ego_traj
+        # polylines through the same FTheta polynomial used by the backdrop
+        # and alpha-blends them into the rendered image before
+        # set_background_image. None for pinhole ckpts. Calibration constants
+        # pinned by docs/T8_artifacts/B2_calibration_probe_log.md.
+        self._overlay_compositor: Optional[Viser4DOverlayCompositor] = None
+        if (self.ftheta_intrinsics is not None
+                and self.ftheta_render_wh is not None):
+            W_ft, H_ft = self.ftheta_render_wh
+            self._overlay_compositor = Viser4DOverlayCompositor(
+                ftheta_dict=self.ftheta_intrinsics,
+                height=H_ft, width=W_ft, subdivide_n=20,
+            )
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -370,6 +387,15 @@ class Viser4DViewer:
             self.show_follow_ego = self.server.gui.add_checkbox(
                 "Follow Ego", False
             )
+            # B2: FTheta overlay toggle. Only added in FTheta mode; lets the
+            # user A/B-compare overlay (correct FTheta projection) against the
+            # legacy add_line_segments path (pinhole, drifts toward image
+            # edges). Off → backdrop only, no wireframes drawn by overlay.
+            self.show_ftheta_overlay = None
+            if self._overlay_compositor is not None:
+                self.show_ftheta_overlay = self.server.gui.add_checkbox(
+                    "FTheta overlay (debug)", True
+                )
 
         @self.show_ego_traj.on_update
         def _(_):
@@ -413,6 +439,12 @@ class Viser4DViewer:
                 self._snap_clients_to_ego(self._t_us_current)
                 self.need_update = True
 
+        # B2: toggling overlay flips backdrop appearance → force redraw.
+        if self.show_ftheta_overlay is not None:
+            @self.show_ftheta_overlay.on_update
+            def _(_):
+                self.need_update = True
+
     # ---------------------------------------------------------------- scene
     def _populate_static_scene(self) -> None:
         """One-shot scene primitives: world axes, ego polyline + frustum,
@@ -433,25 +465,29 @@ class Viser4DViewer:
         if self.meta.ego_poses_c2w.size == 0:
             return
         pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float32)
-        # add_spline_catmull_rom needs at least 4 control points; fall back to
-        # add_point_cloud-style line if the trajectory is too short.
-        if pts.shape[0] >= 4:
-            self.h_ego_traj = self.server.scene.add_spline_catmull_rom(
-                "/ego/trajectory",
-                positions=pts,
-                color=(0.2, 1.0, 0.2),
-                line_width=2.0,
-            )
-        else:
-            # Degenerate trajectory → render as line_segments between consecutive points.
-            if pts.shape[0] >= 2:
-                segs = np.stack([pts[:-1], pts[1:]], axis=1)
-                self.h_ego_traj = self.server.scene.add_line_segments(
+        # B2: in FTheta mode the trajectory is drawn by the overlay path
+        # (correct fisheye projection). Skip the viser scene primitive
+        # entirely to avoid double-drawing it with pinhole geometry.
+        if self.ftheta_render_wh is None:
+            # add_spline_catmull_rom needs at least 4 control points; fall back to
+            # add_point_cloud-style line if the trajectory is too short.
+            if pts.shape[0] >= 4:
+                self.h_ego_traj = self.server.scene.add_spline_catmull_rom(
                     "/ego/trajectory",
-                    points=segs,
-                    colors=np.full_like(segs, fill_value=0.2),
+                    positions=pts,
+                    color=(0.2, 1.0, 0.2),
                     line_width=2.0,
                 )
+            else:
+                # Degenerate trajectory → render as line_segments between consecutive points.
+                if pts.shape[0] >= 2:
+                    segs = np.stack([pts[:-1], pts[1:]], axis=1)
+                    self.h_ego_traj = self.server.scene.add_line_segments(
+                        "/ego/trajectory",
+                        points=segs,
+                        colors=np.full_like(segs, fill_value=0.2),
+                        line_width=2.0,
+                    )
         # Ego frustum at frame 0.
         pose0 = self.meta.ego_poses_c2w[0]
         self.h_ego_frustum = self.server.scene.add_camera_frustum(
@@ -596,6 +632,10 @@ class Viser4DViewer:
             col_list.append(col)
         if not seg_list:
             return
+        # B2: in FTheta mode the track trajectories are drawn by the overlay
+        # path; skip the pinhole-projected scene primitive.
+        if self.ftheta_render_wh is not None:
+            return
         all_segs = np.concatenate(seg_list, axis=0)
         all_cols = np.concatenate(col_list, axis=0)
         self.h_track_trajectories = self.server.scene.add_line_segments(
@@ -703,6 +743,15 @@ class Viser4DViewer:
         fall back to the checkbox value on the first frame) and re-apply it.
         Mirrors _update_dynamic_lidar's preserve-prev-visible pattern.
         """
+        # B2: in FTheta mode the active cuboid edges are drawn by the
+        # overlay path; skip the viser line_segments primitive entirely so
+        # the browser doesn't double-draw a pinhole-projected wireframe
+        # that drifts away from the fisheye Gaussian backdrop.
+        if self.ftheta_render_wh is not None:
+            if self.h_cuboid_lines is not None:
+                self.h_cuboid_lines.remove()
+                self.h_cuboid_lines = None
+            return
         prev_visible = (self.h_cuboid_lines.visible
                         if self.h_cuboid_lines is not None
                         else bool(getattr(self, "show_cuboids", None)
@@ -720,6 +769,72 @@ class Viser4DViewer:
             line_width=2.5,
         )
         self.h_cuboid_lines.visible = prev_visible
+
+    # ---------------------------------------------------------------- B2 overlay
+    def _collect_overlay_layer_specs(self, t_us: int) -> list[PolylineLayerSpec]:
+        """Build world-space polyline specs for the FTheta overlay path.
+
+        Layers are ordered bottom→top: ego_trajectory → tracks → cuboids
+        (cuboids on top because they are the P1 visual verification target).
+        Each layer respects the corresponding ``show_*`` Visibility checkbox,
+        so the user can hide individual primitives even with overlay on.
+
+        Returns ``[]`` when metadata absent or all layers are hidden / empty.
+        """
+        if self.meta is None:
+            return []
+        specs: list[PolylineLayerSpec] = []
+
+        # Ego trajectory (single multi-vertex polyline from poses_c2w).
+        if (getattr(self, "show_ego_traj", None) is not None
+                and bool(self.show_ego_traj.value)
+                and self.meta.ego_poses_c2w.size > 0):
+            ego_pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float64)
+            if ego_pts.shape[0] >= 2:
+                specs.append(PolylineLayerSpec(
+                    name="ego_trajectory",
+                    polylines_world=[ego_pts],
+                    color=(50, 255, 50, 220),
+                    width=2,
+                ))
+
+        # Per-track trajectories (one polyline per track over its active frames).
+        if (getattr(self, "show_tracks", None) is not None
+                and bool(self.show_tracks.value)):
+            track_pls: list[np.ndarray] = []
+            for tid, t in self.meta.tracks.items():
+                mask = t["frame_info"]
+                poses = t["poses"]
+                if mask is None or poses is None or mask.sum() < 2:
+                    continue
+                centers = poses[mask, :3, 3].astype(np.float64)
+                track_pls.append(centers)
+            if track_pls:
+                specs.append(PolylineLayerSpec(
+                    name="track_trajectories",
+                    polylines_world=track_pls,
+                    color=(180, 180, 180, 180),
+                    width=1,
+                ))
+
+        # Active cuboids — 12 edges × N cuboids at current frame_idx.
+        # Each edge is a 2-vertex polyline. cuboid_world_edges already lives
+        # in world frame via _build_cuboid_edges.
+        if (getattr(self, "show_cuboids", None) is not None
+                and bool(self.show_cuboids.value)):
+            frame_idx = self.meta.lookup_frame_idx(t_us)
+            pts, _cols = self._build_cuboid_edges(frame_idx)   # (N*12, 2, 3)
+            if pts.shape[0] > 0:
+                cuboid_pls = [pts[i].astype(np.float64)
+                              for i in range(pts.shape[0])]
+                specs.append(PolylineLayerSpec(
+                    name="active_cuboids",
+                    polylines_world=cuboid_pls,
+                    color=(0, 255, 0, 255),
+                    width=2,
+                ))
+
+        return specs
 
     # ---------------------------------------------------------------- render
     def _play_tick(self) -> None:
@@ -805,6 +920,46 @@ class Viser4DViewer:
                 print(e)
                 interval = 1
                 continue
+            # B2: FTheta cuboid overlay — project + alpha-blend wireframes
+            # into the backdrop so they share the fisheye projection
+            # (cuboid wireframes drawn via add_line_segments use pinhole
+            # projection in the browser and drift toward image edges).
+            img_pre_overlay = None
+            if (self._overlay_compositor is not None
+                    and self.show_ftheta_overlay is not None
+                    and bool(self.show_ftheta_overlay.value)):
+                try:
+                    layer_specs = self._collect_overlay_layer_specs(
+                        self._t_us_current)
+                    img_pre_overlay = img
+                    img = self._overlay_compositor.composite(
+                        img, layer_specs, view_matrix.astype(np.float64))
+                except Exception as e:
+                    print(f"[B2-OVERLAY] composite failed (continuing without "
+                          f"overlay): {e}")
+            # B2 debug: dump pre-overlay backdrop + post-overlay blended to
+            # disk so the result can be inspected outside the browser when
+            # WebGL canvas toDataURL is not viable. Activated by env var
+            # B2_DUMP_DIR=/path; writes <dir>/b2_backdrop.png and
+            # <dir>/b2_blended.png on each frame (last frame wins).
+            _dump_dir = os.environ.get("B2_DUMP_DIR")
+            if _dump_dir:
+                try:
+                    from PIL import Image as _PILImage
+                    if img_pre_overlay is not None:
+                        _PILImage.fromarray(img_pre_overlay).save(
+                            os.path.join(_dump_dir, "b2_backdrop.png"))
+                    _PILImage.fromarray(img).save(
+                        os.path.join(_dump_dir, "b2_blended.png"))
+                    # Also dump the c2w used for THIS frame so offline
+                    # annotation tools can reproject the same cuboids
+                    # with the matching camera pose.
+                    np.save(os.path.join(_dump_dir, "b2_c2w.npy"),
+                            view_matrix.astype(np.float64))
+                    with open(os.path.join(_dump_dir, "b2_t_us.txt"), "w") as _f:
+                        _f.write(str(self._t_us_current))
+                except Exception as e:
+                    print(f"[B2-DUMP] save failed: {e}")
             client.scene.set_background_image(img, format="jpeg")
         self.render_times.append(interval)
         if self.render_times and self.fps is not None:
