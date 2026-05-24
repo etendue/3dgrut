@@ -95,10 +95,10 @@ kanban
     [T8.6 dataset --dataset_path lazy fallback ✅ Mac]
     [T8.8 Stage 8 A800 100 step smoke ✅ 70 tracks / ego 2623 / 960 MB]
     [T8.9 inject_viz_4d CLI "方案 B" ✅ A800 实测 T6F.3 ckpt 31 tracks / 991→995 MB]
-    [T8.10 viser_gui_4d --no_gaussian_render （Ampere datacenter A100/A800; Hopper H100 不需要） ✅]
+    [T8.10 viser_gui_4d --no_gaussian_render - Ampere datacenter A100/A800, Hopper H100 不需要 ✅]
     [T8.11 dyn LiDAR per-track local frame + 每帧 transform ✅ 48K 点 / 20 active tracks]
-    [T8.12 vast.ai RTX 4090 验证 viser_gui_4d ⚠️ 部分通过 （Bug #1+#2 修, fisheye 内参遗漏待 T8.13） ]
-    [T8.14 viser_gui_4d "Gaussian Layers" 运行时按层开关 (background/road/dynamic_rigids/sky_envmap) ✅ Mac 200/200 PASS + vast.ai 4090 视觉验收 9 张截图全 PASS]
+    [T8.12 vast.ai RTX 4090 验证 viser_gui_4d ⚠️ 部分通过 - Bug 1+2 修, fisheye 内参遗漏待 T8.13]
+    [T8.14 viser_gui_4d "Gaussian Layers" 运行时按层开关 background/road/dynamic_rigids/sky_envmap ✅ Mac 200/200 PASS + vast.ai 4090 视觉验收 9 张截图全 PASS]
 ```
 
 如果你的 Markdown 渲染器不支持 mermaid kanban，可读下表（同源数据）：
@@ -313,8 +313,8 @@ flowchart LR
     T6F3 --> T71
 
     T71 --> T72 --> T73
-    T73 -. raw masked 15.6 → exposure 失控 .-> T73b
-    T73b -. 证伪后跳过 .-> T74
+    T73 -.->|"raw masked 15.6 / exposure 失控"| T73b
+    T73b -.->|"证伪后跳过"| T74
     T73b --> T75
     T73 --> T75
 
