@@ -120,8 +120,16 @@ def _detect_primary_camera(dataset):
         if max_angle is not None and hasattr(camera_model, "get_parameters"):
             try:
                 params = camera_model.get_parameters()
+                # T8.13 follow-up fix: NCore FTheta params.resolution comes back
+                # as numpy.uint64 (e.g. [1920, 1080]). torch.as_tensor refuses
+                # uint64 (torch has no native uint64 dtype) → TypeError silently
+                # swallowed by the except below → ftheta_dict=None and the whole
+                # T8.13 fisheye projection path silently degrades to pinhole
+                # approx in viser_gui_4d. Cast uint64 → int64 via numpy BEFORE
+                # touching torch; the other fields (principal_point, polynomials,
+                # linear_cde) are already float32 so they round-trip fine.
                 ftheta_dict = {
-                    "resolution":              _to_cpu_int64(torch.as_tensor(params.resolution)).numpy(),
+                    "resolution":              np.asarray(params.resolution, dtype=np.int64),
                     "shutter_type":            params.shutter_type.name,
                     "principal_point":         _to_cpu_float32(torch.as_tensor(params.principal_point)).numpy(),
                     "reference_poly":          params.reference_poly.name,
