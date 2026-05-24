@@ -115,6 +115,13 @@ class Viser4DViewer:
         # set_background_image. None for pinhole ckpts. Calibration constants
         # pinned by docs/T8_artifacts/B2_calibration_probe_log.md.
         self._overlay_compositor: Optional[Viser4DOverlayCompositor] = None
+        # B2 perf: ego trajectory + per-track trajectories are static (depend
+        # only on meta, not on t_us or c2w), so we build their world-space
+        # polyline lists exactly once and reuse them across every frame.
+        # Active cuboids still need per-frame rebuild (active set + poses
+        # depend on t_us).
+        self._overlay_static_ego_polylines: list[np.ndarray] = []
+        self._overlay_static_track_polylines: list[np.ndarray] = []
         if (self.ftheta_intrinsics is not None
                 and self.ftheta_render_wh is not None):
             W_ft, H_ft = self.ftheta_render_wh
@@ -122,6 +129,19 @@ class Viser4DViewer:
                 ftheta_dict=self.ftheta_intrinsics,
                 height=H_ft, width=W_ft, subdivide_n=20,
             )
+            if metadata is not None:
+                if metadata.ego_poses_c2w.size > 0:
+                    ego_pts = metadata.ego_poses_c2w[:, :3, 3].astype(np.float64)
+                    if ego_pts.shape[0] >= 2:
+                        self._overlay_static_ego_polylines = [ego_pts]
+                for tid, t in metadata.tracks.items():
+                    mask = t["frame_info"]
+                    poses = t["poses"]
+                    if mask is None or poses is None or mask.sum() < 2:
+                        continue
+                    centers = poses[mask, :3, 3].astype(np.float64)
+                    if centers.shape[0] >= 2:
+                        self._overlay_static_track_polylines.append(centers)
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -785,41 +805,38 @@ class Viser4DViewer:
             return []
         specs: list[PolylineLayerSpec] = []
 
-        # Ego trajectory (single multi-vertex polyline from poses_c2w).
+        # Ego trajectory — static polyline, cached in __init__.
+        # subdivide_n=3 is plenty for an already-dense polyline (524 verts
+        # over 20 s) since each segment is short and the fisheye curvature
+        # between consecutive ego poses is sub-pixel.
         if (getattr(self, "show_ego_traj", None) is not None
                 and bool(self.show_ego_traj.value)
-                and self.meta.ego_poses_c2w.size > 0):
-            ego_pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float64)
-            if ego_pts.shape[0] >= 2:
-                specs.append(PolylineLayerSpec(
-                    name="ego_trajectory",
-                    polylines_world=[ego_pts],
-                    color=(50, 255, 50, 220),
-                    width=2,
-                ))
+                and self._overlay_static_ego_polylines):
+            specs.append(PolylineLayerSpec(
+                name="ego_trajectory",
+                polylines_world=self._overlay_static_ego_polylines,
+                color=(50, 255, 50, 220),
+                width=2,
+                subdivide_n=3,
+            ))
 
-        # Per-track trajectories (one polyline per track over its active frames).
+        # Track trajectories — static, cached in __init__. Same low
+        # subdivide_n rationale as ego.
         if (getattr(self, "show_tracks", None) is not None
-                and bool(self.show_tracks.value)):
-            track_pls: list[np.ndarray] = []
-            for tid, t in self.meta.tracks.items():
-                mask = t["frame_info"]
-                poses = t["poses"]
-                if mask is None or poses is None or mask.sum() < 2:
-                    continue
-                centers = poses[mask, :3, 3].astype(np.float64)
-                track_pls.append(centers)
-            if track_pls:
-                specs.append(PolylineLayerSpec(
-                    name="track_trajectories",
-                    polylines_world=track_pls,
-                    color=(180, 180, 180, 180),
-                    width=1,
-                ))
+                and bool(self.show_tracks.value)
+                and self._overlay_static_track_polylines):
+            specs.append(PolylineLayerSpec(
+                name="track_trajectories",
+                polylines_world=self._overlay_static_track_polylines,
+                color=(180, 180, 180, 180),
+                width=1,
+                subdivide_n=3,
+            ))
 
-        # Active cuboids — 12 edges × N cuboids at current frame_idx.
-        # Each edge is a 2-vertex polyline. cuboid_world_edges already lives
-        # in world frame via _build_cuboid_edges.
+        # Active cuboids — per-frame (active set + poses depend on t_us).
+        # Each cuboid yields 12 short 2-vertex edges; the fisheye curvature
+        # within a single edge can be many pixels at the screen periphery,
+        # so subdivide_n=20 keeps tangents smooth.
         if (getattr(self, "show_cuboids", None) is not None
                 and bool(self.show_cuboids.value)):
             frame_idx = self.meta.lookup_frame_idx(t_us)
@@ -832,6 +849,7 @@ class Viser4DViewer:
                     polylines_world=cuboid_pls,
                     color=(0, 255, 0, 255),
                     width=2,
+                    subdivide_n=20,
                 ))
 
         return specs

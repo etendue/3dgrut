@@ -26,13 +26,21 @@ class PolylineLayerSpec:
     """One semantic layer of world-space polylines, before projection.
 
     ``polylines_world`` is a list of (M, 3) float ndarrays. Each polyline
-    will be subdivided (default n=20) before projection so fisheye-curved
-    edges render with smooth tangents instead of straight chord shortcuts.
+    will be subdivided (per-layer ``subdivide_n``, default 20) before
+    projection so fisheye-curved edges render with smooth tangents instead
+    of straight chord shortcuts.
+
+    Use a high ``subdivide_n`` (e.g. 20) for *short* 2-vertex edges where
+    the fisheye-induced curvature between endpoints is large (cuboid edges).
+    Use a low value (e.g. 2-3) for already-dense multi-vertex polylines
+    (track trajectories, ego trajectory) where each segment is short and
+    the per-frame subdivision cost dominates.
     """
     name: str
     polylines_world: list[np.ndarray] = field(default_factory=list)
     color: RGBAColor = (0, 255, 0, 255)
     width: int = 1
+    subdivide_n: int = 20
 
 
 class Viser4DOverlayCompositor:
@@ -85,8 +93,11 @@ class Viser4DOverlayCompositor:
         for spec in layers_world:
             if not spec.polylines_world:
                 continue
+            # Spec's per-layer subdivide_n overrides the compositor default
+            # so callers can tune cuboid (high) vs trajectory (low) separately.
+            n_sub = spec.subdivide_n if spec.subdivide_n else self.subdivide_n
             projected = self.projector.project_polylines(
-                spec.polylines_world, c2w_viser, subdivide_n=self.subdivide_n)
+                spec.polylines_world, c2w_viser, subdivide_n=n_sub)
             render_layers.append(OverlayLayer(
                 name=spec.name,
                 polylines=projected,
