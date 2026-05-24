@@ -552,10 +552,17 @@ class Viser4DViewer:
         if self.meta is None or not self.meta.has_per_track_dyn_lidar():
             return
         pts, cols = self._build_dyn_lidar_world(frame_idx)
-        # Carry forward user's visibility toggle when re-adding.
+        # Carry forward user's visibility toggle when re-adding. Bug B8 fix:
+        # the previous default of True for the first call (h_dyn_pts is None,
+        # which fires during __init__'s _on_time_change(t_us_first)) added the
+        # cloud as visible regardless of the checkbox initial state (False).
+        # User saw LiDAR points on startup even though "Dynamic LiDAR" was
+        # unchecked. Read the checkbox value on first call so initial state
+        # matches the GUI.
         prev_visible = (self.h_dyn_pts.visible
                         if self.h_dyn_pts is not None
-                        else True)
+                        else bool(getattr(self, "show_dyn_pts", None)
+                                  and self.show_dyn_pts.value))
         if self.h_dyn_pts is not None:
             self.h_dyn_pts.remove()
             self.h_dyn_pts = None
@@ -688,7 +695,18 @@ class Viser4DViewer:
 
         viser 1.0 line-segment handle exposes ``.visible/.position/.wxyz`` but
         not in-place vertex updates → we replace the node each frame.
+
+        Bug B7 fix: each Play tick this method removes + re-adds the node,
+        which defaults to ``visible=True``. Previously the user could uncheck
+        "Active cuboids" in Visibility, then on the very next Play tick the
+        cuboids reappeared. We preserve the prior handle's visibility (or
+        fall back to the checkbox value on the first frame) and re-apply it.
+        Mirrors _update_dynamic_lidar's preserve-prev-visible pattern.
         """
+        prev_visible = (self.h_cuboid_lines.visible
+                        if self.h_cuboid_lines is not None
+                        else bool(getattr(self, "show_cuboids", None)
+                                  and self.show_cuboids.value))
         pts, cols = self._build_cuboid_edges(frame_idx)
         if self.h_cuboid_lines is not None:
             self.h_cuboid_lines.remove()
@@ -701,6 +719,7 @@ class Viser4DViewer:
             colors=cols,
             line_width=2.5,
         )
+        self.h_cuboid_lines.visible = prev_visible
 
     # ---------------------------------------------------------------- render
     def _play_tick(self) -> None:

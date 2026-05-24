@@ -221,24 +221,30 @@ self.h_cuboid_lines.visible = prev_visible
 
 ---
 
-### ⚠️ B8 — Dynamic LiDAR checkbox 状态不对（新 bug，需澄清，P3）
+### ⚠️ B8 — Dynamic LiDAR 初始 checkbox 不勾但点云已显示（新 bug，P2）
 
-**现象**（用户反馈较简短）：Dynamic LiDAR checkbox 状态不对。
-**待澄清**：
-- 是 "勾上之后没看到点云" 还是 "取消之后还在显示"？
-- 是初始状态错（默认 OFF 但显示 ON 之类）还是 toggle 后无效？
-- 跟 B7 同源（Play 时 remove + re-add 不保留 visible flag）？
+**用户实测（2026-05-24 已澄清，含截图）**：
+- 初始状态 Visibility folder 里 "Dynamic LiDAR" checkbox **未勾选**（默认 False）
+- 但浏览器画面上 **LiDAR 点云已经在显示**（路面上密集白色方块）
+- 这是个初始状态不一致的 bug，不是 toggle 失效
 
-`_update_dynamic_lidar` (L546-570) 看起来 **有** preserve `prev_visible` 逻辑，所以不应该犯 B7 的错误。但仍可能有 edge case：
-- 初始化时 `h_dyn_pts` 为 None，prev_visible 取了 `True` 默认，无视 user 的 `show_dyn_pts.value`
-- 跟 `has_per_track_dyn_lidar()` 分支有关（legacy 静态 fallback vs per-track 动态 transform）
-
-**修法**：等用户澄清现象后再定。可能改 prev_visible 初值：
+**根因（已确认）**：[`viser_gui_4d.py:_update_dynamic_lidar` L546-570](threedgrut_playground/viser_gui_4d.py)
 ```python
-prev_visible = (self.h_dyn_pts.visible 
+prev_visible = (self.h_dyn_pts.visible
                 if self.h_dyn_pts is not None
-                else bool(self.show_dyn_pts.value))  # ← 用 user toggle 当默认，不用 True
+                else True)                # ← 第一次调用时 h_dyn_pts 为 None,
+                                          #    硬编码 True 忽视了 show_dyn_pts.value
 ```
+而 `_on_time_change(t_us_first, source="init")` 在 `__init__` 末尾被显式调用，会立刻调 `_update_dynamic_lidar` → 第一次进来 `h_dyn_pts is None` → `prev_visible=True` → 点云被加进 scene 且 visible=True，跟 checkbox 默认 False 不同步。
+
+**修法**：把 `prev_visible` 默认值从 `True` 改成 checkbox 实际值
+```python
+prev_visible = (self.h_dyn_pts.visible
+                if self.h_dyn_pts is not None
+                else bool(getattr(self, 'show_dyn_pts', None) and self.show_dyn_pts.value))
+```
+
+**优先级 P2**：影响初始体验，跟 B7 同一类（"per-frame re-add 不保留 visibility flag"）。**B7 和 B8 应同一 PR 修**。
 
 ---
 

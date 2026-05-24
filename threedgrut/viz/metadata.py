@@ -151,16 +151,25 @@ def _detect_primary_camera(dataset):
 def _extract_ego(dataset, conf) -> dict:
     """Pull ego (primary camera) trajectory + timestamps.
 
-    Only the primary camera (camera_ids[0]) is exported. Multi-camera support
-    is left to v2.x — viz GUI shows a single moving frustum.
+    Only the primary camera (camera_ids[0]) is exported. The dataset's
+    ``get_poses()`` concatenates per-camera frame poses in ``camera_ids``
+    order — so the first ``N_primary`` rows belong to the primary camera and
+    form the correct time-ordered ego trajectory. Including all cameras
+    (Bug B6) produced 2623-frame piecewise paths where 0-5s was front-wide,
+    5-10s was rear-tele, etc. — viewer Play visibly jumped between camera
+    viewpoints instead of following one continuous ego trail. We slice the
+    primary camera's prefix so ``ego_poses_c2w.shape[0] ==
+    n_frames(primary_camera)`` and matches the primary's frame timestamps.
+    Multi-camera trajectories are left to v2.x.
     """
     primary_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
 
     poses_np = dataset.get_poses()
-    poses_c2w = torch.from_numpy(np.asarray(poses_np, dtype=np.float32))
+    poses_full = np.asarray(poses_np, dtype=np.float32)
 
     # Camera frame timestamps follow the same camera_train_frame_indices order
-    # as get_poses (which loops over self.camera_ids). We replicate that loop.
+    # as get_poses (which loops over self.camera_ids). Only the primary
+    # camera's slice is exported as the ego trajectory.
     try:
         import ncore  # type: ignore[import-not-found]
 
@@ -168,22 +177,31 @@ def _extract_ego(dataset, conf) -> dict:
     except Exception:
         end_idx = 1  # FrameTimepoint.END is column 1 in NCore
 
-    all_ts: list[np.ndarray] = []
+    n_primary = 0
+    ts_np = np.empty((0,), dtype=np.int64)
     try:
         seq_id = dataset.sequence_id
-        for camera_id in dataset.camera_ids:
-            frame_indices = dataset.camera_train_frame_indices[camera_id]
-            if len(frame_indices) == 0:
-                continue
-            sensor = dataset.sequence_camera_sensors[seq_id][camera_id]
-            cam_ts = np.asarray(sensor.frames_timestamps_us)[
-                frame_indices, end_idx
+        primary_frame_indices = dataset.camera_train_frame_indices.get(
+            primary_id
+        )
+        if primary_frame_indices is not None and len(primary_frame_indices) > 0:
+            n_primary = len(primary_frame_indices)
+            sensor = dataset.sequence_camera_sensors[seq_id][primary_id]
+            ts_np = np.asarray(sensor.frames_timestamps_us)[
+                primary_frame_indices, end_idx
             ].astype(np.int64)
-            all_ts.append(cam_ts)
-        ts_np = np.concatenate(all_ts) if all_ts else np.empty((0,), dtype=np.int64)
     except Exception as e:
-        logger.warning(f"[viz_4d] frame timestamp extraction failed: {e}; using empty")
-        ts_np = np.empty((0,), dtype=np.int64)
+        logger.warning(
+            f"[viz_4d] primary-camera timestamp extraction failed: {e}; "
+            f"falling back to empty ts + full poses"
+        )
+
+    # Sanity: get_poses() places primary camera first when N_primary > 0.
+    # Slice or fall back to the whole array if our count is off.
+    if n_primary > 0 and poses_full.shape[0] >= n_primary:
+        poses_c2w = torch.from_numpy(poses_full[:n_primary])
+    else:
+        poses_c2w = torch.from_numpy(poses_full)
 
     return {
         "poses_c2w":                _to_cpu_float32(poses_c2w),
