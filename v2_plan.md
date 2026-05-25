@@ -1059,6 +1059,34 @@ flowchart LR
 
 **Mac 单测**：342 passed, 1 skipped, 0 regression（新增 122 测试覆盖 Phase A-E + E.2.b + E.2.c + E.10，全部跑过）。
 
+---
+
+### ✅ T8/B3 — dyn 层训练稳定性修复（2026-05-25，a800-x2 10k smoke）
+
+**触发**：Phase B + E 12-commit 代码修复完成后，ThinkPad 10k smoke 在 iter ~9k 以 `cudaErrorLaunchFailure` 崩溃——dyn 重定位率单调飙升至 90%+，630k 粒子一次性全堆到 70k 活粒子位置，渲染器 tile buffer 溢出。
+
+**根因（炼丹层，非代码 bug）**：
+- `lambda_warmup_iters=5000` 太慢——bg 粒子在 cuboid 内占据 alpha 预算 5000 iter，dyn 拿不到梯度，opacity 持续下降；到 bg 被压制时 dyn 已大半死亡。
+- `max_n_particles=700k` 太大——90% dead × 700k = 630k 一次 relocate → 超密集簇 → OOM。
+
+**修复（1 commit `4de6658`）**：
+- `lambda_warmup_iters` 5000 → **1000**（bg 在 iter 1000 前退出 cuboid，dyn 在死亡前拿到梯度）
+- `lambda` 0.05 → **0.15**（更强的 bg 压制力）
+- `max_n_particles` 700k → **300k**（降低渲染内存压力）
+- `strategy.relocate.max_relocation_fraction` 默认 1.0，dynfix 设为 **0.4**（单步最多搬 40%，防超密集簇 OOM）
+- 2 个新测试：`test_relocation_fraction_cap_config_in_dynfix` + `test_relocation_cap_subsamples_dead_indices`
+
+**KPI（a800-x2 GPU0，10k smoke `B3_stability_20260525_185543`，6.75 it/s）**：
+
+| 指标 | 修复前（崩溃）| 修复后 10k |
+|---|---|---|
+| dyn 重定位率趋势 | 30% → 90%+ → crash | 27% → **13-16%**（下降并稳定）✅ |
+| 完整运行 10k | ❌ OOM ~9k iter | ✅ 正常完成 |
+| mean_cc_psnr | — | 23.22 dB |
+| mean_cc_psnr_masked | — | 24.20 dB |
+| **mean_class_psnr** | — | **19.29 dB**（automobile 19.16 / truck 20.36 / bus 21.08）✅ |
+| Mac 单测 | 342 pass | **343 pass, 1 skip** ✅ |
+
 **A800 GPU 时间**：
 - Phase A baseline 30k 重训（B4 ckpt 复用）= 64 min
 - Phase C 5k 双卡 smoke (baseline + Phase B fix) = 12 min wall

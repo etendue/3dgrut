@@ -1,7 +1,7 @@
 # T8 viser_gui_4d Bug List
 
-**最后更新：** 2026-05-25 16:35 GMT+8
-**对应代码版本：** worktree `worktree-distributed-beaver` @ `587da42` (B3 docs sync 后) — **9/9 bug 全部关闭** (Phase B + E 12 commits)
+**最后更新：** 2026-05-25 19:33 GMT+8
+**对应代码版本：** worktree `worktree-distributed-beaver` @ `4de6658` (训练稳定性修复后) — **9/9 bug 全部关闭** (Phase B + E 12 commits + 稳定性修复 1 commit)
 **Plan 文档：**
 - 旧：[`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
 - B3 详细：[`/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md`](/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md)
