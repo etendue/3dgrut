@@ -268,6 +268,22 @@ class LayeredGaussians(nn.Module):
             },
             "scene_extent": self.scene_extent,
         }
+        # T8/B3 Phase E.4: persist per-layer ``track_ids`` buffer (set by
+        # ``init_layer_from_points`` at L713 for the dynamic_rigids layer).
+        # Without this, viewer/playground loads of v2 ckpts lose the
+        # per-particle owner mapping → ``_transform_means`` indexes pose_stack
+        # incorrectly → all dyn particles render at track[0]'s pose → "勾掉
+        # dynamic_rigids 视觉无变化". MoG.get_model_parameters omits this
+        # buffer because it's a LayeredGaussians-only field; we inject here.
+        for spec in self.specs:
+            if not spec.is_particle_layer or spec.name not in self.layers:
+                continue
+            layer = self.layers[spec.name]
+            track_ids = getattr(layer, "track_ids", None)
+            if track_ids is not None:
+                out["gaussians_nodes"][spec.name]["track_ids"] = (
+                    track_ids.detach().cpu().to(torch.int64)
+                )
         # T5.4: sky envmap state — saved as raw state_dict so SkyEnvmapMLP /
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
@@ -310,6 +326,21 @@ class LayeredGaussians(nn.Module):
                 layer.init_from_checkpoint(
                     nodes_dict[name], setup_optimizer=setup_optimizer
                 )
+                # T8/B3 Phase E.4: restore per-layer ``track_ids`` buffer if it
+                # was saved by ``get_model_parameters``. MoG.init_from_checkpoint
+                # reads only its 6 standard params (positions/density/etc) and
+                # silently ignores extra keys, so the track_ids entry rides
+                # along untouched in nodes_dict[name].
+                ckpt_track_ids = nodes_dict[name].get("track_ids")
+                if ckpt_track_ids is not None:
+                    if not torch.is_tensor(ckpt_track_ids):
+                        ckpt_track_ids = torch.as_tensor(ckpt_track_ids)
+                    # Drop any prior buffer so re-load is idempotent.
+                    if hasattr(layer, "track_ids"):
+                        delattr(layer, "track_ids")
+                    layer.register_buffer(
+                        "track_ids", ckpt_track_ids.long(), persistent=True,
+                    )
             # T5.4: sky envmap state restore — under either NRE-wrapped key
             # "model.sky_envmap_state" or unwrapped "sky_envmap_state".
             sky_state = None
