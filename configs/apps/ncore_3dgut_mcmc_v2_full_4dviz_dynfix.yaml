@@ -28,12 +28,16 @@ defaults:
 trainer:
   bg_dyn_cuboid_penalty:
     enabled: true
-    lambda: 0.05
-    lambda_warmup_iters: 5000
+    lambda: 0.15              # was 0.05 — stronger suppression needed to win vs photometric pull
+    lambda_warmup_iters: 1000 # was 5000 — bg must be expelled from cuboids before dyn dies (~1k iter)
     use_cuboid_mask: true
     dyn_clamp_to_cuboid: true
 
 layers:
   overrides:
     dynamic_rigids:
-      max_n_particles: 700000
+      max_n_particles: 300000 # was 700k — prevent OOM from 90%-dead relocation cluster
+
+strategy:
+  relocate:
+    max_relocation_fraction: 0.4 # cap per-step dead relocations; dyn won't mass-cluster even at 90% dead

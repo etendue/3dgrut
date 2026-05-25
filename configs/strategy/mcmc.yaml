@@ -8,6 +8,7 @@ relocate:
   start_iteration: 500 # Start applying the strategy after start_iteration training iterations
   end_iteration: 25000 # Stop applying the strategy after end_iteration training iterations
   frequency: 100 # Apply the strategy every frequency iterations
+  max_relocation_fraction: 1.0 # Cap dead-particle relocation to this fraction of total per step (1.0 = no cap)
 
 # Perturb the location of the gaussians with noise sampled from the covariance of that Gaussian
 # This is done until the end of training (check if this is the best strategy)
