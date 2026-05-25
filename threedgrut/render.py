@@ -25,6 +25,10 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threedgrut.datasets as datasets
+from threedgrut.model.class_psnr import (
+    collect_active_tracks_for_frame,
+    compute_class_psnr,
+)
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.color_correct import color_correct_affine
 from threedgrut.utils.logger import logger
@@ -226,6 +230,10 @@ class Renderer:
         cc_ssim_masked = []
         cc_lpips_masked = []
         inference_time = []
+        # T8/B3 Phase E.6 — per-cuboid (per-class) PSNR. Records one entry per
+        # active track per frame; only computed when ckpt is v2 LayeredGaussians
+        # with populated tracks_poses AND the batch carries FTheta intrinsics.
+        class_psnr_records: list = []
 
         best_psnr = -1.0
         worst_psnr = 2**16 * 1.0
@@ -355,6 +363,37 @@ class Renderer:
                 cc_ssim_masked.append(cc_ssim[-1])
                 cc_lpips_masked.append(cc_lpips[-1])
 
+            # T8/B3 Phase E.6 — per-cuboid class PSNR. Skipped when the model
+            # has no dyn tracks loaded (single-bg / road-only multi-layer) OR
+            # the batch lacks FTheta intrinsics (current dyn projection only
+            # supports FTheta to match training-side cuboid mask path).
+            tp = getattr(self.model, "tracks_poses", None)
+            ftheta_params = getattr(
+                gpu_batch, "intrinsics_FThetaCameraModelParameters", None,
+            )
+            if tp and ftheta_params is not None and hasattr(self.model, "_resolve_pose_idx"):
+                idx = self.model._resolve_pose_idx(
+                    int(getattr(gpu_batch, "timestamp_us", -1)),
+                    int(getattr(gpu_batch, "frame_idx", -1)) if int(getattr(gpu_batch, "frame_idx", -1)) >= 0 else None,
+                )
+                active = collect_active_tracks_for_frame(
+                    self.model.tracks_poses,
+                    self.model.tracks_active,
+                    getattr(self.model, "tracks_metadata", {}),
+                    idx,
+                )
+                if active:
+                    T_w2c = torch.linalg.inv(gpu_batch.T_to_world[0])
+                    H_, W_ = int(pred_rgb_full.shape[1]), int(pred_rgb_full.shape[2])
+                    cp = compute_class_psnr(
+                        pred_rgb_full, rgb_gt_full, mask,
+                        active, T_world2cam=T_w2c, H=H_, W=W_,
+                        ftheta_params=ftheta_params,
+                    )
+                    for r in cp["per_track"]:
+                        r["frame"] = int(iteration)
+                        class_psnr_records.append(r)
+
             # Record the time
             inference_time.append(outputs["frame_time_ms"])
 
@@ -410,6 +449,26 @@ class Renderer:
             mean_cc_ssim_masked=float(mean_cc_ssim_masked),
             mean_cc_lpips_masked=float(mean_cc_lpips_masked),
         )
+
+        # T8/B3 Phase E.6 — append per-cuboid PSNR aggregates when available.
+        # ``class_psnr_records`` stays empty when the ckpt has no dyn tracks
+        # or the dataset doesn't carry FTheta intrinsics (NeRF / Colmap eval
+        # paths) — keep metrics.json byte-identical with pre-E.6 in that case.
+        cp_values = [r["psnr"] for r in class_psnr_records if r["psnr"] is not None]
+        if cp_values:
+            by_class: dict[str, list] = {}
+            for r in class_psnr_records:
+                if r["psnr"] is not None:
+                    by_class.setdefault(r["class"], []).append(r["psnr"])
+            metrics_json["mean_class_psnr"] = float(np.mean(cp_values))
+            metrics_json["class_psnr_by_class"] = {
+                cls: float(np.mean(vals)) for cls, vals in by_class.items()
+            }
+            metrics_json["class_psnr_n_records"] = int(len(cp_values))
+            metrics_json["class_psnr_n_low_15db"] = int(
+                sum(1 for v in cp_values if v < 15.0)
+            )
+            table["mean_class_psnr"] = float(np.mean(cp_values))
         metrics_path = os.path.join(self.out_dir, "metrics.json")
         with open(metrics_path, "w") as f:
             json.dump(metrics_json, f, indent=2)
