@@ -564,18 +564,37 @@ class LayeredGaussians(nn.Module):
             if spec.name not in self.enabled_layer_names:
                 continue
             layer = self.layers[spec.name]
+            # T8/B3 Phase E.3: compute transformed positions + per-particle
+            # active mask once for dynamic_rigids; then use active mask to
+            # suppress inactive-track particles in the density field.
+            transformed_positions = None
+            active_mask = None
+            if (
+                spec.name == "dynamic_rigids"
+                and hasattr(layer, "track_ids")
+                and len(self.tracks_poses) > 0
+                and (timestamp_us > 0 or frame_id is not None)
+            ):
+                transformed_positions, active_mask = self._transform_means_and_active(
+                    layer.positions, layer.track_ids,
+                    timestamp_us=timestamp_us, frame_id=frame_id,
+                )
             for n in _FORWARD_PARAM_NAMES:
                 v = getattr(layer, n)
-                if (
-                    n == "positions"
-                    and spec.name == "dynamic_rigids"
-                    and hasattr(layer, "track_ids")
-                    and len(self.tracks_poses) > 0
-                    and (timestamp_us > 0 or frame_id is not None)
+                if n == "positions" and transformed_positions is not None:
+                    v = transformed_positions
+                elif (
+                    n == "density"
+                    and active_mask is not None
+                    and not bool(active_mask.all())
                 ):
-                    v = self._transform_means(
-                        v, layer.track_ids,
-                        timestamp_us=timestamp_us, frame_id=frame_id,
+                    # density is [N, 1] raw (pre-sigmoid). Push inactive
+                    # particles to a large-negative value so sigmoid(density)
+                    # ≈ 0 → no render contribution. No mutation of the
+                    # underlying nn.Parameter (only this fused view copy).
+                    inactive_value = torch.full_like(v, -50.0)
+                    v = torch.where(
+                        active_mask.unsqueeze(-1), v, inactive_value,
                     )
                 pieces[n].append(v)
         # All particle layers disabled → return 0-row tensors with correct
@@ -622,6 +641,55 @@ class LayeredGaussians(nn.Module):
         if frame_id is not None:
             return max(0, min(int(frame_id), F - 1))
         return 0
+
+    def _transform_means_and_active(
+        self,
+        positions_local: torch.Tensor,
+        track_ids: torch.Tensor,
+        timestamp_us: int = -1,
+        frame_id: int | None = None,
+    ):
+        """Like ``_transform_means`` but also returns a per-particle
+        ``active_mask`` derived from ``tracks_active`` at the resolved frame.
+
+        Phase E.3: fused_view uses ``active_mask`` to suppress particles whose
+        owner track is inactive at the current frame (their pose entry in
+        ``tracks_loader`` defaults to ``np.eye(4)`` → they'd otherwise dump to
+        world origin and pollute the render). Suppression happens by
+        overriding the *fused view's* density for those particles (no mutation
+        of the underlying nn.Parameter); see fused_view L568-595.
+
+        Returns:
+            (positions_world ``[N, 3]``, active_per_pt ``[N]`` bool)
+            ``active_per_pt`` is all True when ``_track_active_<n>`` buffers
+            are missing (defensive — pre-T4.0 legacy code paths).
+        """
+        track_names = sorted(self.tracks_poses.keys())
+        device = positions_local.device
+        idx = self._resolve_pose_idx(timestamp_us, frame_id)
+        pose_stack = torch.stack(
+            [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
+        )                                                                    # [K, 4, 4]
+        track_ids = track_ids.to(device)
+        pose_per_pt = pose_stack[track_ids]                                  # [N, 4, 4]
+        R = pose_per_pt[:, :3, :3]                                           # [N, 3, 3]
+        t = pose_per_pt[:, :3, 3]                                            # [N, 3]
+        positions_world = (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
+
+        # Per-track active flag at this frame; defaults to all-True when the
+        # _track_active_<n> buffer is missing (pre-T4.0).
+        active_list = []
+        for n in track_names:
+            buf = getattr(self, f"_track_active_{n}", None)
+            if buf is None:
+                active_list.append(
+                    torch.tensor(True, dtype=torch.bool, device=device)
+                )
+            else:
+                active_list.append(buf[idx].to(device).to(torch.bool))
+        active_stack = torch.stack(active_list)                              # [K] bool
+        active_per_pt = active_stack[track_ids]                              # [N] bool
+        return positions_world, active_per_pt
 
     def _transform_means(
         self,
