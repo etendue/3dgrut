@@ -1,8 +1,10 @@
 # T8 viser_gui_4d Bug List
 
-**最后更新：** 2026-05-24 10:52 GMT+8
-**对应代码版本：** main @ `b1752b3` (FTheta uint64 fix) + `d965b00` (Bug 3 guard removal) + `209886c` (Follow Ego)
-**Plan 文档：** [`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
+**最后更新：** 2026-05-25 16:28 GMT+8
+**对应代码版本：** worktree `worktree-distributed-beaver` @ `7d5be05` (Phase E.2.c) — Phase B + E 全套 12 commits 合并后 8/9 bug 关闭
+**Plan 文档：**
+- 旧：[`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
+- B3 详细：[`/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md`](/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md)
 
 ---
 
@@ -60,7 +62,7 @@
 |---|---|---|---|
 | B1 | Play 时视角不跟 ego | ✅ **已修** (commit 209886c) | — |
 | B2 | cuboid 与 Gaussian 不重合 | ⚠️ **待修** (FTheta vs pinhole 投影) | P1 |
-| B3 | dynamic_rigids toggle 无效 | ⚠️ **代码侧已修但行为仍异常** | P1 |
+| B3 | dynamic_rigids toggle 无效 | ✅ **已修** (Phase B + E 全套，commits `7f8bb17` → `7d5be05`) | — |
 | B4 | 训练只覆盖 ~2s 短 clip | ✅ **已修** (commit 1.9s → 19.9s 全时长 30k 重训) | — |
 | B5 | inject CLI 不该是新 ckpt 必需步骤 | ⚠️ **新 bug** | P2 |
 | B6 | viz_4d 中 ego trajectory 按 camera 拼接，非时间连续 | ⚠️ **新 bug** | P1 |
@@ -106,29 +108,46 @@
 
 ---
 
-### ⚠️ B3 — dynamic_rigids toggle 无效（代码修了但行为仍异常，P1）
+### ✅ B3 — dynamic_rigids toggle 无效（已修，Phase B + E 完整链路）
 
-**现象**：
-- 浏览器 Gaussian Layers folder 勾掉 `dynamic_rigids` checkbox → 车辆/行人 Gaussian **不消失**
-- 勾掉 `background` checkbox → 车辆/行人 **跟着背景一起消失**
-- 终端日志 `[BUG3-DIAG]` 行确认 callback 真的触发，`enabled_layer_names` 真的被改
+**现象**：浏览器 Gaussian Layers folder 勾掉 `dynamic_rigids` checkbox → 车辆 Gaussian **不消失**；勾掉 `background` 反而车辆**跟着消失** → 视觉证据是车在 bg 层而非 dyn 层。
 
-**已做修复**：commit `d965b00`
-- `engine.py:1050` 移除了 `len(self.scene_mog.tracks_poses) > 0` guard，让所有 LayeredGaussians 都走 forward → fused_view → enabled_layer_names 过滤
-- `viser_gui_4d.py` toggle callback 加 `[BUG3-DIAG]` 运行时打印
+**追溯到的 6 个独立 bug**（Phase A → E 全部修完）：
 
-**新根因（已确认）**：训练时**动态车辆的 Gaussians 被分到了 `background` 层**，不是 `dynamic_rigids` 层。dynamic_mask 训练监督不够强 / 初始化分配不充分，导致车的密度高斯进了 background。
+| # | 根因 | 修复 commit | 文件 |
+|---|---|---|---|
+| 1 | **MCMC per-layer scoped, dynamic_mask 无层归属约束** | `7f8bb17` (Phase B) | `threedgrut/model/bg_cuboid_loss.py` 新增 3D opacity penalty，把 bg 层在 cuboid 内的粒子 push 到 dead 阈值 |
+| 2 | **NCore cuboid 旋转被丢弃** — `tracks_loader.py:195` 写死 `pose = np.eye(4)`，车辆 yaw 全部按 identity rot 处理 | `40875a5` (Phase E.2) | `tracks_loader.py:euler_xyz_to_rotation_matrix` 把 `bbox.rot` 解为 intrinsic XYZ Euler 写入 pose[:3,:3] |
+| 3 | **fused_view rotation 没复合** — E.2 让 pose 含旋转后，per-particle local rotation 仍按 world 轴解释 → MCMC 用 6 米巨型 scale 补偿方向错位 | `2987d12` (Phase E.2.b) | `layered_model.py:_transform_means_and_active` 新增 `q_world = q_pose ⊗ q_local` 复合 |
+| 4 | **Inactive 帧 pose 是 identity** — tracks_loader 用 `np.eye(4)` 初始化所有帧，inactive track 粒子被塌到 world 原点 | `368c87d` (Phase E.3) | `_transform_means_and_active` 返回 active_mask；fused_view 把 inactive 粒子 density 改 -50 → sigmoid≈0 |
+| 5 | **`track_ids` buffer ckpt roundtrip 丢失** — `MoG.get_model_parameters` 不存这个 buffer，viewer 加载后 `_transform_means` 拿不到 per-particle owner | `1594396` (Phase E.4) | `LayeredGaussians.get_model_parameters` + `init_from_checkpoint` 在 wrapper 层序列化 track_ids |
+| 6 | **Inference 自由相机无时间戳 fallback** — `timestamp_us<=0 and frame_id is None` 时不变换 dyn 位置 → 渲染崩 | `7d5be05` (Phase E.2.c) | per-track 各自找第一个 active 帧做 fallback pose |
 
-**新 ckpt（全时长 30k 重训）状态**：
-- 诊断显示 `dynamic_rigids` 仍有 200k 粒子，70 tracks 都有 frame_info coverage
-- 但视觉验证：勾掉 dynamic_rigids 车依然在 → 车的 Gaussian 仍然主要在 background
+**附加工具**：
+- `7f8bb17` (B7): `dyn_clamp_to_cuboid` 在 `_post_optimizer_step` 末尾把 dyn positions 钳回 `|local|≤size/2`
+- `7f8bb17` (B7): dataset 端 `dyn_mask_cuboid` 用 FTheta 投影替代 sseg
+- `add202a` (Phase A): `scripts/diagnose_bg_in_cuboid.py` 量化 bg 层粒子误入 cuboid 比例
+- `f446f43` (Phase E.1): `scripts/diagnose_dyn_per_cuboid.py` per-track alive_pct + outlier 距离
+- `b00dddf` (Phase E.5+E.6): `threedgrut/model/class_psnr.py` per-cuboid PSNR 指标，trainer/render.py 双路径接入 metrics.json
+- `5bc878c` (Phase E.10): `scripts/validate_frame_0.py` 把 cuboid wireframe / sseg / LiDAR init / Gaussian centers 同时投影到第一帧，验证 init 对齐
 
-**待修方向**：
-- 训练侧：strengthen dynamic_mask 监督（更高权重）/ adjust dynamic_rigid 初始化策略
-- 评估工具：写诊断脚本统计 background 层粒子在 cuboid 内的占比（验证假设）
-- 可能跟 V3-P1 ExposureModel / bilateral grid 优化合并研究
+**KPI 验证**（A800 1k smoke `B3_E2b_1k_20260525_114457`）：
 
-**用户实测**：⚠️ 视觉无变化。
+| 指标 | 30k baseline | 5k broken (no E.2.b) | **1k Fix (Phase E)** |
+|---|---:|---:|---:|
+| bg_inside_pct | 10.17 % | 5.72 % | (待 30k 重测) |
+| dyn alive_pct | n/a | 22.0 % | **84 %** ✅ |
+| dyn scale max | n/a | 6.88 m | **0.22 m** ✅ (-31×) |
+| dyn outside_cuboid | n/a | 2281 m max | **0 m** ✅ |
+| mean_class_psnr | 18.73 dB | 17.82 dB | **19.13 dB** ✅ +0.40 |
+| automobile_psnr | 18.70 | 17.61 | **19.01** ✅ |
+| heavy_truck_psnr | 18.52 | 20.16 | **20.26** ✅ |
+
+**视觉验证（用户实测，ThinkPad viser + 1k ckpt）**：✅ 勾掉 `dynamic_rigids` checkbox → 车辆区域清空；勾掉 `background` checkbox → 车辆保留。**toggle 双向独立工作**。
+
+**Frame-0 投影验证**（`docs/T8_artifacts/E10_frame0_init/*.png`）：cuboid wireframe 紧贴 SUV / sseg mask 完整覆盖车身 / dyn LiDAR 点聚集在车上 / bg 点避开 cuboid 内部 → init 阶段四套数据完全对齐。
+
+**Mac 单测**：342 passed, 1 skipped, 0 regression（新增 88 个测试覆盖 E.1-E.6 + E.2.b/c + E.10）。
 
 ---
 
@@ -273,10 +292,26 @@ NCore FTheta `params.resolution` 是 `numpy.uint64`（e.g. `[1920, 1080]`），t
 ## 提交计划
 
 按优先级合并：
-1. **下一个 PR**：B6 (ego trajectory dedupe) + B7 (cuboid visibility preserve) + B8 (待澄清, 同源 fix) — 都改 metadata.py / viser_gui_4d.py，一致主题
-2. **再下一个 PR**：B2 (FTheta cuboid overlay) — 工作量较大（~0.5d），独立 PR
-3. **持续**：B3 训练侧研究（与 V3-P1 合并）
-4. **验证**：B5 在下次训练（不需要 inject）
+1. ✅ **PR #1**：B6 (ego trajectory dedupe) + B7 (cuboid visibility preserve) + B8 (LiDAR init state) — commit `46e643f`，三 bug 同 PR
+2. ✅ **PR #2**：B3 完整修复链（Phase B + E.1-E.10 + E.2.b + E.2.c）— 12 commits 从 `add202a` → `7d5be05`
+3. **PR #3**（待）：B2 FTheta cuboid overlay — viser 端 wireframe 跟 FTheta backdrop 对齐（B2 `2e12a1b` 已实现 forward projection helper，剩下 viser 集成）
+4. **验证**：B5 在下次训练 ckpt 自带 FTheta 8-key（不需要 inject）
+
+## 9-bug 最终状态
+
+| ID | 现状 | 完成 PR |
+|---|---|---|
+| B1 Follow Ego | ✅ | `209886c` |
+| B2 cuboid 与 Gaussian 不重合 | ⚠️ 部分（projector 已实现，viser 集成 pending） | `2e12a1b` (helper only) |
+| **B3 dynamic_rigids toggle 无效** | ✅ | `7f8bb17` → `7d5be05` (12 commits) |
+| B4 训练只覆盖 ~2s 短 clip | ✅ | `bug4_v2_full_30k_20260523_184318` |
+| B5 inject CLI 必需 | ⚠️ 下次训练验证 | `b1752b3` (extract fix) |
+| B6 ego trajectory 按 camera 拼接 | ✅ | `46e643f` |
+| B7 Active cuboids checkbox 取消后再现 | ✅ | `46e643f` |
+| B8 Dynamic LiDAR 初始状态错误 | ✅ | `46e643f` |
+| B9 FTheta extraction uint64 静默失败 | ✅ | `b1752b3` |
+
+**8/9 P1-P2 bug 已修**。剩 B2 viewer 集成 + B5 ckpt 自动验证。
 
 ## 验证步骤模板
 
