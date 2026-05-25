@@ -79,6 +79,73 @@ def _build_sky_module(spec: LayerSpec, conf) -> nn.Module:
 _SH_C0 = 0.28209479177387814
 
 
+def _rotmat_to_quat_wxyz(R: torch.Tensor) -> torch.Tensor:
+    """Rotation matrix ``R`` of shape ``[..., 3, 3]`` → quaternion ``[..., 4]``
+    in ``(w, x, y, z)`` convention.
+
+    Uses Shepperd's case-switching for numerical stability across the full
+    rotation range — cuboid yaws can be near ±π where the naive
+    ``sqrt(1 + trace)`` form is unstable.
+    """
+    R00, R01, R02 = R[..., 0, 0], R[..., 0, 1], R[..., 0, 2]
+    R10, R11, R12 = R[..., 1, 0], R[..., 1, 1], R[..., 1, 2]
+    R20, R21, R22 = R[..., 2, 0], R[..., 2, 1], R[..., 2, 2]
+    trace = R00 + R11 + R22
+
+    # Case A: trace > 0 — most numerically stable
+    s_a = torch.sqrt(torch.clamp(trace + 1.0, min=1e-12)) * 2.0
+    w_a = 0.25 * s_a
+    x_a = (R21 - R12) / s_a
+    y_a = (R02 - R20) / s_a
+    z_a = (R10 - R01) / s_a
+
+    # Case B: R00 is the largest diagonal element
+    s_b = torch.sqrt(torch.clamp(1.0 + R00 - R11 - R22, min=1e-12)) * 2.0
+    w_b = (R21 - R12) / s_b
+    x_b = 0.25 * s_b
+    y_b = (R01 + R10) / s_b
+    z_b = (R02 + R20) / s_b
+
+    # Case C: R11 is the largest diagonal element
+    s_c = torch.sqrt(torch.clamp(1.0 + R11 - R00 - R22, min=1e-12)) * 2.0
+    w_c = (R02 - R20) / s_c
+    x_c = (R01 + R10) / s_c
+    y_c = 0.25 * s_c
+    z_c = (R12 + R21) / s_c
+
+    # Case D: R22 is the largest diagonal element
+    s_d = torch.sqrt(torch.clamp(1.0 + R22 - R00 - R11, min=1e-12)) * 2.0
+    w_d = (R10 - R01) / s_d
+    x_d = (R02 + R20) / s_d
+    y_d = (R12 + R21) / s_d
+    z_d = 0.25 * s_d
+
+    cond_a = trace > 0
+    cond_b = (~cond_a) & (R00 >= R11) & (R00 >= R22)
+    cond_c = (~cond_a) & (~cond_b) & (R11 >= R22)
+
+    w = torch.where(cond_a, w_a, torch.where(cond_b, w_b, torch.where(cond_c, w_c, w_d)))
+    x = torch.where(cond_a, x_a, torch.where(cond_b, x_b, torch.where(cond_c, x_c, x_d)))
+    y = torch.where(cond_a, y_a, torch.where(cond_b, y_b, torch.where(cond_c, y_c, y_d)))
+    z = torch.where(cond_a, z_a, torch.where(cond_b, z_b, torch.where(cond_c, z_c, z_d)))
+    return torch.stack([w, x, y, z], dim=-1)
+
+
+def _quat_multiply_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    """Hamilton quaternion product ``q1 ⊗ q2`` in ``(w, x, y, z)`` convention.
+
+    Shapes broadcast: ``q1`` and ``q2`` may be any common-broadcast shape
+    ending in 4. Result has the broadcast shape.
+    """
+    w1 = q1[..., 0]; x1 = q1[..., 1]; y1 = q1[..., 2]; z1 = q1[..., 3]
+    w2 = q2[..., 0]; x2 = q2[..., 1]; y2 = q2[..., 2]; z2 = q2[..., 3]
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    return torch.stack([w, x, y, z], dim=-1)
+
+
 class _LayeredOptimizerView:
     """Lightweight optimizer-like wrapper that fans calls across per-layer Adams.
 
@@ -569,20 +636,28 @@ class LayeredGaussians(nn.Module):
             # suppress inactive-track particles in the density field.
             transformed_positions = None
             active_mask = None
+            transformed_rotations = None
             if (
                 spec.name == "dynamic_rigids"
                 and hasattr(layer, "track_ids")
                 and len(self.tracks_poses) > 0
                 and (timestamp_us > 0 or frame_id is not None)
             ):
-                transformed_positions, active_mask = self._transform_means_and_active(
-                    layer.positions, layer.track_ids,
-                    timestamp_us=timestamp_us, frame_id=frame_id,
-                )
+                transformed_positions, active_mask, transformed_rotations = \
+                    self._transform_means_and_active(
+                        layer.positions, layer.track_ids,
+                        rotations_local=layer.rotation,
+                        timestamp_us=timestamp_us, frame_id=frame_id,
+                    )
             for n in _FORWARD_PARAM_NAMES:
                 v = getattr(layer, n)
                 if n == "positions" and transformed_positions is not None:
                     v = transformed_positions
+                elif n == "rotation" and transformed_rotations is not None:
+                    # Phase E.2.b: q_world = q_pose ⊗ q_local — without this
+                    # composition, MCMC inflates scales to compensate for the
+                    # missing orientation, producing scenes-wide smudge.
+                    v = transformed_rotations
                 elif (
                     n == "density"
                     and active_mask is not None
@@ -646,21 +721,29 @@ class LayeredGaussians(nn.Module):
         self,
         positions_local: torch.Tensor,
         track_ids: torch.Tensor,
+        rotations_local: torch.Tensor | None = None,
         timestamp_us: int = -1,
         frame_id: int | None = None,
     ):
-        """Like ``_transform_means`` but also returns a per-particle
-        ``active_mask`` derived from ``tracks_active`` at the resolved frame.
+        """Like ``_transform_means`` but also returns ``(active_mask,
+        rotations_world)``.
 
-        Phase E.3: fused_view uses ``active_mask`` to suppress particles whose
-        owner track is inactive at the current frame (their pose entry in
-        ``tracks_loader`` defaults to ``np.eye(4)`` → they'd otherwise dump to
-        world origin and pollute the render). Suppression happens by
-        overriding the *fused view's* density for those particles (no mutation
-        of the underlying nn.Parameter); see fused_view L568-595.
+        Phase E.3: ``active_mask`` lets fused_view suppress inactive-track
+        particles by overriding their density to a large-negative sentinel.
+
+        Phase E.2.b: when ``rotations_local`` is provided, compose the
+        per-track pose rotation with each particle's local rotation
+        ``q_world = q_pose ⊗ q_local`` so the renderer sees the rotated
+        Gaussian's covariance pointing along the cuboid's natural axes
+        (not the world axes). Without this, a yaw=π/2 car's particles
+        sit at the right world coords but face the wrong direction →
+        MCMC inflates ``scale`` to multiple meters to compensate → fused
+        view becomes a sky-wide smudge (observed in E.7 5k fix ckpt).
 
         Returns:
-            (positions_world ``[N, 3]``, active_per_pt ``[N]`` bool)
+            (positions_world ``[N, 3]``,
+             active_per_pt ``[N]`` bool,
+             rotations_world ``[N, 4]`` or None if ``rotations_local`` is None)
             ``active_per_pt`` is all True when ``_track_active_<n>`` buffers
             are missing (defensive — pre-T4.0 legacy code paths).
         """
@@ -689,7 +772,26 @@ class LayeredGaussians(nn.Module):
                 active_list.append(buf[idx].to(device).to(torch.bool))
         active_stack = torch.stack(active_list)                              # [K] bool
         active_per_pt = active_stack[track_ids]                              # [N] bool
-        return positions_world, active_per_pt
+
+        # Phase E.2.b: compose pose rotation with per-particle local rotation.
+        # Done in quaternion space (wxyz). When rotations_local is omitted
+        # (legacy callers / unit tests), return None so the caller keeps the
+        # original behaviour.
+        rotations_world = None
+        if rotations_local is not None:
+            # pose_stack[..., :3, :3] is the rotation block per track; convert
+            # ONCE per track (not per particle) for efficiency, then gather.
+            pose_R_per_track = pose_stack[:, :3, :3].to(rotations_local.dtype)  # [K, 3, 3]
+            q_pose_per_track = _rotmat_to_quat_wxyz(pose_R_per_track)            # [K, 4]
+            q_pose_per_pt = q_pose_per_track[track_ids]                          # [N, 4]
+            q_local = rotations_local.to(device=device, dtype=q_pose_per_pt.dtype)
+            q_world = _quat_multiply_wxyz(q_pose_per_pt, q_local)                # [N, 4]
+            # Renderer / MoG conventionally re-normalizes via rotation_activation
+            # ("normalize" in config) but it's cheap to do so here too — bounds
+            # numerical drift from float32 multiplication.
+            q_world = q_world / q_world.norm(dim=-1, keepdim=True).clamp(min=1e-12)
+            rotations_world = q_world
+        return positions_world, active_per_pt, rotations_world
 
     def _transform_means(
         self,

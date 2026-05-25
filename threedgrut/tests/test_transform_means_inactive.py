@@ -93,7 +93,7 @@ def test_transform_means_and_active_all_active(real_conf):
     model = _make_model_with_two_tracks(conf, True, True)
     local = model.layers["dynamic_rigids"].positions
     track_ids = model.layers["dynamic_rigids"].track_ids
-    world, active = model._transform_means_and_active(local, track_ids, frame_id=0)
+    world, active, _rot = model._transform_means_and_active(local, track_ids, frame_id=0)
     assert world.shape == (6, 3)
     assert active.shape == (6,)
     assert active.dtype == torch.bool
@@ -106,7 +106,7 @@ def test_transform_means_and_active_mixed(real_conf):
     model = _make_model_with_two_tracks(conf, False, True)
     local = model.layers["dynamic_rigids"].positions
     track_ids = model.layers["dynamic_rigids"].track_ids
-    world, active = model._transform_means_and_active(local, track_ids, frame_id=0)
+    world, active, _rot = model._transform_means_and_active(local, track_ids, frame_id=0)
     assert active.tolist() == [False, False, False, True, True, True]
 
 
@@ -117,11 +117,126 @@ def test_transform_means_and_active_world_positions_correct(real_conf):
     model = _make_model_with_two_tracks(conf, False, True)
     local = model.layers["dynamic_rigids"].positions  # all zeros
     track_ids = model.layers["dynamic_rigids"].track_ids
-    world, _active = model._transform_means_and_active(local, track_ids, frame_id=0)
+    world, _active, _rot = model._transform_means_and_active(local, track_ids, frame_id=0)
     # alice particles (0,1,2) get alice's translation (10, 0, 0); bob's get
     # bob's (0, 20, 0). Identity rotation × zero local → translation only.
     assert torch.allclose(world[:3], torch.tensor([10.0, 0.0, 0.0]).expand(3, 3).to(world))
     assert torch.allclose(world[3:], torch.tensor([0.0, 20.0, 0.0]).expand(3, 3).to(world))
+
+
+def test_transform_means_and_active_rotation_composition_identity_pose(real_conf):
+    """Identity pose rotation → q_world = q_pose ⊗ q_local should equal q_local
+    (up to sign — quat double cover). Verify the returned rotations match the
+    input rotations under identity pose."""
+    conf = _with_dyn_layer(real_conf)
+    model = _make_model_with_two_tracks(conf, True, True)
+    local = model.layers["dynamic_rigids"].positions
+    track_ids = model.layers["dynamic_rigids"].track_ids
+    # default per-particle rotation is identity (1, 0, 0, 0)
+    rot_local = model.layers["dynamic_rigids"].rotation
+    _, _, rot_world = model._transform_means_and_active(
+        local, track_ids, rotations_local=rot_local, frame_id=0,
+    )
+    assert rot_world is not None
+    assert rot_world.shape == rot_local.shape
+    # identity pose × identity local → identity world (within sign)
+    expected = torch.tensor([1.0, 0.0, 0.0, 0.0]).expand_as(rot_world)
+    assert torch.allclose(rot_world.abs(), expected.abs().to(rot_world), atol=1e-5)
+
+
+def test_transform_means_and_active_rotation_composition_yaw(real_conf):
+    """Non-trivial pose rotation (yaw=π/2) composes correctly: w_world = q_pose ⊗ q_local.
+
+    With q_local = identity (1, 0, 0, 0), q_world should equal q_pose
+    (rotation about Z by π/2 → quat = (cos π/4, 0, 0, sin π/4))."""
+    import math
+    # Build tracks dict explicitly with a yaw=π/2 pose
+    yaw = math.pi / 2.0
+    cz, sz = math.cos(yaw), math.sin(yaw)
+    pose_yaw = torch.tensor([
+        [cz, -sz, 0.0, 0.0],
+        [sz,  cz, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+    tracks = {
+        "v0": {
+            "poses": pose_yaw.unsqueeze(0).expand(3, 4, 4).clone(),
+            "active": torch.tensor([True, True, True], dtype=torch.bool),
+            "size": torch.tensor([2.0, 2.0, 2.0]),
+            "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
+        }
+    }
+    conf = _with_dyn_layer(real_conf)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
+                             tracks=tracks)
+    model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
+    positions = torch.zeros(4, 3)
+    track_ids = torch.zeros(4, dtype=torch.int64)
+    model.init_layer_from_points(
+        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+    )
+    rot_local = model.layers["dynamic_rigids"].rotation  # all identity (1,0,0,0)
+    _, _, rot_world = model._transform_means_and_active(
+        positions, track_ids, rotations_local=rot_local, frame_id=0,
+    )
+    # Expected world quat = yaw-π/2 Z rotation = (cos π/4, 0, 0, sin π/4)
+    expected_w = math.cos(math.pi / 4)
+    expected_z = math.sin(math.pi / 4)
+    # All 4 particles share the same track, so all rotations should be identical
+    for i in range(4):
+        assert math.isclose(float(rot_world[i, 0]), expected_w, abs_tol=1e-5), \
+            f"q_world[{i}].w = {rot_world[i, 0]} (expected {expected_w})"
+        assert math.isclose(float(rot_world[i, 3]), expected_z, abs_tol=1e-5), \
+            f"q_world[{i}].z = {rot_world[i, 3]} (expected {expected_z})"
+        # x, y components should be ~0
+        assert abs(float(rot_world[i, 1])) < 1e-5
+        assert abs(float(rot_world[i, 2])) < 1e-5
+
+
+def test_transform_means_and_active_rotation_omitted_returns_none(real_conf):
+    """When ``rotations_local`` is None (backward compat), returned rotations
+    is None — preserves the API for legacy / unit-test callers."""
+    conf = _with_dyn_layer(real_conf)
+    model = _make_model_with_two_tracks(conf, True, True)
+    local = model.layers["dynamic_rigids"].positions
+    track_ids = model.layers["dynamic_rigids"].track_ids
+    world, active, rot = model._transform_means_and_active(local, track_ids, frame_id=0)
+    assert rot is None
+
+
+def test_fused_view_applies_rotation_composition(real_conf):
+    """fused_view should override the rotation field with q_world for the
+    dynamic_rigids layer when tracks are populated + a frame is provided."""
+    import math
+    yaw = math.pi
+    pose_pi = torch.eye(4)
+    pose_pi[0, 0] = math.cos(yaw); pose_pi[0, 1] = -math.sin(yaw)
+    pose_pi[1, 0] = math.sin(yaw); pose_pi[1, 1] = math.cos(yaw)
+    tracks = {
+        "v0": {
+            "poses": pose_pi.unsqueeze(0).expand(3, 4, 4).clone(),
+            "active": torch.tensor([True, True, True], dtype=torch.bool),
+            "size": torch.tensor([2.0, 2.0, 2.0]),
+            "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
+        }
+    }
+    conf = _with_dyn_layer(real_conf)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
+                             tracks=tracks)
+    model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
+    model.init_layer_from_points(
+        "dynamic_rigids", torch.zeros(3, 3),
+        track_ids=torch.zeros(3, dtype=torch.int64), setup_optimizer=False,
+    )
+    fv = model.fused_view(frame_id=0)
+    # bg rows 0-1 keep their identity rotation; dyn rows 2-4 should have the
+    # yaw=π quat ≈ (0, 0, 0, 1) (or sign-flipped (0, 0, 0, -1))
+    dyn_rot = fv["rotation"][2:]
+    for i in range(3):
+        assert abs(float(dyn_rot[i, 0])) < 1e-4, f"yaw=π should give w≈0; got {dyn_rot[i, 0]}"
+        assert abs(float(dyn_rot[i, 3])) > 0.99, \
+            f"yaw=π should give |z|≈1; got {dyn_rot[i, 3]}"
 
 
 def test_transform_means_unchanged_returns_only_positions(real_conf):
