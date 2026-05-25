@@ -320,16 +320,85 @@ def test_fused_view_positions_use_transformed_world_coords(real_conf):
     assert torch.allclose(dyn_pos[3:], torch.tensor([0.0, 20.0, 0.0]).expand(3, 3).to(dyn_pos))
 
 
-def test_fused_view_no_transform_when_no_timestamp_or_frame(real_conf):
-    """When neither timestamp_us nor frame_id is given, density override
-    should NOT fire (no active mask is available)."""
+def test_fused_view_no_time_uses_per_track_first_active_fallback(real_conf):
+    """E.2.c: when neither timestamp_us nor frame_id is given (inference
+    free camera), each track falls back to its FIRST ACTIVE FRAME so the
+    user sees an "all visible actors" composite scene instead of dyn
+    particles snapping to world origin.
+
+    Build tracks where alice is active only at frame 1 (NOT 0) and bob is
+    active only at frame 2. fused_view() with no args should transform
+    each track's particles by THEIR first-active pose.
+    """
+    pose_a_f0 = torch.eye(4)
+    pose_a_f1 = torch.eye(4); pose_a_f1[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
+    pose_a_f2 = torch.eye(4)
+    pose_b_f0 = torch.eye(4)
+    pose_b_f1 = torch.eye(4)
+    pose_b_f2 = torch.eye(4); pose_b_f2[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
+    tracks = {
+        "alice": {
+            "poses": torch.stack([pose_a_f0, pose_a_f1, pose_a_f2]),
+            "active": torch.tensor([False, True, False], dtype=torch.bool),
+            "size": torch.tensor([2.0, 2.0, 2.0]),
+            "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
+        },
+        "bob": {
+            "poses": torch.stack([pose_b_f0, pose_b_f1, pose_b_f2]),
+            "active": torch.tensor([False, False, True], dtype=torch.bool),
+            "size": torch.tensor([2.0, 2.0, 2.0]),
+            "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
+        },
+    }
     conf = _with_dyn_layer(real_conf)
-    model = _make_model_with_two_tracks(conf, False, False)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
+                             tracks=tracks)
+    model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
+    positions = torch.zeros(6, 3)
+    track_ids = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.int64)
+    model.init_layer_from_points(
+        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+    )
     _set_dyn_density(model, raw_value=0.5)
-    # No frame_id, no timestamp_us → dyn density unchanged
+
+    # No frame_id, no timestamp_us → E.2.c fallback fires
     fv = model.fused_view()
+    dyn_pos = fv["positions"][2:]
+    # alice's first active = frame 1 → translation (10, 0, 0)
+    # bob's first active = frame 2 → translation (0, 20, 0)
+    assert torch.allclose(dyn_pos[:3], torch.tensor([10.0, 0.0, 0.0]).expand(3, 3).to(dyn_pos))
+    assert torch.allclose(dyn_pos[3:], torch.tensor([0.0, 20.0, 0.0]).expand(3, 3).to(dyn_pos))
+    # Both tracks have at least one active frame → all particles considered
+    # active → density unchanged (no -50 sentinel).
     dyn_density = fv["density"][2:]
     assert torch.allclose(dyn_density, torch.full((6, 1), 0.5))
+
+
+def test_fused_view_no_time_track_with_zero_active_marked_inactive(real_conf):
+    """E.2.c: tracks with NO active frames at all → particles still get density
+    suppressed, mirroring the existing inactive-track behaviour."""
+    pose = torch.eye(4); pose[:3, 3] = torch.tensor([5.0, 0.0, 0.0])
+    tracks = {
+        "alice": {
+            "poses": pose.unsqueeze(0).expand(3, 4, 4).clone(),
+            "active": torch.tensor([False, False, False], dtype=torch.bool),  # no active
+            "size": torch.tensor([2.0, 2.0, 2.0]),
+            "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
+        },
+    }
+    conf = _with_dyn_layer(real_conf)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
+                             tracks=tracks)
+    model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
+    model.init_layer_from_points(
+        "dynamic_rigids", torch.zeros(3, 3),
+        track_ids=torch.zeros(3, dtype=torch.int64), setup_optimizer=False,
+    )
+    _set_dyn_density(model, raw_value=0.5)
+    fv = model.fused_view()
+    # No-active-frame track → suppressed via density override
+    dyn_density = fv["density"][2:]
+    assert torch.allclose(dyn_density, torch.full((3, 1), _DENSITY_SENTINEL))
 
 
 def test_sigmoid_of_sentinel_is_essentially_zero():

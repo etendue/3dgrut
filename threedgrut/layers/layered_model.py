@@ -641,8 +641,11 @@ class LayeredGaussians(nn.Module):
                 spec.name == "dynamic_rigids"
                 and hasattr(layer, "track_ids")
                 and len(self.tracks_poses) > 0
-                and (timestamp_us > 0 or frame_id is not None)
             ):
+                # E.2.c: always transform when track buffers are populated.
+                # ``_transform_means_and_active`` handles the no-time fallback
+                # (each track uses its first active frame) so inference free
+                # cameras don't dump dyn particles to world origin.
                 transformed_positions, active_mask, transformed_rotations = \
                     self._transform_means_and_active(
                         layer.positions, layer.track_ids,
@@ -749,28 +752,62 @@ class LayeredGaussians(nn.Module):
         """
         track_names = sorted(self.tracks_poses.keys())
         device = positions_local.device
-        idx = self._resolve_pose_idx(timestamp_us, frame_id)
-        pose_stack = torch.stack(
-            [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
-        )                                                                    # [K, 4, 4]
         track_ids = track_ids.to(device)
+
+        # E.2.c: free-camera fallback. When the caller has no time signal
+        # (inference / playground rendering a static view), pick each track's
+        # FIRST ACTIVE FRAME independently so the user sees a composite "all
+        # visible actors" scene instead of dyn particles snapping to world
+        # origin (which is what the old ``timestamp_us > 0 or frame_id is not
+        # None`` gate in fused_view used to do).
+        use_per_track_first_active = (timestamp_us <= 0 and frame_id is None)
+
+        if use_per_track_first_active:
+            pose_list = []
+            active_track_flags = []
+            for n in track_names:
+                active_buf = getattr(self, f"_track_active_{n}", None)
+                if active_buf is None or active_buf.numel() == 0:
+                    fallback_idx = 0
+                    is_active = True
+                else:
+                    nonzero = active_buf.nonzero(as_tuple=False)
+                    if nonzero.numel() == 0:
+                        fallback_idx = 0
+                        is_active = False    # track has no active frames at all
+                    else:
+                        fallback_idx = int(nonzero[0, 0].item())
+                        is_active = True
+                pose_list.append(
+                    getattr(self, f"_track_pose_{n}")[fallback_idx].to(device)
+                )
+                active_track_flags.append(
+                    torch.tensor(is_active, dtype=torch.bool, device=device)
+                )
+            pose_stack = torch.stack(pose_list)                              # [K, 4, 4]
+            active_stack = torch.stack(active_track_flags)                   # [K] bool
+        else:
+            idx = self._resolve_pose_idx(timestamp_us, frame_id)
+            pose_stack = torch.stack(
+                [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
+            )                                                                # [K, 4, 4]
+            # Per-track active flag at this frame; defaults to all-True when
+            # the _track_active_<n> buffer is missing (pre-T4.0).
+            active_list = []
+            for n in track_names:
+                buf = getattr(self, f"_track_active_{n}", None)
+                if buf is None:
+                    active_list.append(
+                        torch.tensor(True, dtype=torch.bool, device=device)
+                    )
+                else:
+                    active_list.append(buf[idx].to(device).to(torch.bool))
+            active_stack = torch.stack(active_list)                          # [K] bool
+
         pose_per_pt = pose_stack[track_ids]                                  # [N, 4, 4]
         R = pose_per_pt[:, :3, :3]                                           # [N, 3, 3]
         t = pose_per_pt[:, :3, 3]                                            # [N, 3]
         positions_world = (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
-
-        # Per-track active flag at this frame; defaults to all-True when the
-        # _track_active_<n> buffer is missing (pre-T4.0).
-        active_list = []
-        for n in track_names:
-            buf = getattr(self, f"_track_active_{n}", None)
-            if buf is None:
-                active_list.append(
-                    torch.tensor(True, dtype=torch.bool, device=device)
-                )
-            else:
-                active_list.append(buf[idx].to(device).to(torch.bool))
-        active_stack = torch.stack(active_list)                              # [K] bool
         active_per_pt = active_stack[track_ids]                              # [N] bool
 
         # Phase E.2.b: compose pose rotation with per-particle local rotation.
