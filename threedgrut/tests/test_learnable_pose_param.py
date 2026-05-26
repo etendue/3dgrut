@@ -430,6 +430,106 @@ def test_state_dict_round_trip_learnable_pose(conf_learnable_on):
     assert isinstance(dst._track_trans_t0, nn.Parameter)
 
 
+# ─── 7b. trainer-format ckpt round-trip (the real production path) ──────────
+
+
+def test_trainer_format_ckpt_round_trip_learnable_pose(conf_learnable_on):
+    """The trainer doesn't use nn.Module.state_dict() — it calls
+    ``model.get_model_parameters()`` and writes a structured dict (per-layer
+    MoG params + sky_envmap_state + layered_track_state etc.). On load it
+    calls ``model.init_from_checkpoint(ckpt)`` which dispatches per layer.
+
+    Before V3 Stage A this path did NOT carry the LayeredGaussians-level
+    track buffers — fine in legacy mode (populate_tracks re-derives them
+    from manifest each session) but FATAL for learnable mode where the
+    Adam-updated Parameters are the only persistent copy of refined pose.
+
+    This test reproduces the trainer save/load contract for learnable mode:
+        src → get_model_parameters() → ckpt dict
+        dst → populate_tracks(fresh GT) → init_from_checkpoint(ckpt)
+        assert dst._track_quat_<tid> == src._track_quat_<tid>
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
+    src = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
+    tracks = _viz4d_tracks_dict(F=4)
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
+        [1000, 2000, 3000, 4000], dtype=torch.int64
+    )
+    src.populate_tracks(tracks)
+    src.setup_optimizer_for_test()  # get_model_parameters() asserts optimizer != None
+
+    # Simulate training: drift quat + trans away from GT.
+    with torch.no_grad():
+        src._track_trans_t0.add_(torch.tensor([10.0, 20.0, 30.0]))
+        src._track_quat_t1.add_(torch.tensor([0.0, 0.05, 0.0, 0.0]))
+    src_trans_t0 = src._track_trans_t0.detach().clone()
+    src_quat_t1 = src._track_quat_t1.detach().clone()
+
+    # Trainer-format save: get_model_parameters wraps under "model" key.
+    ckpt = {"model": src.get_model_parameters()}
+
+    assert "layered_track_state" in ckpt["model"], \
+        "get_model_parameters did NOT emit layered_track_state — Stage A ckpt persistence broken"
+    # Spot-check that the wxyz quat and trans Parameters AND _track_pose_gt_
+    # and _track_active_ buffers are all present.
+    expected = {
+        "_track_quat_t0",   "_track_quat_t1",
+        "_track_trans_t0",  "_track_trans_t1",
+        "_track_pose_gt_t0", "_track_pose_gt_t1",
+        "_track_active_t0", "_track_active_t1",
+    }
+    missing = expected - set(ckpt["model"]["layered_track_state"].keys())
+    assert not missing, f"layered_track_state missing entries: {missing}"
+
+    # Trainer-format load: fresh dst + populate_tracks (GT) + init_from_checkpoint.
+    dst = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
+    dst.populate_tracks(tracks)
+    # Before load, dst's quat/trans equal GT (not drifted).
+    pre_load_trans_t0 = dst._track_trans_t0.detach().clone()
+    assert not torch.allclose(pre_load_trans_t0, src_trans_t0), \
+        "pre-load dst should still be GT, not src's drifted state"
+    dst.init_from_checkpoint(ckpt, setup_optimizer=False)
+
+    # After load: dst's Parameters match src (refined pose restored).
+    assert torch.allclose(dst._track_trans_t0.detach(), src_trans_t0), \
+        "trans Parameter not restored from ckpt via trainer-format path"
+    assert torch.allclose(dst._track_quat_t1.detach(), src_quat_t1), \
+        "quat Parameter not restored from ckpt via trainer-format path"
+    # Still nn.Parameter, not buffer.
+    assert isinstance(dst._track_quat_t0, nn.Parameter)
+    assert isinstance(dst._track_trans_t0, nn.Parameter)
+
+
+def test_trainer_format_ckpt_round_trip_buffer_mode(conf_learnable_off):
+    """Buffer mode: trainer ckpt path round-trips the _track_pose_<tid> +
+    _track_active_<tid> buffers too (regression guard — before V3 Stage A
+    these were re-derived from manifest each session, so 'not in ckpt' was
+    fine; after the fix they ARE in the ckpt and should match)."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
+    src = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
+    tracks = _viz4d_tracks_dict(F=4)
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
+        [1000, 2000, 3000, 4000], dtype=torch.int64
+    )
+    src.populate_tracks(tracks)
+    src.setup_optimizer_for_test()
+
+    ckpt = {"model": src.get_model_parameters()}
+    assert "_track_pose_t0" in ckpt["model"].get("layered_track_state", {})
+    assert "_track_active_t0" in ckpt["model"].get("layered_track_state", {})
+
+    dst = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
+    dst.populate_tracks(tracks)
+    dst.init_from_checkpoint(ckpt, setup_optimizer=False)
+
+    assert torch.equal(dst._track_pose_t0, src._track_pose_t0)
+    assert torch.equal(dst._track_active_t0, src._track_active_t0)
+
+
 # ─── 8. _gather_active_tracks_for_batch detaches in learnable mode ──────────
 # (This test lives in test_learnable_pose_param rather than
 # test_trainer_* because it only exercises the model's property + a tiny

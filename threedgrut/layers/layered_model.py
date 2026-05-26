@@ -511,6 +511,23 @@ class LayeredGaussians(nn.Module):
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
             out["sky_envmap_state"] = self.layers["sky_envmap"].state_dict()
+        # V3 Stage A: LayeredGaussians-level per-track state — wxyz quat /
+        # trans nn.Parameter (learnable mode) or _track_pose_<tid> buffer
+        # (legacy/disabled mode), _track_active_<tid> buffers, and the frozen
+        # _track_pose_gt_<tid> reference buffer. ``get_model_parameters``
+        # returns a structured dict (NOT a flat nn.Module state_dict), so
+        # these would otherwise be silently dropped on save — fatal for
+        # learnable_pose since the Adam-updated quat/trans Parameters carry
+        # the only persistent copy of the refined pose. Sibling buffers
+        # ``tracks_camera_timestamps_us`` and ``track_ids`` are still re-
+        # derived by populate_tracks() / init_layer_from_points() each
+        # session, so they don't need a slot here.
+        layered_track_state = {
+            k: v.detach().cpu() for k, v in self.state_dict().items()
+            if k.startswith("_track_")
+        }
+        if layered_track_state:
+            out["layered_track_state"] = layered_track_state
         return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
@@ -577,6 +594,36 @@ class LayeredGaussians(nn.Module):
                 sky_state = checkpoint["sky_envmap_state"]
             if sky_state is not None and "sky_envmap" in self.layers:
                 self.layers["sky_envmap"].load_state_dict(sky_state)
+            # V3 Stage A: restore LayeredGaussians-level per-track state.
+            # Must run AFTER the trainer has called populate_tracks() (it does
+            # so before init_from_checkpoint, see trainer.init_model L386-449),
+            # so the buffer/Parameter slots already exist and load_state_dict
+            # only has to fill them. ``strict=False`` because we only carry
+            # _track_* entries — everything else is filled by the per-layer
+            # MoG init_from_checkpoint calls above.
+            track_state = None
+            if (
+                "model" in checkpoint
+                and isinstance(checkpoint["model"], dict)
+                and "layered_track_state" in checkpoint["model"]
+            ):
+                track_state = checkpoint["model"]["layered_track_state"]
+            elif "layered_track_state" in checkpoint:
+                track_state = checkpoint["layered_track_state"]
+            if track_state is not None and len(track_state) > 0:
+                missing_keys, unexpected_keys = self.load_state_dict(
+                    track_state, strict=False,
+                )
+                # ``missing_keys`` will contain every non-track key (per-layer
+                # MoG params, sky_envmap, etc.) — those are filled by the
+                # paths above, so we DON'T warn on them. ``unexpected_keys``
+                # signals a true ckpt schema mismatch.
+                if unexpected_keys:
+                    logger.warning(
+                        f"[ckpt] Unexpected layered_track_state keys (first "
+                        f"5): {unexpected_keys[:5]} — pose state may be "
+                        f"partially restored"
+                    )
             # T8.12 fix: ckpt state_dicts hold CPU tensors and load_state_dict
             # does not migrate device. Trainer-path eval always calls
             # ``model.cuda()`` after construction so this is invisible there;
