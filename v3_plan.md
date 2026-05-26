@@ -772,7 +772,24 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 > 按 Stage 顺序追加。每条包含：日期 + commit hash + Stage / Task ID + 实际改动摘要 + 关键验收数据（实测 PSNR / it/s / 耗时）。
 > v3 启动后填充。初始为空。
 
-*（待 Stage 8.5 启动时追加首条）*
+### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
+
+可视化基础设施 sub-stage，承担 v3 训练前的"看清楚问题"诉求，复用 B3_30k ckpt 不重跑训练。
+
+- **V3-VIZ.1** BEV 散点诊断：`scripts/diagnose_layered_bev.py` + `threedgrut_playground/utils/bev_renderer.py`，CPU/Mac 可跑，输出每帧 BEV PNG（ego + cuboid + 各 layer Gaussian 中心散点按 layer 着色）。
+- **V3-VIZ.1b** BEV stitched：`scripts/diagnose_layered_bev_stitched.py` + `threedgrut_playground/utils/bev_stitcher.py`，5 相机 FTheta IPM (z=0 vehicle plane) 拼成 BEV 底图，cuboid + Gaussian 叠加其上。ThinkPad 批量跑了 500 帧 (`/tmp/b3_bev_stitched_full/`, 455MB)。
+- **V3-VIZ.2** viser cuboid label：每个 active cuboid 顶角加 "tID | class" 3D 文本 billboard，跟随 Active cuboids 可见性。FTheta + pinhole 两条路径都生效。
+- **V3-VIZ.3** viser 多相机 dropdown + Follow Camera：从 `--dataset_path` 自动加载 7 相机的 per-frame c2w + FTheta intrinsics + FOV，dropdown 切换时同时 snap viewer pose + 改 engine FTheta intrinsics + 改 client FOV，跟 Follow Ego 互斥。
+- **V3-VIZ.5** ego trajectory 诊断：`scripts/diagnose_ego_trajectory.py` + 单测。结论：B3_30k ckpt trajectory 数据干净（max kink 2.4°），dt 双峰 (33ms/66ms) 为正常 rolling-shutter 模式，"乱七八糟"来自 viser 渲染端。
+- **架构统一**：cuboid wireframe / label / ego_trajectory / track_trajectories **全部走 viser 3D scene primitive**（移除 FTheta image-space overlay 路径中的 cuboid+ego+track 块）。ego 从 `add_spline_catmull_rom` 改成 `add_line_segments`（避免 dt 双峰处的样条过冲）。Trade-off：3D primitives 用 viser 内部 pinhole 投影，跟 FTheta backdrop 在画面边缘可能有几像素到几十像素漂移；好处是 cuboid + label + trajectory 之间互相完全对齐，没有 FTheta overlay 的 behind-camera 剪枝 bug。
+- **Dichotomy 验证**：`scripts/validate_cuboid_7cam.py` 在 5 相机原始图上投影 cuboid 全部精确贴合实际车辆 → 证明 cuboid pose 数据 + FTheta 投影算法 100% 正确。
+- **Diagnostic 工具**：`scripts/diagnose_bg_in_cuboid.py` 跑 B3_30k 结果 → bg 层 1.58% (15,845)、road 层 10.53% (21,067) 粒子落入 cuboid 内，dyn → bg/road 错分残留（V3 backlog 等待 V3-P2 修复）。
+- **Mac/CPU 单测**：`test_bev_renderer.py` (5 cases) + `test_diagnose_ego_trajectory.py` (9 cases) 全绿。
+- **遗留**：(a) ego/track trajectory 视觉上仍有少量异常（用户报告，未完全定位）；(b) Follow Ego toggle 偶发不自动更新（中段反馈，未修）；(c) `compare_raw_vs_recon_cuboid.py` recon 渲染破（kaolin Camera convention 跟引擎不一致，留作后续调试）；(d) V3-VIZ.4（viser 嵌入 BEV panel）未做（P2）。
+
+**关联未来 task**：V3-P2 — 修 dyn→bg/road 错分（cuboid-exclusion mask 加严 / 训练后 post-process 粒子迁移）。
+
+*（待 Stage 8.5 启动时追加首条 KPI 任务条目）*
 
 ---
 

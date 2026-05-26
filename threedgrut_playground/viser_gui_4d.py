@@ -88,11 +88,21 @@ class Viser4DViewer:
     def __init__(self, *, port: int, engine: "Engine3DGRUT | None",
                  metadata: Optional[FourDMetadata],
                  target_fps: float = 20.0,
-                 initial_fov_rad: Optional[float] = None):
+                 initial_fov_rad: Optional[float] = None,
+                 multi_cam_poses: Optional[dict] = None):
         self.engine = engine
         self.meta = metadata
         self.port = port
         self.target_fps = target_fps
+        # V3-VIZ.3: per-camera per-frame c2w lookup, used by Camera dropdown +
+        # Follow Camera. Shape: {cam_id: {"c2w": (F, 4, 4) float32,
+        # "timestamps_us": (F,) int64}}. None when launched without
+        # --dataset_path → dropdown contains only the primary camera.
+        self._multi_cam_poses: dict = multi_cam_poses or {}
+        self._follow_camera_enabled: bool = False
+        self._cam_dropdown = None
+        self._show_follow_cam = None
+        self._current_dropdown_cam: Optional[str] = None
         # T8.13: when FourDMetadata carries FTheta polynomial intrinsics
         # (viz_4d schema_v2), the viewer pipes them straight into
         # engine.render_pass and locks the rendered W×H to the trained
@@ -172,6 +182,8 @@ class Viser4DViewer:
         self.h_cuboid_lines = None
         self.h_track_trajectories = None
         self.h_world_axes = None
+        # V3-VIZ.2: per-cuboid 3D billboard label, keyed by track_id.
+        self._cuboid_label_handles: dict[str, object] = {}
 
         # Render dirtiness — set by camera move, slider drag, visibility toggle.
         self.need_update = True
@@ -407,6 +419,23 @@ class Viser4DViewer:
             self.show_follow_ego = self.server.gui.add_checkbox(
                 "Follow Ego", False
             )
+            # V3-VIZ.3: multi-camera dropdown + Follow Camera. Populated from
+            # NCore dataset via --dataset_path; degrades to {primary} when not
+            # available. Mutually exclusive with Follow Ego (only one snap
+            # source active at a time).
+            cam_options = (sorted(self._multi_cam_poses.keys())
+                           if self._multi_cam_poses else [
+                               self.meta.ego_primary_camera_id])
+            initial_cam = (self.meta.ego_primary_camera_id
+                           if self.meta.ego_primary_camera_id in cam_options
+                           else cam_options[0])
+            self._current_dropdown_cam = initial_cam
+            self._cam_dropdown = self.server.gui.add_dropdown(
+                "Camera", options=tuple(cam_options), initial_value=initial_cam,
+            )
+            self._show_follow_cam = self.server.gui.add_checkbox(
+                "Follow Camera", False,
+            )
             # B2: FTheta overlay toggle. Only added in FTheta mode; lets the
             # user A/B-compare overlay (correct FTheta projection) against the
             # legacy add_line_segments path (pinhole, drifts toward image
@@ -434,8 +463,15 @@ class Viser4DViewer:
 
         @self.show_cuboids.on_update
         def _(_):
+            v = bool(self.show_cuboids.value)
             if self.h_cuboid_lines is not None:
-                self.h_cuboid_lines.visible = bool(self.show_cuboids.value)
+                self.h_cuboid_lines.visible = v
+            # V3-VIZ.2: labels follow the same Active-cuboids toggle.
+            for h in self._cuboid_label_handles.values():
+                try:
+                    h.visible = v
+                except Exception:
+                    pass
 
         @self.show_road.on_update
         def _(_):
@@ -456,7 +492,32 @@ class Viser4DViewer:
         def _(_):
             self._follow_ego_enabled = bool(self.show_follow_ego.value)
             if self._follow_ego_enabled:
+                # Mutual exclusion with Follow Camera.
+                if self._show_follow_cam is not None and self._show_follow_cam.value:
+                    self._show_follow_cam.value = False
+                    self._follow_camera_enabled = False
                 self._snap_clients_to_ego(self._t_us_current)
+                self.need_update = True
+
+        # V3-VIZ.3: dropdown snap (one-shot) on selection change.
+        @self._cam_dropdown.on_update
+        def _(_):
+            self._current_dropdown_cam = str(self._cam_dropdown.value)
+            self._snap_clients_to_camera(
+                self._current_dropdown_cam, self._t_us_current)
+            self.need_update = True
+
+        # V3-VIZ.3: Follow Camera checkbox — snap every timeline tick to the
+        # selected camera's current-frame c2w. Mutually exclusive with Follow Ego.
+        @self._show_follow_cam.on_update
+        def _(_):
+            self._follow_camera_enabled = bool(self._show_follow_cam.value)
+            if self._follow_camera_enabled:
+                if self.show_follow_ego.value:
+                    self.show_follow_ego.value = False
+                    self._follow_ego_enabled = False
+                self._snap_clients_to_camera(
+                    self._current_dropdown_cam, self._t_us_current)
                 self.need_update = True
 
         # B2: toggling overlay flips backdrop appearance → force redraw.
@@ -485,29 +546,27 @@ class Viser4DViewer:
         if self.meta.ego_poses_c2w.size == 0:
             return
         pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float32)
-        # B2: in FTheta mode the trajectory is drawn by the overlay path
-        # (correct fisheye projection). Skip the viser scene primitive
-        # entirely to avoid double-drawing it with pinhole geometry.
-        if self.ftheta_render_wh is None:
-            # add_spline_catmull_rom needs at least 4 control points; fall back to
-            # add_point_cloud-style line if the trajectory is too short.
-            if pts.shape[0] >= 4:
-                self.h_ego_traj = self.server.scene.add_spline_catmull_rom(
-                    "/ego/trajectory",
-                    positions=pts,
-                    color=(0.2, 1.0, 0.2),
-                    line_width=2.0,
-                )
-            else:
-                # Degenerate trajectory → render as line_segments between consecutive points.
-                if pts.shape[0] >= 2:
-                    segs = np.stack([pts[:-1], pts[1:]], axis=1)
-                    self.h_ego_traj = self.server.scene.add_line_segments(
-                        "/ego/trajectory",
-                        points=segs,
-                        colors=np.full_like(segs, fill_value=0.2),
-                        line_width=2.0,
-                    )
+        # V3-VIZ.5 (2026-05-26): always render as straight-chord line_segments
+        # in BOTH FTheta and pinhole modes.
+        #   - Was: FTheta path skipped viser primitive (drawn by overlay
+        #     compositor in image space); pinhole path used spline_catmull_rom.
+        #   - Now: viser projects 3D primitives consistently with cuboid/label
+        #     fix (2026-05-26). Avoids:
+        #       (a) overlay's behind-camera segment-clipping bug
+        #       (b) spline_catmull_rom overshoot at the trajectory's bimodal
+        #           dt cadence (33ms/66ms gaps inflate control-point spacing).
+        if pts.shape[0] >= 2:
+            segs = np.stack([pts[:-1], pts[1:]], axis=1)
+            cols = np.broadcast_to(
+                np.array([0.2, 1.0, 0.2], dtype=np.float32),
+                (segs.shape[0], 2, 3),
+            ).copy()
+            self.h_ego_traj = self.server.scene.add_line_segments(
+                "/ego/trajectory",
+                points=segs,
+                colors=cols,
+                line_width=2.0,
+            )
         # Ego frustum at frame 0.
         pose0 = self.meta.ego_poses_c2w[0]
         self.h_ego_frustum = self.server.scene.add_camera_frustum(
@@ -652,10 +711,11 @@ class Viser4DViewer:
             col_list.append(col)
         if not seg_list:
             return
-        # B2: in FTheta mode the track trajectories are drawn by the overlay
-        # path; skip the pinhole-projected scene primitive.
-        if self.ftheta_render_wh is not None:
-            return
+        # V3-VIZ.5 (2026-05-26): unified — also render via 3D scene primitive
+        # in FTheta mode (matches cuboid/label/ego_traj unification). Avoids
+        # the overlay compositor's behind-camera segment-clipping bug that
+        # made long track trajectories scatter pixels across the image when
+        # they cross the camera's Z=0 plane.
         all_segs = np.concatenate(seg_list, axis=0)
         all_cols = np.concatenate(col_list, axis=0)
         self.h_track_trajectories = self.server.scene.add_line_segments(
@@ -679,6 +739,11 @@ class Viser4DViewer:
         self._update_active_cuboids(frame_idx)
         self._update_dynamic_lidar(frame_idx)
         self._mirror_ui(t_us, frame_idx)
+        # V3-VIZ.3: if Follow Camera is on, snap viewer to selected camera's
+        # c2w at the new time. Checked before Follow Ego so a Camera-mode user
+        # doesn't get bumped to ego by the ego branch below.
+        if self._follow_camera_enabled and self._current_dropdown_cam:
+            self._snap_clients_to_camera(self._current_dropdown_cam, t_us)
         # Bug 1 fix: if Follow Ego is on, snap viewer cameras to the new
         # ego pose so Play visibly tracks the trajectory.
         if self._follow_ego_enabled:
@@ -703,6 +768,54 @@ class Viser4DViewer:
         pose = self.meta.ego_pose_at(t_us)
         self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
         self.h_ego_frustum.position = pose[:3, 3]
+
+    def _snap_clients_to_camera(self, cam_id: Optional[str], t_us: int) -> None:
+        """V3-VIZ.3: snap viewer to ``cam_id``'s c2w at the nearest frame ≤ t_us.
+
+        Also swaps the engine's FTheta intrinsics + render WH so the Gaussian
+        backdrop uses the SELECTED camera's polynomial — otherwise the engine
+        keeps using primary camera's intrinsics and front_wide vs front_tele
+        renders identically (since browser pinhole approx ignores FTheta).
+        """
+        if cam_id is None or cam_id not in self._multi_cam_poses:
+            return
+        entry = self._multi_cam_poses[cam_id]
+        c2w_arr = entry["c2w"]
+        ts_arr = entry["timestamps_us"]
+        if ts_arr.size == 0:
+            return
+        idx = int(np.searchsorted(ts_arr, int(t_us)))
+        idx = max(0, min(idx, ts_arr.size - 1))
+        if idx > 0 and abs(int(ts_arr[idx - 1]) - t_us) < abs(int(ts_arr[idx]) - t_us):
+            idx -= 1
+        pose = c2w_arr[idx]
+        R = pose[:3, :3]
+        forward_world = R @ np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        up_world = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
+        # Swap engine intrinsics so backdrop matches this camera's projection.
+        new_ftheta = entry.get("ftheta_dict")
+        new_res = entry.get("resolution")
+        new_fov = float(entry.get("fov_y_rad", 1.5708))
+        if new_ftheta is not None and new_res is not None:
+            self.ftheta_intrinsics = new_ftheta
+            self.ftheta_render_wh = new_res
+            # Rebuild compositor at the new render resolution so any overlay
+            # path that still uses it (ego/track trajectories) stays in sync.
+            if self._overlay_compositor is not None:
+                from threedgrut_playground.utils.viser_overlay_compositor import (
+                    Viser4DOverlayCompositor,
+                )
+                self._overlay_compositor = Viser4DOverlayCompositor(
+                    ftheta_dict=new_ftheta,
+                    height=new_res[1], width=new_res[0], subdivide_n=20,
+                )
+        for client in self.server.get_clients().values():
+            client.camera.wxyz = mat_to_wxyz(pose)
+            client.camera.position = pose[:3, 3]
+            client.camera.look_at = pose[:3, 3] + 10.0 * forward_world
+            client.camera.up_direction = up_world
+            client.camera.fov = new_fov
+        self.need_update = True
 
     def _snap_clients_to_ego(self, t_us: int) -> None:
         """Snap every connected viser client's free camera onto the ego pose
@@ -763,15 +876,16 @@ class Viser4DViewer:
         fall back to the checkbox value on the first frame) and re-apply it.
         Mirrors _update_dynamic_lidar's preserve-prev-visible pattern.
         """
-        # B2: in FTheta mode the active cuboid edges are drawn by the
-        # overlay path; skip the viser line_segments primitive entirely so
-        # the browser doesn't double-draw a pinhole-projected wireframe
-        # that drifts away from the fisheye Gaussian backdrop.
-        if self.ftheta_render_wh is not None:
-            if self.h_cuboid_lines is not None:
-                self.h_cuboid_lines.remove()
-                self.h_cuboid_lines = None
-            return
+        # V3-VIZ.2 (2026-05-26): unified architecture — cuboid wireframes AND
+        # labels are both 3D scene primitives in BOTH pinhole and FTheta modes.
+        # The B2 image-space overlay path for cuboids previously diverged from
+        # the 3D-scene label projection (overlay = FTheta polynomial, labels =
+        # viser pinhole), so labels and cuboid edges visibly separated at the
+        # image edges. Letting viser project both as 3D primitives keeps them
+        # mutually consistent. Trade-off: cuboid wireframes use viser's pinhole
+        # projection so they may drift a few pixels from the FTheta-rendered
+        # Gaussian backdrop near the periphery — acceptable for diagnostic use,
+        # and the cuboid+label still hug each other.
         prev_visible = (self.h_cuboid_lines.visible
                         if self.h_cuboid_lines is not None
                         else bool(getattr(self, "show_cuboids", None)
@@ -789,6 +903,67 @@ class Viser4DViewer:
             line_width=2.5,
         )
         self.h_cuboid_lines.visible = prev_visible
+        # V3-VIZ.2: per-cuboid "tID | class" billboard label, top-center.
+        self._update_cuboid_labels(frame_idx, visible=prev_visible)
+
+    def _update_cuboid_labels(self, frame_idx: int, *, visible: bool) -> None:
+        """V3-VIZ.2: add/remove ``/labels/cuboid_<tid>`` 3D text labels.
+
+        Each label shows ``"t<tid> | <class>"`` positioned ~0.3 m above the
+        cuboid's top face. Labels follow the same Active-cuboids visibility
+        toggle as the line wireframe. In FTheta mode line_segments are
+        skipped (overlay path), so this method is called with visible=False
+        from that early-return branch.
+        """
+        if self.meta is None:
+            return
+        active_ids = set(self.meta.active_tracks_at(frame_idx))
+        # Remove labels for tracks no longer active.
+        for tid in list(self._cuboid_label_handles.keys()):
+            if tid not in active_ids:
+                try:
+                    self._cuboid_label_handles[tid].remove()
+                except Exception:
+                    pass
+                self._cuboid_label_handles.pop(tid, None)
+        if not active_ids:
+            return
+        for tid in active_ids:
+            t = self.meta.tracks[tid]
+            poses = t.get("poses")
+            size = t.get("size")
+            if poses is None or frame_idx >= poses.shape[0]:
+                continue
+            pose = poses[frame_idx]
+            # V3-VIZ.2 follow-up: anchor label on the cuboid top-back-right
+            # corner (vertex 7 = (+sx/2, +sy/2, +sz/2)) so the text touches the
+            # wireframe instead of floating above. User feedback 2026-05-26:
+            # previous +0.3 m vertical offset made labels drift off the box.
+            sx = float(size[0]) if size is not None and size.size >= 1 else 1.0
+            sy = float(size[1]) if size is not None and size.size >= 2 else 1.0
+            sz_z = float(size[2]) if size is not None and size.size >= 3 else 1.0
+            local = np.array([sx * 0.5, sy * 0.5, sz_z * 0.5], dtype=np.float32)
+            top = (pose[:3, :3] @ local + pose[:3, 3]).astype(np.float32)
+            text = f"t{tid} | {t.get('class', 'unknown')}"
+            old = self._cuboid_label_handles.get(tid)
+            if old is not None:
+                try:
+                    old.remove()
+                except Exception:
+                    pass
+            try:
+                handle = self.server.scene.add_label(
+                    f"/labels/cuboid_{tid}",
+                    text=text,
+                    position=(float(top[0]), float(top[1]), float(top[2])),
+                    wxyz=(1.0, 0.0, 0.0, 0.0),
+                )
+                handle.visible = bool(visible)
+                self._cuboid_label_handles[tid] = handle
+            except Exception:
+                # Older viser without add_label: silently skip; cuboid edges
+                # still render correctly.
+                pass
 
     # ---------------------------------------------------------------- B2 overlay
     def _collect_overlay_layer_specs(self, t_us: int) -> list[PolylineLayerSpec]:
@@ -805,52 +980,19 @@ class Viser4DViewer:
             return []
         specs: list[PolylineLayerSpec] = []
 
-        # Ego trajectory — static polyline, cached in __init__.
-        # subdivide_n=3 is plenty for an already-dense polyline (524 verts
-        # over 20 s) since each segment is short and the fisheye curvature
-        # between consecutive ego poses is sub-pixel.
-        if (getattr(self, "show_ego_traj", None) is not None
-                and bool(self.show_ego_traj.value)
-                and self._overlay_static_ego_polylines):
-            specs.append(PolylineLayerSpec(
-                name="ego_trajectory",
-                polylines_world=self._overlay_static_ego_polylines,
-                color=(50, 255, 50, 220),
-                width=2,
-                subdivide_n=3,
-            ))
+        # V3-VIZ.5 (2026-05-26): ego_trajectory + track_trajectories removed
+        # from overlay path — now rendered as 3D scene primitives by
+        # _add_ego_trajectory and _add_track_trajectories (consistent with
+        # cuboid/label unification). The overlay path is now empty of static
+        # polylines; keeping the layer-spec scaffold for future re-additions
+        # of FTheta-projected overlays if needed.
 
-        # Track trajectories — static, cached in __init__. Same low
-        # subdivide_n rationale as ego.
-        if (getattr(self, "show_tracks", None) is not None
-                and bool(self.show_tracks.value)
-                and self._overlay_static_track_polylines):
-            specs.append(PolylineLayerSpec(
-                name="track_trajectories",
-                polylines_world=self._overlay_static_track_polylines,
-                color=(180, 180, 180, 180),
-                width=1,
-                subdivide_n=3,
-            ))
-
-        # Active cuboids — per-frame (active set + poses depend on t_us).
-        # Each cuboid yields 12 short 2-vertex edges; the fisheye curvature
-        # within a single edge can be many pixels at the screen periphery,
-        # so subdivide_n=20 keeps tangents smooth.
-        if (getattr(self, "show_cuboids", None) is not None
-                and bool(self.show_cuboids.value)):
-            frame_idx = self.meta.lookup_frame_idx(t_us)
-            pts, _cols = self._build_cuboid_edges(frame_idx)   # (N*12, 2, 3)
-            if pts.shape[0] > 0:
-                cuboid_pls = [pts[i].astype(np.float64)
-                              for i in range(pts.shape[0])]
-                specs.append(PolylineLayerSpec(
-                    name="active_cuboids",
-                    polylines_world=cuboid_pls,
-                    color=(0, 255, 0, 255),
-                    width=2,
-                    subdivide_n=20,
-                ))
+        # Cuboids removed from overlay path (2026-05-26): cuboid wireframes are
+        # now 3D scene primitives via _update_active_cuboids → add_line_segments,
+        # matching the label rendering path so the two stay co-projected by
+        # viser. Ego/track trajectories are kept in the overlay because they're
+        # static polylines and benefit from the FTheta sub-pixel accuracy at
+        # image edges.
 
         return specs
 
@@ -1136,6 +1278,115 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
     print("[T8.13-DIAG] ============================================================")
 
 
+def _load_multi_cam_poses(dataset_path: Optional[str],
+                          default_config: str) -> dict:
+    """V3-VIZ.3: extract per-camera per-frame c2w + timestamps for the
+    Camera dropdown + Follow Camera modes.
+
+    Returns ``{cam_id: {"c2w": (F, 4, 4) float32, "timestamps_us": (F,) int64}}``
+    in world_global frame (T_world_to_world_global applied so the poses match
+    ckpt ego frame). Empty dict when ``dataset_path`` is None or NCore SDK
+    is unavailable.
+    """
+    if dataset_path is None:
+        return {}
+    try:
+        import ncore  # noqa: F401 — runtime-only SDK
+        from threedgrut.datasets.datasetNcore import NCoreDataset
+    except ImportError as e:
+        print(f"[viz_4d] multi-camera load skipped — NCore SDK missing: {e}",
+              flush=True)
+        return {}
+    try:
+        # NCoreDataset auto-fails when manifest has multiple sensors and
+        # camera_ids=None. Open with the (camera-id wildcard) auto-discovery
+        # by catching the "Multiple camera sensors" error message — the
+        # exception payload lists every available sensor.
+        try:
+            NCoreDataset(
+                datapath=str(dataset_path), split="train", device="cpu",
+                sample_full_image=True, camera_ids=None, load_aux_masks=False,
+            )
+            all_cam_ids = ["camera_front_wide_120fov"]  # single-sensor clip
+        except ValueError as err:
+            msg = str(err)
+            if "Multiple camera sensors" not in msg or "[" not in msg:
+                raise
+            # Extract the bracketed list literal from the error message.
+            import ast
+            lit = msg[msg.index("["):msg.rindex("]") + 1]
+            all_cam_ids = sorted(ast.literal_eval(lit))
+        ds = NCoreDataset(
+            datapath=str(dataset_path), split="train", device="cpu",
+            sample_full_image=True,
+            camera_ids=all_cam_ids, load_aux_masks=False,
+        )
+        out: dict[str, dict] = {}
+        end_col = int(ncore.data.FrameTimepoint.END)
+        start_tp = ncore.data.FrameTimepoint.START
+        T_w2wg = np.asarray(ds.T_world_to_world_global, dtype=np.float64)
+        seq_id = ds.sequence_id
+        for cam_id in ds.camera_ids:
+            sensor = ds.sequence_camera_sensors[seq_id][cam_id]
+            frame_indices = ds.camera_train_frame_indices.get(cam_id, [])
+            if frame_indices is None or len(frame_indices) == 0:
+                continue
+            c2w_native = sensor.get_frames_T_source_target(
+                source_node=sensor.sensor_id, target_node="world",
+                frame_indices=frame_indices, frame_timepoint=start_tp,
+            )
+            c2w_native = np.asarray(c2w_native, dtype=np.float64).reshape(-1, 4, 4)
+            c2w_wg = np.einsum("ij,njk->nik", T_w2wg, c2w_native).astype(np.float32)
+            ts = np.asarray(sensor.frames_timestamps_us)[
+                np.asarray(frame_indices), end_col].astype(np.int64)
+            # Per-camera FTheta intrinsics (so dropdown switch actually changes
+            # what the engine renders, not just the viewer pose). Falls back
+            # to None for non-FTheta cameras (pinhole/distorted) — engine then
+            # uses pinhole approx.
+            cam_model = ds.sequence_camera_models[seq_id][cam_id]
+            ftheta_dict = None
+            fov_y_rad = 1.5708  # ~90°, generic default
+            resolution = None
+            try:
+                W = int(cam_model.resolution[0].item())
+                H = int(cam_model.resolution[1].item())
+                resolution = (W, H)
+                max_angle = getattr(cam_model, "max_angle", None)
+                if max_angle is not None and hasattr(cam_model, "get_parameters"):
+                    p = cam_model.get_parameters()
+                    ftheta_dict = {
+                        "resolution":              np.asarray(p.resolution, dtype=np.int64),
+                        "shutter_type":            p.shutter_type.name,
+                        "principal_point":         np.asarray(p.principal_point, dtype=np.float32),
+                        "reference_poly":          p.reference_poly.name,
+                        "pixeldist_to_angle_poly": np.asarray(p.pixeldist_to_angle_poly, dtype=np.float32),
+                        "angle_to_pixeldist_poly": np.asarray(p.angle_to_pixeldist_poly, dtype=np.float32),
+                        "max_angle":               float(p.max_angle),
+                        "linear_cde":              np.asarray(p.linear_cde, dtype=np.float32),
+                    }
+                    fov_y_rad = 2.0 * float(max_angle)
+                else:
+                    fy = float(cam_model.focal_length[1])
+                    if fy > 0:
+                        fov_y_rad = 2.0 * float(np.arctan(0.5 * H / fy))
+            except Exception as e:
+                print(f"[viz_4d] cam {cam_id}: intrinsics extract failed ({e})",
+                      flush=True)
+            out[cam_id] = {
+                "c2w": c2w_wg, "timestamps_us": ts,
+                "ftheta_dict": ftheta_dict, "resolution": resolution,
+                "fov_y_rad": fov_y_rad,
+            }
+            print(f"[viz_4d] cam {cam_id}: {c2w_wg.shape[0]} frames, "
+                  f"FOV_y={np.rad2deg(fov_y_rad):.1f}°, "
+                  f"ftheta={'YES' if ftheta_dict else 'no'}",
+                  flush=True)
+        return out
+    except Exception as e:
+        print(f"[viz_4d] multi-camera load failed: {e}", flush=True)
+        return {}
+
+
 def _load_metadata(ckpt: dict, dataset_path: Optional[str],
                    default_config: str) -> Optional[FourDMetadata]:
     """Try ckpt['viz_4d'] first; fall back to dataset on-the-fly extract."""
@@ -1262,10 +1513,19 @@ def main() -> None:
     else:
         print("[T8.13] 无 FTheta intrinsics, 走 pinhole approximation 路径 "
               "(T8.12 行为).")
+    # V3-VIZ.3: per-camera per-frame c2w lookup (multi-camera dropdown +
+    # Follow Camera). Empty when --dataset_path not provided → dropdown
+    # falls back to {primary} only.
+    multi_cam_poses = _load_multi_cam_poses(
+        args.dataset_path, args.default_gs_config)
+    if multi_cam_poses:
+        print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available "
+              f"for dropdown / Follow Camera")
     viewer = Viser4DViewer(
         port=args.port, engine=engine, metadata=metadata,
         target_fps=args.target_fps,
         initial_fov_rad=math.radians(args.initial_fov_deg),
+        multi_cam_poses=multi_cam_poses,
     )
     # Phase A diagnostic block — one-shot startup print, no GUI/render side
     # effects. See plan v2-t8-13-t8-14-bug-happy-starfish.md for the 4-bug
