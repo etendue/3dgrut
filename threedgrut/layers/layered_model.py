@@ -79,6 +79,73 @@ def _build_sky_module(spec: LayerSpec, conf) -> nn.Module:
 _SH_C0 = 0.28209479177387814
 
 
+def _rotmat_to_quat_wxyz(R: torch.Tensor) -> torch.Tensor:
+    """Rotation matrix ``R`` of shape ``[..., 3, 3]`` → quaternion ``[..., 4]``
+    in ``(w, x, y, z)`` convention.
+
+    Uses Shepperd's case-switching for numerical stability across the full
+    rotation range — cuboid yaws can be near ±π where the naive
+    ``sqrt(1 + trace)`` form is unstable.
+    """
+    R00, R01, R02 = R[..., 0, 0], R[..., 0, 1], R[..., 0, 2]
+    R10, R11, R12 = R[..., 1, 0], R[..., 1, 1], R[..., 1, 2]
+    R20, R21, R22 = R[..., 2, 0], R[..., 2, 1], R[..., 2, 2]
+    trace = R00 + R11 + R22
+
+    # Case A: trace > 0 — most numerically stable
+    s_a = torch.sqrt(torch.clamp(trace + 1.0, min=1e-12)) * 2.0
+    w_a = 0.25 * s_a
+    x_a = (R21 - R12) / s_a
+    y_a = (R02 - R20) / s_a
+    z_a = (R10 - R01) / s_a
+
+    # Case B: R00 is the largest diagonal element
+    s_b = torch.sqrt(torch.clamp(1.0 + R00 - R11 - R22, min=1e-12)) * 2.0
+    w_b = (R21 - R12) / s_b
+    x_b = 0.25 * s_b
+    y_b = (R01 + R10) / s_b
+    z_b = (R02 + R20) / s_b
+
+    # Case C: R11 is the largest diagonal element
+    s_c = torch.sqrt(torch.clamp(1.0 + R11 - R00 - R22, min=1e-12)) * 2.0
+    w_c = (R02 - R20) / s_c
+    x_c = (R01 + R10) / s_c
+    y_c = 0.25 * s_c
+    z_c = (R12 + R21) / s_c
+
+    # Case D: R22 is the largest diagonal element
+    s_d = torch.sqrt(torch.clamp(1.0 + R22 - R00 - R11, min=1e-12)) * 2.0
+    w_d = (R10 - R01) / s_d
+    x_d = (R02 + R20) / s_d
+    y_d = (R12 + R21) / s_d
+    z_d = 0.25 * s_d
+
+    cond_a = trace > 0
+    cond_b = (~cond_a) & (R00 >= R11) & (R00 >= R22)
+    cond_c = (~cond_a) & (~cond_b) & (R11 >= R22)
+
+    w = torch.where(cond_a, w_a, torch.where(cond_b, w_b, torch.where(cond_c, w_c, w_d)))
+    x = torch.where(cond_a, x_a, torch.where(cond_b, x_b, torch.where(cond_c, x_c, x_d)))
+    y = torch.where(cond_a, y_a, torch.where(cond_b, y_b, torch.where(cond_c, y_c, y_d)))
+    z = torch.where(cond_a, z_a, torch.where(cond_b, z_b, torch.where(cond_c, z_c, z_d)))
+    return torch.stack([w, x, y, z], dim=-1)
+
+
+def _quat_multiply_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+    """Hamilton quaternion product ``q1 ⊗ q2`` in ``(w, x, y, z)`` convention.
+
+    Shapes broadcast: ``q1`` and ``q2`` may be any common-broadcast shape
+    ending in 4. Result has the broadcast shape.
+    """
+    w1 = q1[..., 0]; x1 = q1[..., 1]; y1 = q1[..., 2]; z1 = q1[..., 3]
+    w2 = q2[..., 0]; x2 = q2[..., 1]; y2 = q2[..., 2]; z2 = q2[..., 3]
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    return torch.stack([w, x, y, z], dim=-1)
+
+
 class _LayeredOptimizerView:
     """Lightweight optimizer-like wrapper that fans calls across per-layer Adams.
 
@@ -268,6 +335,22 @@ class LayeredGaussians(nn.Module):
             },
             "scene_extent": self.scene_extent,
         }
+        # T8/B3 Phase E.4: persist per-layer ``track_ids`` buffer (set by
+        # ``init_layer_from_points`` at L713 for the dynamic_rigids layer).
+        # Without this, viewer/playground loads of v2 ckpts lose the
+        # per-particle owner mapping → ``_transform_means`` indexes pose_stack
+        # incorrectly → all dyn particles render at track[0]'s pose → "勾掉
+        # dynamic_rigids 视觉无变化". MoG.get_model_parameters omits this
+        # buffer because it's a LayeredGaussians-only field; we inject here.
+        for spec in self.specs:
+            if not spec.is_particle_layer or spec.name not in self.layers:
+                continue
+            layer = self.layers[spec.name]
+            track_ids = getattr(layer, "track_ids", None)
+            if track_ids is not None:
+                out["gaussians_nodes"][spec.name]["track_ids"] = (
+                    track_ids.detach().cpu().to(torch.int64)
+                )
         # T5.4: sky envmap state — saved as raw state_dict so SkyEnvmapMLP /
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
@@ -310,6 +393,21 @@ class LayeredGaussians(nn.Module):
                 layer.init_from_checkpoint(
                     nodes_dict[name], setup_optimizer=setup_optimizer
                 )
+                # T8/B3 Phase E.4: restore per-layer ``track_ids`` buffer if it
+                # was saved by ``get_model_parameters``. MoG.init_from_checkpoint
+                # reads only its 6 standard params (positions/density/etc) and
+                # silently ignores extra keys, so the track_ids entry rides
+                # along untouched in nodes_dict[name].
+                ckpt_track_ids = nodes_dict[name].get("track_ids")
+                if ckpt_track_ids is not None:
+                    if not torch.is_tensor(ckpt_track_ids):
+                        ckpt_track_ids = torch.as_tensor(ckpt_track_ids)
+                    # Drop any prior buffer so re-load is idempotent.
+                    if hasattr(layer, "track_ids"):
+                        delattr(layer, "track_ids")
+                    layer.register_buffer(
+                        "track_ids", ckpt_track_ids.long(), persistent=True,
+                    )
             # T5.4: sky envmap state restore — under either NRE-wrapped key
             # "model.sky_envmap_state" or unwrapped "sky_envmap_state".
             sky_state = None
@@ -533,18 +631,48 @@ class LayeredGaussians(nn.Module):
             if spec.name not in self.enabled_layer_names:
                 continue
             layer = self.layers[spec.name]
+            # T8/B3 Phase E.3: compute transformed positions + per-particle
+            # active mask once for dynamic_rigids; then use active mask to
+            # suppress inactive-track particles in the density field.
+            transformed_positions = None
+            active_mask = None
+            transformed_rotations = None
+            if (
+                spec.name == "dynamic_rigids"
+                and hasattr(layer, "track_ids")
+                and len(self.tracks_poses) > 0
+            ):
+                # E.2.c: always transform when track buffers are populated.
+                # ``_transform_means_and_active`` handles the no-time fallback
+                # (each track uses its first active frame) so inference free
+                # cameras don't dump dyn particles to world origin.
+                transformed_positions, active_mask, transformed_rotations = \
+                    self._transform_means_and_active(
+                        layer.positions, layer.track_ids,
+                        rotations_local=layer.rotation,
+                        timestamp_us=timestamp_us, frame_id=frame_id,
+                    )
             for n in _FORWARD_PARAM_NAMES:
                 v = getattr(layer, n)
-                if (
-                    n == "positions"
-                    and spec.name == "dynamic_rigids"
-                    and hasattr(layer, "track_ids")
-                    and len(self.tracks_poses) > 0
-                    and (timestamp_us > 0 or frame_id is not None)
+                if n == "positions" and transformed_positions is not None:
+                    v = transformed_positions
+                elif n == "rotation" and transformed_rotations is not None:
+                    # Phase E.2.b: q_world = q_pose ⊗ q_local — without this
+                    # composition, MCMC inflates scales to compensate for the
+                    # missing orientation, producing scenes-wide smudge.
+                    v = transformed_rotations
+                elif (
+                    n == "density"
+                    and active_mask is not None
+                    and not bool(active_mask.all())
                 ):
-                    v = self._transform_means(
-                        v, layer.track_ids,
-                        timestamp_us=timestamp_us, frame_id=frame_id,
+                    # density is [N, 1] raw (pre-sigmoid). Push inactive
+                    # particles to a large-negative value so sigmoid(density)
+                    # ≈ 0 → no render contribution. No mutation of the
+                    # underlying nn.Parameter (only this fused view copy).
+                    inactive_value = torch.full_like(v, -50.0)
+                    v = torch.where(
+                        active_mask.unsqueeze(-1), v, inactive_value,
                     )
                 pieces[n].append(v)
         # All particle layers disabled → return 0-row tensors with correct
@@ -591,6 +719,116 @@ class LayeredGaussians(nn.Module):
         if frame_id is not None:
             return max(0, min(int(frame_id), F - 1))
         return 0
+
+    def _transform_means_and_active(
+        self,
+        positions_local: torch.Tensor,
+        track_ids: torch.Tensor,
+        rotations_local: torch.Tensor | None = None,
+        timestamp_us: int = -1,
+        frame_id: int | None = None,
+    ):
+        """Like ``_transform_means`` but also returns ``(active_mask,
+        rotations_world)``.
+
+        Phase E.3: ``active_mask`` lets fused_view suppress inactive-track
+        particles by overriding their density to a large-negative sentinel.
+
+        Phase E.2.b: when ``rotations_local`` is provided, compose the
+        per-track pose rotation with each particle's local rotation
+        ``q_world = q_pose ⊗ q_local`` so the renderer sees the rotated
+        Gaussian's covariance pointing along the cuboid's natural axes
+        (not the world axes). Without this, a yaw=π/2 car's particles
+        sit at the right world coords but face the wrong direction →
+        MCMC inflates ``scale`` to multiple meters to compensate → fused
+        view becomes a sky-wide smudge (observed in E.7 5k fix ckpt).
+
+        Returns:
+            (positions_world ``[N, 3]``,
+             active_per_pt ``[N]`` bool,
+             rotations_world ``[N, 4]`` or None if ``rotations_local`` is None)
+            ``active_per_pt`` is all True when ``_track_active_<n>`` buffers
+            are missing (defensive — pre-T4.0 legacy code paths).
+        """
+        track_names = sorted(self.tracks_poses.keys())
+        device = positions_local.device
+        track_ids = track_ids.to(device)
+
+        # E.2.c: free-camera fallback. When the caller has no time signal
+        # (inference / playground rendering a static view), pick each track's
+        # FIRST ACTIVE FRAME independently so the user sees a composite "all
+        # visible actors" scene instead of dyn particles snapping to world
+        # origin (which is what the old ``timestamp_us > 0 or frame_id is not
+        # None`` gate in fused_view used to do).
+        use_per_track_first_active = (timestamp_us <= 0 and frame_id is None)
+
+        if use_per_track_first_active:
+            pose_list = []
+            active_track_flags = []
+            for n in track_names:
+                active_buf = getattr(self, f"_track_active_{n}", None)
+                if active_buf is None or active_buf.numel() == 0:
+                    fallback_idx = 0
+                    is_active = True
+                else:
+                    nonzero = active_buf.nonzero(as_tuple=False)
+                    if nonzero.numel() == 0:
+                        fallback_idx = 0
+                        is_active = False    # track has no active frames at all
+                    else:
+                        fallback_idx = int(nonzero[0, 0].item())
+                        is_active = True
+                pose_list.append(
+                    getattr(self, f"_track_pose_{n}")[fallback_idx].to(device)
+                )
+                active_track_flags.append(
+                    torch.tensor(is_active, dtype=torch.bool, device=device)
+                )
+            pose_stack = torch.stack(pose_list)                              # [K, 4, 4]
+            active_stack = torch.stack(active_track_flags)                   # [K] bool
+        else:
+            idx = self._resolve_pose_idx(timestamp_us, frame_id)
+            pose_stack = torch.stack(
+                [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
+            )                                                                # [K, 4, 4]
+            # Per-track active flag at this frame; defaults to all-True when
+            # the _track_active_<n> buffer is missing (pre-T4.0).
+            active_list = []
+            for n in track_names:
+                buf = getattr(self, f"_track_active_{n}", None)
+                if buf is None:
+                    active_list.append(
+                        torch.tensor(True, dtype=torch.bool, device=device)
+                    )
+                else:
+                    active_list.append(buf[idx].to(device).to(torch.bool))
+            active_stack = torch.stack(active_list)                          # [K] bool
+
+        pose_per_pt = pose_stack[track_ids]                                  # [N, 4, 4]
+        R = pose_per_pt[:, :3, :3]                                           # [N, 3, 3]
+        t = pose_per_pt[:, :3, 3]                                            # [N, 3]
+        positions_world = (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
+        active_per_pt = active_stack[track_ids]                              # [N] bool
+
+        # Phase E.2.b: compose pose rotation with per-particle local rotation.
+        # Done in quaternion space (wxyz). When rotations_local is omitted
+        # (legacy callers / unit tests), return None so the caller keeps the
+        # original behaviour.
+        rotations_world = None
+        if rotations_local is not None:
+            # pose_stack[..., :3, :3] is the rotation block per track; convert
+            # ONCE per track (not per particle) for efficiency, then gather.
+            pose_R_per_track = pose_stack[:, :3, :3].to(rotations_local.dtype)  # [K, 3, 3]
+            q_pose_per_track = _rotmat_to_quat_wxyz(pose_R_per_track)            # [K, 4]
+            q_pose_per_pt = q_pose_per_track[track_ids]                          # [N, 4]
+            q_local = rotations_local.to(device=device, dtype=q_pose_per_pt.dtype)
+            q_world = _quat_multiply_wxyz(q_pose_per_pt, q_local)                # [N, 4]
+            # Renderer / MoG conventionally re-normalizes via rotation_activation
+            # ("normalize" in config) but it's cheap to do so here too — bounds
+            # numerical drift from float32 multiplication.
+            q_world = q_world / q_world.norm(dim=-1, keepdim=True).clamp(min=1e-12)
+            rotations_world = q_world
+        return positions_world, active_per_pt, rotations_world
 
     def _transform_means(
         self,

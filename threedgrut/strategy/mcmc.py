@@ -115,6 +115,17 @@ class MCMCStrategy(BaseStrategy):
         alive_idxs = torch.where(densities > self.conf.strategy.opacity_threshold)[0]
         n_dead_gaussians = len(dead_idxs)
 
+        # Cap relocation to avoid super-dense clusters when a layer collapses
+        # (e.g. dynamic_rigids at 90% dead → 630k particles crammed into 70k spots
+        # → tile-buffer OOM in the renderer). max_relocation_fraction=1.0 disables.
+        max_frac = float(getattr(self.conf.strategy.relocate, "max_relocation_fraction", 1.0))
+        if max_frac < 1.0 and n_dead_gaussians > 0:
+            cap = max(1, int(max_frac * len(densities)))
+            if n_dead_gaussians > cap:
+                perm = torch.randperm(n_dead_gaussians, device=dead_idxs.device)
+                dead_idxs = dead_idxs[perm[:cap]]
+                n_dead_gaussians = cap
+
         if n_dead_gaussians:
             sampled_idxs, new_densities, new_scales = self.sample_new_gaussians(n_dead_gaussians, alive_idxs)
 

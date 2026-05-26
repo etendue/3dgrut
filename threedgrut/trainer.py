@@ -32,6 +32,12 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 import threedgrut.datasets as datasets
 from threedgrut.datasets.protocols import BoundedMultiViewDataset
 from threedgrut.datasets.utils import DEFAULT_DEVICE, MultiEpochsDataLoader, PointCloud
+from threedgrut.model.bg_cuboid_loss import (
+    collect_active_cuboids_for_frame,
+    compute_bg_cuboid_opacity_penalty,
+    lambda_schedule,
+)
+from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 from threedgrut.model.losses import ssim
 from threedgrut.model.model import MixtureOfGaussians
@@ -738,6 +744,13 @@ class Trainer3DGRUT:
         image_infos = getattr(gpu_batch, "image_infos", None)
         trainer_conf = getattr(self.conf, "trainer", {})
 
+        # T8/B3 — optionally fill image_infos["dyn_mask_cuboid"] from active
+        # cuboids + FTheta intrinsics so compute_layered_l1_loss prefers cuboid
+        # over sseg (cuboid mask is exact: tied to tracked actors, no leak from
+        # untracked vehicles / cones). Mutates image_infos in place.
+        self._maybe_fill_cuboid_mask(gpu_batch, trainer_conf)
+        image_infos = getattr(gpu_batch, "image_infos", None)
+
         # Mask out the invalid pixels if the mask is provided
         if mask is not None:
             rgb_gt = rgb_gt * mask
@@ -818,6 +831,14 @@ class Trainer3DGRUT:
                     else getattr(trainer_conf, "lambda_sky", 0.1)
                 )
 
+        # T8/B3 — Background-layer cuboid opacity penalty.
+        # Pushes bg particles whose world position lies inside an active
+        # dynamic-rigid cuboid to lower opacity, so MCMC relocate_gaussians
+        # can move them to alive donors elsewhere. λ ramps 0 → λ_max over
+        # warmup_iters; off entirely when bg_dyn_cuboid_penalty.enabled=false
+        # (v2 baseline byte-identical default).
+        loss_bg_cuboid = self._compute_bg_cuboid_penalty_term(gpu_batch, trainer_conf)
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -825,6 +846,7 @@ class Trainer3DGRUT:
             + lambda_opacity * loss_opacity
             + lambda_scale * loss_scale
             + lambda_sky * loss_sky
+            + loss_bg_cuboid
         )
         return dict(
             total_loss=loss,
@@ -834,6 +856,143 @@ class Trainer3DGRUT:
             opacity_loss=lambda_opacity * loss_opacity,
             scale_loss=lambda_scale * loss_scale,
             sky_loss=lambda_sky * loss_sky,
+            bg_cuboid_loss=loss_bg_cuboid,
+        )
+
+    # ---------------------------------------------------------------- T8/B3
+    def _bg_cuboid_conf(self, trainer_conf) -> dict:
+        """Pull the bg_dyn_cuboid_penalty sub-dict from trainer conf.
+
+        Returns ``{"enabled": False}`` when the section is absent so callers
+        can do a single ``cfg["enabled"]`` check without optional handling.
+        """
+        if trainer_conf is None:
+            return {"enabled": False}
+        cfg = (
+            trainer_conf.get("bg_dyn_cuboid_penalty", None)
+            if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bg_dyn_cuboid_penalty", None)
+        )
+        if cfg is None:
+            return {"enabled": False}
+        enabled = (
+            cfg.get("enabled", False) if hasattr(cfg, "get")
+            else getattr(cfg, "enabled", False)
+        )
+        if not enabled:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "lambda_max": float(
+                cfg.get("lambda", 0.05) if hasattr(cfg, "get")
+                else getattr(cfg, "lambda", 0.05)
+            ),
+            "warmup_iters": int(
+                cfg.get("lambda_warmup_iters", 5000) if hasattr(cfg, "get")
+                else getattr(cfg, "lambda_warmup_iters", 5000)
+            ),
+            "use_cuboid_mask": bool(
+                cfg.get("use_cuboid_mask", True) if hasattr(cfg, "get")
+                else getattr(cfg, "use_cuboid_mask", True)
+            ),
+        }
+
+    def _gather_active_tracks_for_batch(self, gpu_batch):
+        """Return (poses [T,4,4], sizes [T,3]) for tracks active at this batch.
+
+        Returns ``(None, None)`` when the model has no tracks, or when no
+        track is active at the batch's timestamp.
+        """
+        model = self.model
+        tracks_poses = getattr(model, "tracks_poses", None)
+        if not tracks_poses:
+            return None, None
+        tracks_active = getattr(model, "tracks_active", {})
+        tracks_meta = getattr(model, "tracks_metadata", {})
+        # Build {tid: size} from the metadata dict (size is the cuboid full extent).
+        size_map: dict = {}
+        for tid, meta in tracks_meta.items():
+            sz = meta.get("size") if isinstance(meta, dict) else None
+            if sz is not None:
+                size_map[tid] = sz
+        if not size_map:
+            return None, None
+
+        timestamp_us = int(getattr(gpu_batch, "timestamp_us", -1))
+        frame_idx = int(getattr(gpu_batch, "frame_idx", -1))
+        idx = model._resolve_pose_idx(timestamp_us, frame_idx if frame_idx >= 0 else None)
+        poses, sizes = collect_active_cuboids_for_frame(
+            tracks_poses, tracks_active, size_map, idx,
+        )
+        if poses.shape[0] == 0:
+            return None, None
+        return poses, sizes
+
+    def _maybe_fill_cuboid_mask(self, gpu_batch, trainer_conf) -> None:
+        """Project active cuboids → FTheta 2D mask → ``image_infos["dyn_mask_cuboid"]``.
+
+        No-op when ``bg_dyn_cuboid_penalty.use_cuboid_mask=false``, when the
+        model has no tracks, or when the batch lacks ``intrinsics_FThetaCameraModelParameters``.
+        """
+        cfg = self._bg_cuboid_conf(trainer_conf)
+        if not cfg["enabled"] or not cfg.get("use_cuboid_mask", True):
+            return
+        image_infos = getattr(gpu_batch, "image_infos", None)
+        if image_infos is None:
+            return
+        ftheta_params = getattr(gpu_batch, "intrinsics_FThetaCameraModelParameters", None)
+        if ftheta_params is None:
+            # T8/B3: only FTheta path implemented; pinhole AABB at ±90° clamps
+            # to image edges and would paint whole columns as dyn (defeats the
+            # mask). Quietly skip — sseg mask remains the fallback.
+            return
+        poses, sizes = self._gather_active_tracks_for_batch(gpu_batch)
+        if poses is None:
+            return
+
+        # T_to_world is c2w (camera→world, START pose). project_cuboids_to_mask
+        # expects world→cam; invert. B=1 in current trainer (one camera per iter).
+        T_c2w = gpu_batch.T_to_world[0]
+        T_w2c = torch.linalg.inv(T_c2w)
+        # Image dimensions from rgb_gt.
+        H = int(gpu_batch.rgb_gt.shape[1])
+        W = int(gpu_batch.rgb_gt.shape[2])
+        mask = project_cuboids_to_mask(
+            poses, sizes,
+            K=None, T_world2cam=T_w2c, H=H, W=W,
+            device=self.device,
+            ftheta_params=ftheta_params,
+        )
+        # compute_layered_l1_loss expects [B, H, W] float; we have [H, W] bool.
+        image_infos["dyn_mask_cuboid"] = mask.to(dtype=torch.float32).unsqueeze(0)
+
+    def _compute_bg_cuboid_penalty_term(self, gpu_batch, trainer_conf) -> torch.Tensor:
+        """Compute scalar bg-cuboid opacity penalty for this batch.
+
+        Returns ``torch.zeros(1, device=self.device)`` when disabled / no
+        tracks / lambda still at 0 — matches the dtype of the other loss
+        contributions in :meth:`get_losses`.
+        """
+        zero = torch.zeros(1, device=self.device)
+        cfg = self._bg_cuboid_conf(trainer_conf)
+        if not cfg["enabled"]:
+            return zero
+        lam = lambda_schedule(self.global_step, cfg["lambda_max"], cfg["warmup_iters"])
+        if lam == 0.0:
+            return zero
+        # Need access to the background layer's positions + density. Only
+        # meaningful in LayeredGaussians mode.
+        layers = getattr(self.model, "layers", None)
+        if layers is None or "background" not in layers:
+            return zero
+        poses, sizes = self._gather_active_tracks_for_batch(gpu_batch)
+        if poses is None:
+            return zero
+        bg_layer = layers["background"]
+        return compute_bg_cuboid_opacity_penalty(
+            bg_layer.positions, bg_layer.density,
+            poses.to(self.device), sizes.to(self.device),
+            lambda_val=lam,
         )
 
     @torch.cuda.nvtx.range("log_validation_iter")

@@ -20,6 +20,7 @@ from omegaconf import OmegaConf
 
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
+from threedgrut.model.bg_cuboid_loss import clamp_layer_positions_to_cuboids
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.strategy.mcmc import MCMCStrategy
 from threedgrut.utils.logger import logger
@@ -85,7 +86,61 @@ class LayeredMCMCStrategy(BaseStrategy):
                 step, scene_extent, train_dataset, batch, writer
             )
             any_updated = any_updated or updated
+        # T8/B3 — dynamic_rigids hard constraint: clamp positions back into
+        # owner cuboid after MCMC perturb/add. Pure no-op when conf gate off
+        # or when the layer / metadata are missing.
+        self._maybe_clamp_dynamic_rigids()
         return any_updated
+
+    def _maybe_clamp_dynamic_rigids(self) -> None:
+        """In-place clamp dynamic_rigids positions to ``|local| ≤ size/2``.
+
+        Gated by ``conf.trainer.bg_dyn_cuboid_penalty.dyn_clamp_to_cuboid``
+        (default false) so v2 baseline training stays byte-identical until
+        the dynfix yaml flips it on.
+        """
+        # BaseStrategy stores config under ``self.conf`` (base.py:25).
+        trainer_conf = getattr(self.conf, "trainer", None)
+        if trainer_conf is None:
+            return
+        cfg = (
+            trainer_conf.get("bg_dyn_cuboid_penalty", None)
+            if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bg_dyn_cuboid_penalty", None)
+        )
+        if cfg is None:
+            return
+        enabled = (
+            cfg.get("dyn_clamp_to_cuboid", False) if hasattr(cfg, "get")
+            else getattr(cfg, "dyn_clamp_to_cuboid", False)
+        )
+        if not enabled:
+            return
+
+        model = self.model
+        layers = getattr(model, "layers", None)
+        if layers is None or "dynamic_rigids" not in layers:
+            return
+        dyn = layers["dynamic_rigids"]
+        track_ids_buf = getattr(dyn, "track_ids", None)
+        if track_ids_buf is None or dyn.positions.numel() == 0:
+            return
+        tracks_meta = getattr(model, "tracks_metadata", {})
+        sizes_map: dict = {}
+        for tid, meta in tracks_meta.items():
+            if isinstance(meta, dict) and "size" in meta:
+                sizes_map[tid] = meta["size"]
+        if not sizes_map:
+            return
+        # The track-id integer assignment in dynamic_rigid_init mirrors
+        # sorted(instance_pts_dict.keys()); populate_tracks uses the same
+        # sort. tracks_poses keys are the authoritative source post-load.
+        tracks_poses = getattr(model, "tracks_poses", {})
+        track_keys_sorted = sorted(tracks_poses.keys()) if tracks_poses else sorted(sizes_map.keys())
+        with torch.no_grad():
+            clamp_layer_positions_to_cuboids(
+                dyn.positions.data, track_ids_buf, track_keys_sorted, sizes_map,
+            )
 
     def suspend(self) -> None:
         super().suspend()
