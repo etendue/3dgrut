@@ -1370,6 +1370,10 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         if "camera_idx" in batch:
             camera_idx = batch["camera_idx"]
             batch_dict["camera_idx"] = camera_idx[0].item() if isinstance(camera_idx, torch.Tensor) else int(camera_idx)
+        # T8.5.7: per-camera metric aggregation in render.py needs the logical
+        # camera id (string) at gpu_batch level. ``camera_id`` is already resolved
+        # at L1312 above; pass it through to Batch.camera_id.
+        batch_dict["camera_id"] = camera_id
 
         # --- T6F.1: ego mask (per-frame) → Batch.mask --------------------------
         # 训练分支 __getitem__ 把 cache 中的 ego mask 注入 batch_dict["valid"]
