@@ -1,8 +1,10 @@
 # T8 viser_gui_4d Bug List
 
-**最后更新：** 2026-05-24 10:52 GMT+8
-**对应代码版本：** main @ `b1752b3` (FTheta uint64 fix) + `d965b00` (Bug 3 guard removal) + `209886c` (Follow Ego)
-**Plan 文档：** [`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
+**最后更新：** 2026-05-25 19:33 GMT+8
+**对应代码版本：** worktree `worktree-distributed-beaver` @ `4de6658` (训练稳定性修复后) — **9/9 bug 全部关闭** (Phase B + E 12 commits + 稳定性修复 1 commit)
+**Plan 文档：**
+- 旧：[`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
+- B3 详细：[`/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md`](/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md)
 
 ---
 
@@ -59,13 +61,13 @@
 | ID | 名称 | 现状 | 优先级 |
 |---|---|---|---|
 | B1 | Play 时视角不跟 ego | ✅ **已修** (commit 209886c) | — |
-| B2 | cuboid 与 Gaussian 不重合 | ⚠️ **待修** (FTheta vs pinhole 投影) | P1 |
-| B3 | dynamic_rigids toggle 无效 | ⚠️ **代码侧已修但行为仍异常** | P1 |
+| B2 | cuboid 与 Gaussian 不重合 | ✅ **已修** (commit `2e12a1b` FTheta projector helper + Phase E.10 实测 wireframe 紧贴车) | — |
+| B3 | dynamic_rigids toggle 无效 | ✅ **已修** (Phase B + E 全套，commits `7f8bb17` → `7d5be05`) | — |
 | B4 | 训练只覆盖 ~2s 短 clip | ✅ **已修** (commit 1.9s → 19.9s 全时长 30k 重训) | — |
-| B5 | inject CLI 不该是新 ckpt 必需步骤 | ⚠️ **新 bug** | P2 |
-| B6 | viz_4d 中 ego trajectory 按 camera 拼接，非时间连续 | ⚠️ **新 bug** | P1 |
-| B7 | Active cuboids checkbox 取消后 Play 仍 render | ⚠️ **新 bug** | P2 |
-| B8 | Dynamic LiDAR checkbox 状态不对 | ⚠️ **新 bug，需澄清** | P3 |
+| B5 | inject CLI 不该是新 ckpt 必需步骤 | ✅ **已修** (commit `b1752b3` 修 uint64 + 1k smoke 实测 ckpt 自带 FTheta block 无需 inject) | — |
+| B6 | viz_4d 中 ego trajectory 按 camera 拼接，非时间连续 | ✅ **已修** (commit `46e643f`) | — |
+| B7 | Active cuboids checkbox 取消后 Play 仍 render | ✅ **已修** (commit `46e643f`) | — |
+| B8 | Dynamic LiDAR checkbox 状态不对 | ✅ **已修** (commit `46e643f`) | — |
 | B9 | FTheta extraction 在 numpy.uint64 上静默失败 | ✅ **已修** (commit b1752b3) | — |
 
 ---
@@ -87,48 +89,61 @@
 
 ---
 
-### ⚠️ B2 — cuboid 与 Gaussian 不重合（待修，P1）
+### ✅ B2 — cuboid 与 Gaussian 不重合（已修）
 
 **现象**：浏览器画面上 cuboid wireframe 与 Gaussian 渲染的真实物体（如白色卡车）在屏幕坐标上**偏移**，越靠边缘偏得越远。
-**根因（已确认）**：投影模型不一致
-- Gaussian backdrop 由 engine 走 **FTheta polynomial 多项式投影**（鱼眼，桶形畸变，140° FOV）
-- viser 自己画的 `add_line_segments` cuboid 走 **pinhole 投影**（Kaolin Camera fov）
-- 两套投影对同一个 3D 点会算出不同的 2D 像素位置
-- 诊断块 A.4 段已警告此点
 
-**修法（Phase D-a）**：
-- 新增 `threedgrut_playground/utils/ftheta_projector.py`，用 polynomial helper 在 Python 端把 cuboid 3D 边投到 FTheta 2D 像素
-- 渲染到 RGBA overlay 图，叠加在 Gaussian backdrop 之上
-- 关闭 viser line_segments 的 cuboid/frustum/track 路径
-- 工作量：~0.5d
+**根因**：投影模型不一致 — Gaussian backdrop 走 FTheta polynomial（鱼眼，140° FOV），viser 的 `add_line_segments` cuboid 走 pinhole（Kaolin Camera fov）。
 
-**用户实测**：✅ 未修（FTheta ckpt 上仍偏移）。
+**修复**：commit `2e12a1b` (FTheta projector helper) + Phase E.10 `5bc878c` (validate_frame_0 验证)
+- `threedgrut_playground/utils/ftheta_projector.py` — polynomial-based forward projection (`FthetaForwardProjector` + Shepperd 数值稳定 + `project_polylines` 含 polyline subdivision)
+- viser_gui_4d.py 中 cuboid wireframe path 已接入 FTheta
+- Phase E.10 frame-0 验证（`docs/T8_artifacts/E10_frame0_init/out_1_cuboids.png`）：蓝色 cuboid wireframe 紧贴前景银 SUV + 背景所有车的 box 都正确对位
+
+**用户实测（B3 1k ckpt viser）**：✅ 各 active cuboid wireframe 都跟实车对齐，无明显偏移。
 
 ---
 
-### ⚠️ B3 — dynamic_rigids toggle 无效（代码修了但行为仍异常，P1）
+### ✅ B3 — dynamic_rigids toggle 无效（已修，Phase B + E 完整链路）
 
-**现象**：
-- 浏览器 Gaussian Layers folder 勾掉 `dynamic_rigids` checkbox → 车辆/行人 Gaussian **不消失**
-- 勾掉 `background` checkbox → 车辆/行人 **跟着背景一起消失**
-- 终端日志 `[BUG3-DIAG]` 行确认 callback 真的触发，`enabled_layer_names` 真的被改
+**现象**：浏览器 Gaussian Layers folder 勾掉 `dynamic_rigids` checkbox → 车辆 Gaussian **不消失**；勾掉 `background` 反而车辆**跟着消失** → 视觉证据是车在 bg 层而非 dyn 层。
 
-**已做修复**：commit `d965b00`
-- `engine.py:1050` 移除了 `len(self.scene_mog.tracks_poses) > 0` guard，让所有 LayeredGaussians 都走 forward → fused_view → enabled_layer_names 过滤
-- `viser_gui_4d.py` toggle callback 加 `[BUG3-DIAG]` 运行时打印
+**追溯到的 6 个独立 bug**（Phase A → E 全部修完）：
 
-**新根因（已确认）**：训练时**动态车辆的 Gaussians 被分到了 `background` 层**，不是 `dynamic_rigids` 层。dynamic_mask 训练监督不够强 / 初始化分配不充分，导致车的密度高斯进了 background。
+| # | 根因 | 修复 commit | 文件 |
+|---|---|---|---|
+| 1 | **MCMC per-layer scoped, dynamic_mask 无层归属约束** | `7f8bb17` (Phase B) | `threedgrut/model/bg_cuboid_loss.py` 新增 3D opacity penalty，把 bg 层在 cuboid 内的粒子 push 到 dead 阈值 |
+| 2 | **NCore cuboid 旋转被丢弃** — `tracks_loader.py:195` 写死 `pose = np.eye(4)`，车辆 yaw 全部按 identity rot 处理 | `40875a5` (Phase E.2) | `tracks_loader.py:euler_xyz_to_rotation_matrix` 把 `bbox.rot` 解为 intrinsic XYZ Euler 写入 pose[:3,:3] |
+| 3 | **fused_view rotation 没复合** — E.2 让 pose 含旋转后，per-particle local rotation 仍按 world 轴解释 → MCMC 用 6 米巨型 scale 补偿方向错位 | `2987d12` (Phase E.2.b) | `layered_model.py:_transform_means_and_active` 新增 `q_world = q_pose ⊗ q_local` 复合 |
+| 4 | **Inactive 帧 pose 是 identity** — tracks_loader 用 `np.eye(4)` 初始化所有帧，inactive track 粒子被塌到 world 原点 | `368c87d` (Phase E.3) | `_transform_means_and_active` 返回 active_mask；fused_view 把 inactive 粒子 density 改 -50 → sigmoid≈0 |
+| 5 | **`track_ids` buffer ckpt roundtrip 丢失** — `MoG.get_model_parameters` 不存这个 buffer，viewer 加载后 `_transform_means` 拿不到 per-particle owner | `1594396` (Phase E.4) | `LayeredGaussians.get_model_parameters` + `init_from_checkpoint` 在 wrapper 层序列化 track_ids |
+| 6 | **Inference 自由相机无时间戳 fallback** — `timestamp_us<=0 and frame_id is None` 时不变换 dyn 位置 → 渲染崩 | `7d5be05` (Phase E.2.c) | per-track 各自找第一个 active 帧做 fallback pose |
 
-**新 ckpt（全时长 30k 重训）状态**：
-- 诊断显示 `dynamic_rigids` 仍有 200k 粒子，70 tracks 都有 frame_info coverage
-- 但视觉验证：勾掉 dynamic_rigids 车依然在 → 车的 Gaussian 仍然主要在 background
+**附加工具**：
+- `7f8bb17` (B7): `dyn_clamp_to_cuboid` 在 `_post_optimizer_step` 末尾把 dyn positions 钳回 `|local|≤size/2`
+- `7f8bb17` (B7): dataset 端 `dyn_mask_cuboid` 用 FTheta 投影替代 sseg
+- `add202a` (Phase A): `scripts/diagnose_bg_in_cuboid.py` 量化 bg 层粒子误入 cuboid 比例
+- `f446f43` (Phase E.1): `scripts/diagnose_dyn_per_cuboid.py` per-track alive_pct + outlier 距离
+- `b00dddf` (Phase E.5+E.6): `threedgrut/model/class_psnr.py` per-cuboid PSNR 指标，trainer/render.py 双路径接入 metrics.json
+- `5bc878c` (Phase E.10): `scripts/validate_frame_0.py` 把 cuboid wireframe / sseg / LiDAR init / Gaussian centers 同时投影到第一帧，验证 init 对齐
 
-**待修方向**：
-- 训练侧：strengthen dynamic_mask 监督（更高权重）/ adjust dynamic_rigid 初始化策略
-- 评估工具：写诊断脚本统计 background 层粒子在 cuboid 内的占比（验证假设）
-- 可能跟 V3-P1 ExposureModel / bilateral grid 优化合并研究
+**KPI 验证**（A800 1k smoke `B3_E2b_1k_20260525_114457`）：
 
-**用户实测**：⚠️ 视觉无变化。
+| 指标 | 30k baseline | 5k broken (no E.2.b) | **1k Fix (Phase E)** |
+|---|---:|---:|---:|
+| bg_inside_pct | 10.17 % | 5.72 % | (待 30k 重测) |
+| dyn alive_pct | n/a | 22.0 % | **84 %** ✅ |
+| dyn scale max | n/a | 6.88 m | **0.22 m** ✅ (-31×) |
+| dyn outside_cuboid | n/a | 2281 m max | **0 m** ✅ |
+| mean_class_psnr | 18.73 dB | 17.82 dB | **19.13 dB** ✅ +0.40 |
+| automobile_psnr | 18.70 | 17.61 | **19.01** ✅ |
+| heavy_truck_psnr | 18.52 | 20.16 | **20.26** ✅ |
+
+**视觉验证（用户实测，ThinkPad viser + 1k ckpt）**：✅ 勾掉 `dynamic_rigids` checkbox → 车辆区域清空；勾掉 `background` checkbox → 车辆保留。**toggle 双向独立工作**。
+
+**Frame-0 投影验证**（`docs/T8_artifacts/E10_frame0_init/*.png`）：cuboid wireframe 紧贴 SUV / sseg mask 完整覆盖车身 / dyn LiDAR 点聚集在车上 / bg 点避开 cuboid 内部 → init 阶段四套数据完全对齐。
+
+**Mac 单测**：342 passed, 1 skipped, 0 regression（新增 88 个测试覆盖 E.1-E.6 + E.2.b/c + E.10）。
 
 ---
 
@@ -148,103 +163,53 @@
 
 ---
 
-### ⚠️ B5 — inject CLI 不该是新 ckpt 必需步骤（新 bug，P2）
+### ✅ B5 — inject CLI 不该是新 ckpt 必需步骤（已修）
 
-**现象**：理论上 `trainer.save_checkpoint` 在 `viz_4d.enabled=true` 时自动调 `extract_4d_metadata`，写完整 schema_v2 + FTheta。但本次训练后 ckpt 里 `FTheta present: False`，必须额外跑 `python -m threedgrut.viz.inject` 才能补 FTheta。
+**现象**：理论上 `trainer.save_checkpoint` 在 `viz_4d.enabled=true` 时自动调 `extract_4d_metadata`，写完整 schema_v2 + FTheta。但旧训练后 ckpt 里 `FTheta present: False`，必须额外跑 `python -m threedgrut.viz.inject` 才能补 FTheta。
 
-**根因**：是 B9 同源（uint64 异常）的连锁反应——`extract_4d_metadata` 在训练 save 路径下静默落到 `ftheta_dict=None`，schema_v2 占位但 FTheta 8-key 没填。
+**根因**：B9 同源（uint64 异常）的连锁反应—`extract_4d_metadata` 在训练 save 路径下静默落到 `ftheta_dict=None`，schema_v2 占位但 FTheta 8-key 没填。
 
-**已做修复（部分）**：commit `b1752b3` 修了 numpy.uint64 → int64 cast。但新训练**没用这版代码**，所以本次 ckpt 仍要 inject。
+**修复**：commit `b1752b3` 修了 numpy.uint64 → int64 cast。
 
-**待验证**：
-- 下次训练应直接产出含 FTheta 的 ckpt，不需要 inject
-- 加一个单测：模拟 NCore FTheta camera_model → extract → 验证 ftheta_dict 8 keys 全齐
-
-**优先级 P2**：现 ckpt 用 inject workaround 可用，下次训练验证 b1752b3 修复链是否打通。
+**实测验证（Phase E 1k smoke `B3_E2b_1k_20260525_114457`）**：✅ 新训练 ckpt `B3_E2b_1k.pt` 直接含完整 `viz_4d` block (schema_v2 + 8-key FTheta + 70 tracks)，**无需 inject** 就能直接被 viser_gui_4d 加载并正确渲染。`[T8.13-DIAG]` 启动日志确认 `tracks_poses dict: 70 tracks`、`FTheta intrinsics 已加载 (resolution=(1920, 1080), max_angle=1.221rad)`。
 
 ---
 
-### ⚠️ B6 — viz_4d ego trajectory 按 camera 拼接，非时间连续（新 bug，P1）
+### ✅ B6 — viz_4d ego trajectory 按 camera 拼接，非时间连续（已修）
 
-**现象**：用户实测 Play 时**视角在 0-5s 是前视，5-10s 切到后视，10-15s 切其它相机，15-20s 又回到后视**。trajectory 不连续，完全不是真实 ego 飘动。
+**现象**：旧版 Play 时**视角在 0-5s 是前视，5-10s 切到后视**…完全不是真实 ego 飘动。
 
-**根因（已确认）**：[`threedgrut/viz/metadata.py:_extract_ego` L156-179](threedgrut/viz/metadata.py)
-```python
-for camera_id in dataset.camera_ids:
-    frame_indices = dataset.camera_train_frame_indices[camera_id]
-    cam_ts = ...frame_indices, end_idx
-    all_ts.append(cam_ts)
-ts_np = np.concatenate(all_ts)  # ← 按 camera 顺序拼接，不按时间排序
-```
-同样 `dataset.get_poses()` 也按 camera_ids 循环 → 拼出来的 `ego_poses_c2w` 跟 `frame_timestamps_us` 是 [front_wide_524帧][rear_tele_524帧][cross_left_524帧][cross_right_524帧][rear_left_524帧]，**而不是按时间排序的真 ego trajectory**。
+**根因**：`threedgrut/viz/metadata.py:_extract_ego` 按 `camera_ids` 循环 concat 所有相机的 timestamps + poses，没去重也没按时间排。`n_ego_frames: 2623 = 524 × 5 camera` 而非 unique 525。
 
-**新 ckpt 诊断证据**：`n_ego_frames: 2623 = 524 + 525 + 525 + 525 + 524`（5 camera 各全帧）。但 ego 在物理上同一时刻只有 **一个** pose，本应 dedupe → ~525 unique time stamps。
+**修复**：commit `46e643f` (B6+B7+B8 同 PR)
+- `_extract_ego` 只取 primary camera 的帧（或按 timestamp dedupe + sort）
+- 单测 mock 5 camera × 524 帧 → 验证输出 ≤ 525 unique stamps
 
-**修法**：
-- `_extract_ego` 改成只取 primary camera 的帧（或者按 timestamp dedupe + sort）
-- 单测：mock 5 camera × 524 帧的 dataset，验证输出 `ego_poses_c2w.shape[0] == 524`（不是 2623）
-- 文件：[`threedgrut/viz/metadata.py:143-191`](threedgrut/viz/metadata.py)
-
-**用户实测**：⚠️ 视角切换体验非常突兀。
+**用户实测（B3 1k ckpt）**：✅ ego trajectory 流畅连续，Play 不再跨相机跳切。
 
 ---
 
-### ⚠️ B7 — Active cuboids checkbox 取消后 Play 仍 render（新 bug，P2）
+### ✅ B7 — Active cuboids checkbox 取消后 Play 仍 render（已修）
 
 **现象**：勾掉 Visibility "Active cuboids" checkbox 后，**Play 一推进帧，cuboid 又重新出现**在画面里。
 
-**根因（已确认）**：[`threedgrut_playground/viser_gui_4d.py:_update_active_cuboids` L686-704](threedgrut_playground/viser_gui_4d.py)
-```python
-def _update_active_cuboids(self, frame_idx):
-    pts, cols = self._build_cuboid_edges(frame_idx)
-    if self.h_cuboid_lines is not None:
-        self.h_cuboid_lines.remove()   # ← 删旧
-        self.h_cuboid_lines = None
-    if pts.shape[0] == 0:
-        return
-    self.h_cuboid_lines = self.server.scene.add_line_segments(...)
-    # ↑ 重新 add 默认 visible=True, 没读 self.show_cuboids.value
-```
-对比 `_update_dynamic_lidar` L546-570 是有 `prev_visible = self.h_dyn_pts.visible` 保留 + re-apply 的，**cuboid 路径漏写了这个 preserve 逻辑**。
+**根因**：`_update_active_cuboids` 每帧 remove + re-add `h_cuboid_lines`，新 line_segments 默认 visible=True，没读 `self.show_cuboids.value`。
 
-**修法**：在 `_update_active_cuboids` L692 / L700 加：
-```python
-prev_visible = (self.h_cuboid_lines.visible 
-                if self.h_cuboid_lines is not None 
-                else bool(getattr(self, 'show_cuboids', None) and self.show_cuboids.value))
-... # remove + add ...
-self.h_cuboid_lines.visible = prev_visible
-```
-镜像 `_update_dynamic_lidar` 的 L556-570 模式，1 行改动即可。
+**修复**：commit `46e643f` (B6+B7+B8 同 PR) — `_update_active_cuboids` 加 `prev_visible` preserve 逻辑，镜像 `_update_dynamic_lidar` 模式。
 
-**优先级 P2**：很小很明显，跟 B6 同一个 PR 即可。
+**用户实测（B3 1k ckpt）**：✅ 勾掉 Active cuboids 后 Play 不再重新出现 wireframe。
 
 ---
 
-### ⚠️ B8 — Dynamic LiDAR 初始 checkbox 不勾但点云已显示（新 bug，P2）
+### ✅ B8 — Dynamic LiDAR 初始 checkbox 不勾但点云已显示（已修）
 
-**用户实测（2026-05-24 已澄清，含截图）**：
-- 初始状态 Visibility folder 里 "Dynamic LiDAR" checkbox **未勾选**（默认 False）
-- 但浏览器画面上 **LiDAR 点云已经在显示**（路面上密集白色方块）
-- 这是个初始状态不一致的 bug，不是 toggle 失效
+**现象**：初始状态 Visibility folder 里 "Dynamic LiDAR" checkbox 未勾选，但浏览器画面上 LiDAR 点云已显示。
 
-**根因（已确认）**：[`viser_gui_4d.py:_update_dynamic_lidar` L546-570](threedgrut_playground/viser_gui_4d.py)
-```python
-prev_visible = (self.h_dyn_pts.visible
-                if self.h_dyn_pts is not None
-                else True)                # ← 第一次调用时 h_dyn_pts 为 None,
-                                          #    硬编码 True 忽视了 show_dyn_pts.value
-```
-而 `_on_time_change(t_us_first, source="init")` 在 `__init__` 末尾被显式调用，会立刻调 `_update_dynamic_lidar` → 第一次进来 `h_dyn_pts is None` → `prev_visible=True` → 点云被加进 scene 且 visible=True，跟 checkbox 默认 False 不同步。
+**根因**：`_update_dynamic_lidar` 中 `prev_visible` 在首次调用时 `h_dyn_pts is None` → 硬编码 fallback `True`，忽视 `show_dyn_pts.value`。
 
-**修法**：把 `prev_visible` 默认值从 `True` 改成 checkbox 实际值
-```python
-prev_visible = (self.h_dyn_pts.visible
-                if self.h_dyn_pts is not None
-                else bool(getattr(self, 'show_dyn_pts', None) and self.show_dyn_pts.value))
-```
+**修复**：commit `46e643f` (B6+B7+B8 同 PR) — `prev_visible` 默认值从硬编码 `True` 改为 `bool(getattr(self, 'show_dyn_pts', None) and self.show_dyn_pts.value)`。
 
-**优先级 P2**：影响初始体验，跟 B7 同一类（"per-frame re-add 不保留 visibility flag"）。**B7 和 B8 应同一 PR 修**。
+**用户实测（B3 1k ckpt）**：✅ 初始 checkbox 状态跟实际渲染一致。
 
 ---
 
@@ -273,10 +238,32 @@ NCore FTheta `params.resolution` 是 `numpy.uint64`（e.g. `[1920, 1080]`），t
 ## 提交计划
 
 按优先级合并：
-1. **下一个 PR**：B6 (ego trajectory dedupe) + B7 (cuboid visibility preserve) + B8 (待澄清, 同源 fix) — 都改 metadata.py / viser_gui_4d.py，一致主题
-2. **再下一个 PR**：B2 (FTheta cuboid overlay) — 工作量较大（~0.5d），独立 PR
-3. **持续**：B3 训练侧研究（与 V3-P1 合并）
-4. **验证**：B5 在下次训练（不需要 inject）
+1. ✅ **PR #1**：B6 (ego trajectory dedupe) + B7 (cuboid visibility preserve) + B8 (LiDAR init state) — commit `46e643f`，三 bug 同 PR
+2. ✅ **PR #2**：B3 完整修复链（Phase B + E.1-E.10 + E.2.b + E.2.c）— 12 commits 从 `add202a` → `7d5be05`
+3. ✅ **PR #3**：B2 FTheta cuboid overlay — commit `2e12a1b` (forward projection helper) + Phase E.10 验证 wireframe 与 FTheta backdrop 对齐
+4. ✅ **B5 自动验证**：1k smoke `B3_E2b_1k.pt` 实测无需 inject 即含 FTheta block（commit `b1752b3` 修复链打通）
+
+## 9-bug 最终状态 ✅ 9/9 全闭合
+
+| ID | 现状 | 完成 PR |
+|---|---|---|
+| B1 Follow Ego | ✅ | `209886c` |
+| B2 cuboid 与 Gaussian 不重合 | ✅ | `2e12a1b` + Phase E.10 验证 |
+| **B3 dynamic_rigids toggle 无效** | ✅ | `7f8bb17` → `7d5be05` (12 commits) |
+| B4 训练只覆盖 ~2s 短 clip | ✅ | `bug4_v2_full_30k_20260523_184318` |
+| B5 inject CLI 必需 | ✅ | `b1752b3` + 1k smoke 自动产 FTheta ckpt 验证 |
+| B6 ego trajectory 按 camera 拼接 | ✅ | `46e643f` |
+| B7 Active cuboids checkbox 取消后再现 | ✅ | `46e643f` |
+| B8 Dynamic LiDAR 初始状态错误 | ✅ | `46e643f` |
+| B9 FTheta extraction uint64 静默失败 | ✅ | `b1752b3` |
+
+**T8 viser_gui_4d bug list 全部关闭** — 用户在 B3_E2b_1k ckpt + Phase E 代码上实测确认 9 个 bug 行为均符合预期。
+
+**最终 30k 全量训练验收（2026-05-26，`4de6658` + dynfix yaml）**：
+- A800 30k ckpt：`mean_cc_psnr_masked = 25.35 dB`（gate 24.35 ✅），`mean_class_psnr = 19.73 dB` ✅
+- ThinkPad RTX 4090 viser_gui_4d 视觉验证：用户确认"基本符合预期" ✅
+  - 勾掉 `dynamic_rigids` → 车辆区域清空 ✅
+  - 勾掉 `background` → 车辆保留（路面消失）✅
 
 ## 验证步骤模板
 

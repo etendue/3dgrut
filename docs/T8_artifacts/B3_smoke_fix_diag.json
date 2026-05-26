@@ -1,0 +1,863 @@
+{
+  "ckpt": "/root/work/yusun/ncore-nurec/output/B3_smoke_fix_20260524_161643/B3_smoke_fix_20260524_161643/pai_9ae151dc-e87b-41a7-8e85-71772f9603d7-2405_162212/ckpt_last.pt",
+  "n_tracks": 70,
+  "max_frames_per_track": 5,
+  "per_layer_total": {
+    "background": 1000000,
+    "road": 200000,
+    "dynamic_rigids": 700000
+  },
+  "per_layer_inside_any_cuboid": {
+    "background": 54873,
+    "road": 8369,
+    "dynamic_rigids": 700000
+  },
+  "per_layer_inside_pct": {
+    "background": 5.4873,
+    "road": 4.1845,
+    "dynamic_rigids": 100.0
+  },
+  "dynamic_rigids_outside_own_cuboid_pct": null,
+  "per_track_breakdown": [
+    {
+      "track_id": "1",
+      "size": [
+        4.449955940246582,
+        1.9543752670288086,
+        1.9424192905426025
+      ],
+      "n_active_frames": 16,
+      "n_frames_sampled": 5,
+      "background_inside": 1,
+      "road_inside": 0
+    },
+    {
+      "track_id": "13",
+      "size": [
+        4.227573394775391,
+        1.8702179193496704,
+        1.6251462697982788
+      ],
+      "n_active_frames": 582,
+      "n_frames_sampled": 5,
+      "background_inside": 28,
+      "road_inside": 0
+    },
+    {
+      "track_id": "133",
+      "size": [
+        4.4103546142578125,
+        2.005967378616333,
+        1.8733484745025635
+      ],
+      "n_active_frames": 599,
+      "n_frames_sampled": 5,
+      "background_inside": 32,
+      "road_inside": 0
+    },
+    {
+      "track_id": "16",
+      "size": [
+        4.188040733337402,
+        1.9683421850204468,
+        1.6491119861602783
+      ],
+      "n_active_frames": 522,
+      "n_frames_sampled": 5,
+      "background_inside": 119,
+      "road_inside": 0
+    },
+    {
+      "track_id": "164",
+      "size": [
+        4.449204444885254,
+        2.053366184234619,
+        1.9751086235046387
+      ],
+      "n_active_frames": 578,
+      "n_frames_sampled": 5,
+      "background_inside": 32,
+      "road_inside": 0
+    },
+    {
+      "track_id": "165",
+      "size": [
+        7.98745584487915,
+        2.764798402786255,
+        3.274207592010498
+      ],
+      "n_active_frames": 599,
+      "n_frames_sampled": 5,
+      "background_inside": 1797,
+      "road_inside": 7
+    },
+    {
+      "track_id": "178",
+      "size": [
+        3.9644017219543457,
+        1.8845746517181396,
+        1.610906958580017
+      ],
+      "n_active_frames": 50,
+      "n_frames_sampled": 5,
+      "background_inside": 2,
+      "road_inside": 0
+    },
+    {
+      "track_id": "18",
+      "size": [
+        4.141666412353516,
+        1.9365242719650269,
+        1.671433925628662
+      ],
+      "n_active_frames": 548,
+      "n_frames_sampled": 5,
+      "background_inside": 83,
+      "road_inside": 1
+    },
+    {
+      "track_id": "2",
+      "size": [
+        4.6512770652771,
+        2.043358564376831,
+        2.0009799003601074
+      ],
+      "n_active_frames": 132,
+      "n_frames_sampled": 5,
+      "background_inside": 41,
+      "road_inside": 1
+    },
+    {
+      "track_id": "205",
+      "size": [
+        4.609431266784668,
+        2.073272228240967,
+        1.785412311553955
+      ],
+      "n_active_frames": 33,
+      "n_frames_sampled": 5,
+      "background_inside": 27,
+      "road_inside": 0
+    },
+    {
+      "track_id": "207",
+      "size": [
+        4.026004791259766,
+        1.896867275238037,
+        1.6369081735610962
+      ],
+      "n_active_frames": 152,
+      "n_frames_sampled": 5,
+      "background_inside": 54,
+      "road_inside": 0
+    },
+    {
+      "track_id": "21",
+      "size": [
+        3.9450345039367676,
+        1.860498309135437,
+        1.539345145225525
+      ],
+      "n_active_frames": 491,
+      "n_frames_sampled": 5,
+      "background_inside": 29,
+      "road_inside": 0
+    },
+    {
+      "track_id": "216",
+      "size": [
+        4.461453437805176,
+        2.0599546432495117,
+        1.8687466382980347
+      ],
+      "n_active_frames": 12,
+      "n_frames_sampled": 5,
+      "background_inside": 2,
+      "road_inside": 0
+    },
+    {
+      "track_id": "237",
+      "size": [
+        4.1166181564331055,
+        1.8960654735565186,
+        1.6365816593170166
+      ],
+      "n_active_frames": 114,
+      "n_frames_sampled": 5,
+      "background_inside": 2,
+      "road_inside": 0
+    },
+    {
+      "track_id": "24",
+      "size": [
+        5.819046974182129,
+        2.450766086578369,
+        2.5042543411254883
+      ],
+      "n_active_frames": 598,
+      "n_frames_sampled": 5,
+      "background_inside": 24491,
+      "road_inside": 334
+    },
+    {
+      "track_id": "243",
+      "size": [
+        4.390478134155273,
+        2.0310897827148438,
+        1.597130537033081
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 26,
+      "road_inside": 0
+    },
+    {
+      "track_id": "244",
+      "size": [
+        4.697473526000977,
+        1.9544715881347656,
+        1.4812694787979126
+      ],
+      "n_active_frames": 581,
+      "n_frames_sampled": 5,
+      "background_inside": 3051,
+      "road_inside": 1932
+    },
+    {
+      "track_id": "259",
+      "size": [
+        4.479860305786133,
+        1.9477472305297852,
+        1.6550886631011963
+      ],
+      "n_active_frames": 563,
+      "n_frames_sampled": 5,
+      "background_inside": 1787,
+      "road_inside": 357
+    },
+    {
+      "track_id": "274",
+      "size": [
+        5.914828777313232,
+        2.5800912380218506,
+        2.7077462673187256
+      ],
+      "n_active_frames": 129,
+      "n_frames_sampled": 5,
+      "background_inside": 33,
+      "road_inside": 0
+    },
+    {
+      "track_id": "278",
+      "size": [
+        3.924778938293457,
+        1.8184956312179565,
+        1.6100152730941772
+      ],
+      "n_active_frames": 9,
+      "n_frames_sampled": 5,
+      "background_inside": 0,
+      "road_inside": 0
+    },
+    {
+      "track_id": "282",
+      "size": [
+        5.0102925300598145,
+        2.245770215988159,
+        2.208200216293335
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 22,
+      "road_inside": 0
+    },
+    {
+      "track_id": "288",
+      "size": [
+        4.302740573883057,
+        1.9113178253173828,
+        1.6416975259780884
+      ],
+      "n_active_frames": 78,
+      "n_frames_sampled": 5,
+      "background_inside": 30,
+      "road_inside": 1
+    },
+    {
+      "track_id": "291",
+      "size": [
+        4.274736404418945,
+        1.9807322025299072,
+        1.710848093032837
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 1,
+      "road_inside": 0
+    },
+    {
+      "track_id": "292",
+      "size": [
+        4.671784400939941,
+        2.168330192565918,
+        1.8059828281402588
+      ],
+      "n_active_frames": 9,
+      "n_frames_sampled": 5,
+      "background_inside": 5,
+      "road_inside": 0
+    },
+    {
+      "track_id": "293",
+      "size": [
+        5.153409957885742,
+        2.1531009674072266,
+        1.8979418277740479
+      ],
+      "n_active_frames": 519,
+      "n_frames_sampled": 5,
+      "background_inside": 46,
+      "road_inside": 272
+    },
+    {
+      "track_id": "307",
+      "size": [
+        4.191298484802246,
+        1.9386646747589111,
+        1.644301414489746
+      ],
+      "n_active_frames": 12,
+      "n_frames_sampled": 5,
+      "background_inside": 5,
+      "road_inside": 0
+    },
+    {
+      "track_id": "313",
+      "size": [
+        4.380037307739258,
+        2.1058855056762695,
+        1.779482126235962
+      ],
+      "n_active_frames": 12,
+      "n_frames_sampled": 5,
+      "background_inside": 22,
+      "road_inside": 0
+    },
+    {
+      "track_id": "316",
+      "size": [
+        4.204338073730469,
+        1.8789912462234497,
+        1.5147103071212769
+      ],
+      "n_active_frames": 479,
+      "n_frames_sampled": 5,
+      "background_inside": 605,
+      "road_inside": 632
+    },
+    {
+      "track_id": "323",
+      "size": [
+        4.344741344451904,
+        1.946833848953247,
+        1.7961156368255615
+      ],
+      "n_active_frames": 462,
+      "n_frames_sampled": 5,
+      "background_inside": 16,
+      "road_inside": 9
+    },
+    {
+      "track_id": "324",
+      "size": [
+        4.122942924499512,
+        1.9153077602386475,
+        1.630033254623413
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 15,
+      "road_inside": 0
+    },
+    {
+      "track_id": "327",
+      "size": [
+        4.413228511810303,
+        2.067999839782715,
+        1.7824907302856445
+      ],
+      "n_active_frames": 27,
+      "n_frames_sampled": 5,
+      "background_inside": 16,
+      "road_inside": 0
+    },
+    {
+      "track_id": "328",
+      "size": [
+        4.391538143157959,
+        1.9872013330459595,
+        1.6064479351043701
+      ],
+      "n_active_frames": 15,
+      "n_frames_sampled": 5,
+      "background_inside": 1,
+      "road_inside": 0
+    },
+    {
+      "track_id": "338",
+      "size": [
+        3.83064603805542,
+        1.7973217964172363,
+        1.5246379375457764
+      ],
+      "n_active_frames": 102,
+      "n_frames_sampled": 5,
+      "background_inside": 59,
+      "road_inside": 0
+    },
+    {
+      "track_id": "339",
+      "size": [
+        3.974677324295044,
+        1.8005250692367554,
+        1.5555243492126465
+      ],
+      "n_active_frames": 419,
+      "n_frames_sampled": 5,
+      "background_inside": 17,
+      "road_inside": 0
+    },
+    {
+      "track_id": "342",
+      "size": [
+        4.153930187225342,
+        1.9816783666610718,
+        1.6758482456207275
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 0,
+      "road_inside": 0
+    },
+    {
+      "track_id": "351",
+      "size": [
+        4.000615119934082,
+        1.8079392910003662,
+        1.511157512664795
+      ],
+      "n_active_frames": 411,
+      "n_frames_sampled": 5,
+      "background_inside": 21,
+      "road_inside": 2
+    },
+    {
+      "track_id": "356",
+      "size": [
+        4.112274646759033,
+        1.9387917518615723,
+        1.7838959693908691
+      ],
+      "n_active_frames": 366,
+      "n_frames_sampled": 5,
+      "background_inside": 33,
+      "road_inside": 0
+    },
+    {
+      "track_id": "359",
+      "size": [
+        4.1728715896606445,
+        1.9672317504882812,
+        1.6591167449951172
+      ],
+      "n_active_frames": 24,
+      "n_frames_sampled": 5,
+      "background_inside": 12,
+      "road_inside": 0
+    },
+    {
+      "track_id": "371",
+      "size": [
+        3.994361400604248,
+        1.8398443460464478,
+        1.5694904327392578
+      ],
+      "n_active_frames": 378,
+      "n_frames_sampled": 5,
+      "background_inside": 33,
+      "road_inside": 0
+    },
+    {
+      "track_id": "372",
+      "size": [
+        4.3510847091674805,
+        1.8889373540878296,
+        1.5125796794891357
+      ],
+      "n_active_frames": 261,
+      "n_frames_sampled": 5,
+      "background_inside": 330,
+      "road_inside": 188
+    },
+    {
+      "track_id": "373",
+      "size": [
+        4.063886642456055,
+        1.8982343673706055,
+        1.6124013662338257
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 2,
+      "road_inside": 0
+    },
+    {
+      "track_id": "377",
+      "size": [
+        4.018982410430908,
+        1.8960330486297607,
+        1.6815141439437866
+      ],
+      "n_active_frames": 15,
+      "n_frames_sampled": 5,
+      "background_inside": 15,
+      "road_inside": 0
+    },
+    {
+      "track_id": "378",
+      "size": [
+        4.341405868530273,
+        1.9942355155944824,
+        1.6467951536178589
+      ],
+      "n_active_frames": 15,
+      "n_frames_sampled": 5,
+      "background_inside": 18,
+      "road_inside": 0
+    },
+    {
+      "track_id": "383",
+      "size": [
+        4.038956642150879,
+        1.8229162693023682,
+        1.6782171726226807
+      ],
+      "n_active_frames": 102,
+      "n_frames_sampled": 5,
+      "background_inside": 83,
+      "road_inside": 0
+    },
+    {
+      "track_id": "39",
+      "size": [
+        4.536431312561035,
+        1.9930452108383179,
+        1.927253246307373
+      ],
+      "n_active_frames": 55,
+      "n_frames_sampled": 5,
+      "background_inside": 8,
+      "road_inside": 0
+    },
+    {
+      "track_id": "398",
+      "size": [
+        4.427660942077637,
+        1.8704864978790283,
+        1.5268287658691406
+      ],
+      "n_active_frames": 102,
+      "n_frames_sampled": 5,
+      "background_inside": 105,
+      "road_inside": 16
+    },
+    {
+      "track_id": "405",
+      "size": [
+        12.4501314163208,
+        3.0791172981262207,
+        3.524097204208374
+      ],
+      "n_active_frames": 263,
+      "n_frames_sampled": 5,
+      "background_inside": 14780,
+      "road_inside": 2376
+    },
+    {
+      "track_id": "41",
+      "size": [
+        4.090442180633545,
+        1.871651530265808,
+        1.6130839586257935
+      ],
+      "n_active_frames": 465,
+      "n_frames_sampled": 5,
+      "background_inside": 9,
+      "road_inside": 0
+    },
+    {
+      "track_id": "414",
+      "size": [
+        4.924201011657715,
+        2.020900249481201,
+        1.741719126701355
+      ],
+      "n_active_frames": 9,
+      "n_frames_sampled": 5,
+      "background_inside": 25,
+      "road_inside": 0
+    },
+    {
+      "track_id": "43",
+      "size": [
+        4.109844207763672,
+        1.9045288562774658,
+        1.546722173690796
+      ],
+      "n_active_frames": 492,
+      "n_frames_sampled": 5,
+      "background_inside": 46,
+      "road_inside": 0
+    },
+    {
+      "track_id": "449",
+      "size": [
+        5.108844757080078,
+        2.0470943450927734,
+        1.9309742450714111
+      ],
+      "n_active_frames": 159,
+      "n_frames_sampled": 5,
+      "background_inside": 103,
+      "road_inside": 0
+    },
+    {
+      "track_id": "456",
+      "size": [
+        4.381436347961426,
+        2.004892349243164,
+        1.7172470092773438
+      ],
+      "n_active_frames": 24,
+      "n_frames_sampled": 5,
+      "background_inside": 4,
+      "road_inside": 0
+    },
+    {
+      "track_id": "458",
+      "size": [
+        4.83012580871582,
+        1.9305555820465088,
+        1.549763560295105
+      ],
+      "n_active_frames": 21,
+      "n_frames_sampled": 5,
+      "background_inside": 177,
+      "road_inside": 6
+    },
+    {
+      "track_id": "467",
+      "size": [
+        4.056346416473389,
+        1.9129505157470703,
+        1.692851185798645
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 12,
+      "road_inside": 0
+    },
+    {
+      "track_id": "47",
+      "size": [
+        5.403167247772217,
+        2.2842953205108643,
+        2.362499237060547
+      ],
+      "n_active_frames": 587,
+      "n_frames_sampled": 5,
+      "background_inside": 83,
+      "road_inside": 0
+    },
+    {
+      "track_id": "473",
+      "size": [
+        4.435306549072266,
+        1.8972965478897095,
+        1.7196779251098633
+      ],
+      "n_active_frames": 129,
+      "n_frames_sampled": 5,
+      "background_inside": 2,
+      "road_inside": 0
+    },
+    {
+      "track_id": "476",
+      "size": [
+        4.680306434631348,
+        1.8932125568389893,
+        1.5271224975585938
+      ],
+      "n_active_frames": 57,
+      "n_frames_sampled": 5,
+      "background_inside": 160,
+      "road_inside": 14
+    },
+    {
+      "track_id": "498",
+      "size": [
+        4.408829689025879,
+        1.9270395040512085,
+        1.5482181310653687
+      ],
+      "n_active_frames": 9,
+      "n_frames_sampled": 5,
+      "background_inside": 30,
+      "road_inside": 2
+    },
+    {
+      "track_id": "502",
+      "size": [
+        4.34291934967041,
+        1.909193992614746,
+        1.6372284889221191
+      ],
+      "n_active_frames": 65,
+      "n_frames_sampled": 5,
+      "background_inside": 71,
+      "road_inside": 6
+    },
+    {
+      "track_id": "521",
+      "size": [
+        4.1815505027771,
+        1.9259653091430664,
+        1.4861211776733398
+      ],
+      "n_active_frames": 47,
+      "n_frames_sampled": 5,
+      "background_inside": 229,
+      "road_inside": 143
+    },
+    {
+      "track_id": "532",
+      "size": [
+        4.64738655090332,
+        1.9191703796386719,
+        1.5275660753250122
+      ],
+      "n_active_frames": 26,
+      "n_frames_sampled": 5,
+      "background_inside": 248,
+      "road_inside": 9
+    },
+    {
+      "track_id": "54",
+      "size": [
+        4.550816059112549,
+        1.8974311351776123,
+        1.4910893440246582
+      ],
+      "n_active_frames": 48,
+      "n_frames_sampled": 5,
+      "background_inside": 5,
+      "road_inside": 0
+    },
+    {
+      "track_id": "546",
+      "size": [
+        4.243784427642822,
+        1.9887032508850098,
+        1.6095912456512451
+      ],
+      "n_active_frames": 9,
+      "n_frames_sampled": 5,
+      "background_inside": 0,
+      "road_inside": 0
+    },
+    {
+      "track_id": "547",
+      "size": [
+        4.271026134490967,
+        1.9261975288391113,
+        1.5794744491577148
+      ],
+      "n_active_frames": 6,
+      "n_frames_sampled": 5,
+      "background_inside": 242,
+      "road_inside": 295
+    },
+    {
+      "track_id": "549",
+      "size": [
+        4.143482208251953,
+        1.929381012916565,
+        1.587293267250061
+      ],
+      "n_active_frames": 8,
+      "n_frames_sampled": 5,
+      "background_inside": 60,
+      "road_inside": 0
+    },
+    {
+      "track_id": "59",
+      "size": [
+        4.041896343231201,
+        1.852799892425537,
+        1.5726414918899536
+      ],
+      "n_active_frames": 531,
+      "n_frames_sampled": 5,
+      "background_inside": 54,
+      "road_inside": 0
+    },
+    {
+      "track_id": "60",
+      "size": [
+        4.272555351257324,
+        1.9456486701965332,
+        1.7007418870925903
+      ],
+      "n_active_frames": 78,
+      "n_frames_sampled": 5,
+      "background_inside": 18,
+      "road_inside": 0
+    },
+    {
+      "track_id": "7",
+      "size": [
+        4.413279056549072,
+        2.025759220123291,
+        1.6853983402252197
+      ],
+      "n_active_frames": 571,
+      "n_frames_sampled": 5,
+      "background_inside": 6385,
+      "road_inside": 1952
+    },
+    {
+      "track_id": "94",
+      "size": [
+        4.048031330108643,
+        1.9164845943450928,
+        1.6850271224975586
+      ],
+      "n_active_frames": 578,
+      "n_frames_sampled": 5,
+      "background_inside": 15,
+      "road_inside": 0
+    },
+    {
+      "track_id": "97",
+      "size": [
+        4.048416614532471,
+        1.9264006614685059,
+        1.564247727394104
+      ],
+      "n_active_frames": 599,
+      "n_frames_sampled": 5,
+      "background_inside": 102,
+      "road_inside": 35
+    }
+  ]
+}

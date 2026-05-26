@@ -1,0 +1,1206 @@
+{
+  "ckpt": "/root/work/yusun/ncore-nurec/output/B3_smoke_fix_20260524_161643/B3_smoke_fix_20260524_161643/pai_9ae151dc-e87b-41a7-8e85-71772f9603d7-2405_162212/ckpt_last.pt",
+  "n_tracks": 70,
+  "track_ids_path": "world-fallback",
+  "opacity_threshold": 0.005,
+  "summary": {
+    "total_dyn_particles": 700000,
+    "alive_total": 154191,
+    "alive_pct": 22.027285714285714,
+    "tracks_with_zero_alive": 0,
+    "tracks_with_lt_100_alive": 0,
+    "centers_in_own_cuboid_pct": null
+  },
+  "per_track_breakdown": [
+    {
+      "track_id": "1",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.449955940246582,
+        1.9543752670288086,
+        1.9424192905426025
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "13",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.227573394775391,
+        1.8702179193496704,
+        1.6251462697982788
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "133",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.4103546142578125,
+        2.005967378616333,
+        1.8733484745025635
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "16",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.188040733337402,
+        1.9683421850204468,
+        1.6491119861602783
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "164",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.449204444885254,
+        2.053366184234619,
+        1.9751086235046387
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "165",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        7.98745584487915,
+        2.764798402786255,
+        3.274207592010498
+      ],
+      "class": "heavy_truck"
+    },
+    {
+      "track_id": "178",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        3.9644017219543457,
+        1.8845746517181396,
+        1.610906958580017
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "18",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.141666412353516,
+        1.9365242719650269,
+        1.671433925628662
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "2",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.6512770652771,
+        2.043358564376831,
+        2.0009799003601074
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "205",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.609431266784668,
+        2.073272228240967,
+        1.785412311553955
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "207",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.026004791259766,
+        1.896867275238037,
+        1.6369081735610962
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "21",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        3.9450345039367676,
+        1.860498309135437,
+        1.539345145225525
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "216",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.461453437805176,
+        2.0599546432495117,
+        1.8687466382980347
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "237",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.1166181564331055,
+        1.8960654735565186,
+        1.6365816593170166
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "24",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        5.819046974182129,
+        2.450766086578369,
+        2.5042543411254883
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "243",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.390478134155273,
+        2.0310897827148438,
+        1.597130537033081
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "244",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.697473526000977,
+        1.9544715881347656,
+        1.4812694787979126
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "259",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.479860305786133,
+        1.9477472305297852,
+        1.6550886631011963
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "274",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        5.914828777313232,
+        2.5800912380218506,
+        2.7077462673187256
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "278",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        3.924778938293457,
+        1.8184956312179565,
+        1.6100152730941772
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "282",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        5.0102925300598145,
+        2.245770215988159,
+        2.208200216293335
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "288",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.302740573883057,
+        1.9113178253173828,
+        1.6416975259780884
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "291",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.274736404418945,
+        1.9807322025299072,
+        1.710848093032837
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "292",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.671784400939941,
+        2.168330192565918,
+        1.8059828281402588
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "293",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        5.153409957885742,
+        2.1531009674072266,
+        1.8979418277740479
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "307",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.191298484802246,
+        1.9386646747589111,
+        1.644301414489746
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "313",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.380037307739258,
+        2.1058855056762695,
+        1.779482126235962
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "316",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.204338073730469,
+        1.8789912462234497,
+        1.5147103071212769
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "323",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.344741344451904,
+        1.946833848953247,
+        1.7961156368255615
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "324",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.122942924499512,
+        1.9153077602386475,
+        1.630033254623413
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "327",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.413228511810303,
+        2.067999839782715,
+        1.7824907302856445
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "328",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.391538143157959,
+        1.9872013330459595,
+        1.6064479351043701
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "338",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        3.83064603805542,
+        1.7973217964172363,
+        1.5246379375457764
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "339",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        3.974677324295044,
+        1.8005250692367554,
+        1.5555243492126465
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "342",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.153930187225342,
+        1.9816783666610718,
+        1.6758482456207275
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "351",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.000615119934082,
+        1.8079392910003662,
+        1.511157512664795
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "356",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.112274646759033,
+        1.9387917518615723,
+        1.7838959693908691
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "359",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.1728715896606445,
+        1.9672317504882812,
+        1.6591167449951172
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "371",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        3.994361400604248,
+        1.8398443460464478,
+        1.5694904327392578
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "372",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.3510847091674805,
+        1.8889373540878296,
+        1.5125796794891357
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "373",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.063886642456055,
+        1.8982343673706055,
+        1.6124013662338257
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "377",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.018982410430908,
+        1.8960330486297607,
+        1.6815141439437866
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "378",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.341405868530273,
+        1.9942355155944824,
+        1.6467951536178589
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "383",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.038956642150879,
+        1.8229162693023682,
+        1.6782171726226807
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "39",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.536431312561035,
+        1.9930452108383179,
+        1.927253246307373
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "398",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.427660942077637,
+        1.8704864978790283,
+        1.5268287658691406
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "405",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        12.4501314163208,
+        3.0791172981262207,
+        3.524097204208374
+      ],
+      "class": "bus"
+    },
+    {
+      "track_id": "41",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.090442180633545,
+        1.871651530265808,
+        1.6130839586257935
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "414",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.924201011657715,
+        2.020900249481201,
+        1.741719126701355
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "43",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.109844207763672,
+        1.9045288562774658,
+        1.546722173690796
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "449",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        5.108844757080078,
+        2.0470943450927734,
+        1.9309742450714111
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "456",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.381436347961426,
+        2.004892349243164,
+        1.7172470092773438
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "458",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.83012580871582,
+        1.9305555820465088,
+        1.549763560295105
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "467",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.056346416473389,
+        1.9129505157470703,
+        1.692851185798645
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "47",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        5.403167247772217,
+        2.2842953205108643,
+        2.362499237060547
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "473",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.435306549072266,
+        1.8972965478897095,
+        1.7196779251098633
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "476",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.680306434631348,
+        1.8932125568389893,
+        1.5271224975585938
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "498",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.408829689025879,
+        1.9270395040512085,
+        1.5482181310653687
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "502",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.34291934967041,
+        1.909193992614746,
+        1.6372284889221191
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "521",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.1815505027771,
+        1.9259653091430664,
+        1.4861211776733398
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "532",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.64738655090332,
+        1.9191703796386719,
+        1.5275660753250122
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "54",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.550816059112549,
+        1.8974311351776123,
+        1.4910893440246582
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "546",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.243784427642822,
+        1.9887032508850098,
+        1.6095912456512451
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "547",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.271026134490967,
+        1.9261975288391113,
+        1.5794744491577148
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "549",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.143482208251953,
+        1.929381012916565,
+        1.587293267250061
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "59",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.041896343231201,
+        1.852799892425537,
+        1.5726414918899536
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "60",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.272555351257324,
+        1.9456486701965332,
+        1.7007418870925903
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "7",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.413279056549072,
+        2.025759220123291,
+        1.6853983402252197
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "94",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.048031330108643,
+        1.9164845943450928,
+        1.6850271224975586
+      ],
+      "class": "automobile"
+    },
+    {
+      "track_id": "97",
+      "n_particles": -1,
+      "alive": -1,
+      "dead": -1,
+      "alive_pct": -1.0,
+      "out_of_cuboid": -1,
+      "outlier_max_dist": null,
+      "note": "world-fallback: track_ids buffer missing; only global alive count available \u2014 re-train with Phase E.4 to get per-owner accuracy",
+      "alive_global": 154191,
+      "size": [
+        4.048416614532471,
+        1.9264006614685059,
+        1.564247727394104
+      ],
+      "class": "automobile"
+    }
+  ]
+}

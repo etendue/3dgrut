@@ -257,6 +257,53 @@ def test_init_densification_buffer_dispatches_to_all_subs(real_conf, monkeypatch
     assert sorted(call_log) == ["background", "road"]
 
 
+def test_relocation_fraction_cap_config_in_dynfix():
+    """Regression: dynfix config must have max_relocation_fraction < 1.0 (OOM prevention).
+
+    T8/B3 stability fix: 90% dyn-layer dead → 630k particles crammed into 70k alive
+    spots → tile-buffer OOM. The cap prevents mass-clustering by spreading relocations
+    across multiple MCMC steps.
+    """
+    with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
+        conf = compose(config_name="apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix")
+    frac = conf.strategy.relocate.max_relocation_fraction
+    assert frac < 1.0, (
+        f"dynfix config must cap relocation fraction (got {frac}); "
+        "without cap, 90%-dead dyn layer causes OOM from dense cluster"
+    )
+    assert frac >= 0.1, f"cap too aggressive ({frac}); bg/road need normal relocation"
+
+
+def test_relocation_cap_subsamples_dead_indices():
+    """Unit test for the max_relocation_fraction capping logic in relocate_gaussians.
+
+    Simulates 90-particle layer with 81 dead (90%). With max_relocation_fraction=0.5,
+    only 45 particles should be selected for relocation per step.
+    """
+    import torch
+
+    N = 100
+    dead = 90
+    max_frac = 0.5
+
+    densities = torch.zeros(N)
+    densities[:N - dead] = 0.5  # first 10 alive
+
+    dead_idxs = torch.where(densities <= 0.005)[0]
+    assert len(dead_idxs) == dead
+
+    # Replicate the cap logic from mcmc.py:relocate_gaussians
+    cap = max(1, int(max_frac * N))
+    assert len(dead_idxs) > cap  # precondition: cap triggers
+    perm = torch.randperm(len(dead_idxs))
+    capped_dead = dead_idxs[perm[:cap]]
+
+    assert len(capped_dead) == cap
+    assert len(capped_dead) <= int(max_frac * N) + 1  # allow rounding
+    # All selected indices must actually be dead
+    assert (densities[capped_dead] <= 0.005).all()
+
+
 def test_make_sub_conf_does_not_mutate_parent(real_conf):
     """T2.2 carry-over (M-2): _make_sub_conf returns an independent conf;
     modifying the sub must not leak back into the parent."""

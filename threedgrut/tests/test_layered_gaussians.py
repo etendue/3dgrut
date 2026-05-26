@@ -576,9 +576,15 @@ def test_fused_view_dynamic_layer_applies_transform(real_conf):
     assert torch.allclose(dyn_world, torch.tensor([7.0, 8.0, 9.0]).expand(2, 3).to(dyn_world.dtype))
 
 
-def test_fused_view_dynamic_layer_frame_id_none_skips_transform(real_conf):
-    """T4.3 D4: frame_id=None → dynamic positions passed through unchanged
-    (TODO Stage 8 inference fallback)."""
+def test_fused_view_dynamic_layer_frame_id_none_uses_first_active_fallback(real_conf):
+    """E.2.c (replaces the original "skip transform" behaviour): when no
+    timestamp_us or frame_id is given, each track falls back to its first
+    active frame so inference free cameras don't dump dyn particles to
+    world origin.
+
+    With every frame active and identity rotations + translation (7,8,9),
+    the first-active fallback picks frame 0 → world position = local + t.
+    """
     pose = torch.eye(4); pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
     tracks = {"v0": {
         "poses": pose.expand(5, 4, 4).clone(),
@@ -586,9 +592,10 @@ def test_fused_view_dynamic_layer_frame_id_none_skips_transform(real_conf):
     }}
     model = _make_dyn_model(real_conf, tracks, n_pts_per_track=2)
     fused = model.fused_view(frame_id=None)
-    # dyn pts should still be at local origin (zeros), not transformed
-    dyn_local = fused["positions"][5:]
-    assert torch.allclose(dyn_local, torch.zeros_like(dyn_local))
+    # dyn local positions are zeros; world = R · 0 + t = (7, 8, 9)
+    dyn_world = fused["positions"][5:]
+    expected = torch.tensor([7.0, 8.0, 9.0]).expand_as(dyn_world)
+    assert torch.allclose(dyn_world, expected.to(dyn_world))
 
 
 # --- T3.5: multi-layer forward routing + _FusedView contract ---

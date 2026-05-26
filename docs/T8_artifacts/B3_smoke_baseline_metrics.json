@@ -1,0 +1,14 @@
+{
+  "mean_psnr": 18.564423385620117,
+  "mean_ssim": 0.7702836157480876,
+  "mean_lpips": 0.4278812926610311,
+  "mean_cc_psnr": 21.70513013203939,
+  "mean_cc_ssim": 0.7641960794130961,
+  "mean_cc_lpips": 0.42787018926938375,
+  "mean_psnr_masked": 19.68886257171631,
+  "mean_ssim_masked": 0.7929889911015828,
+  "mean_lpips_masked": 0.3958542226155599,
+  "mean_cc_psnr_masked": 22.535948247273762,
+  "mean_cc_ssim_masked": 0.7866723486582439,
+  "mean_cc_lpips_masked": 0.395444553454717
+}

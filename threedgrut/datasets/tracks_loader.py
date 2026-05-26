@@ -1,6 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """scene_manifest tracks → instance_pts_dict loader (T4.1.b).
 
+T8/B3 Phase E fix (2026-05-25): ``load_tracks_from_ncore_cuboids`` previously
+stored each cuboid pose as **translation-only identity rotation**, ignoring
+``bbox3.rot``. That broke dynamic_rigids end-to-end (init filter, _transform_means
+local→world, and project_cuboids_to_mask all assumed object-local frame was
+axis-aligned with world). For a yaw=π/2 vehicle, the AABB-style filter
+missed most LiDAR points and the rendered Gaussian "footprint" was 90° off.
+We now decode ``bbox3.rot`` as intrinsic XYZ Euler radians (probe-confirmed
+on NCore v4 manifests: rz spans ±π for vehicle yaw, rx/ry ≈ 0 on flat ground)
+and write the full SE(3) into ``poses[fi]``.
+
+
 Lives in its own module (not in datasetNcore.py) so unit tests can import it
 without triggering the NCore SDK / cv2 / kornia chain that datasets/__init__.py
 pulls in on Mac.
@@ -34,6 +45,39 @@ from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import torch
+
+
+def euler_xyz_to_rotation_matrix(rx: float, ry: float, rz: float) -> np.ndarray:
+    """Extrinsic xyz Euler angles (radians) → 3x3 rotation matrix.
+
+    Matches ``scipy.spatial.transform.Rotation.from_euler("xyz", [rx, ry, rz]).as_matrix()``
+    bit-for-bit (within fp tolerance) — scipy's *lowercase* "xyz" is extrinsic,
+    i.e. rotate about world X by rx, then world Y by ry, then world Z by rz.
+    Pure numpy so Mac venv (no scipy) can still run unit tests.
+
+    Convention (extrinsic xyz):
+        R = Rz(rz) · Ry(ry) · Rx(rx)
+    applied to a column vector ``v`` as ``R @ v``. For pure-yaw vehicles
+    (rx ≈ ry ≈ 0) this collapses to Rz(rz), which is what most NCore
+    automobile observations actually exercise.
+
+    Args:
+        rx, ry, rz: rotation about the X, Y, Z axes (radians).
+
+    Returns:
+        ``[3, 3]`` float64 rotation matrix.
+    """
+    cx, sx = float(np.cos(rx)), float(np.sin(rx))
+    cy, sy = float(np.cos(ry)), float(np.sin(ry))
+    cz, sz = float(np.cos(rz)), float(np.sin(rz))
+    return np.array(
+        [
+            [cy * cz,  cz * sy * sx - sz * cx,  cz * sy * cx + sz * sx],
+            [sz * cy,  sz * sy * sx + cz * cx,  sz * sy * cx - cz * sx],
+            [-sy,      cy * sx,                 cy * cx],
+        ],
+        dtype=np.float64,
+    )
 
 
 def load_tracks_from_manifest(manifest_path: Union[str, Path]) -> Dict[str, dict]:
@@ -190,9 +234,15 @@ def load_tracks_from_ncore_cuboids(
                 # extrapolation gap); skip this frame.
                 continue
             cx, cy, cz = bbox.centroid
+            # T8/B3 Phase E: decode bbox.rot as intrinsic XYZ Euler radians and
+            # populate the rotation block of the SE(3) pose. ``bbox.rot`` after
+            # ``obs.transform("world", ...)`` is the cuboid local frame's
+            # orientation in world frame, which is exactly what _transform_means
+            # consumes (``world = R @ local + t``).
+            rx, ry, rz = bbox.rot
             pose = np.eye(4, dtype=np.float32)
+            pose[:3, :3] = euler_xyz_to_rotation_matrix(rx, ry, rz).astype(np.float32)
             pose[:3, 3] = (cx, cy, cz)
-            # TODO(stage4+): incorporate bbox.rot for non-axis-aligned actors.
             poses_np[fi] = pose
             frame_info_np[fi] = True
             if size_np is None:

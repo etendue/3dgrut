@@ -176,7 +176,8 @@ kanban
 | **T8.12-FIX** | 8 | viser_gui_4d --initial_fov_deg + --camera_type + --camera_fov_deg CLI flags + vast.ai 视觉验收 → 诊断锚定 T8.13 必走 | 0.5 | ✅ **CLI 基建完成 + 诊断完成** | 远端参考 `thinkpad:/home/yusun/repo/3dgrut/tools/viser_multilayer_nurec.py:280` 同样处理 fisheye-trained nurec 用 `client.camera.fov = math.radians(90)` 硬设 + 纯 pinhole `make_rays` 渲染清晰. **改动**: `viser_gui_4d.py` 加 3 CLI flags + `Viser4DViewer.__init__` 加 `initial_fov_rad` kwarg + `_on_connect` / Reset View 显式设 `client.camera.fov` + engine 实例化后可选 `engine.camera_type=Fisheye / engine.camera_fov=<deg>` 走已存在 `_raygen_fisheye` 路径. **Mac**: NEW `test_viser_gui_4d_fov.py` 10/10 PASS + 全量 189/189 PASS 0 回归. **vast.ai California 4090 实测** ($0.908/hr × 1h = $0.98): **Phase A.2 (pinhole 90°) 与历史 fov 45/75/140 同形态 → fov 假设证伪**; **Phase A.5 (Fisheye 120° equirectangular) 结构性突破 → 椭圆 fisheye + cuboid 合理位置 (但 equirectangular ≠ FTheta polynomial 所以内容仍糊)**. 诊断锚定 **Phase C (T8.13 FTheta schema 扩展) 必然路径**——本仓库 3dgut UT rasterizer 通过 intrinsics (而非 rays) 投影 Gaussian 协方差到 2D 屏幕, FTheta-trained Gaussian 形状只能用 FTheta intrinsics 才能正确投影. |
 | **T8.12** | 8 | vast.ai RTX 4090 验证 viser_gui_4d 完整 Gaussian 渲染 + 修 Stage 8 集成 bug | 0.5 | ⚠️ **部分通过** | vast.ai RTX 4090 24GB (Norway, $0.630/hr). **修了 2 个真实 Stage 8 bug**: **Bug #1** `engine.py:_trace_scene_mog` LayeredGaussians 路径构 Batch 缺 camera intrinsics → 3dgut tracer `__create_camera_parameters` 抛 `Camera intrinsics unavailable` viser 一连即崩; fix: 从 kaolin Camera 取 [fx,fy,cx,cy] 塞 Batch.intrinsics + 真实 c2w as T_to_world + camera-space rays 匹配 NCoreDataset.get_gpu_batch_with_intrinsics contract. **Bug #2** `layered_model.py:init_from_checkpoint` 完后 SkyEnvmapMLP 残留 CPU → `_blend_sky` 路径 `cpu vs cuda` addmm 报错; fix: 末尾 `self.cuda()` 把整个 ModuleDict 搬上 GPU. **Reset View 改进**: snap camera 到 `meta.initial_c2w` (position+wxyz+look_at+up_direction). **Infra fix**: `scripts/cuda_helper.sh` 加 CUDA 12.1 case + viser nohup 不持久 → setsid 子 shell; NEW `docs/T8.12_handover_day1.md`. **Pipeline 验证**: viser RTX 4090 87 FPS 跑通 + scene primitives (cuboid/LiDAR/ego frustum) 全同步 + timeline 推进 cuboid + dyn LiDAR 跟车飘. **未达预期点 → T8.13**: viz_4d schema (T8.2 设计) 只存 `primary_camera_fov_y_rad`, 没存 fisheye polynomial / distortion coeffs. NCore ckpt 用 `camera_front_wide_120fov` (FTheta fisheye) 训练, viser 用 pinhole 投影 → Gaussians 视觉是远景隧道 motion-blur 乱糊, 跟 render.py 输出的清晰街景 (含 fisheye 桶形畸变) 完全不是同一视角. 用户对比图实证此 gap. Bug #3 fov override 因 pinhole 140° 退化已撤. **完整 fisheye 渲染留 T8.13** (扩展 viz_4d schema 含 FTheta + viser_gui_4d 用 fisheye intrinsics). **T8.12 实例 37188673 已销毁** (~$1.5 总成本) |
 | **T8.14** | 8 | viser_gui_4d "Gaussian Layers" 运行时按层开关 (Render Controls 嵌套子 folder) | 0.25 | ✅ **Mac + vast.ai 4090** | 用户痛点: 调 4D 场景时无法单独关掉某层验证 (动态刚体单独看 / 背景无 sky 时纯净外观 / sky cubemap 出问题临时屏蔽). **实现**: MOD `threedgrut/layers/layered_model.py` (`__init__` 新增 `enabled_layer_names: Set[str]` 默认全 enabled + `_empty_render(gpu_batch)` 辅助方法 + `forward` 双兜底 single-bg fast path + ref_layer None case + `fused_view` 跳过禁用层 + 0-row tensor 兜底 + `_blend_sky` 检查 sky 开关) + MOD `threedgrut_playground/viser_gui_4d.py` (`_build_static_gui` 在 Render Controls 内 `with folder:` 嵌套创建 "Gaussian Layers" 子 folder, 遍历 `scene_mog.specs` 给每个 particle layer + sky_envmap 加 checkbox; closure 用 `_self/_name/_cb` 默认参数绑定; callback 整体替换 enabled_layer_names 而非 in-place mutate, GIL 保证原子). **守卫**: v1 ckpt (`MixtureOfGaussians` 无 `.specs`) / `--no_gaussian_render` (engine=None) / dynamic_deformables 占位符 全部 isinstance + filter 跳过. **不持久化**: `set` 不进 state_dict, 仅 GUI session 状态. **零性能损失** (默认全开 → 行为与改动前完全相同, 仅用户取消勾选时 fused_view concat 列表变短). **测试**: NEW 5 测试在 test_layered_gaussians.py (default_includes_all_contributing / skips_disabled_layer / all_disabled_returns_zero_particle / forward_all_disabled_returns_empty_render with renderer.render 反向断言 / blend_sky_skipped_when_sky_disabled). **Mac 全套 200 passed + 1 skipped 0 回归**. AST 解析两改动文件 OK. **vast.ai RTX 4090 视觉验收 ✅** (实例 37299842 $0.828/hr, 2 组 ckpt 共 9 张截图: pinhole schema_v1 5 张 + FTheta schema_v2 4 张, 全 toggle 行为命中设计预期). 跳过 ckpt save/load, 不动 trainer, 不改 render_pass 签名 |
-| | | **合计** | **30.25** | | |
+| **T8.15** | 8 | T8/B3 dynamic_rigids toggle 失效完整修复（Phase B + E 全套 12 commits） | 4 | ✅ **A800 + ThinkPad RTX 4090** | 见 § 5 Done Log "T8/B3" 段。**6 根因 / 12 commits**: bg-cuboid opacity penalty (`7f8bb17`) + bbox.rot SE(3) (`40875a5`) + fused_view 旋转复合 q_world=q_pose⊗q_local (`2987d12`) + inactive 帧 density 抑制 (`368c87d`) + track_ids ckpt roundtrip (`1594396`) + free-camera fallback (`7d5be05`) · 5 个新诊断脚本 + class_psnr 指标双路径接入 trainer/render · **KPI**: 1k smoke `mean_class_psnr=19.13` vs baseline 18.73 (**+0.40 dB**), automobile +0.31 / heavy_truck +1.74 / bus +0.57; dyn scale_max **0.22m (从 6.88m 缩小 31×)**, alive_pct 84% (vs broken 22%), outside_cuboid 0m (vs 2281m). **用户视觉验证**: ThinkPad 4090 viser 加载 1k ckpt + tunnel → "现在基本上正确" — toggle dynamic_rigids 车辆消失/恢复，与 background toggle 互斥. Mac **342 PASS, 1 skipped, 0 regression** (新增 122 测试). 详见 [`/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md`](/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md) |
+| | | **合计** | **34.25** | | |
 
 ### 1.3 当前 Stage 状态汇总
 
@@ -191,7 +192,7 @@ kanban
 | 6 | Exposure | **3/3 ✅** | Stage 6 出口完成 A800 5-cam 5k cc_PSNR **24.937 dB** (+1.7 dB cc gain 直证 per-cam affine 学到差异), exposure_a.std=0.0306 > 0.01 出口 ✅ |
 | 6-fix | Ego mask 全栈接通 | **3/3 ✅** | Stage 6-fix 完成. T6F.1+T6F.2 Mac 本地 (16 新测试, 141/141 PASS). T6F.3 A800 5k smoke v2_full_exposure: **masked PSNR 29.49 dB > Stage 4 baseline 26.32 (+3.17 dB 干净区)**, full PSNR 20.49 (ego 区不再训练→渲染崩 -5.8 dB, 正确预期), 性能 0 损失 (9.61 it/s ≈ 9.58). ego 区 21.78% 量化为 Stage 3/4/5/6 历史 PSNR 水分源 |
 | 7 | 集成 + KPI 软出口 | **5/5 ✅** (T7.4 跳过) | Stage 7 软出口结题. T7.1 复用 v2_full_exposure (无新 yaml) + 7-cam Hydra dump 通过. T7.2 A800 1-cam 1k smoke masked 26.38 / 9.71 it/s. **T7.3 A800 7-cam 30k 51 min raw masked 15.63 ❌ 但 cc_psnr_masked 24.75 OK → 暴露 ExposureModel 长训退化优化失控. T7.3.b A800 同配置 + use_exposure=false ablation 证伪: raw masked 25.76 (+10.13 dB), cc_psnr_masked 24.70 (vs T7.3 24.75 -0.05 dB noise 级)** → 实证 v2 真实重建质量上限 ~24.7 dB cc_psnr_masked = Stage 5/6/6-fix baseline 持平. **T7.4 cap ablation 跳过** (根因不在 cap). T7.5 WP_V2_Report.md (231 行) + v2_plan/architecture 同步, ExposureModel 失控 + bilateral-grid 合并 V3-P1 整合任务 (§ 14.5) |
-| 8 | viser_gui_4d (4D viz) | **14/14 ✅ + vast.ai 视觉验收 pending** | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️, T8.12-FIX ✅, T8.13 ✅ FTheta, **T8.14 ✅ "Gaussian Layers" 运行时按层开关**). ckpt['viz_4d'] schema v2: ego poses + FTheta 8-key intrinsics (T8.13) + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容) + **Render Controls 下嵌套 "Gaussian Layers" 子 folder 每层 checkbox (T8.14, 取消勾选直接跳过 fused_view/_blend_sky 不进 OptiX)**. inject_viz_4d CLI 方案 B 一次性注入 (T8.9). **A800 + vast.ai RTX 4090 双路实测**: A800 走 `--no_gaussian_render` bypass (Ampere datacenter SKU 无 RT cores → OptiX dlopen segfault, **A800 做不了高斯渲染**, 验收必须 vast.ai 4090+ 或本机 RTX); RT cores (T8.12+T8.13, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通 + T8.13 后视觉与 render.py 同形态清晰街景**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.13 闭环 schema gap**: `viz_4d.ego.primary_camera_intrinsics_FTheta` 8-key + viser FTheta 投影. **T8.14 闭环用户调试痛点**: 按层开关让用户在浏览器侧调试单层. Mac 全套 **200 passed + 1 skipped 0 回归** (含 T8.14 新增 5 测试). |
+| 8 | viser_gui_4d (4D viz) | **15/15 ✅** (含 T8.15 B3 完整修复) | Stage 8 完整 (T8.1-T8.6 + T8.8-T8.11 ✅, T8.12 ⚠️, T8.12-FIX ✅, T8.13 ✅ FTheta, **T8.14 ✅ "Gaussian Layers" 运行时按层开关**, **T8.15 ✅ B3 dynamic_rigids toggle 完整修复 — Phase B + E 12 commits 闭合 6 个独立根因, ThinkPad 4090 实测用户确认 toggle 双向独立工作**). ckpt['viz_4d'] schema v2: ego poses + FTheta 8-key intrinsics (T8.13) + tracks {poses/size/frame_info/class} + road LiDAR + **per-track object-local dynamic LiDAR (T8.11)** + viewer_defaults. viser_gui_4d.py: timeline + ego polyline + per-frame frustum + tracks polylines (class color) + cuboid wireframe + 每帧 dyn LiDAR world transform (instance color) + `--no_gaussian_render` (T8.10 Ampere datacenter A100/A800 兼容) + **Render Controls 下嵌套 "Gaussian Layers" 子 folder 每层 checkbox (T8.14, 取消勾选直接跳过 fused_view/_blend_sky 不进 OptiX)**. inject_viz_4d CLI 方案 B 一次性注入 (T8.9). **A800 + vast.ai RTX 4090 双路实测**: A800 走 `--no_gaussian_render` bypass (Ampere datacenter SKU 无 RT cores → OptiX dlopen segfault, **A800 做不了高斯渲染**, 验收必须 vast.ai 4090+ 或本机 RTX); RT cores (T8.12+T8.13, RTX 4090 Norway $0.630/hr, 87 FPS @ 1024×~600) 完整 Gaussian 渲染**pipeline 通 + T8.13 后视觉与 render.py 同形态清晰街景**. **T8.12 修了 Stage 8 两个真实集成 bug**: camera intrinsics 缺失 (engine.py) / sky_envmap CPU 残留 (layered_model.py). **T8.13 闭环 schema gap**: `viz_4d.ego.primary_camera_intrinsics_FTheta` 8-key + viser FTheta 投影. **T8.14 闭环用户调试痛点**: 按层开关让用户在浏览器侧调试单层. Mac 全套 **200 passed + 1 skipped 0 回归** (含 T8.14 新增 5 测试). |
 
 ### 1.4 依赖关系图
 
@@ -975,6 +976,137 @@ flowchart LR
 ---
 
 ## 5. Done Log
+
+### ✅ T8/B3 — dynamic_rigids toggle 失效完整修复 (2026-05-25, A800 + ThinkPad RTX 4090, plan t8-viser-gui-4d-distributed-beaver)
+
+**用户触发**：浏览器 viser_gui_4d 勾掉 `dynamic_rigids` checkbox → 车辆不消失；勾掉 `background` 反而车辆消失 → 车辆 Gaussian 实际在 bg 层而非 dyn 层；之前 commit `d965b00`（viewer-side guard 移除）让 callback 真触发但视觉无效果。
+
+**核心约束**：不改 v1 ckpt 路径（保 byte-identical 回归）；不动 MoG.get_model_parameters 签名（避免 v1 兼容回归）；训练侧改动通过新 yaml `_dynfix` 触发，base config 改动 default = false 让 v2 baseline 保持原行为。
+
+**追溯到 6 个独立根因 + 12 个 commits 完整闭合**：
+
+| Phase | Commit | 根因 / 修复 |
+|---|---|---|
+| A | `add202a` | `scripts/diagnose_bg_in_cuboid.py` 量化 baseline 30k ckpt bg 层 10.17% 粒子误入 cuboid |
+| B | `7f8bb17` | 3D bg-cuboid opacity penalty（`threedgrut/model/bg_cuboid_loss.py`）+ FTheta cuboid mask（`dynamic_mask.py` 加 ftheta_params 分支）+ dyn_clamp_to_cuboid + `layers.overrides` yaml 机制 + `ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml` |
+| B-hotfix | `a8e930b` | `_maybe_clamp_dynamic_rigids` 用 `self.conf` 不是 `self.config`（BaseStrategy 约定） |
+| E.1 | `f446f43` | `scripts/diagnose_dyn_per_cuboid.py` 揭露 5k smoke fix 只有 22% alive（"假修复"硬证据） |
+| **E.2** | **`40875a5`** | **`tracks_loader.py:195` 写死 `pose=eye(4)` 丢 bbox.rot；新增 `euler_xyz_to_rotation_matrix` pure-numpy（vs scipy bit-match）+ extrinsic xyz 约定** |
+| E.3 | `368c87d` | `tracks_loader` 用 `np.eye(4)` 初始化 inactive 帧 → fused_view 把粒子塌到 world 原点；新增 `_transform_means_and_active` 返回 active_mask + fused_view 用 density=-50 (sigmoid≈0) 抑制 inactive 粒子 |
+| E.4 | `1594396` | `MoG.get_model_parameters` 不存 `track_ids` buffer，viewer 加载 ckpt 后 `_transform_means` 拿不到 per-particle owner；在 LayeredGaussians wrapper 序列化 track_ids（不动 MoG） |
+| E.5+6 | `b00dddf` | `threedgrut/model/class_psnr.py` 新增 per-cuboid PSNR + trainer.render.py eval loop 集成 → metrics.json 新增 `mean_class_psnr` + per-class breakdown |
+| E.10 | `5bc878c` | `scripts/validate_frame_0.py` 把 cuboid wireframe / sseg / LiDAR init / Gaussian centers 同时投到第一帧验证 init 对齐 |
+| **E.2.b** | **`2987d12`** | **fused_view 只转 position 不转 rotation → MCMC 用 6 米巨型 scale 补偿方向错位（5k ckpt scale max=6.88m）；新增 `_rotmat_to_quat_wxyz` (Shepperd) + `_quat_multiply_wxyz` + `_transform_means_and_active(rotations_local=...)` 复合 q_world = q_pose ⊗ q_local** |
+| E.2.c | `7d5be05` | inference 自由相机 `timestamp_us<=0 and frame_id is None` 时 dyn positions 不变换 → world 原点崩；新增 per-track first-active frame fallback |
+
+**KPI 验证（A800 1k smoke ckpt `B3_E2b_1k_20260525_114457`）**：
+
+| 指标 | 30k baseline (pre-fix) | 5k broken (无 E.2.b) | **1k Fix (Phase E 完整)** |
+|---|---:|---:|---:|
+| bg_inside_pct | 10.17 % | 5.72 % | 待 30k 重测 |
+| dyn alive_pct | n/a | 22.0 % | **84 %** ✅ |
+| dyn scale max (m) | n/a | **6.88** | **0.22** ✅ (-31×) |
+| dyn outside_cuboid max (m) | n/a | 2281 | **0** ✅ |
+| mean_class_psnr (dB) | 18.73 | 17.82 | **19.13** ✅ +0.40 |
+| automobile_psnr | 18.70 | 17.61 | **19.01** ✅ |
+| heavy_truck_psnr | 18.52 | 20.16 | **20.26** ✅ |
+| bus_psnr | 20.25 | 19.70 | **20.82** ✅ |
+| psnr_masked | 19.30 | 19.20 | **21.09** ✅ +1.79 |
+
+**用户视觉验证（ThinkPad RTX 4090, viser 加载 1k ckpt）**：✅ "现在基本上正确" — 勾掉 dynamic_rigids 车辆区域清空，勾掉 background 车辆保留，两个 toggle 双向独立工作。
+
+**Frame-0 验证截图**（`docs/T8_artifacts/E10_frame0_init/`）：
+- `out_0_gt.png` GT 图（rear-left cam, 26 active cuboids）
+- `out_1_cuboids.png` FTheta-投影的 cuboid wireframe 紧贴 SUV ✓
+- `out_2_sseg.png` sseg 红色 mask 完整覆盖车身 ✓
+- `out_3_lidar_init.png` dyn LiDAR 点聚集在车上 ✓
+- `out_4_gaussian_centers.png` post-train Gaussian centers 仍在 cuboid bbox 内 ✓
+
+**改动文件汇总 (12 commits, 4080 行新增)**：
+
+| 文件 | 性质 | 改动 |
+|---|---|---|
+| `threedgrut/datasets/tracks_loader.py` | MOD | E.2: 加 `euler_xyz_to_rotation_matrix` pure-numpy 函数 + L237-245 写入完整 SE(3) |
+| `threedgrut/layers/layered_model.py` | MOD | E.2.b/c/E.3/E.4: `_rotmat_to_quat_wxyz` (Shepperd) + `_quat_multiply_wxyz` + `_transform_means_and_active` 三返回 (positions/active/rotations) + per-track first-active fallback + density -50 sentinel + `get_model_parameters`/`init_from_checkpoint` 序列化 track_ids buffer + fused_view 移除时间 gate |
+| `threedgrut/layers/dynamic_mask.py` | MOD | B1: `project_cuboids_to_mask` 加 ftheta_params 分支 + `_normalize_ftheta_params` + `_horner_ascending_torch` + `_corners_to_pixels_ftheta`/`_corners_to_pixels_pinhole` |
+| `threedgrut/layers/registry.py` | MOD | `specs_from_config` 加 `layers.overrides.<name>.<field>` yaml override 机制（用 `dataclasses.replace`）|
+| `threedgrut/model/bg_cuboid_loss.py` | NEW | B3: bg 层 3D opacity penalty + `clamp_layer_positions_to_cuboids` + `collect_active_cuboids_for_frame` + `lambda_schedule` (warmup) + `particles_inside_any_cuboid_mask` |
+| `threedgrut/model/class_psnr.py` | NEW | E.5: `compute_psnr_in_mask` + `compute_class_psnr` + `collect_active_tracks_for_frame` |
+| `threedgrut/strategy/layered_mcmc.py` | MOD | B7: `_post_optimizer_step` 末尾调 `_maybe_clamp_dynamic_rigids` 把 dyn positions 钳回 `\|local\|≤size/2` |
+| `threedgrut/trainer.py` | MOD | B5: 加 `_bg_cuboid_conf` + `_gather_active_tracks_for_batch` + `_maybe_fill_cuboid_mask` + `_compute_bg_cuboid_penalty_term` 接到 `get_losses` |
+| `threedgrut/render.py` | MOD | E.6: eval loop 每帧 call `compute_class_psnr` + 累积 + 写入 metrics.json |
+| `configs/base_gs.yaml` | MOD | 加 `trainer.bg_dyn_cuboid_penalty` default = enabled:false |
+| `configs/apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml` | NEW | enabled:true + lambda:0.05 + warmup:5000 + dyn_clamp:true + layers.overrides.dynamic_rigids.max_n_particles:700000 |
+| `threedgrut_playground/utils/ftheta_projector.py` | NEW | E.10: B2 已有的 FTheta forward projector helper（pure numpy + Shepperd numerical stability） |
+| `scripts/diagnose_bg_in_cuboid.py` | NEW | Phase A |
+| `scripts/diagnose_dyn_per_cuboid.py` | NEW | Phase E.1 |
+| `scripts/validate_frame_0.py` | NEW | Phase E.10 |
+| `threedgrut/tests/test_bg_cuboid_loss.py` | NEW | 25 tests |
+| `threedgrut/tests/test_dynamic_mask_ftheta.py` | NEW | 15 tests |
+| `threedgrut/tests/test_trainer_bg_cuboid_integration.py` | NEW | 10 tests |
+| `threedgrut/tests/test_diagnose_bg_in_cuboid.py` | NEW | 13 tests |
+| `threedgrut/tests/test_tracks_loader_rotation.py` | NEW | 15 tests (含 scipy bit-match) |
+| `threedgrut/tests/test_track_ids_ckpt_roundtrip.py` | NEW | 7 tests |
+| `threedgrut/tests/test_transform_means_inactive.py` | NEW | 12 tests (含 E.2.b 旋转复合 + E.2.c fallback) |
+| `threedgrut/tests/test_diagnose_dyn_per_cuboid.py` | NEW | 9 tests |
+| `threedgrut/tests/test_class_psnr.py` | NEW | 13 tests |
+| `threedgrut/tests/test_layer_spec_registry.py` | MOD | +3 tests for `layers.overrides` |
+| `threedgrut/tests/test_layered_gaussians.py` | MOD | T4.3 测试适配 E.2.c first-active fallback |
+| `T8_buglists.md` | MOD | B3 → ✅ + 6-根因表 + 完整 KPI + commit hashes |
+| `docs/T8_artifacts/B3_baseline.json` 等 | NEW | 4 个诊断 JSON (Phase A baseline / 5k smoke baseline+fix / 1k Fix) |
+| `docs/T8_artifacts/E10_frame0_init/*.png` | NEW | 5 张帧-0 投影对齐验证图 |
+| `docs/T8_artifacts/B3_layer_diagnostic.md` | NEW | Phase A baseline 报告 |
+
+**Mac 单测**：342 passed, 1 skipped, 0 regression（新增 122 测试覆盖 Phase A-E + E.2.b + E.2.c + E.10，全部跑过）。
+
+---
+
+### ✅ T8/B3 — dyn 层训练稳定性修复（2026-05-25，a800-x2 10k smoke）
+
+**触发**：Phase B + E 12-commit 代码修复完成后，ThinkPad 10k smoke 在 iter ~9k 以 `cudaErrorLaunchFailure` 崩溃——dyn 重定位率单调飙升至 90%+，630k 粒子一次性全堆到 70k 活粒子位置，渲染器 tile buffer 溢出。
+
+**根因（炼丹层，非代码 bug）**：
+- `lambda_warmup_iters=5000` 太慢——bg 粒子在 cuboid 内占据 alpha 预算 5000 iter，dyn 拿不到梯度，opacity 持续下降；到 bg 被压制时 dyn 已大半死亡。
+- `max_n_particles=700k` 太大——90% dead × 700k = 630k 一次 relocate → 超密集簇 → OOM。
+
+**修复（1 commit `4de6658`）**：
+- `lambda_warmup_iters` 5000 → **1000**（bg 在 iter 1000 前退出 cuboid，dyn 在死亡前拿到梯度）
+- `lambda` 0.05 → **0.15**（更强的 bg 压制力）
+- `max_n_particles` 700k → **300k**（降低渲染内存压力）
+- `strategy.relocate.max_relocation_fraction` 默认 1.0，dynfix 设为 **0.4**（单步最多搬 40%，防超密集簇 OOM）
+- 2 个新测试：`test_relocation_fraction_cap_config_in_dynfix` + `test_relocation_cap_subsamples_dead_indices`
+
+**KPI（a800-x2 GPU0，10k smoke `B3_stability_20260525_185543`，6.75 it/s）**：
+
+| 指标 | 修复前（崩溃）| 修复后 10k | **修复后 30k** |
+|---|---|---|---|
+| dyn 重定位率趋势 | 30% → 90%+ → crash | 27% → **13-16%**（稳定）✅ | — |
+| 完整运行 | ❌ OOM ~9k iter | ✅ 正常完成 | ✅ 正常完成 |
+| mean_cc_psnr | — | 23.22 dB | **24.21 dB** |
+| mean_cc_psnr_masked | — | 24.20 dB | **25.35 dB** ✅（gate ≥ 24.35）|
+| **mean_class_psnr** | — | 19.29 dB | **19.73 dB**（auto 19.67 / truck 19.66 / bus 21.75）✅ |
+| Mac 单测 | 342 pass | **343 pass, 1 skip** ✅ | — |
+
+**30k 全量训练（2026-05-26，`B3_30k_20260525`，a800-x2 GPU0）**：
+- ckpt: `/root/work/yusun/ncore-nurec/output/B3_30k/B3_30k_20260525/.../ckpt_last.pt`
+- mean_cc_psnr_masked **25.35 dB** > gate 24.35 dB ✅
+- mean_class_psnr **19.73 dB**（10k→30k +0.44 dB，持续提升）✅
+- **ThinkPad RTX 4090 viser 视觉验证**：用户确认"基本符合预期" ✅
+  - 勾掉 dynamic_rigids → 车辆区域清空
+  - 勾掉 background → 车辆保留（路面消失）
+
+**A800 GPU 时间**：
+- Phase A baseline 30k 重训（B4 ckpt 复用）= 64 min
+- Phase C 5k 双卡 smoke (baseline + Phase B fix) = 12 min wall
+- Phase E.7 5k 双卡 smoke (baseline + Phase B + E fix) = 13 min wall（Bug E1/2/3 全修后 5k 已超过 5k baseline KPI）
+- Phase E.2.b 1k smoke 验证 rotation 复合 = 3 min wall（用户视觉确认）
+- **稳定性修复 10k smoke** = ~25 min（a800-x2 GPU0，6.75 it/s）
+- **稳定性修复 30k 全量** = ~65 min（a800-x2 GPU0）✅
+
+**关键不变量更新**：
+- v2 LayeredGaussians ckpt 现在持久化 `track_ids` buffer（per particle layer），加载后 viewer / playground 可正确按 owner 分组渲染
+- v2 LayeredGaussians 渲染时 fused_view 自动复合 per-track pose 旋转到 per-particle rotation：`q_world = q_pose ⊗ q_local` → cuboid 朝向跟车实际朝向对齐
+- v2 LayeredGaussians 自由相机模式（无 timestamp）走 per-track first-active frame fallback，不再塌到 world 原点
 
 ### ✅ T8.14 — viser_gui_4d "Gaussian Layers" 运行时按层开关 (2026-05-22, Mac 本地, plan threedgrut-playground-viser-gui-4d-py-g-pure-knuth)
 

@@ -107,3 +107,40 @@ def test_specs_from_config_defaults_to_single_background():
     specs = specs_from_config(conf)
     assert len(specs) == 1
     assert specs[0].name == "background"
+
+
+# --------------------------------------------------------------- T8/B3
+def test_specs_from_config_overrides_max_n_particles():
+    """T8/B3: ``layers.overrides.<name>.max_n_particles`` applied via replace."""
+    from threedgrut.layers.registry import specs_from_config
+    conf = OmegaConf.create({
+        "layers": {
+            "enabled": ["background", "dynamic_rigids"],
+            "overrides": {"dynamic_rigids": {"max_n_particles": 700_000}},
+        }
+    })
+    specs = specs_from_config(conf)
+    by_name = {s.name: s for s in specs}
+    assert by_name["dynamic_rigids"].max_n_particles == 700_000
+    # background is untouched
+    assert by_name["background"].max_n_particles == 600_000
+
+
+def test_specs_from_config_overrides_unknown_field_raises():
+    from threedgrut.layers.registry import specs_from_config
+    conf = OmegaConf.create({
+        "layers": {
+            "enabled": ["dynamic_rigids"],
+            "overrides": {"dynamic_rigids": {"max_n_particles_typo": 700_000}},
+        }
+    })
+    with pytest.raises(ValueError, match="max_n_particles_typo"):
+        specs_from_config(conf)
+
+
+def test_specs_from_config_no_overrides_section_no_change():
+    """``layers.overrides`` absent → specs are pristine STANDARD_LAYERS entries."""
+    from threedgrut.layers.registry import STANDARD_LAYERS, specs_from_config
+    conf = OmegaConf.create({"layers": {"enabled": ["dynamic_rigids"]}})
+    specs = specs_from_config(conf)
+    assert specs[0] is STANDARD_LAYERS["dynamic_rigids"]
