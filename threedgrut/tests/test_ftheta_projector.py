@@ -306,3 +306,38 @@ def test_init_missing_required_key():
     del bad["max_angle"]
     with pytest.raises(ValueError, match="missing required keys"):
         FthetaForwardProjector(bad)
+
+
+# ---- Test 12: world_to_camera_flip parameter — NCore raw-camera path ----
+def test_flip_identity_parity_with_default_viser_flip():
+    """A point projected with ``world_to_camera_flip=I`` and an OpenCV-style
+    world coordinate must hit the same pixel as the same point with default
+    flip and a viser-style world coordinate (z-flipped).
+
+    Anchors the 7-camera validation path: NCore's ``T_camera_to_world`` is
+    already OpenCV convention, so the projector must NOT apply an extra flip
+    when given ``flip=I``.
+    """
+    ftheta = _synthetic_ftheta_dict()
+    proj_default = FthetaForwardProjector(ftheta)  # flip = diag([1,1,-1,1])
+    proj_no_flip = FthetaForwardProjector(
+        ftheta, world_to_camera_flip=np.eye(4))    # NCore raw-camera convention
+
+    # In default path: world (0,0,-10) → cam (0,0,+10) → (cx,cy).
+    # In no-flip path: world (0,0,+10) → cam (0,0,+10) → (cx,cy).
+    uv_d, vis_d = proj_default.project_points(
+        np.array([[0.0, 0.0, -10.0]]), np.eye(4))
+    uv_n, vis_n = proj_no_flip.project_points(
+        np.array([[0.0, 0.0, +10.0]]), np.eye(4))
+
+    assert vis_d[0] and vis_n[0]
+    np.testing.assert_allclose(uv_d, uv_n, atol=1e-9)
+
+
+def test_flip_init_validates_shape():
+    """A non (4,4) flip matrix must raise immediately, not silently propagate."""
+    with pytest.raises(ValueError, match="must be \\(4, 4\\)"):
+        FthetaForwardProjector(
+            _synthetic_ftheta_dict(),
+            world_to_camera_flip=np.eye(3),
+        )
