@@ -977,6 +977,49 @@ flowchart LR
 
 ## 5. Done Log
 
+### 🟡 V3 Stage A — Learnable Cuboid Pose Mac 落地 (2026-05-26, Mac本地，A800 验收待补)
+
+**用户触发**: dynamic rigid gaussian 训练有模糊重影；结合 DriveStudio `RigidNodes` 分析（见 `/Users/etendue/repo/drivestudio/dynamic_rigid_gaussian_analysis.md`），把 tracker 标注 pose 作为可学习 Parameter，photometric loss 反向 refine。
+
+**问题**: NCore tracker 标注的 cuboid SE(3) pose 在 LayeredGaussians 里以 `_track_pose_<tid>` buffer 存（不进梯度图），但标注本身有 ~10cm 平移 / ~5° yaw 误差。MCMC 为补偿误差把 gaussian scale 学得偏大，结果是"所有帧 pose 误差并集 ≈ 模糊"。3dgrut2 已具备 object-local canonical + per-frame transform 的基础设施，唯一缺失就是 pose 的可学习参数化。
+
+**改动 (Stage A — 最小可学习 pipeline + bg_penalty/mask 切换到 learned pose detached, 6 files)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut/layers/layered_model.py` | (a) 补 `_quat_wxyz_to_rotmat` 反向函数（已有 `_rotmat_to_quat_wxyz` + `_quat_multiply_wxyz`，缺反向）；(b) 删 init 的 `tracks_poses = {}` `tracks_active = {}` Python dict 初始化（observation #321/#349/#851 ckpt load 后 dict drift 根因）；(c) 加 `@property tracks_poses` + `@property tracks_active` 动态从 buffer/Parameter 反查；(d) 新 `_compose_pose_for_track(tid, idx)` + `_compose_pose_all_frames(tid)` + `_iter_track_tids()` + `_get_track_pose_F(tid)` + `_read_learnable_pose_flag()` 五个 helper；(e) `_populate_tracks_impl` 加 learnable 分支：注册 `_track_quat_<tid>` nn.Parameter[F,4] + `_track_trans_<tid>` nn.Parameter[F,3] + `_track_pose_gt_<tid>` 冻结 buffer；resume guard：检测 quat/trans Parameter 已存在则跳过重初始化（不覆盖学过的 pose）；cross-mode adoption：legacy buffer ckpt → learnable 模式时从 buffer 重建 Parameter；(f) `_resolve_pose_idx` + 三处 `pose_stack` 构造（free-camera fallback + timestamp 路径 + legacy `_transform_means`）改用 helper，mode-agnostic |
+| `threedgrut/trainer.py` | (a) 新增 `pose_optimizer` / `pose_freeze_until_iter` 类字段（仿 `exposure_optimizer`）；(b) `init_pose_optimizer(conf)` 方法：读 `trainer.learnable_pose.enabled`，按 tid 收集 quat/trans Parameter 两组分配 lr_rotation=1e-5 / lr_translation=1e-4 的独立 Adam，resume 时从 ckpt 恢复 optimizer 状态；(c) `setup_training` chain 加 `init_pose_optimizer(conf)` 调用；(d) ckpt save 加 `learnable_pose_state = { optimizer state_dict, freeze_until_iter }`；(e) train step 注入：freeze_until_iter 前 zero_grad 不 step，之后 step + zero_grad；(f) `_gather_active_tracks_for_batch` 在传给 `collect_active_cuboids_for_frame` 前对 tracks_poses 整体 `.detach()`（杜绝 bg_cuboid_penalty 通过 cuboid mask 反向"拖动" pose 的对抗优化路径） |
+| `configs/base_gs.yaml` | trainer 节加 `learnable_pose: { enabled: false, lr_rotation: 1.0e-5, lr_translation: 1.0e-4, freeze_until_iter: 5000, lambda_*: 0.0 }`。默认 off 保 v2 baseline 字节兼容 |
+| `configs/apps/ncore_3dgut_mcmc_multilayer_poseopt.yaml` | NEW — 继承 `ncore_3dgut_mcmc_multilayer` + `_self_`，覆盖 `trainer.learnable_pose.enabled=true`，文件头 acceptance gate 注明 |
+| `threedgrut/tests/test_learnable_pose_param.py` | NEW — 13 个单测：quat↔rotmat round-trip（50 个随机 SO(3)）；populate buffer vs Parameter 分支（按 conf flag）；`@property` survives state_dict round-trip（防 observation #321/#349/#851 复发）；keys 排序（防 observation #677 indexing risk）；compose_pose 匹配 GT；Adam step 改变 trans Parameter；resume guard 不覆盖；state_dict round-trip；detach snapshot 切断梯度。**全部 13 pass** |
+| —— | —— |
+
+**关键决策（已落地）**：
+1. **per-track 拆 quat + trans** 而不是 stacked `[F, I, 4]/[F, I, 3]`：跟现有 `_track_pose_<tid>` 一一对应，改动面最小，新 track 加入不破坏 stacked tensor
+2. **独立 `pose_optimizer = torch.optim.Adam`** 仿照 ExposureModel 模式：主 MoG optimizer 是 `SelectiveAdam(step(visibility))`，跟 pose 参数语义不兼容
+3. **lr: rot 1e-5 / trans 1e-4** = DriveStudio omnire `ins_rotation` 同款，trans 比 omnire 5e-4 低 5×（3dgrut2 main lr 量级也较小）
+4. **freeze_until_iter=5000** 默认：先让 gaussian/scale/opacity 在 GT pose 下收敛
+5. **bg_cuboid_penalty / mask 投影路径** `.detach()`：梯度只流到 bg gaussians，不流到 pose
+6. **`@property tracks_poses` 改造** 根除 observation #321/#349/#851 的 dict drift bug（旧 Python dict mirror 在 ckpt load 后变空，看似 model 没 track）
+
+**Mac 单测验证**:
+- 新 `test_learnable_pose_param.py` 13/13 pass（包括 quat round-trip max err < 1e-5 / state_dict round-trip / resume guard / detach 切梯度）
+- 完整 regression sweep: **408/410 pass**, 1 skip, 2 unrelated pre-existing failures：
+  - `test_viser_gui_4d_follow_ego.py::test_on_time_change_writes_camera_only_when_enabled` — `_follow_camera_enabled` 属性缺失，main 上同样失败
+  - `test_transform_means_inactive.py::test_transform_means_and_active_rotation_composition_yaw` 的 `requires_grad=True` scalar warning，main 上同样存在
+  - 两个都不是 V3 改动引入
+
+**A800 出口验收（待补）**：
+- 5k smoke baseline byte-identical（CLI `trainer.learnable_pose.enabled=false`）
+- 10k smoke with `enabled=true`：total_loss 不 NaN，freeze 期 trans Parameter 不变，5k 后开始 drift；trans Δ 中位数 < 0.3m；metrics.json 含 `learnable_pose_state`
+
+**out-of-scope（Stage B/C/D 留下一步）**:
+- temporal smoothness regularization（trans 二阶差分、rot quat 测地距离）
+- test-frame slerp（NCore 默认无 held-out，缓做）
+- 双视图 viz 脚本 + BEV 对比图 + per-track drift 直方图
+- 6D continuous rotation parameterization 实验
+- pose-prior loss 默认开启
+
 ### ✅ Config 重构 — 扁平化 v2 多层训练配置链 (2026-05-26, A800 GPU 0)
 
 **用户触发**: "当前的训练配置 ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml 递归的太多, 建一个独立的配置把其他关于 v2 的配置都清理掉. 建一个 ncore_3dgut_mcmc_multilayer.yaml 的单独配置. 在 A800 上快速验证一下".
