@@ -1078,21 +1078,30 @@ flowchart LR
 
 **KPI（a800-x2 GPU0，10k smoke `B3_stability_20260525_185543`，6.75 it/s）**：
 
-| 指标 | 修复前（崩溃）| 修复后 10k |
-|---|---|---|
-| dyn 重定位率趋势 | 30% → 90%+ → crash | 27% → **13-16%**（下降并稳定）✅ |
-| 完整运行 10k | ❌ OOM ~9k iter | ✅ 正常完成 |
-| mean_cc_psnr | — | 23.22 dB |
-| mean_cc_psnr_masked | — | 24.20 dB |
-| **mean_class_psnr** | — | **19.29 dB**（automobile 19.16 / truck 20.36 / bus 21.08）✅ |
-| Mac 单测 | 342 pass | **343 pass, 1 skip** ✅ |
+| 指标 | 修复前（崩溃）| 修复后 10k | **修复后 30k** |
+|---|---|---|---|
+| dyn 重定位率趋势 | 30% → 90%+ → crash | 27% → **13-16%**（稳定）✅ | — |
+| 完整运行 | ❌ OOM ~9k iter | ✅ 正常完成 | ✅ 正常完成 |
+| mean_cc_psnr | — | 23.22 dB | **24.21 dB** |
+| mean_cc_psnr_masked | — | 24.20 dB | **25.35 dB** ✅（gate ≥ 24.35）|
+| **mean_class_psnr** | — | 19.29 dB | **19.73 dB**（auto 19.67 / truck 19.66 / bus 21.75）✅ |
+| Mac 单测 | 342 pass | **343 pass, 1 skip** ✅ | — |
+
+**30k 全量训练（2026-05-26，`B3_30k_20260525`，a800-x2 GPU0）**：
+- ckpt: `/root/work/yusun/ncore-nurec/output/B3_30k/B3_30k_20260525/.../ckpt_last.pt`
+- mean_cc_psnr_masked **25.35 dB** > gate 24.35 dB ✅
+- mean_class_psnr **19.73 dB**（10k→30k +0.44 dB，持续提升）✅
+- **ThinkPad RTX 4090 viser 视觉验证**：用户确认"基本符合预期" ✅
+  - 勾掉 dynamic_rigids → 车辆区域清空
+  - 勾掉 background → 车辆保留（路面消失）
 
 **A800 GPU 时间**：
 - Phase A baseline 30k 重训（B4 ckpt 复用）= 64 min
 - Phase C 5k 双卡 smoke (baseline + Phase B fix) = 12 min wall
 - Phase E.7 5k 双卡 smoke (baseline + Phase B + E fix) = 13 min wall（Bug E1/2/3 全修后 5k 已超过 5k baseline KPI）
 - Phase E.2.b 1k smoke 验证 rotation 复合 = 3 min wall（用户视觉确认）
-- 30k 全量 run #1 跑到 ~iter 18k 时 CUDA illegal mem 崩（root cause 待复查 — 94% relocate 可能撞 GPU 边界，调 λ=0.02 重跑）
+- **稳定性修复 10k smoke** = ~25 min（a800-x2 GPU0，6.75 it/s）
+- **稳定性修复 30k 全量** = ~65 min（a800-x2 GPU0）✅
 
 **关键不变量更新**：
 - v2 LayeredGaussians ckpt 现在持久化 `track_ids` buffer（per particle layer），加载后 viewer / playground 可正确按 owner 分组渲染

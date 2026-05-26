@@ -259,6 +259,12 @@ NCore FTheta `params.resolution` 是 `numpy.uint64`（e.g. `[1920, 1080]`），t
 
 **T8 viser_gui_4d bug list 全部关闭** — 用户在 B3_E2b_1k ckpt + Phase E 代码上实测确认 9 个 bug 行为均符合预期。
 
+**最终 30k 全量训练验收（2026-05-26，`4de6658` + dynfix yaml）**：
+- A800 30k ckpt：`mean_cc_psnr_masked = 25.35 dB`（gate 24.35 ✅），`mean_class_psnr = 19.73 dB` ✅
+- ThinkPad RTX 4090 viser_gui_4d 视觉验证：用户确认"基本符合预期" ✅
+  - 勾掉 `dynamic_rigids` → 车辆区域清空 ✅
+  - 勾掉 `background` → 车辆保留（路面消失）✅
+
 ## 验证步骤模板
 
 ThinkPad 浏览器验证：
