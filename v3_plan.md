@@ -74,6 +74,7 @@ kanban
         [T8.5.3 ★ Novel-view pose 生成器 + hold-out 验证集]
         [T8.5.4 ★ v2 baseline novel-view PSNR 实测]
         [T8.5.5 A800 5k smoke 验证]
+        [T8.5.7 ★ V3-E4 7-cam vs 5-cam KPI 对照 + per-cam breakdown]
         [T9.0 v3_architecture.md 创建]
         [T9.1 V3-P1.a 双边网格 1×1×1 grid]
         [T9.2 V3-P1.b ExposureModel L2 reg]
@@ -153,7 +154,7 @@ kanban
 
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
-| Backlog ⬜ | **57** | Stage 8.5 (5) + 9 (6) + 10 (4) + 11 (6) + 12 (8) + 13a (7) + 13b (7) + 14 (7) + 15 (7) + 16 (5) + 17 (3) + 18 (3) — 含 T9.0 架构图任务 |
+| Backlog ⬜ | **58** | Stage 8.5 (6) + 9 (6) + 10 (4) + 11 (6) + 12 (8) + 13a (7) + 13b (7) + 14 (7) + 15 (7) + 16 (5) + 17 (3) + 18 (3) — 含 T9.0 架构图任务 + T8.5.7 V3-E4 ablation |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
@@ -171,6 +172,7 @@ kanban
 | **T8.5.3** ★ | 8.5 | Novel-view pose 生成器 + hold-out 验证集（±1m / ±2m / ±5° / ±10° 4 档 pose 扰动）+ render.py 接入 | NEW `threedgrut/utils/novel_view.py` | 1.5 | ⬜ | — |
 | **T8.5.4** ★ | 8.5 | v2 baseline novel-view PSNR 实测（4 档 × {full / sky / dyn / bg 区域}）+ metrics.json novel_* 字段定义 | A800 + `render.py` eval | 1 | ⬜ | — |
 | **T8.5.5** | 8.5 | A800 5k smoke 验证投影校对无回归（reconstructed cc_psnr_masked ≥ 24.7 不退化 + novel-view baseline 入档） | — | 1 | ⬜ | — |
+| **T8.5.7** ★ | 8.5 | V3-E4 7-cam vs 5-cam KPI 对照实验 + per-camera PSNR breakdown 工具（render.py per_camera 字段 + eval_cameras filter） | V3-E4 (新) | 2 | 🟡 | dd6c39f (Phase 1 代码) |
 | **T9.0** | 9 | v3_architecture.md 创建（v2_architecture.md 1:1 镜像 + v3 新增模块占位） | docs | 1 | ⬜ | — |
 | **T9.1** | 9 | V3-P1.a 双边网格 1×1×1 grid（按 camera_id）port Recon-Studio | V3-P1 | 1.5 | ⬜ | — |
 | **T9.2** | 9 | V3-P1.b ExposureModel L2 reg + lr cosine decay + 2-stage freeze (step > 2000) | V3-P1 | 1 | ⬜ | — |

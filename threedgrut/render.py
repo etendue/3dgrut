@@ -134,8 +134,36 @@ class Renderer:
         writer, out_dir, run_name = create_summary_writer(conf, object_name, out_dir, experiment_name, use_wandb=False)
 
         if model is None:
-            # Initialize the model and the optix context
-            model = MixtureOfGaussians(conf)
+            # T8.5.7 fix: respect conf.use_layered_model — multilayer ckpts
+            # store params under nested ``gaussians_nodes`` and MoG's
+            # init_from_checkpoint() looks for top-level ``positions`` and
+            # raises KeyError. Mirror trainer.init_model dispatch so
+            # standalone ``python render.py --checkpoint ...`` works on
+            # both flat MoG and LayeredGaussians ckpts.
+            if conf.get("use_layered_model", False):
+                from threedgrut.layers.layered_model import LayeredGaussians
+                from threedgrut.layers.registry import specs_from_config
+
+                logger.warning(
+                    "[T8.5.7 / V3-E4 known issue] standalone "
+                    "Renderer.from_checkpoint() of a LayeredGaussians ckpt "
+                    "yields ~3 dB lower PSNR than the train-end-of-train "
+                    "eval (which uses Renderer.from_preloaded_model with the "
+                    "live model + exposure_model + post_processing already "
+                    "attached). Some training-time state (likely the "
+                    "ExposureModel state under 'exposure_state' key, plus "
+                    "any sky_envmap warmup buffers) is not yet restored on "
+                    "this path. For V3-E4 per-camera comparison use the "
+                    "metrics.json['per_camera'] written at end-of-train "
+                    "directly — that path is correct. Tracked as follow-up "
+                    "task V3-E4.1: standalone-eval state restore."
+                )
+                specs = specs_from_config(conf)
+                # scene_extent=None — LayeredGaussians fills it from ckpt
+                # (trainer.init_model passes the same when restoring).
+                model = LayeredGaussians(conf, specs=specs, scene_extent=None)
+            else:
+                model = MixtureOfGaussians(conf)
             # Initialize the parameters from checkpoint
             model.init_from_checkpoint(checkpoint, setup_optimizer=False)
         model.build_acc()
