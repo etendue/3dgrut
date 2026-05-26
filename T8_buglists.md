@@ -1,7 +1,7 @@
 # T8 viser_gui_4d Bug List
 
-**最后更新：** 2026-05-25 19:33 GMT+8
-**对应代码版本：** worktree `worktree-distributed-beaver` @ `4de6658` (训练稳定性修复后) — **9/9 bug 全部关闭** (Phase B + E 12 commits + 稳定性修复 1 commit)
+**最后更新：** 2026-05-26 10:40 GMT+8
+**对应代码版本：** `main` @ `4f3f6ce` (PR #2 worktree-distributed-beaver 合并) + B2 follow-up `f681c0a` (7-cam validation + Pinhole projector) — **9/9 bug 全部关闭**
 **Plan 文档：**
 - 旧：[`/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md`](/Users/etendue/.claude/plans/v2-t8-13-t8-14-bug-happy-starfish.md)
 - B3 详细：[`/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md`](/Users/etendue/.claude/plans/t8-viser-gui-4d-distributed-beaver.md)
@@ -101,6 +101,25 @@
 - Phase E.10 frame-0 验证（`docs/T8_artifacts/E10_frame0_init/out_1_cuboids.png`）：蓝色 cuboid wireframe 紧贴前景银 SUV + 背景所有车的 box 都正确对位
 
 **用户实测（B3 1k ckpt viser）**：✅ 各 active cuboid wireframe 都跟实车对齐，无明显偏移。
+
+#### B2 后续 — 7 相机 cuboid 投影验证 + Pinhole projector 补齐 (2026-05-26, A800)
+
+**目标**：B2 / Phase E.10 只验证了 ego primary FTheta 相机；扩展到 NCore v4 全部相机（此 clip 5 相机全 FTheta）+ 补齐 pinhole forward projector。
+
+**改动**：
+- `threedgrut_playground/utils/projector_common.py` (新) — 抽出 `horner_ascending` / `subdivide_polyline` 共用
+- `threedgrut_playground/utils/ftheta_projector.py` — `FLIP_VISER_TO_OPENCV` 提取为 `__init__` 可配 `world_to_camera_flip`，默认值不变（viser 路径完全 byte-identical）
+- `threedgrut_playground/utils/pinhole_projector.py` (新) — `PinholeForwardProjector`（numpy + radial/tangential 畸变，签名与 FTheta 对齐，默认 `flip=eye(4)`）
+- `scripts/validate_cuboid_7cam.py` (新) — 7 相机投影验证脚本，遍历 `dataset.camera_ids` 按 model_type_name 自动选 projector，输出每相机 PNG + 2×4 拼图
+
+**单测**：FTheta 12 旧 + 2 新（`flip=I` parity + shape validation）+ Pinhole 11 新 + B2 overlay 集成 4 = **29 PASS 0 回归**。
+
+**A800 实跑（B3 E7 fix ckpt + dynfix config，5 个 FTheta 相机）**：
+- front_wide 9/24 ✅ / rear_tele 10/24 ✅ / cross_left 0/24 ✅（无车正确）/ cross_right 1/24 ✅ / rear_left 14/24 ✅（街边一排停车精准贴框）
+- 5/5 相机投影对齐通过肉眼判定，34 cuboid overlay 全部正确，无 projector bug
+
+**详细报告**：[docs/T8_artifacts/B2_7cam_validation_report.md](docs/T8_artifacts/B2_7cam_validation_report.md)
+**拼图截图**：[docs/T8_artifacts/B2_7cam_grid.png](docs/T8_artifacts/B2_7cam_grid.png)
 
 ---
 

@@ -18,27 +18,24 @@ Pure numpy; no torch, no viser, no kaolin — fully Mac-testable.
 """
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Optional, Sequence
 
 import numpy as np
 
+from .projector_common import horner_ascending, subdivide_polyline
+
 
 # Phase 0 calibration: see docs/T8_artifacts/B2_calibration_probe_log.md
+# This flip maps a c2w in viser convention (+Y down, +Z backward) to OpenCV
+# convention (+Y down, +Z forward). For c2w already in OpenCV convention
+# (e.g. NCoreDataset's T_camera_to_world for the raw-camera projection path),
+# pass ``world_to_camera_flip=np.eye(4)`` to skip the flip.
 FLIP_VISER_TO_OPENCV: np.ndarray = np.diag([1.0, 1.0, -1.0, 1.0])
 
 
-def _horner_ascending(poly: np.ndarray, x: np.ndarray) -> np.ndarray:
-    """Evaluate p(x) = poly[0] + poly[1]*x + poly[2]*x^2 + ...
-
-    Mirrors ftheta_intrinsics.py:69-70 (ascending coefficient storage,
-    Horner iterating from highest-degree index down to 0). NCore's
-    ``angle_to_pixeldist_poly`` and ``pixeldist_to_angle_poly`` are both
-    stored in this ascending convention.
-    """
-    out = np.zeros_like(x, dtype=np.float64)
-    for k in range(len(poly) - 1, -1, -1):
-        out = out * x + poly[k]
-    return out
+# Back-compat aliases (older imports may reach in for these symbols).
+_horner_ascending = horner_ascending
+_subdivide_polyline = subdivide_polyline
 
 
 class FthetaForwardProjector:
@@ -59,8 +56,20 @@ class FthetaForwardProjector:
     projects to a *curve* under fisheye.
     """
 
-    def __init__(self, ftheta_dict: dict):
-        """Parse ftheta_dict into numpy arrays. Validates required keys."""
+    def __init__(
+        self,
+        ftheta_dict: dict,
+        world_to_camera_flip: Optional[np.ndarray] = None,
+    ):
+        """Parse ftheta_dict into numpy arrays. Validates required keys.
+
+        ``world_to_camera_flip`` is a 4×4 right-multiplied onto ``c2w`` before
+        inversion, mapping the caller's c2w convention onto OpenCV
+        (+Y down, +Z forward). Defaults to ``FLIP_VISER_TO_OPENCV`` for
+        backward compatibility with the viser viewer path. Pass
+        ``np.eye(4)`` when c2w is already in OpenCV convention (NCore raw
+        camera ``T_camera_to_world``).
+        """
         REQUIRED = {
             "resolution", "principal_point",
             "angle_to_pixeldist_poly", "max_angle",
@@ -82,6 +91,14 @@ class FthetaForwardProjector:
         self.max_angle = float(ftheta_dict["max_angle"])
         # linear_cde intentionally skipped — see ftheta_intrinsics.py:50-57.
 
+        if world_to_camera_flip is None:
+            world_to_camera_flip = FLIP_VISER_TO_OPENCV
+        flip = np.asarray(world_to_camera_flip, dtype=np.float64)
+        if flip.shape != (4, 4):
+            raise ValueError(
+                f"world_to_camera_flip must be (4, 4); got {flip.shape}")
+        self._flip = flip
+
     def project_points(
         self,
         points_world: np.ndarray,         # (N, 3) float64-compatible
@@ -101,7 +118,7 @@ class FthetaForwardProjector:
         if c2w.shape != (4, 4):
             raise ValueError(f"c2w_viser must be (4, 4); got {c2w.shape}")
 
-        c2w_cv = c2w @ FLIP_VISER_TO_OPENCV
+        c2w_cv = c2w @ self._flip
         w2c = np.linalg.inv(c2w_cv)
 
         N = pts.shape[0]
@@ -115,7 +132,7 @@ class FthetaForwardProjector:
         r_xy = np.sqrt(x * x + y * y)
         angle = np.arctan2(r_xy, z)                                # ∈ [0, π]
 
-        r_pix = _horner_ascending(self.angle_to_pixeldist_poly, angle)
+        r_pix = horner_ascending(self.angle_to_pixeldist_poly, angle)
 
         safe_r = np.where(r_xy < 1e-9, 1.0, r_xy)
         u_off = np.where(r_xy < 1e-9, 0.0, r_pix * x / safe_r)
@@ -162,7 +179,7 @@ class FthetaForwardProjector:
                 if pl.shape[0] == 1:
                     all_pts.append(pl)
                 continue
-            sub = _subdivide_polyline(pl, subdivide_n)
+            sub = subdivide_polyline(pl, subdivide_n)
             lengths.append(sub.shape[0])
             all_pts.append(sub)
 
@@ -184,20 +201,5 @@ class FthetaForwardProjector:
         return out
 
 
-def _subdivide_polyline(pl: np.ndarray, n: int) -> np.ndarray:
-    """Insert (n-1) intermediate vertices on each segment of a polyline.
-
-    M-vertex input → (1 + (M-1)*n)-vertex output. ``n=1`` returns the input
-    unchanged. Endpoints are preserved exactly.
-    """
-    if n == 1:
-        return pl.copy()
-    M = pl.shape[0]
-    if M < 2:
-        return pl.copy()
-    t = np.linspace(0.0, 1.0, n, endpoint=False)             # (n,)
-    a = pl[:-1]                                              # (M-1, 3)
-    b = pl[1:]                                               # (M-1, 3)
-    seg = a[:, None, :] + (b - a)[:, None, :] * t[None, :, None]  # (M-1, n, 3)
-    flat = seg.reshape(-1, 3)                                # ((M-1)*n, 3)
-    return np.concatenate([flat, pl[-1:]], axis=0)           # +1 endpoint
+# NOTE: ``_subdivide_polyline`` and ``_horner_ascending`` now live in
+# ``projector_common``; module-level aliases above keep older imports working.

@@ -977,6 +977,58 @@ flowchart LR
 
 ## 5. Done Log
 
+### ✅ B2 follow-up — 7 相机 cuboid 投影验证 + Pinhole projector 补齐 (2026-05-26, A800 GPU 0, plan viser-gui-4d-cuboid-cuboid-7-magical-lynx)
+
+**用户触发**: "viser_gui_4d 的 cuboid 投影目前有问题, 你要完成 cuboid 在 7 个相机上的投影. 检查投影是否正确, 利用 NCore v4 的原始相机数据即可, 注意相机 calibration 格式 (FTheta/pinhole)".
+
+**核心约束**: B2 viser overlay 路径**完全 byte-identical 零回归** / 不动 `Viser4DOverlayCompositor` 调用 / NCore raw camera (OpenCV +Y down +Z forward) 与 viser (+Y down +Z backward) 两种 c2w convention 走同一份 projector / pytest 测试套件 0 回归.
+
+**改动文件 (6 files, +547 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut_playground/utils/projector_common.py` | NEW — 抽出 `horner_ascending` + `subdivide_polyline` 给 FTheta 和 Pinhole projector 共用 (避免双份实现) |
+| `threedgrut_playground/utils/ftheta_projector.py` | `FLIP_VISER_TO_OPENCV` 提取为 `__init__(world_to_camera_flip=None)` 可配参数, 默认 = `FLIP_VISER_TO_OPENCV` (B2 viser 路径完全兼容). `_horner_ascending` / `_subdivide_polyline` 改为 projector_common 的别名 (旧 import 保持工作) |
+| `threedgrut_playground/utils/pinhole_projector.py` | NEW — `PinholeForwardProjector` 类, numpy + OpenCV radial/tangential 畸变, 签名与 FTheta 镜像, 默认 `flip=eye(4)` (NCore raw). 畸变公式按 `cv2.projectPoints`: `radial = 1 + k1·r² + k2·r⁴ + ...` + `x_dist = x_n·radial + 2·p1·x_n·y_n + p2·(r² + 2·x_n²)` |
+| `scripts/validate_cuboid_7cam.py` | NEW — 7 相机投影验证脚本, Hydra compose + NCoreDataset + FourDMetadata.from_ckpt 拿 cuboid pose, 遍历 `dataset.camera_ids` 按 model_type_name (`FThetaCameraModelParameters` vs `OpenCVPinholeCameraModelParameters` 等) 自动选 projector, 每相机用 `_get_start_end_poses_world_global()[1]` (END pose, 与 cuboid 时间戳对齐), 输出 `cam_<id>.png` + 2×4 拼图 `out_grid.png` |
+| `threedgrut/tests/test_pinhole_projector.py` | NEW 11 测试 — optical-axis hit (cx,cy) / 2×2m 方块手算 cx±200,cy±200 (fx=fy=500, z=5) / k1>0 outward push / z<=0 + 出界 clip / viser-flip parity (FLIP_VISER_TO_OPENCV vs identity OpenCV c2w 一致) / project_polylines 长度结构正确 / scalar focal_length 容错 / missing key raises |
+| `threedgrut/tests/test_ftheta_projector.py` | +2 测试 — `test_flip_identity_parity_with_default_viser_flip` (NCore raw OpenCV c2w + `flip=I` ≡ viser z-flipped c2w + 默认 flip) / `test_flip_init_validates_shape` (非 4×4 flip 抛 ValueError) |
+
+**验证 — 单测**: pytest 三套件 29 PASS — FTheta 12 旧 + 2 新 + Pinhole 11 新 + viser overlay 集成 4 旧, 0 回归.
+
+**验证 — A800 实跑** (B3 E7 fix 5k ckpt `B3_E7_fix_20260525_100806`, dynfix config, NCore 9ae151dc clip, 5 相机全 FTheta — 此 dataset 无 pinhole 相机, pinhole projector 留待未来):
+
+| camera_id | model | drawn/total | Δt (ms) | 肉眼判定 |
+|---|---|---|---|---|
+| `camera_front_wide_120fov` | FTheta | 9/24 | 0.0 | ✅ 远处公交贴框, 前景 ego 引擎盖区无 cuboid (物理正确) |
+| `camera_rear_tele_30fov` | FTheta | 10/24 | 11.0 | ✅ 前景 SUV + 远处面包车都被框 |
+| `camera_cross_left_120fov` | FTheta | 0/24 | 11.1 | ✅ 视野无车 → drawn=0 (无误框) |
+| `camera_cross_right_120fov` | FTheta | 1/24 | 11.0 | ✅ 左下角面包车被框 |
+| `camera_rear_left_70fov` | FTheta | 14/24 | 0.1 | ✅ 街边一排停车 14 辆全部精准贴框 |
+
+Δt = 该相机最近帧 END timestamp 与 t_us 差, 反映 NCore 多相机异步真实特性 (11ms ≈ 60fps 帧间隔 2/3), 非 projector bug. 5/5 相机投影对齐通过肉眼判定, 34 个 cuboid wireframe overlay 全部正确, **无 projector bug**.
+
+**关键设计决策**:
+
+| 选择 | 决定 | 理由 |
+|---|---|---|
+| 交付形式 | 独立离线验证脚本 (vs viser_gui_4d 多相机面板) | 用户选 "独立离线验证脚本"; 用 NCore 原始 raw image 是最接近 ground truth 的判据 |
+| c2w convention | NCore 原始相机外参 (OpenCV rig 链路) | 用户选 "NCore 原始相机外参 (rig 链路)"; 与训练时数据增强 / refined pose 一致 |
+| flip 实现 | 提取为 `__init__` 可配参数, 默认值不变 | B2 viser 路径完全兼容; 调用侧只需传 `flip=eye(4)` 走 NCore raw 路径; 避免代码分支 |
+| Pinhole 模型 | radial + tangential, 跳过 thin_prism | NCore v4 车载相机少见 thin_prism; 需要时再补 |
+| START vs END pose | 用 END pose | 与 cuboid timestamp_us (END timestamp) 对齐, 减少 rolling-shutter 误差 |
+
+**结论**:
+
+1. **B2 FTheta cuboid overlay 投影算法在 7 相机上全部正确**, 没有 projector bug 需要修复
+2. `FthetaForwardProjector` 现在同时服务 viser overlay (B2 路径) + NCore raw-camera 验证 (本任务路径), 仅靠 `world_to_camera_flip` 参数切换
+3. `PinholeForwardProjector` 补齐 B2 缺失的 numpy pinhole 投影 (B2 阶段 pinhole 靠 viser 浏览器原生), 签名对齐 FTheta
+4. `scripts/validate_cuboid_7cam.py` 作为后续 cuboid 投影回归 sanity-check 入口
+
+**详细报告**: [docs/T8_artifacts/B2_7cam_validation_report.md](docs/T8_artifacts/B2_7cam_validation_report.md) (含拼图 + 5 张单相机 PNG)
+
+---
+
 ### ✅ T8/B3 — dynamic_rigids toggle 失效完整修复 (2026-05-25, A800 + ThinkPad RTX 4090, plan t8-viser-gui-4d-distributed-beaver)
 
 **用户触发**：浏览器 viser_gui_4d 勾掉 `dynamic_rigids` checkbox → 车辆不消失；勾掉 `background` 反而车辆消失 → 车辆 Gaussian 实际在 bg 层而非 dyn 层；之前 commit `d965b00`（viewer-side guard 移除）让 callback 真触发但视觉无效果。
@@ -1107,6 +1159,8 @@ flowchart LR
 - v2 LayeredGaussians ckpt 现在持久化 `track_ids` buffer（per particle layer），加载后 viewer / playground 可正确按 owner 分组渲染
 - v2 LayeredGaussians 渲染时 fused_view 自动复合 per-track pose 旋转到 per-particle rotation：`q_world = q_pose ⊗ q_local` → cuboid 朝向跟车实际朝向对齐
 - v2 LayeredGaussians 自由相机模式（无 timestamp）走 per-track first-active frame fallback，不再塌到 world 原点
+
+---
 
 ### ✅ T8.14 — viser_gui_4d "Gaussian Layers" 运行时按层开关 (2026-05-22, Mac 本地, plan threedgrut-playground-viser-gui-4d-py-g-pure-knuth)
 
