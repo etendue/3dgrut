@@ -977,6 +977,60 @@ flowchart LR
 
 ## 5. Done Log
 
+### ✅ Config 重构 — 扁平化 v2 多层训练配置链 (2026-05-26, A800 GPU 0)
+
+**用户触发**: "当前的训练配置 ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml 递归的太多, 建一个独立的配置把其他关于 v2 的配置都清理掉. 建一个 ncore_3dgut_mcmc_multilayer.yaml 的单独配置. 在 A800 上快速验证一下".
+
+**问题**: dynfix 配置 7 层递归 (`dynfix → 4dviz → exposure → sky → full → road → ncore_3dgut_mcmc → base_mcmc → base_gs`), 想看清生效字段需要打开 7 个文件交叉看, 文档难度高, 新人上手成本高.
+
+**改动 (1 file, +99 行 NEW)**:
+
+| 文件 | 改动 |
+|---|---|
+| `configs/apps/ncore_3dgut_mcmc_multilayer.yaml` | NEW — 扁平化版本, defaults 只保留 `/base_mcmc + /dataset:ncore + /initialization:lidar + /render:3dgut + override /strategy:layered_mcmc + _self_`, 把整条 v2 链上所有有效 override (use_layered_model / layers.enabled / dataset.load_aux_masks / dataset.camera_ids 5-cam ring / trainer.layered_loss / trainer.use_sky_envmap / trainer.use_exposure / trainer.bg_dyn_cuboid_penalty / layers.overrides.dynamic_rigids.max_n_particles=300k / strategy.relocate.max_relocation_fraction=0.4 / viz_4d.*) 一份 yaml 平铺写入, 每段注明来源 |
+
+**验证 — Hydra compose 字节等价**: 本地 `.venv` compose 两份 yaml 后递归 diff —— `BYTE-EQUIVALENT ✅`, 0 字段差异. dynfix 与 multilayer 在 Hydra 解析后完全等价.
+
+**验证 — A800 1k smoke** (CUDA_VISIBLE_DEVICES=0, sky_backend=mlp, NCore 9ae151dc clip):
+
+| 验收点 | 结果 |
+|---|---|
+| exit code | 0 ✅ |
+| Training Statistics | 1000 step / 221.84s / **4.51 it/s** ✅ |
+| LayeredGaussians layers | `[background, road, dynamic_rigids, sky_envmap]` ✅ |
+| LayeredMCMC sub-strategies | 3 (bg/road/dyn; sky 非粒子) ✅ |
+| 各层初始化粒子数 | bg=1,000,000 / road=200,000 / dyn=150,077 ✅ |
+| ExposureModel | 5 cameras, lr=0.001 ✅ |
+| ckpt 顶层 keys | `config, epoch, exposure_state, global_step, model, viz_4d` ✅ |
+| viz_4d.schema_version | 2 (latest) ✅ |
+| viz_4d.tracks count | 70 (> 0) ✅ |
+| viz_4d.ego.poses_c2w | `(524, 4, 4)` ✅ |
+| viz_4d.lidar.road_xyz | `(200000, 3)` ✅ |
+| model.sky_envmap_state | present (envmap 模块已物化) ✅ |
+
+**输出 ckpt**: `/root/work/yusun/ncore-nurec/output/multilayer_refactor_smoke_1k/pai_9ae151dc-...-2605_111601/ours_1000/ckpt_1000.pt`
+
+**关键设计决策**:
+
+| 选择 | 决定 | 理由 |
+|---|---|---|
+| 等价性强度 | 完全字节等价 dynfix (含 use_exposure=true) | 用户选 "完全字节等价"; 不引入语义变更, 便于 A→B 对照; exposure 退化问题留给 V3-P1 单独处理 |
+| sky_backend 是否 bake | 留 null (registry default), CLI 显式传 mlp | 与 dynfix 一致, 保持 yaml 跨 A800/Mac/RTX 平台通用 |
+| 7-cam vs 5-cam | 保留 5-cam (与 exposure 父 yaml 一致) | 字节等价要求; 用户 Stage 7 需 7-cam 时 CLI 覆盖 camera_ids 即可 |
+| dynfix 旧 yaml 是否删除 | 保留 | 历史 commit 引用 + 实验复现需要; 新人推荐直接用 multilayer 起 |
+
+**关键不变量** (写入 architecture):
+
+- INV-CFG-1: `apps/ncore_3dgut_mcmc_multilayer.yaml` 与 `apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml` Hydra compose 结果字节等价 (回归验证: `.venv/bin/python` compose + 递归 diff dict)
+- INV-CFG-2: `layers.overrides.<name>.<field>` 通过 `layers.registry.specs_from_config` 经 `dataclasses.replace` 写入 LayerSpec, 未知字段抛 ValueError (test_layer_spec_registry.py:114, T8/B3)
+
+**收益**:
+- 上手成本: 7 个 yaml 文件 → 1 个文件 + 顶部段落注释源头
+- diff 噪声: dynfix 修改其中任一上游 yaml 时 4 个下游 yaml 都受影响, multilayer 是叶节点不受影响
+- A800 smoke 验证已通过, 后续 5k / 30k 训练可直接 `--config-name apps/ncore_3dgut_mcmc_multilayer` 起
+
+---
+
 ### ✅ B2 follow-up — 7 相机 cuboid 投影验证 + Pinhole projector 补齐 (2026-05-26, A800 GPU 0, plan viser-gui-4d-cuboid-cuboid-7-magical-lynx)
 
 **用户触发**: "viser_gui_4d 的 cuboid 投影目前有问题, 你要完成 cuboid 在 7 个相机上的投影. 检查投影是否正确, 利用 NCore v4 的原始相机数据即可, 注意相机 calibration 格式 (FTheta/pinhole)".

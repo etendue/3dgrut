@@ -58,6 +58,31 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work
 9. 把"伪完成"识别为"未完成"：训练 exit 0 + ckpt 写出 ≠ task ✅。必须 metric 数字达标 + 写进 Done Log + commit hash 入看板。
 10. 跑挂了（exit ≠ 0 / 早期 RuntimeError）回头改代码时，**先写一个回归测试 pin 住这个 case**（如 4D vs 3D mask broadcast），再修代码 + Mac pytest，最后再 rsync + 重跑 A800。不要"改了就直接重跑 A800"，单测便宜，A800 贵。
 
+## 训练配置约定（重要）
+
+**v2 多层训练统一使用 `configs/apps/ncore_3dgut_mcmc_multilayer.yaml`**，这是 dynfix 7 层递归链 (`dynfix → 4dviz → exposure → sky → full → road → ncore_3dgut_mcmc`) 的字节等价扁平版（Hydra compose 递归 diff 0 差异，A800 1k smoke 验证通过，详见 v2_plan.md § 5 Done Log 2026-05-26 "Config 重构"条目）。
+
+**后续所有训练（smoke / 5k / 30k / 全量）默认用 multilayer**：
+
+```bash
+# A800 标准启动（sky_backend=mlp 必须，nvdiffrast 不可用）
+ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH \
+  && export CUDA_VISIBLE_DEVICES=0 \
+  && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  && cd /root/work/yusun/repo/3dgrut \
+  && python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+    n_iterations=<N> \
+    path=/root/work/yusun/ncore-nurec/data/ncore/clips/<clip>/pai_<clip>.json \
+    trainer.sky_backend=mlp \
+    out_dir=/root/work/yusun/ncore-nurec/output \
+    experiment_name=<name>'
+```
+
+- **不要再用旧的 7 层 v2 yaml**（`v2_full_4dviz_dynfix` 等）起新训练；旧 yaml 仅保留供历史 commit 复现，新工作一律 multilayer。
+- **camera_ids 5-cam ring 内置**：Stage 7 需 7-cam 时 CLI 覆盖 `'dataset.camera_ids=[...]'`，其他 override 直接 CLI 加在 multilayer 之上。
+- **exposure 默认 ON**（与 dynfix 等价），如做 ablation/复跑 baseline 加 `trainer.use_exposure=false`（详见 v2_plan.md § 14.5 V3-P1）。
+- **dataset path 必须是 manifest json 文件**（`pai_<clip>.json`），不是 clip 目录。
+
 ## v2 开发工作流（分层高斯）
 
 v2 分层高斯（LayeredGaussians）工作以两份活文档驱动：

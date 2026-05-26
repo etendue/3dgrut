@@ -1,0 +1,103 @@
+# @package _global_
+#
+# ===========================================================================
+#  NCore 3DGUT MCMC Multi-Layer — 单文件扁平配置 (2026-05-26)
+# ===========================================================================
+# 本 yaml 是 ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml 7 层递归链的
+# 字节等价扁平版, 把以下链路上所有 override 合并进一份文件:
+#
+#   dynfix → 4dviz → exposure → sky → full → road → ncore_3dgut_mcmc
+#
+# 启用的 v2 能力 (= dynfix 全部):
+#   * LayeredGaussians + LayeredMCMCStrategy
+#   * 4 个 layer: background / road / dynamic_rigids / sky_envmap
+#   * region-weighted L1 (trainer.layered_loss)
+#   * sky envmap (默认 cubemap; A800 必须 CLI 加 trainer.sky_backend=mlp)
+#   * per-camera affine exposure (use_exposure=true, 与 dynfix 保持一致;
+#     注: Stage 7 实证 exposure 会让 raw psnr_masked 退化, V3-P1 计划修复.
+#     若复跑 baseline 推荐 CLI 覆盖 trainer.use_exposure=false)
+#   * 4D viz metadata 入 ckpt (viz_4d.enabled=true)
+#   * T8/B3: bg-layer cuboid 内 opacity penalty + cuboid mask + dyn 位置 clamp
+#   * dynamic_rigids.max_n_particles 调到 300k (= dynfix)
+#   * MCMC relocate 单步上限 0.4 (= dynfix)
+#
+# Acceptance gate (1k smoke / 5k full smoke 同 dynfix):
+#   - exit 0; ckpt['viz_4d'] present
+#   - bg_dyn_cuboid_penalty enabled = true 在训练日志可见
+#   - layers.enabled = [background, road, dynamic_rigids, sky_envmap]
+#   - dynamic_rigids LayerSpec.max_n_particles = 300000
+# ===========================================================================
+
+defaults:
+  - /base_mcmc
+  - /dataset: ncore
+  - /initialization: lidar
+  - /render: 3dgut
+  - override /strategy: layered_mcmc
+  - _self_
+
+# ─── 根级 (源自 ncore_3dgut_mcmc.yaml) ───────────────────────────────────
+val_frequency: 999999  # never validate during training; rely on render.py post-eval
+
+initialization:
+  use_observation_points: false
+
+# ─── v2 layered model 开关 (源自 v2_road.yaml) ─────────────────────────
+use_layered_model: true
+layers:
+  # 4 层: 来自 v2_sky.yaml (扩展自 v2_road.yaml [bg,road] 和 v2_full.yaml [+dyn])
+  enabled: [background, road, dynamic_rigids, sky_envmap]
+  # T8/B3 dynfix: dyn 层最大粒子数 200k → 300k
+  overrides:
+    dynamic_rigids:
+      max_n_particles: 300000
+
+# ─── 数据集 (源自 v2_full_exposure.yaml: 5-cam ring) ────────────────────
+dataset:
+  load_aux_masks: true   # T3.1.b: sseg + lidar-sseg readers (v2_road)
+  # 5-cam ring (v2_full_exposure): 平衡 front-wide + rear-tele + 两侧 cross
+  # + 一个 rear-corner, 用来学 per-camera exposure delta. 7-cam 跑 Stage 7
+  # 时 CLI 覆盖整段 camera_ids 列表.
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_rear_tele_30fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_rear_left_70fov
+
+# ─── trainer (汇总所有上游 v2 yaml) ────────────────────────────────────
+trainer:
+  layered_loss: true       # v2_road: region-weighted L1
+  use_sky_envmap: true     # v2_sky
+  lambda_sky: 0.1          # v2_sky
+  # sky_backend / sky_resolution 保持 null (registry default = cubemap@128);
+  # A800 nvdiffrast 不可用 → CLI 加 trainer.sky_backend=mlp
+
+  # v2_full_exposure: per-camera affine exposure (Adam, exposure_lr)
+  # 注: Stage 7 实证 raw psnr_masked 退化 (15.63 vs 25.76 dB), V3-P1 待修.
+  # 若想 ablation 关闭, CLI 加 trainer.use_exposure=false
+  use_exposure: true
+  exposure_lr: 1.0e-3
+
+  # v2_full_4dviz_dynfix (T8/B3): bg-layer opacity 在 cuboid 内被压制,
+  # 让 MCMC relocate 把死粒子转移到 donor, dyn 层接管 cuboid 内部.
+  bg_dyn_cuboid_penalty:
+    enabled: true
+    lambda: 0.15                # dynfix 调强 (was 0.05) 压过 photometric pull
+    lambda_warmup_iters: 1000   # dynfix 调短 (was 5000) bg 必须先撤出 cuboid
+    use_cuboid_mask: true       # FTheta cuboid 投影填 image_infos["dyn_mask_cuboid"]
+    dyn_clamp_to_cuboid: true   # LayeredMCMCStrategy._post_optimizer_step 把
+                                # dynamic_rigids.positions 钳回 |local| ≤ size/2
+
+# ─── 4D viz metadata 入 ckpt (源自 v2_full_4dviz.yaml) ─────────────────
+viz_4d:
+  enabled: true
+  include_lidar: true
+  lidar_road_subsample: 200000
+  lidar_dynamic_subsample: 100000
+
+# ─── strategy 微调 (源自 v2_full_4dviz_dynfix.yaml) ─────────────────────
+# /strategy: layered_mcmc 已通过 defaults 加载, 此处只 override 单字段.
+strategy:
+  relocate:
+    max_relocation_fraction: 0.4   # dynfix: 90% 死时 dyn 不会瞬间团聚
