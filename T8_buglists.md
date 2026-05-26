@@ -112,6 +112,25 @@
 
 **用户实测**：✅ 已确认（dump 截图验证）。
 
+#### B2 后续 — 7 相机 cuboid 投影验证 + pinhole projector 补齐 (2026-05-26, A800)
+
+**目标**：B2 只验证了 viser 单一 ego primary FTheta 相机；扩展到 NCore v4 全部相机（实测此 clip 5 相机全 FTheta）+ 补齐 pinhole forward projector。
+
+**改动**：
+- `threedgrut_playground/utils/projector_common.py` (新) — 抽出 `horner_ascending` / `subdivide_polyline`
+- `threedgrut_playground/utils/ftheta_projector.py` — `FLIP_VISER_TO_OPENCV` 提取为 `__init__` 可配 `world_to_camera_flip`，默认值不变（B2 viser 路径零回归）
+- `threedgrut_playground/utils/pinhole_projector.py` (新) — `PinholeForwardProjector`（numpy + radial/tangential 畸变，签名与 FTheta 对齐，默认 `flip=eye(4)`）
+- `scripts/validate_cuboid_7cam.py` (新) — 7 相机投影验证脚本，遍历 `dataset.camera_ids` 按 model_type_name 自动选 projector，输出每相机 PNG + 2×4 拼图
+
+**单测**：FTheta 12 旧 + 2 新（`flip=I` parity + shape validation）+ Pinhole 11 新 + B2 overlay 集成 4 = **29 PASS 0 回归**。
+
+**A800 实跑（B3 E7 fix ckpt + dynfix config，5 个 FTheta 相机）**：
+- front_wide 9/24 ✅ / rear_tele 10/24 ✅ / cross_left 0/24 ✅（无车正确）/ cross_right 1/24 ✅ / rear_left 14/24 ✅（街边一排停车精准贴框）
+- 5/5 相机投影对齐通过肉眼判定，34 cuboid overlay 全部正确，无 projector bug
+
+**详细报告**：[docs/T8_artifacts/B2_7cam_validation_report.md](docs/T8_artifacts/B2_7cam_validation_report.md)
+**拼图截图**：[docs/T8_artifacts/B2_7cam_grid.png](docs/T8_artifacts/B2_7cam_grid.png)
+
 ---
 
 ### ⚠️ B3 — dynamic_rigids toggle 无效（代码修了但行为仍异常，P1）
