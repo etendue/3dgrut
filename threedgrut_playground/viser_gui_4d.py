@@ -321,6 +321,25 @@ class Viser4DViewer:
                               f"value={bool(_cb.value)} → enabled_layer_names="
                               f"{sorted(new_set)}", flush=True)
 
+        if self.engine is not None:
+            with folder:
+                initial_renderer = getattr(self.engine, "_requested_renderer", "3dgrt")
+                self._gui_renderer = self.server.gui.add_dropdown(
+                    "Renderer",
+                    options=["3dgrt", "3dgut"],
+                    initial_value=initial_renderer,
+                )
+
+                @self._gui_renderer.on_update
+                def _(_ev, _self=self):
+                    if _self.engine is not None:
+                        try:
+                            _self.engine.set_renderer(_self._gui_renderer.value)
+                            print(f"[viz_4d] renderer → {_self._gui_renderer.value}", flush=True)
+                        except Exception as exc:
+                            print(f"[viz_4d] renderer switch failed: {exc}", flush=True)
+                    _self.need_update = True
+
         @self.reset_view_button.on_click
         def _(_):
             self.need_update = True
@@ -1447,6 +1466,11 @@ def main() -> None:
                              "cores and don't need this flag. Scene "
                              "primitives (ego/cuboid/LiDAR) + timeline still "
                              "work in this mode.")
+    parser.add_argument("--renderer", type=str, default="3dgrt",
+                        choices=["3dgrt", "3dgut"],
+                        help="Rendering backend. '3dgrt' (default) uses OptiX ray tracing "
+                             "(requires RT cores). '3dgut' uses tile-based rasterization "
+                             "and works on A100/A800 without RT cores.")
     # T8.12-FIX (Phase A.2 + A.5): explicit viser fov + optional fisheye
     # raygen switch. Reference repo (tools/viser_multilayer_nurec.py) uses
     # --fov_deg=90 hard-set for fisheye-trained ckpts and renders cleanly via
@@ -1484,6 +1508,7 @@ def main() -> None:
             mesh_assets_folder=args.mesh_assets,
             envmap_assets_folder=args.envmap_assets,
             default_config=args.default_gs_config,
+            renderer=args.renderer,
         )
         # T8.12-FIX: opt-in fisheye raygen for FTheta-trained ckpts. Reference
         # repo + our T8.12 stuck with pinhole; this hook lets operators flip

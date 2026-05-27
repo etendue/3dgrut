@@ -708,6 +708,9 @@ class Primitives:
             rebuild (bool): Whether to rebuild or update existing BVH
         """
         if self.dirty or force:
+            if self.tracer is None:
+                self.dirty = False
+                return
             if self.has_visible_objects():
                 self.recompute_stacked_buffers()
                 self.tracer.build_mesh_acc(
@@ -818,10 +821,16 @@ class Engine3DGRUT:
     ANTIALIASING_MODES = ["4x MSAA", "8x MSAA", "16x MSAA", "Quasi-Random (Sobol)"]
 
     def __init__(
-        self, gs_object: str, mesh_assets_folder: str, default_config: str, envmap_assets_folder: Optional[str] = None
+        self, gs_object: str, mesh_assets_folder: str, default_config: str,
+        envmap_assets_folder: Optional[str] = None,
+        renderer: str = "3dgrt",
     ):
         self.scene_mog, self.scene_name = self.load_3dgrt_object(gs_object, config_name=default_config)
-        self.tracer = Tracer(self.scene_mog.conf)
+        self._requested_renderer = renderer
+        if renderer == "3dgut":
+            self.tracer = None  # rasterizer-only path; no OptiX tracer needed
+        else:
+            self.tracer = Tracer(self.scene_mog.conf)
         self.device = self.scene_mog.device
 
         self.frame_id = 0
@@ -1177,7 +1186,7 @@ class Engine3DGRUT:
 
         if is_first_pass:
             # Disable path tracer under certain settings, useful for comparing with the vanilla volumetric tracer
-            if not self.primitives.enabled or not self.primitives.has_visible_objects():
+            if not self.primitives.enabled or not self.primitives.has_visible_objects() or self.tracer is None:
                 if self.disable_gaussian_tracing:
                     rb = dict(
                         pred_rgb=torch.zeros_like(rays.rays_ori),
@@ -1209,7 +1218,7 @@ class Engine3DGRUT:
 
         # Keep a noisy version of the accumulated rgb buffer so we don't repeat denoising per frame
         rb["rgb_buffer"] = rb["rgb"]
-        if self.use_optix_denoiser:
+        if self.use_optix_denoiser and self.tracer is not None:
             rb["rgb"] = self.tracer.denoise(rb["rgb"])
 
         if rays.mask is not None:  # mask is for masking away pixels out of view for, i.e. fisheye
@@ -1393,8 +1402,25 @@ class Engine3DGRUT:
             scene_mog (MixtureOfGaussians): The 3D Gaussian model whose BVH needs to be rebuilt
         """
         rebuild = True
-        self.tracer.build_gs_acc(gaussians=scene_mog, rebuild=rebuild)
+        if self.tracer is not None:
+            self.tracer.build_gs_acc(gaussians=scene_mog, rebuild=rebuild)
         self.primitives.rebuild_bvh_if_needed()
+
+    def set_renderer(self, renderer: str) -> None:
+        """Switch rendering backend between '3dgut' (rasterizer) and '3dgrt' (OptiX ray tracing).
+
+        '3dgut' skips OptiX tracer init — works on A100/A800 without RT cores.
+        '3dgrt' lazily initializes the OptiX tracer on first switch; requires RT-capable GPU.
+        """
+        if renderer == self._requested_renderer:
+            return
+        self._requested_renderer = renderer
+        if renderer == "3dgut":
+            self.tracer = None
+        else:
+            if self.tracer is None:
+                self.tracer = Tracer(self.scene_mog.conf)
+                self.rebuild_bvh(self.scene_mog)
 
     def did_camera_change(self, camera: Camera) -> bool:
         """Checks if the camera view matrix has changed from the last cached state.
