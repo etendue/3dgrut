@@ -44,6 +44,16 @@ if __name__ == "__main__":
             "iterates the full test split."
         ),
     )
+    parser.add_argument(
+        "--novel-view",
+        action="store_true",
+        help=(
+            "T8.5.3 / V3-E3: also render 4 novel-view perturbations of each "
+            "anchor frame (lateral_1m / lateral_2m / yaw_5deg / yaw_10deg) "
+            "and record per-mode LPIPS vs the anchor GT in metrics.json. "
+            "5x render cost; off by default."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
@@ -55,6 +65,7 @@ if __name__ == "__main__":
         save_gt=args.save_gt,
         computes_extra_metrics=args.compute_extra_metrics,
         eval_cameras=eval_cameras_list,
+        novel_view=args.novel_view,
     )
 
     renderer.render_all()
