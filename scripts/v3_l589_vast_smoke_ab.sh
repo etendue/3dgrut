@@ -51,9 +51,9 @@ export CUDA_VISIBLE_DEVICES=0
 python train.py \
   "${COMMON_FLAGS[@]}" \
   experiment_name="$EXP_OFF" \
-  +layers.overrides.dynamic_rigids.symmetric_axis=null \
-  +layers.overrides.dynamic_rigids.optimize_track_albedo=false \
-  +layers.overrides.dynamic_rigids.optimize_track_scale=false \
+  ++layers.overrides.dynamic_rigids.symmetric_axis=null \
+  ++layers.overrides.dynamic_rigids.optimize_track_albedo=false \
+  ++layers.overrides.dynamic_rigids.optimize_track_scale=false \
   2>&1 | tee "/tmp/${EXP_OFF}.log"
 echo "BASELINE done at $(date +%H:%M:%S)"
 
@@ -67,9 +67,9 @@ echo "starting at $(date +%H:%M:%S)"
 python train.py \
   "${COMMON_FLAGS[@]}" \
   experiment_name="$EXP_ON" \
-  +layers.overrides.dynamic_rigids.symmetric_axis=Y \
-  +layers.overrides.dynamic_rigids.optimize_track_albedo=true \
-  +layers.overrides.dynamic_rigids.optimize_track_scale=true \
+  ++layers.overrides.dynamic_rigids.symmetric_axis=Y \
+  ++layers.overrides.dynamic_rigids.optimize_track_albedo=true \
+  ++layers.overrides.dynamic_rigids.optimize_track_scale=true \
   2>&1 | tee "/tmp/${EXP_ON}.log"
 echo "EXPERIMENT done at $(date +%H:%M:%S)"
 
