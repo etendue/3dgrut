@@ -1133,6 +1133,29 @@ Active mask: `a[f-1]=a[f]=a[f+1]=1` 三连活跃才计入（避免跨 active 边
 - ~~双视图 / BEV / per-track drift 直方图 viz~~ → ✅ Stage D.3 完成（下条）
 - A800 长训（用户暂缓 merge main）
 
+### ✅ V3 Stage D.2 — `render_learned_vs_gt.py` + `LayeredGaussians.pose_source` flag (2026-05-27, Mac edit + ThinkPad RTX 4090 验证)
+
+**目标**: 在已学完的 ckpt 上以 GT pose render 一遍、以 learned pose render 一遍，并排显示 + 像素差异 — 把 Stage A/B 学到了什么从数字（drift mm/°）变成视觉可证。
+
+**改动 (3 files, +144 / -2 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut/layers/layered_model.py` | `set_pose_source("learned"\|"gt")` 方法 + `pose_source` `@property` (默认 "learned")。`_compose_pose_for_track` / `_compose_pose_all_frames` 顶部加 gt 短路：检测 `_track_pose_gt_<tid>` buffer 存在则返回它的 slice（no-grad）；不存在（buffer-only legacy 模式）则 fall through 到原路径，行为不变 |
+| `scripts/render_learned_vs_gt.py` | NEW — Renderer.from_checkpoint 加载 → 按 `--stride` / `--num-samples` 从 dataloader 取样 → 同一 batch 两次 forward（toggle `pose_source`）→ 三联图保存 `[GT \| Learned \| \|Δ\| × amplify]`。结束后 `set_pose_source("learned")` 复原默认 |
+| `threedgrut/tests/test_pose_source_flag.py` | NEW — 8 个单测：default="learned"；setter ValueError on bad string；gt 路由真返回 `_track_pose_gt_` slice（人为漂移 quat/trans 不影响）；batched `_compose_pose_all_frames` 同样；gt 路由 no-grad；learned 路由 grad；`tracks_poses` @property 跟随 flag；buffer-only mode（无 `_track_pose_gt_`）gt 调用安全 fall through |
+
+**Mac CPU 单测**: `test_pose_source_flag.py` 8/8 + Stage A `test_learnable_pose_param.py` 13/13 全过 (0.11s + 0.67s)。Stage B `test_learnable_pose_smoothness.py` 11 passed + 3 skipped（importorskip 守门，无回归）。
+
+**ThinkPad RTX 4090 集成测试** (ckpt `poseopt_on_30k_freeze10k/ours_30000/ckpt_30000.pt`, Stage A only — λ=0):
+- 5 个 sample 跨 dataloader stride=125（5 cam × 75 frame = 375 帧的均匀采样）
+- 5 张 triptych PNG 写出，文件名含 `cam_<camera_id>` 不再是 `cam_cam`
+- diff column: 因 Stage A 30k drift p99=53mm（pixel space ~1px@50m），diff max 0.0001-0.0016，amplify=10/50 都几乎看不见（**这是预期 + 实证**：viz 脚本工作，drift 单纯太小）
+- 视觉验证：左/中两列 GT vs Learned 渲染肉眼无差，右列基本黑色 — 与 Stage A 设计目标"低 drift"一致
+- 待对照：A800 Stage B 30k 跑完后（drift 预期 ~16× 大），diff 列应出现可见亮斑（cuboid 边缘高亮）
+
+**用途**: (a) Stage A vs Stage B 30k A/B 视觉对照；(b) pose-prior loss / 6D rot ablation 视觉锚；(c) 后续 paper figure 直接用
+
 ### ✅ V3 Stage D.3 — analyze_pose_drift.py `--plot` BEV / hist viz (2026-05-27, Mac edit + ThinkPad RTX 4090 验证)
 
 **改动 (1 file, +82 / -5 行)**: `scripts/analyze_pose_drift.py` —

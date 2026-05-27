@@ -373,6 +373,23 @@ class LayeredGaussians(nn.Module):
         tids.sort()
         return tids
 
+    # ─── V3 Stage D.2 — pose_source flag for A/B render comparison ──────────
+    # "learned" (default) → compose pose from _track_quat / _track_trans
+    #                       Parameters; gradient-tracking; what training uses.
+    # "gt"                → return frozen _track_pose_gt_<tid> buffer slice;
+    #                       no gradient. For render_learned_vs_gt.py to
+    #                       toggle at inference time without re-initializing
+    #                       the model. Falls through to learned in buffer-
+    #                       only / legacy mode (no _track_pose_gt_ exists).
+    def set_pose_source(self, source: str) -> None:
+        if source not in ("learned", "gt"):
+            raise ValueError(f"pose_source must be 'learned' or 'gt', got {source!r}")
+        self._pose_source = source
+
+    @property
+    def pose_source(self) -> str:
+        return getattr(self, "_pose_source", "learned")
+
     def _get_track_pose_F(self, tid: str) -> int:
         """Number of frames in a track's pose schedule. Mode-agnostic."""
         # Learnable: quat[F, 4]; buffer: pose[F, 4, 4]; active[F]
@@ -397,7 +414,16 @@ class LayeredGaussians(nn.Module):
         ``populate_tracks`` half-restored from a buffer-mode ckpt into a
         learnable-mode session still works (see ``_populate_tracks_impl``
         cross-mode adoption path).
+
+        V3 Stage D.2: when ``self.pose_source == "gt"`` and a frozen
+        ``_track_pose_gt_<tid>`` buffer is registered (learnable mode only),
+        return that slice instead — bypasses learned drift for A/B viz.
         """
+        # V3 Stage D.2: GT route (only meaningful in learnable mode).
+        if self.pose_source == "gt":
+            pose_gt = getattr(self, f"_track_pose_gt_{tid}", None)
+            if pose_gt is not None:
+                return pose_gt[idx]
         # Buffer mode (or legacy ckpt restored before mode flip).
         pose_buf = getattr(self, f"_track_pose_{tid}", None)
         if pose_buf is not None:
@@ -421,7 +447,16 @@ class LayeredGaussians(nn.Module):
         Returns ``[F, 4, 4]``. Used by the ``tracks_poses`` ``@property``,
         ``get_model_parameters``-time persistence, and any caller that wants
         the full schedule for one track. Gradient-tracking in learnable mode.
+
+        V3 Stage D.2: see ``_compose_pose_for_track`` for ``pose_source``
+        flag semantics — same gt-routing applies here for full-schedule
+        callers (e.g. ``tracks_poses`` property used by viz).
         """
+        # V3 Stage D.2: GT route (only meaningful in learnable mode).
+        if self.pose_source == "gt":
+            pose_gt = getattr(self, f"_track_pose_gt_{tid}", None)
+            if pose_gt is not None:
+                return pose_gt
         pose_buf = getattr(self, f"_track_pose_{tid}", None)
         if pose_buf is not None:
             return pose_buf
