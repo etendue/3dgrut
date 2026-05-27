@@ -469,6 +469,33 @@ class Renderer:
                 sum(1 for v in cp_values if v < 15.0)
             )
             table["mean_class_psnr"] = float(np.mean(cp_values))
+
+        # V3-L5/L8/L9 — diagnostic fields. Written even when the toggles are
+        # OFF (as ``null``) so downstream A/B-comparison scripts can rely on
+        # the keys being present in every metrics.json.
+        albedo_t = getattr(self.model, "_track_albedo_table", None)
+        log_scale_t = getattr(self.model, "_track_log_scale_table", None)
+        # symmetric_axis lives on the dynamic_rigids LayerSpec.extra.
+        sym_axis_val = None
+        specs = getattr(self.model, "specs", None)
+        if specs is not None:
+            dyn = next((s for s in specs if s.name == "dynamic_rigids"), None)
+            if dyn is not None:
+                sym_axis_val = (getattr(dyn, "extra", {}) or {}).get("symmetric_axis")
+        metrics_json["symmetric_axis"] = sym_axis_val  # 'Y' / 'X' / 'Z' / null
+        metrics_json["track_albedo_l2_mean"] = (
+            float(albedo_t.detach().norm(dim=-1).mean().cpu())
+            if albedo_t is not None else None
+        )
+        metrics_json["track_log_scale_mean"] = (
+            float(log_scale_t.detach().mean().cpu())
+            if log_scale_t is not None else None
+        )
+        metrics_json["track_log_scale_std"] = (
+            float(log_scale_t.detach().std().cpu())
+            if log_scale_t is not None and log_scale_t.numel() > 1 else None
+        )
+
         metrics_path = os.path.join(self.out_dir, "metrics.json")
         with open(metrics_path, "w") as f:
             json.dump(metrics_json, f, indent=2)

@@ -48,9 +48,25 @@ layers:
   # 4 层: 来自 v2_sky.yaml (扩展自 v2_road.yaml [bg,road] 和 v2_full.yaml [+dyn])
   enabled: [background, road, dynamic_rigids, sky_envmap]
   # T8/B3 dynfix: dyn 层最大粒子数 200k → 300k
+  # V3-L5/L8/L9 (NuRec dynamic_rigids tricks): 全部 default OFF — A/B run 时
+  # CLI 用 ``+layers.overrides.dynamic_rigids.<key>=<value>`` 翻转, 例:
+  #   +layers.overrides.dynamic_rigids.symmetric_axis=Y
+  #   +layers.overrides.dynamic_rigids.optimize_track_albedo=true
+  #   +layers.overrides.dynamic_rigids.optimize_track_scale=true
   overrides:
     dynamic_rigids:
       max_n_particles: 300000
+      # V3-L5: 'Y' 启用左右对称粒子初始化 (车辆 default 推荐); null = OFF
+      symmetric_axis: null
+      # V3-L8: per-track 3-dim RGB bias on DC SH (features_albedo[:,:3])
+      optimize_track_albedo: false
+      # V3-L9: per-track log-space scale offset broadcast to all 3 axes
+      optimize_track_scale: false
+      # V3 共享 warmup: requires_grad 在 global_step >= track_warmup_steps 翻转
+      track_warmup_steps: 500
+      # Per-param-group base LR (NuRec 原文 1e-5, SequentialLR Constant→Linear→Cosine)
+      track_albedo_lr: 1.0e-5
+      track_scale_lr: 1.0e-5
 
 # ─── 数据集 (源自 v2_full_exposure.yaml: 5-cam ring) ────────────────────
 dataset:

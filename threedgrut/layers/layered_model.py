@@ -155,28 +155,35 @@ class _LayeredOptimizerView:
     (byte-identical with the v1 path; this wrapper is not used).
     """
 
-    def __init__(self, layers: nn.ModuleDict) -> None:
+    def __init__(self, layers: nn.ModuleDict,
+                 extra_optimizers: Optional[list] = None) -> None:
         self._layers = layers
+        # V3-L8/L9: optimizers attached to LayeredGaussians itself (not to a
+        # specific layer) — e.g. the per-track albedo / log-scale Adam. Empty
+        # list when no V3 extras are enabled, keeping baseline cost zero.
+        self._extra_optimizers = list(extra_optimizers or [])
+
+    def _all_optimizers(self):
+        for layer in self._layers.values():
+            opt = getattr(layer, "optimizer", None)
+            if opt is not None:
+                yield opt
+        for opt in self._extra_optimizers:
+            yield opt
 
     def step(self) -> None:
-        for layer in self._layers.values():
-            opt = getattr(layer, "optimizer", None)
-            if opt is not None:
-                opt.step()
+        for opt in self._all_optimizers():
+            opt.step()
 
     def zero_grad(self, set_to_none: bool = True) -> None:
-        for layer in self._layers.values():
-            opt = getattr(layer, "optimizer", None)
-            if opt is not None:
-                opt.zero_grad(set_to_none=set_to_none)
+        for opt in self._all_optimizers():
+            opt.zero_grad(set_to_none=set_to_none)
 
     @property
     def param_groups(self) -> list[dict]:
         groups: list[dict] = []
-        for layer in self._layers.values():
-            opt = getattr(layer, "optimizer", None)
-            if opt is not None:
-                groups.extend(opt.param_groups)
+        for opt in self._all_optimizers():
+            groups.extend(opt.param_groups)
         return groups
 
 
@@ -355,6 +362,21 @@ class LayeredGaussians(nn.Module):
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
             out["sky_envmap_state"] = self.layers["sky_envmap"].state_dict()
+        # V3-L8/L9: per-track albedo / log-scale tables and their Adam state.
+        # Stored under a sibling key (parallel to ``sky_envmap_state``) so the
+        # NRE ckpt schema only adds when V3 toggles are enabled — OFF runs
+        # keep byte-identical ckpts to v2 baseline.
+        track_tables: dict = {}
+        if hasattr(self, "_track_albedo_table"):
+            track_tables["albedo"] = self._track_albedo_table.detach().cpu()
+        if hasattr(self, "_track_log_scale_table"):
+            track_tables["log_scale"] = self._track_log_scale_table.detach().cpu()
+        track_opt = getattr(self, "_track_optim", None)
+        if track_tables:
+            entry: dict = {"tables": track_tables}
+            if track_opt is not None:
+                entry["optimizer"] = track_opt.state_dict()
+            out["track_optim_state"] = entry
         return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
@@ -421,6 +443,43 @@ class LayeredGaussians(nn.Module):
                 sky_state = checkpoint["sky_envmap_state"]
             if sky_state is not None and "sky_envmap" in self.layers:
                 self.layers["sky_envmap"].load_state_dict(sky_state)
+            # V3-L8/L9: restore per-track tables + Adam state. Looked up under
+            # either NRE-wrapped or unwrapped key; absent entries leave tables
+            # untouched (so an OFF-config load on an ON-trained ckpt produces
+            # a clear warning + safe fallback rather than crashing).
+            track_state = None
+            if (
+                "model" in checkpoint
+                and isinstance(checkpoint["model"], dict)
+                and "track_optim_state" in checkpoint["model"]
+            ):
+                track_state = checkpoint["model"]["track_optim_state"]
+            elif "track_optim_state" in checkpoint:
+                track_state = checkpoint["track_optim_state"]
+            if track_state is not None:
+                tables = track_state.get("tables", {}) or {}
+                if "albedo" in tables and hasattr(self, "_track_albedo_table"):
+                    with torch.no_grad():
+                        self._track_albedo_table.copy_(
+                            tables["albedo"].to(self._track_albedo_table.device)
+                        )
+                if "log_scale" in tables and hasattr(self, "_track_log_scale_table"):
+                    with torch.no_grad():
+                        self._track_log_scale_table.copy_(
+                            tables["log_scale"].to(
+                                self._track_log_scale_table.device
+                            )
+                        )
+                opt_state = track_state.get("optimizer")
+                track_opt = getattr(self, "_track_optim", None)
+                if opt_state is not None and track_opt is not None:
+                    try:
+                        track_opt.load_state_dict(opt_state)
+                    except (ValueError, KeyError) as e:
+                        logger.warning(
+                            f"[ckpt] track_optim load_state_dict failed "
+                            f"({type(e).__name__}: {e}); resetting to zero-init."
+                        )
             # T8.12 fix: ckpt state_dicts hold CPU tensors and load_state_dict
             # does not migrate device. Trainer-path eval always calls
             # ``model.cuda()`` after construction so this is invisible there;
@@ -652,6 +711,20 @@ class LayeredGaussians(nn.Module):
                         rotations_local=layer.rotation,
                         timestamp_us=timestamp_us, frame_id=frame_id,
                     )
+            # V3-L8/L9 per-track bias tables apply only to dynamic_rigids.
+            # Looked up once outside the param loop to avoid repeated hasattr.
+            apply_dyn_bias = (
+                spec.name == "dynamic_rigids"
+                and hasattr(layer, "track_ids")
+            )
+            albedo_table = (
+                getattr(self, "_track_albedo_table", None)
+                if apply_dyn_bias else None
+            )
+            log_scale_table = (
+                getattr(self, "_track_log_scale_table", None)
+                if apply_dyn_bias else None
+            )
             for n in _FORWARD_PARAM_NAMES:
                 v = getattr(layer, n)
                 if n == "positions" and transformed_positions is not None:
@@ -674,6 +747,27 @@ class LayeredGaussians(nn.Module):
                     v = torch.where(
                         active_mask.unsqueeze(-1), v, inactive_value,
                     )
+                elif (
+                    n == "features_albedo"
+                    and albedo_table is not None
+                    and v.shape[0] > 0
+                ):
+                    # V3-L8: per-track RGB bias on DC SH (features_albedo
+                    # is the [N, 3] DC band). Tables zero-init → identity
+                    # until the trainer flips requires_grad at warmup.
+                    bias = albedo_table[layer.track_ids.to(albedo_table.device)]
+                    v = v + bias.to(v.device, v.dtype)
+                elif (
+                    n == "scale"
+                    and log_scale_table is not None
+                    and v.shape[0] > 0
+                ):
+                    # V3-L9: per-track log-space scale offset broadcast to
+                    # all 3 axes. Zero-init = no change (exp(0)=1×).
+                    log_off = log_scale_table[
+                        layer.track_ids.to(log_scale_table.device)
+                    ]
+                    v = v + log_off.to(v.device, v.dtype)
                 pieces[n].append(v)
         # All particle layers disabled → return 0-row tensors with correct
         # trailing dims so callers (and _FusedView consumers) never trip on
@@ -1023,6 +1117,72 @@ class LayeredGaussians(nn.Module):
                 if meta:
                     self.tracks_metadata[tid] = meta
 
+        # V3-L8 / V3-L9: per-track albedo / log-scale tables (NuRec
+        # ``optimize_track_albedo`` / ``optimize_track_scale``). Registered
+        # only when the dynamic_rigids LayerSpec.extra opts in; defaults to
+        # OFF so v2 baseline ckpts remain byte-identical and existing tests
+        # cannot regress on schema. Tables sorted by ``tid`` matching the
+        # ``track_ids`` produced by ``init_dynamic_rigid_layer`` (which also
+        # sorts ``instance_pts_dict.keys()``) so ``table[track_ids_per_pt]``
+        # indexes correctly.
+        self._register_track_optim_tables(tracks)
+
+    def _dyn_spec(self):
+        """Return the ``dynamic_rigids`` LayerSpec or ``None`` if absent.
+
+        Used by the V3-L8/L9 table registration + the fused_view bias
+        application to read ``extra`` flags without coupling to trainer.
+        """
+        for s in self.specs:
+            if s.name == "dynamic_rigids":
+                return s
+        return None
+
+    def _register_track_optim_tables(self, tracks: dict) -> None:
+        """V3-L8/L9: register per-track albedo + log-scale Parameter tables.
+
+        Idempotent. ``requires_grad`` starts False — the trainer flips it on
+        when ``global_step >= track_warmup_steps`` (see V3-L5/L8/L9 plan §C
+        SequentialLR + Task #4). Tables are zero-initialised so the OFF
+        ckpt → ON ckpt loading path produces an identity transform.
+
+        Both tables sized [K] (number of tracks) in the order matching
+        ``sorted(tracks.keys())`` — this is the same order
+        ``init_dynamic_rigid_layer`` uses for its ``track_ids`` output.
+        """
+        spec = self._dyn_spec()
+        if spec is None:
+            return
+        extra = getattr(spec, "extra", {}) or {}
+        if not (extra.get("optimize_track_albedo")
+                or extra.get("optimize_track_scale")):
+            return  # both OFF → byte-identical to pre-V3 schema
+
+        # Pick a device consistent with the existing track buffers; fall
+        # back to CPU when populate_tracks ran before any layer materialised.
+        device = torch.device("cpu")
+        try:
+            any_pose = next(iter(self.tracks_poses.values()))
+            device = any_pose.device
+        except StopIteration:
+            pass
+
+        K = len(tracks)
+        if extra.get("optimize_track_albedo"):
+            if hasattr(self, "_track_albedo_table"):
+                delattr(self, "_track_albedo_table")
+            albedo = nn.Parameter(torch.zeros(K, 3, dtype=torch.float32,
+                                              device=device))
+            albedo.requires_grad_(False)
+            self.register_parameter("_track_albedo_table", albedo)
+        if extra.get("optimize_track_scale"):
+            if hasattr(self, "_track_log_scale_table"):
+                delattr(self, "_track_log_scale_table")
+            log_scale = nn.Parameter(torch.zeros(K, 1, dtype=torch.float32,
+                                                 device=device))
+            log_scale.requires_grad_(False)
+            self.register_parameter("_track_log_scale_table", log_scale)
+
     # ------------------------------------------------------------------ T3.5.b trainer compat
     def build_acc(self, rebuild: bool = True) -> None:
         """Multi-layer: forward build_acc to every particle layer.
@@ -1083,6 +1243,11 @@ class LayeredGaussians(nn.Module):
                         else getattr(trainer_conf, "sky_lr", 0.01)
                     )
                 sky.optimizer = torch.optim.Adam(sky.parameters(), lr=float(sky_lr))
+        # V3-L8/L9: attach a dedicated Adam for the per-track albedo / log-scale
+        # tables when either is enabled. requires_grad starts False (warmup
+        # gate); the trainer flips it on at global_step >= track_warmup_steps.
+        # Until then this Adam runs but skips params with no grad — no cost.
+        self._maybe_setup_track_optim()
         if state_dict is not None:
             logger.warning(
                 "LayeredGaussians.setup_optimizer: multi-layer mode ignores "
@@ -1101,12 +1266,75 @@ class LayeredGaussians(nn.Module):
 
         Multi-layer mode: return a ``_LayeredOptimizerView`` that fans
         ``step()`` / ``zero_grad()`` / ``param_groups`` across each layer's
-        sub-optimizer.
+        sub-optimizer plus any V3-L8/L9 track optimizer attached on self.
         """
         bg = self._single_bg_layer()
         if bg is not None and getattr(bg, "optimizer", None) is not None:
             return bg.optimizer
-        return _LayeredOptimizerView(self.layers)
+        extras: list = []
+        track_opt = getattr(self, "_track_optim", None)
+        if track_opt is not None:
+            extras.append(track_opt)
+        return _LayeredOptimizerView(self.layers, extra_optimizers=extras)
+
+    # ------------------------------------------------------------------ V3-L8/L9
+    def _maybe_setup_track_optim(self) -> None:
+        """Create the per-track albedo / log-scale Adam when either table
+        is registered. Idempotent — a second setup_optimizer() call replaces
+        the previous optimizer (matches v2 retraining pattern)."""
+        params: list = []
+        if hasattr(self, "_track_albedo_table"):
+            params.append({
+                "params": [self._track_albedo_table],
+                "lr": float(self._track_lr("albedo")),
+                "name": "track_albedo",
+            })
+        if hasattr(self, "_track_log_scale_table"):
+            params.append({
+                "params": [self._track_log_scale_table],
+                "lr": float(self._track_lr("scale")),
+                "name": "track_log_scale",
+            })
+        if not params:
+            return
+        # Replace any pre-existing instance (e.g. on retrain / resume).
+        object.__setattr__(self, "_track_optim", torch.optim.Adam(params))
+
+    def _track_lr(self, which: str) -> float:
+        """Resolve the per-track LR from dynamic_rigids LayerSpec.extra.
+
+        ``which`` ∈ {"albedo", "scale"}. Falls back to 1e-5 (NuRec default).
+        """
+        spec = self._dyn_spec()
+        if spec is None:
+            return 1.0e-5
+        extra = getattr(spec, "extra", {}) or {}
+        key = "track_albedo_lr" if which == "albedo" else "track_scale_lr"
+        return float(extra.get(key, 1.0e-5))
+
+    def maybe_activate_track_params(self, global_step: int) -> bool:
+        """Warmup gate for V3-L8/L9. Flip ``requires_grad`` on the per-track
+        Parameter tables when ``global_step >= track_warmup_steps``.
+
+        Returns ``True`` exactly once — on the step the flip happens — so
+        the trainer can log a one-line ⚡ confirmation. ``False`` on all
+        other steps (cheap to call every iteration; no side effects after
+        the first flip).
+        """
+        spec = self._dyn_spec()
+        if spec is None:
+            return False
+        extra = getattr(spec, "extra", {}) or {}
+        warmup = int(extra.get("track_warmup_steps", 500))
+        if global_step < warmup:
+            return False
+        flipped = False
+        for name in ("_track_albedo_table", "_track_log_scale_table"):
+            t = getattr(self, name, None)
+            if t is not None and not t.requires_grad:
+                t.requires_grad_(True)
+                flipped = True
+        return flipped
 
     def get_layer_mask(self, name: str) -> torch.Tensor:
         """Return Bool mask of shape [N_total] selecting particles of layer `name`.
