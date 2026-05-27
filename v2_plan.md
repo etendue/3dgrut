@@ -977,6 +977,34 @@ flowchart LR
 
 ## 5. Done Log
 
+### ✅ viser_gui_4d 3DGUT/3DGRT 渲染器切换 + A800 无 RT 核支持 (2026-05-27, commit 38a5af1)
+
+**触发**: A800 无 RT 核，`viser_gui_4d.py` 启动即崩溃（`HybridOptixTracer` → `libplayground_cc.so` OptiX init 失败）。同时希望在有 RT 核的 GPU 上支持 3DGUT ↔ 3DGRT 运行时切换做对比。
+
+**根本原因**: `Engine3DGRUT.__init__:824` 无条件调用 `Tracer(conf)` → 创建 `HybridOptixTracer`，即使 LayeredGaussians checkpoint 渲染完全走 `lib3dgut_cc.so` 光栅化路径，从不用 OptiX tracer。
+
+**改动 (2 files)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut_playground/engine.py` | `Engine3DGRUT.__init__` 新增 `renderer: str = "3dgrt"` 参数；`renderer="3dgut"` 时 `self.tracer=None` 跳过 OptiX init；新增 `set_renderer()` 方法支持热切换（切到 3DGRT 时懒惰初始化 Tracer）；5 处 `self.tracer.*` 调用加 `if self.tracer is not None` 守卫（`Primitives.rebuild_bvh_if_needed` early-return、`rebuild_bvh` 的 `build_gs_acc`、`render_pass` 的 denoiser、`render_pass` 的 hybrid 路径 fallback） |
+| `threedgrut_playground/viser_gui_4d.py` | 新增 `--renderer {3dgrt,3dgut}` CLI flag（默认 `3dgrt`，向后兼容）；`Engine3DGRUT` 构造时透传 `renderer=args.renderer`；viser GUI "Render Controls" folder 新增 **Renderer 下拉框**（`add_dropdown`），on_update 回调调 `engine.set_renderer()` |
+
+**A800 验证 (2026-05-27, GPU 0, v3_kpi_7cam_30k ckpt)**:
+- `python viser_gui_4d.py --renderer 3dgut …` → 启动成功，无 OptiX/RT 崩溃
+- `lib3dgut_cc.so` JIT 编译加载 → 70 tracks + FTheta 相机全部加载
+- viser 监听 `http://localhost:8080`，SSH 隧道 Mac 浏览器可访问
+
+**FPS 基准 (A800 A800-SXM4-80GB, `scripts/bench_renderer_fps.py`)**:
+
+| 分辨率 | renderer | 均值 FPS | 中位 FPS | 均值 ms |
+|--------|----------|----------|----------|---------|
+| 1024×1024 | 3dgut | **36.0** | 36.5 | 27.8 ms |
+
+p5 慢尾 33.1 fps / p95 快突发 38.3 fps，抖动极小（±5 fps）。
+
+**新增工具**: `scripts/bench_renderer_fps.py` — headless 渲染基准脚本，支持 `--renderer 3dgut/3dgrt --resolution N --n_frames N`。
+
 ### ✅ Config 重构 — 扁平化 v2 多层训练配置链 (2026-05-26, A800 GPU 0)
 
 **用户触发**: "当前的训练配置 ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml 递归的太多, 建一个独立的配置把其他关于 v2 的配置都清理掉. 建一个 ncore_3dgut_mcmc_multilayer.yaml 的单独配置. 在 A800 上快速验证一下".
