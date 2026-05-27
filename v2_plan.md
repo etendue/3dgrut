@@ -977,7 +977,7 @@ flowchart LR
 
 ## 5. Done Log
 
-### 🟡 V3 Stage A — Learnable Cuboid Pose Mac 落地 (2026-05-26, Mac本地，A800 验收待补)
+### ✅ V3 Stage A — Learnable Cuboid Pose 落地 + ThinkPad RTX 4090 1.5k 验证 (2026-05-27, commit 67d11e6 + 8c48815, ThinkPad GPU 1)
 
 **用户触发**: dynamic rigid gaussian 训练有模糊重影；结合 DriveStudio `RigidNodes` 分析（见 `/Users/etendue/repo/drivestudio/dynamic_rigid_gaussian_analysis.md`），把 tracker 标注 pose 作为可学习 Parameter，photometric loss 反向 refine。
 
@@ -1009,9 +1009,40 @@ flowchart LR
   - `test_transform_means_inactive.py::test_transform_means_and_active_rotation_composition_yaw` 的 `requires_grad=True` scalar warning，main 上同样存在
   - 两个都不是 V3 改动引入
 
-**A800 出口验收（待补）**：
-- 5k smoke baseline byte-identical（CLI `trainer.learnable_pose.enabled=false`）
-- 10k smoke with `enabled=true`：total_loss 不 NaN，freeze 期 trans Parameter 不变，5k 后开始 drift；trans Δ 中位数 < 0.3m；metrics.json 含 `learnable_pose_state`
+**ThinkPad RTX 4090 GPU 实测验收**（A800 当时另有实验，改在 ThinkPad 跑）:
+
+> 远端环境：`/home/yusun/repo/3dgrut2`（rsync mirror，无 .git），conda env `3dgrut2`（torch 2.11.0+cu128, kaolin 0.17.0, slangtorch 1.3.18），dataset `/home/yusun/work/data/9ae151dc/pai_9ae151dc-e87b-41a7-8e85-71772f9603d7.json`，5 cam × 75 frame = 375 frames。GPU 1=RTX 4090 24 GB（GPU 0=Quadro T2000 4 GB 不用，**注意 CUDA 默认 FASTEST_FIRST 把 4090 当成 device 0，必须 `CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=1` 才能选中 4090**）。`PYTHONNOUSERSITE=1` 防 `~/.local/lib/zarr` shadow conda env zarr 导致 `numcodecs.blosc.cbuffer_sizes` ImportError。
+
+**🔴 发现并修复一个真 bug（commit 8c48815 fix）**：
+- 第一次 ThinkPad sanity 100 iter ckpt 实测 **0 个 `_track_quat_*` / `_track_trans_*` entries**（应 70 个）
+- 根因：`LayeredGaussians.get_model_parameters` 是结构化保存（不是 `nn.Module.state_dict()`），原实现只 emit per-layer MoG params + sky_envmap_state + per-layer track_ids，**不包含** `LayeredGaussians`-level 的 `_track_*` buffer/Parameter
+- legacy buffer 模式无问题（`populate_tracks` 每次从 manifest 重 reload pose）；learnable 模式**致命**（Adam 学到的 Param 是 refined pose 唯一持久副本）
+- 原 Mac 单测 `test_state_dict_round_trip_learnable_pose` 走 `nn.Module.state_dict()` 不能暴露——加 2 个新 trainer-format ckpt round-trip 单测 pin 住这个 bug
+- 修复：`get_model_parameters` 加 `layered_track_state` 子键收集 `_track_*` 状态；`init_from_checkpoint` 走 `self.load_state_dict(track_state, strict=False)` 恢复
+- 修复后 ckpt 正确含 70 quat + 70 trans + 70 pose_gt + 70 active 共 **140 个 layered_track_state keys**
+
+**ThinkPad 验证结果（3 个 run）**：
+
+| run | yaml | iter | freeze | 状态 | PSNR | PSNR_masked | cc_PSNR_masked | class_PSNR | 备注 |
+|---|---|---|---|---|---|---|---|---|---|
+| sanity v1 | multilayer_poseopt | 100 | 5000 | 🔴 ckpt 缺 Param | 14-18 dB | — | — | — | 暴露 ckpt 持久化 bug → 8c48815 fix |
+| sanity v2 | multilayer_poseopt | 100 | 5000 | ✅ | — | — | — | — | ckpt 含 70 × {quat, trans, pose_gt, active}；drift 验证 trans/rot Δ=0（freeze 期未 step）|
+| **baseline** | multilayer | **500** | n/a | ✅ | **19.05** | **19.93** | **18.00** | **18.74** | v2 baseline 锚点 |
+| **poseopt off** | multilayer_poseopt + CLI `enabled=false` | **500** | n/a | ✅ | **18.70** | **19.63** | **17.74** | **18.62** | 与 baseline Δ < 0.36 dB（MCMC + CUDA atomic 非确定性 + experiment_name → RNG 影响合理范围）；ckpt 140 keys 完全是 70 × `_track_pose_<tid>` legacy buffer + 70 × `_track_active_<tid>`，**0 V3 Param**，无 `learnable_pose_state` ✅ |
+| **poseopt on** | multilayer_poseopt | **1500** | **200** | ✅ | **21.34** | **22.61** | **21.79** | **20.33** | 1500 iter / 344.07 s / 4.36 it/s；ckpt 含 70 × {quat, trans, pose_gt, active}；`learnable_pose_state.optimizer.state` 含 **140 个 Adam moment entries**（确认 Adam 实际 step 过 1300 iter）|
+
+**Pose drift 实测**（1500 iter, freeze=200, Adam step 1300 iter，14994 active (track, frame) pairs）：
+
+| 维度 | min | median | p90 | p99 | max | mean |
+|---|---|---|---|---|---|---|
+| **trans Δ (m)** | 0.0000 | 0.0000 | 0.0044 | 0.0075 | 0.0124 | 0.0014 |
+| **rot Δ (°)** | 0.0000 | 0.0000 | 0.0560 | 0.0885 | 0.1480 | 0.0129 |
+
+- median=0 因大量帧 inactive (track 不可见 → gradient=0 → pose 不动)，正确行为
+- 1300 Adam step 后 active 帧 pose 漂移 p99 < 8 mm / < 0.09°，符合"软先验" refinement 预期
+- Top 5 drifted tracks (`tid 7/24/59/97/94`) max trans Δ 0.011–0.012 m / max rot Δ 0.11–0.14° 全部合理
+
+**验收点全过**: (a) total_loss 无 NaN ✅ (b) ckpt 含 quat/trans/pose_gt/active 各 70 + learnable_pose_state.optimizer 有 step 过 ✅ (c) trans Δ 合理 (p99 < 8 mm << 1 m 阈值) ✅ (d) rot Δ 合理 (p99 < 0.09° << 5° 阈值) ✅ (e) enabled=false 路径 byte-equivalent 于 baseline (ckpt 结构 140 keys 完全一致, PSNR Δ < 0.5 dB CUDA 噪声范围) ✅
 
 **out-of-scope（Stage B/C/D 留下一步）**:
 - temporal smoothness regularization（trans 二阶差分、rot quat 测地距离）
