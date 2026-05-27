@@ -108,7 +108,13 @@ def compute_pose_smoothness_loss(
         if F < 3:
             continue
 
-        a_bool = a.to(dtype=torch.bool, device=device)
+        # Mask must live on t's device — even when the function-level
+        # ``device`` arg targets cuda, individual ``_track_active_<tid>``
+        # buffers may have stayed on cpu (LayeredGaussians populates them
+        # via register_buffer at construction time, before ``.to(device)``
+        # in some test stubs / partial-init paths). Pin to t.device so
+        # ``sq * m`` doesn't trip the cross-device guard.
+        a_bool = a.to(dtype=torch.bool, device=t.device)
         # Triple-active mask covering interior frames f ∈ [1, F-1).
         mask = a_bool[:-2] & a_bool[1:-1] & a_bool[2:]   # [F-2]
         if not bool(mask.any()):
@@ -119,7 +125,10 @@ def compute_pose_smoothness_loss(
         if lambda_trans > 0.0:
             d2t = t[2:] - 2.0 * t[1:-1] + t[:-2]   # [F-2, 3]
             sq = (d2t * d2t).sum(dim=-1)            # [F-2]
-            sum_t = sum_t + (sq * m).sum()
+            # `.to(device)` reconciles the per-track contribution back
+            # onto the accumulator's device (Parameters may live on a
+            # different cuda index than self.device in DDP scenarios).
+            sum_t = sum_t + (sq * m).sum().to(device)
             n_t += n_valid
 
         if lambda_rot > 0.0:
@@ -133,7 +142,7 @@ def compute_pose_smoothness_loss(
             q_next_a = torch.where(dot_next >= 0, q_next, -q_next)
             d2q = q_next_a - 2.0 * q_center + q_prev_a   # [F-2, 4]
             sq_r = (d2q * d2q).sum(dim=-1)
-            sum_r = sum_r + (sq_r * m).sum()
+            sum_r = sum_r + (sq_r * m).sum().to(device)
             n_r += n_valid
 
     out = torch.zeros((), device=device)

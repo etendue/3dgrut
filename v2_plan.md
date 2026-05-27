@@ -1045,11 +1045,65 @@ flowchart LR
 **验收点全过**: (a) total_loss 无 NaN ✅ (b) ckpt 含 quat/trans/pose_gt/active 各 70 + learnable_pose_state.optimizer 有 step 过 ✅ (c) trans Δ 合理 (p99 < 8 mm << 1 m 阈值) ✅ (d) rot Δ 合理 (p99 < 0.09° << 5° 阈值) ✅ (e) enabled=false 路径 byte-equivalent 于 baseline (ckpt 结构 140 keys 完全一致, PSNR Δ < 0.5 dB CUDA 噪声范围) ✅
 
 **out-of-scope（Stage B/C/D 留下一步）**:
-- temporal smoothness regularization（trans 二阶差分、rot quat 测地距离）
+- ~~temporal smoothness regularization（trans 二阶差分、rot quat 测地距离）~~ → ✅ Stage B 完成 (commit bb49bc5 + device-fix)
 - test-frame slerp（NCore 默认无 held-out，缓做）
 - 双视图 viz 脚本 + BEV 对比图 + per-track drift 直方图
 - 6D continuous rotation parameterization 实验
 - pose-prior loss 默认开启
+
+### ✅ V3 Stage B — Temporal Smoothness Reg (2026-05-27, commit bb49bc5 + device-fix, ThinkPad RTX 4090)
+
+**触发**：Stage A `bf37839` 落地后用户在 ThinkPad viser 视觉验收时报告动态物体"顿挫感" — per-frame `_track_quat_<tid>` / `_track_trans_<tid>` Parameter 完全独立优化，photometric loss 在每帧推到独立局部最优 → 时间轴上看就是高频抖动。计划 [users-etendue-repo-drivestudio-dynamic-compressed-cocke.md](users-etendue-repo-drivestudio-dynamic-compressed-cocke.md)（plan §4 ThinkPad A/B）。
+
+**实现（commit `bb49bc5` + ThinkPad device-fix）**:
+
+新模块 `threedgrut/model/pose_smoothness.py` — DriveStudio `RigidNodes.temporal_smooth_reg` 形式的二阶有限差分：
+```
+Δ²t[f] = t[f+1] − 2·t[f] + t[f−1]                       (trans, m)
+Δ²q[f] = q'[f+1] − 2·q[f] + q'[f−1]                     (rot, chord-distance)
+              q'[f±1] = sign(⟨q[f], q[f±1]⟩) · q[f±1]   (sign-align fix:
+              否则 ‖2q‖²=4 chord 即使旋转相同)
+L_smooth = Σ_{tid} Σ_{a-mask} ‖Δ²·‖² / N_valid
+```
+Active mask: `a[f-1]=a[f]=a[f+1]=1` 三连活跃才计入（避免跨 active 边界把 GT 锚拉向 0）。
+
+`Trainer._compute_pose_smoothness_term` 三层门控（全部满足才进 total_loss）：
+1. `pose_optimizer is not None`（learnable_pose 启用）
+2. `global_step >= pose_freeze_until_iter`（与 Stage A Adam step 一致）
+3. `λ_t > 0` 或 `λ_r > 0`
+
+默认值：`base_gs.yaml` λ=0（baseline byte-identical 不变）；`ncore_3dgut_mcmc_multilayer_poseopt.yaml` λ_trans=1e-2 / λ_rot=1e-1（DriveStudio 量级）。
+
+**Mac CPU 单测**: 新 `test_learnable_pose_smoothness.py` 14 tests（11 helper + 3 trainer-method importorskip 守门）：linear trans / 常量 quat → 0；jitter 噪声单调；active mask 三连边界；q vs −q sign-align chord=0；λ=0 短路无图；梯度流到 quat+trans Param；F<3 / 空 model no-op。**11 passed + 3 skipped**。Stage A 回归 25 tests 全绿。
+
+**ThinkPad RTX 4090 1500-iter A/B 对照**（freeze_until_iter=200，dataset 9ae151dc 5cam×75frame）:
+
+发现并修复一个真 bug：**device mismatch** — `_track_active_<tid>` buffer 在 `LayeredGaussians.populate_tracks` 注册时还没 `.to(cuda)`，sum_t/sum_r 累加器在 trainer.device=cuda:0 但 mask 留 cpu → `RuntimeError: cuda:0 vs cpu`。修：mask pin 到 `t.device`（Parameter 实际 device），per-track 贡献回到 `device` 累加器。Mac CPU 单测仍绿。
+
+| 指标 | B1 (λ=0 control) | B2 (λ_t=1e-2, λ_r=1e-1) | Δ vs B1 |
+|---|---|---|---|
+| PSNR | 22.306 | 22.359 | **+0.05** ✅ |
+| cc_psnr_masked | 21.917 | 21.781 | -0.14 (< 0.5 dB 噪声 ✅) |
+| class_psnr | 20.025 | 20.134 | +0.11 ✅ |
+| **‖Δ²t‖ median (m)** | **0.0181** | **0.0029** | **0.16x（顿挫降 84%）** |
+| ‖Δ²t‖ p99 (m) | 0.851 | 0.540 | 0.64x |
+| ‖Δ²t‖ mean (m) | 0.108 | 0.040 | 0.37x |
+| **‖Δ²q‖ p99** | **0.0119** | **0.0022** | **0.18x（旋转顿挫降 82%）** |
+| ‖Δ²q‖ median | 6.96e-4 | 1.51e-4 | 0.22x |
+| trans drift wrt GT p99 (m) | 0.0074 | 0.1221 | **16x ↑（预期）** |
+| rot drift wrt GT p99 (°) | 0.089 | 0.571 | 6x ↑（预期） |
+
+**关键洞察**: B2 的 GT-drift 比 B1 大一个数量级 — 这是 smoothness reg 的**正确行为**（penalty 是 Δ²，不是 |t−t_gt|）：约束的是轨迹 2 阶平滑度，photometric loss 仍可沿光滑轨迹自由漂移。"顿挫感"的真正量化（轨迹 2 阶差分模值）在 B2 中下降 3-5×，与设计目标一致。
+
+**验收点**: (a) reconstructed PSNR Δ ≤ 0.5 dB ✅ (b) ‖Δ²t‖ / ‖Δ²q‖ 显著下降 ✅ (c) total_loss 无 NaN ✅ (d) ckpt round-trip 含 quat/trans/optimizer state ✅ (e) Mac CPU 单测 + Stage A 回归全绿 ✅
+
+**待做**: ThinkPad viser 4D 重新加载 B1 / B2 ckpt 目视确认顿挫感在 B2 中消失（量化指标已达成，目视确认是用户验收的最后一环）。
+
+**out-of-scope（Stage C/D 留下一步）**:
+- pose-prior `λ‖p − p_gt‖²` 默认开启 (yaml 占位仍 0)
+- fix_first/last 端点冻结
+- 双视图 / BEV / per-track drift 直方图 viz
+- A800 长训（用户暂缓 merge main）
 
 ### ✅ Config 重构 — 扁平化 v2 多层训练配置链 (2026-05-26, A800 GPU 0)
 
