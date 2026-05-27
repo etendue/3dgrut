@@ -588,14 +588,23 @@ class Trainer3DGRUT:
             raise ValueError(f"Unknown post-processing method: {method}")
 
     def init_exposure_model(self, conf: DictConfig) -> None:
-        """Stage 6 T6.2: per-camera affine exposure with independent Adam.
+        """Stage 6 T6.2 / Stage 9 T9.1: per-camera color correction with
+        independent Adam.
 
         Enabled by ``conf.trainer.use_exposure``. Camera count comes from the
         train dataset's ``get_frames_per_camera()`` so any dataset that
         implements :class:`BoundedMultiViewDataset` works (NCore + COLMAP). On
-        resume, exposure parameters and the optimizer state are restored from
-        the ``"exposure_state"`` key in the checkpoint (added by
+        resume, parameters and the optimizer state are restored from the
+        ``"exposure_state"`` key in the checkpoint (added by
         :meth:`save_checkpoint`).
+
+        T9.1 / V3-P1.a: defaults to :class:`BilateralGrid` (1x1x1 = 12-param
+        per-camera color affine) — replaces the v2 ExposureModel
+        ``exp(a)*img + b``. Loading v2 ckpts with the old ``exposure_a`` /
+        ``exposure_b`` keys silently warns and keeps the BilateralGrid at
+        identity init (the v2 affine cannot be losslessly mapped onto a 12-
+        parameter color matrix; a fresh BilateralGrid converges to the right
+        color in a few k steps under V3-P1 reg).
         """
         trainer_conf = getattr(conf, "trainer", None)
         if trainer_conf is None:
@@ -605,16 +614,33 @@ class Trainer3DGRUT:
         if not use_exposure:
             return
 
-        from threedgrut.correction import ExposureModel
+        from threedgrut.correction import BilateralGrid
 
         num_camera = len(self.train_dataset.get_frames_per_camera())
         if num_camera < 1:
             logger.warning(
-                "📷 ExposureModel requested but dataset reports 0 cameras; "
+                "📷 BilateralGrid requested but dataset reports 0 cameras; "
                 "skipping (use_exposure=true → no-op)."
             )
             return
-        self.exposure_model = ExposureModel(num_camera=num_camera).to(self.device)
+        # T9.1: 1x1x1 grid by default (NuRec parsed_config). Future ablations
+        # can override via conf.trainer.bilateral_grid_X / _Y / _W.
+        grid_X = int(
+            trainer_conf.get("bilateral_grid_X", 1) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bilateral_grid_X", 1)
+        )
+        grid_Y = int(
+            trainer_conf.get("bilateral_grid_Y", 1) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bilateral_grid_Y", 1)
+        )
+        grid_W = int(
+            trainer_conf.get("bilateral_grid_W", 1) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bilateral_grid_W", 1)
+        )
+        self.exposure_model = BilateralGrid(
+            num_camera=num_camera,
+            grid_X=grid_X, grid_Y=grid_Y, grid_W=grid_W,
+        ).to(self.device)
         exposure_lr = float(
             trainer_conf.get("exposure_lr", 1e-3) if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "exposure_lr", 1e-3)
@@ -623,16 +649,37 @@ class Trainer3DGRUT:
             self.exposure_model.parameters(), lr=exposure_lr
         )
         logger.info(
-            f"📷 ExposureModel initialized: {num_camera} cameras, lr={exposure_lr}"
+            f"📷 BilateralGrid initialized: {num_camera} cameras, "
+            f"grid={grid_X}x{grid_Y}x{grid_W}, lr={exposure_lr}"
         )
 
         # Restore from checkpoint if resuming.
         if conf.resume:
             ckpt = torch.load(conf.resume, weights_only=False, map_location=self.device)
             if "exposure_state" in ckpt:
-                self.exposure_model.load_state_dict(ckpt["exposure_state"]["module"])
-                self.exposure_optimizer.load_state_dict(ckpt["exposure_state"]["optimizer"])
-                logger.info("📷 ExposureModel state restored from checkpoint")
+                module_state = ckpt["exposure_state"]["module"]
+                try:
+                    self.exposure_model.load_state_dict(module_state, strict=True)
+                    self.exposure_optimizer.load_state_dict(
+                        ckpt["exposure_state"]["optimizer"]
+                    )
+                    logger.info("📷 BilateralGrid state restored from checkpoint")
+                except (KeyError, RuntimeError) as e:
+                    # T9.1: v2 ckpts store {exposure_a, exposure_b} which
+                    # don't fit BilateralGrid.grids. Keep identity init.
+                    legacy_keys = set(module_state.keys()) & {
+                        "exposure_a", "exposure_b",
+                    }
+                    if legacy_keys:
+                        logger.warning(
+                            f"📷 v2 ckpt exposure_state has legacy keys "
+                            f"{sorted(legacy_keys)} incompatible with "
+                            f"BilateralGrid; keeping identity init "
+                            f"(BilateralGrid will re-learn). Original "
+                            f"load_state_dict error: {e}"
+                        )
+                    else:
+                        raise
 
     def init_pose_optimizer(self, conf: DictConfig) -> None:
         """V3 Stage A: independent Adam over per-track learnable cuboid pose.
