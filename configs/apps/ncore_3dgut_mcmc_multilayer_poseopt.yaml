@@ -47,6 +47,14 @@ defaults:
 
 # ─── V3 Stage A overrides ───────────────────────────────────────────────────
 trainer:
+  # sky_backend pinned to mlp here (multilayer baseline keeps null = cubemap)
+  # because the poseopt yaml is specifically for A800 / ThinkPad use where
+  # nvdiffrast is NOT available. Without this pin, viser_gui_4d viewers load
+  # the ckpt (trained with CLI sky_backend=mlp → SkyEnvmapMLP weights) into a
+  # SkyEnvmapCubemap → state_dict shape mismatch on first browser render.
+  # Identical to passing `trainer.sky_backend=mlp` on every train CLI, so the
+  # produced ckpt remains byte-equivalent.
+  sky_backend: mlp
   learnable_pose:
     enabled: true
     # 其余字段沿用 base_gs.yaml 默认 (lr_rotation=1e-5, lr_translation=1e-4,
