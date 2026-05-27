@@ -146,7 +146,7 @@ kanban
     Blocked
 
     Done
-        [T8.5.7 ★ V3-E4 5-cam vs 7-cam → 切对称 5-cam (30k 实测)]
+        [T8.5.7 ★ V3-E4 5-cam vs 7-cam → 切对称 5-cam 30k 实测]
 ```
 
 > Flowchart 在 VSCode/Markdown 中可正常渲染；若不支持则退化为文本列表。
@@ -792,6 +792,55 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 - **遗留**：(a) ego/track trajectory 视觉上仍有少量异常（用户报告，未完全定位）；(b) Follow Ego toggle 偶发不自动更新（中段反馈，未修）；(c) `compare_raw_vs_recon_cuboid.py` recon 渲染破（kaolin Camera convention 跟引擎不一致，留作后续调试）；(d) V3-VIZ.4（viser 嵌入 BEV panel）未做（P2）。
 
 **关联未来 task**：V3-P2 — 修 dyn→bg/road 错分（cuboid-exclusion mask 加严 / 训练后 post-process 粒子迁移）。
+
+---
+
+### V3-E4.1 — Renderer.from_checkpoint 还原 tracks_poses + scene_extent（2026-05-27）
+
+**Commit**: `<next>` （render.py L143-178 fix + tests/test_render_reload_parity.py 新增 6 测试）
+
+**背景**：T8.5.7 commit 0ffd738 加了 `logger.warning` 标注 standalone `Renderer.from_checkpoint()` 比 train-end-of-train eval 低 **~3 dB**，但未定位根因。Phase 8.5 T8.5.4 必须用 v2 ckpt 跑 standalone novel-view eval 拿 v3 主 KPI baseline，**不修这个 bug 则 baseline 数字偏低 ~3 dB，整个 v3 KPI 校准会错**。
+
+**根因定位（5cam 5k smoke 历史数据复现 + ckpt inspection bisection）**：
+
+| 指标 | train-end (live model) | reload (修复前) | Δ |
+|---|---:|---:|---:|
+| `mean_psnr_masked` (raw) | 21.42 | 19.48 | **−1.94 dB** |
+| `mean_cc_psnr_masked` | 23.36 | 20.40 | **−2.96 dB** |
+
+raw psnr 也掉 ~2 dB 排除了"eval 漏 apply exposure"假设（两条 eval 路径都不 apply ExposureModel）。Ckpt inspection 暴露两个真实根因：
+
+1. **tracks_poses 未恢复**（主因）：训练时 `trainer.py:433` 在 dataset ready 后调 `model.populate_tracks(tracks)` 把 70 个 dynamic_rigid track 的 per-frame poses (`Tensor[599,4,4]` × 70) 写入 model buffer；但 `render.py:from_checkpoint` 路径**完全不调** populate_tracks → 300K dyn Gaussians 留在 canonical pose（不跟随车辆运动）→ 所有含动态车辆的帧 raw psnr 显著下降。Tracks pose 数据本身存在 `ckpt["viz_4d"]["tracks"][<tid>]["poses"]` + `ckpt["viz_4d"]["tracks_camera_timestamps_us"]`，只是 render.py 没读。
+2. **scene_extent 传 None 给 ctor**（次因）：`render.py:164` 传 `LayeredGaussians(conf, specs, scene_extent=None)` 而 ckpt 里有 `model.scene_extent=1.103`。MoG.init_from_checkpoint 会从 sub-dict 覆盖回正确值，所以单测 / inference 行为对 model 本身无影响，但 `model.scene_extent`（顶层）保持 None 与 live 训练态不一致，未来代码引用 `model.scene_extent` 会回归。
+
+**修复**：把 `playground/engine.py:1340-1360` 已有的正确 pattern 复制到 `threedgrut/render.py:143-178`：
+- Ctor 传 `scene_extent = float(checkpoint.get("model", {}).get("scene_extent", 1.0))`
+- `init_from_checkpoint` 后从 `viz_4d.tracks + tracks_camera_timestamps_us` 调 `populate_tracks`
+- 用 `viz_4d` 缺失 / `tracks_camera_timestamps_us` 缺失的两层 guard 兼容 v1 + pre-T8.2 ckpts
+- 删掉 0ffd738 的 misleading warning（warning 文本怀疑是 exposure_state，实际无关）
+
+**验收（A800 sym5cam 30k ckpt, byte-identical ★）**：
+
+| 指标 | train-end | reload (修复后) | Δ |
+|---|---:|---:|---:|
+| `mean_psnr_masked` | 15.2878 | **15.2878** | **0.0000** ★ |
+| `mean_cc_psnr_masked` | 26.0436 | **26.0436** | **0.0000** ★ |
+| `mean_cc_psnr` | 23.8795 | **23.8795** | 0.0000 |
+| per_camera (5 个 × 6 metric) | 全 | 全 | 全 0 ★ |
+
+远超 plan 验收门槛（差 < 0.1 dB）→ 修复完全闭合 gap，T8.5.4 可以直接启动。
+
+**测试**：
+- `tests/test_render_reload_parity.py` 新增 6 测试：4 contract（viz_4d → populate_tracks 调用 / ctor scene_extent / no-viz_4d / shared_ts 缺失）+ 2 source-level guard（greppy 检查 render.py 不会被回归性误删）— Mac venv 0.08s 全绿
+- 既有 58 个 layered / render_per_camera / track_ids / engine_layered_load 测试无回归
+
+**关联未来 task**：
+- **下一步 V3-P1 (Stage 9 T9.1-T9.5)**：bilateral grid 替换 ExposureModel + L2 reg + 2-stage freeze（Plan agent 现已确认 V3-P1 范围按原计划走，T9.3 走路线 B = eval 也 apply correction）
+- Phase 1 决策门通过：V3-E4.1 与 ExposureModel 无关，V3-P1 实施不需调整范围
+
+---
+
+### Stage 8.5 启动条目
 
 *（待 Stage 8.5 启动时追加首条 KPI 任务条目）*
 

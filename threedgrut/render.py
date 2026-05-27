@@ -144,28 +144,38 @@ class Renderer:
                 from threedgrut.layers.layered_model import LayeredGaussians
                 from threedgrut.layers.registry import specs_from_config
 
-                logger.warning(
-                    "[T8.5.7 / V3-E4 known issue] standalone "
-                    "Renderer.from_checkpoint() of a LayeredGaussians ckpt "
-                    "yields ~3 dB lower PSNR than the train-end-of-train "
-                    "eval (which uses Renderer.from_preloaded_model with the "
-                    "live model + exposure_model + post_processing already "
-                    "attached). Some training-time state (likely the "
-                    "ExposureModel state under 'exposure_state' key, plus "
-                    "any sky_envmap warmup buffers) is not yet restored on "
-                    "this path. For V3-E4 per-camera comparison use the "
-                    "metrics.json['per_camera'] written at end-of-train "
-                    "directly — that path is correct. Tracked as follow-up "
-                    "task V3-E4.1: standalone-eval state restore."
-                )
                 specs = specs_from_config(conf)
-                # scene_extent=None — LayeredGaussians fills it from ckpt
-                # (trainer.init_model passes the same when restoring).
-                model = LayeredGaussians(conf, specs=specs, scene_extent=None)
+                # V3-E4.1 fix: pass the saved scene_extent (live trainer does
+                # the same) instead of None — mirrors engine.py:1340-1344.
+                scene_extent = float(
+                    checkpoint.get("model", {}).get("scene_extent", 1.0)
+                )
+                model = LayeredGaussians(
+                    conf, specs=specs, scene_extent=scene_extent,
+                )
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
+                # V3-E4.1 fix: restore dynamic-rigid per-track pose buffers
+                # from ckpt["viz_4d"]["tracks"] so fused_view SE(3)-transforms
+                # dynamic Gaussians per-frame. Without this the 300K dyn
+                # particles stay at canonical pose and raw psnr drops ~2 dB
+                # for the train-end-of-train comparison. Mirrors the load
+                # pattern already in playground engine.py:1346-1360. Skipped
+                # silently when ckpt has no viz_4d block (pre-T8.2 ckpts).
+                viz_4d = checkpoint.get("viz_4d")
+                if viz_4d is not None and isinstance(viz_4d, dict):
+                    tracks_dict = viz_4d.get("tracks")
+                    shared_ts = viz_4d.get("tracks_camera_timestamps_us")
+                    if tracks_dict and shared_ts is not None:
+                        # Inject shared timestamps into the first track so
+                        # _populate_tracks_impl picks them up via its
+                        # first-track scan (single shared buffer across all
+                        # tracks; same NCore camera schedule).
+                        first_tid = next(iter(tracks_dict))
+                        tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
+                        model.populate_tracks(tracks_dict)
             else:
                 model = MixtureOfGaussians(conf)
-            # Initialize the parameters from checkpoint
-            model.init_from_checkpoint(checkpoint, setup_optimizer=False)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
         model.build_acc()
 
         # Load post-processing if present in checkpoint
