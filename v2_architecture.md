@@ -620,6 +620,12 @@ flowchart TB
 | **Stage 7 实测锚点** ExposureModel 30k 长训退化优化失控 (路径 1 物理正确 vs 路径 2 病态短路 — 14 参数 vs 几百万高斯, 30k Adam 无约束选病态短路) | T7.3 ✅ → V3-P1 升级 | T7.3 raw_masked 15.63 (path 2: exposure 学到大偏移 raw 严重过曝/泛白) vs T7.3.b 25.76 (强制 path 1). v2_plan.md § 14.5 V3-P1 整合 bilateral-grid + 加约束防退化 (L2 reg + lr decay + freeze) |
 | **Stage 7 实测锚点** 7-cam 30k masked PSNR 25.76 vs 1-cam 5k masked PSNR 29.49 — 多相机长训反而 -3.73 dB | T7.3.b ✅ → V3 排查 | 候选: 多相机 frustum 重叠少监督稀疏 / 30k 过拟合 / dyn 70 tracks 粒子分配不充分 / 多相机 LiDAR 监督权重未调. V3 1-cam 30k + 5-cam 30k 三角化定位 |
 | Renderer 接口零变更 | 所有 stage | tracer Python binding 签名 git diff = ∅ |
+| **T8.5.7 / V3-E4** `protocols.Batch.camera_id` Optional[str] 字段稳定 (NCoreDataset 两端 __getitem__ 都设 + get_gpu_batch_with_intrinsics 透传) | T8.5.7 ✅ | `tests/test_render_per_camera.py` (Mac, 7 tests); 既有 23 metric/mask 测试无回归 (dd6c39f) |
+| **T8.5.7 / V3-E4** `render.py metrics.json["per_camera"]` 字典稳定: keys = train 时 camera_ids; single-cam fallback byte-identical (NeRF/Colmap path) | T8.5.7 ✅ | `tests/test_render_per_camera.py::test_per_camera_byte_identical_when_cam_id_none` + `test_per_camera_single_camera_matches_global_mean` (Mac); A800 E1a/E1b/E1c/E2a/E2b 实测 5 组 metrics.json per_camera 字段齐全 |
+| **T8.5.7 / V3-E4** `render.eval_cameras` filter 在 0 命中时 raise (防止误传相机名生成空 metrics.json) | T8.5.7 ✅ | `tests/test_render_per_camera.py::test_eval_cameras_filter_zero_hits_raises_in_render_py` (Mac) |
+| **T8.5.7 / V3-E4** Stage 8.5 baseline cc_psnr_masked 27.78 (rear_right_70) vs Stage 7 baseline 22.56 (rear_tele_30), 单 rear-back 相机选择带来 **+5.2 dB** | T8.5.7 ✅ | A800 E2b 对称 5cam 30k 实测; 详见 v3_plan.md § 5 Done Log 2026-05-27 V3-E4 |
+| **T8.5.7 / V3-E4** 对称 5-cam 30k cc_psnr_masked 26.04 (global) / 25.61 (4-cam mean), 比 7-cam 30k 全面高 +0.42 dB on 4 公共相机 | T8.5.7 ✅ | A800 E2a vs E2b 实测; multilayer.yaml 默认 camera_ids 切换 |
+| **T8.5.7 / V3-E4.1** (V3 follow-up) `Renderer.from_checkpoint` standalone reload of LayeredGaussians ckpt 偏差 ~3 dB (ExposureModel state 未恢复) | T8.5.7 → V3-E4.1 ⬜ | 0ffd738 加 logger.warning; V3-E4 本身用 train-time metrics.json per_camera 绕开此 bug; V3 后续 novel-view eval 需要先解决 |
 
 ---
 

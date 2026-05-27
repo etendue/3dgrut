@@ -92,11 +92,26 @@ class Renderer:
 
     @classmethod
     def from_checkpoint(
-        cls, checkpoint_path, out_dir, path="", save_gt=True, writer=None, model=None, computes_extra_metrics=True
+        cls,
+        checkpoint_path,
+        out_dir,
+        path="",
+        save_gt=True,
+        writer=None,
+        model=None,
+        computes_extra_metrics=True,
+        eval_cameras=None,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
         If model is None, it will be loaded base on the
+
+        Args:
+            eval_cameras: T8.5.7 / V3-E4 — optional list[str] of camera_id
+                strings to restrict eval to a subset (e.g. NCore 5-cam ring).
+                None / empty → no filter. Injected into ``conf.render.eval_cameras``
+                so the same Hydra-style key works for both ckpt eval and
+                training-end eval.
         """
 
         checkpoint = torch.load(checkpoint_path, weights_only=False)
@@ -108,14 +123,47 @@ class Renderer:
             conf["render"]["particle_kernel_density_clamping"] = True
             conf["render"]["min_transmittance"] = 0.03
         conf["render"]["enable_kernel_timings"] = True
+        # T8.5.7 / V3-E4: inject eval_cameras subset filter into the ckpt-embedded
+        # config. Old ckpts (pre-V3-E4) lack this key — assignment via dict-style
+        # works on the OmegaConf used here (see L107-110 patterns above).
+        if eval_cameras:
+            conf["render"]["eval_cameras"] = list(eval_cameras)
 
         object_name = Path(conf.path).stem
         experiment_name = conf["experiment_name"]
         writer, out_dir, run_name = create_summary_writer(conf, object_name, out_dir, experiment_name, use_wandb=False)
 
         if model is None:
-            # Initialize the model and the optix context
-            model = MixtureOfGaussians(conf)
+            # T8.5.7 fix: respect conf.use_layered_model — multilayer ckpts
+            # store params under nested ``gaussians_nodes`` and MoG's
+            # init_from_checkpoint() looks for top-level ``positions`` and
+            # raises KeyError. Mirror trainer.init_model dispatch so
+            # standalone ``python render.py --checkpoint ...`` works on
+            # both flat MoG and LayeredGaussians ckpts.
+            if conf.get("use_layered_model", False):
+                from threedgrut.layers.layered_model import LayeredGaussians
+                from threedgrut.layers.registry import specs_from_config
+
+                logger.warning(
+                    "[T8.5.7 / V3-E4 known issue] standalone "
+                    "Renderer.from_checkpoint() of a LayeredGaussians ckpt "
+                    "yields ~3 dB lower PSNR than the train-end-of-train "
+                    "eval (which uses Renderer.from_preloaded_model with the "
+                    "live model + exposure_model + post_processing already "
+                    "attached). Some training-time state (likely the "
+                    "ExposureModel state under 'exposure_state' key, plus "
+                    "any sky_envmap warmup buffers) is not yet restored on "
+                    "this path. For V3-E4 per-camera comparison use the "
+                    "metrics.json['per_camera'] written at end-of-train "
+                    "directly — that path is correct. Tracked as follow-up "
+                    "task V3-E4.1: standalone-eval state restore."
+                )
+                specs = specs_from_config(conf)
+                # scene_extent=None — LayeredGaussians fills it from ckpt
+                # (trainer.init_model passes the same when restoring).
+                model = LayeredGaussians(conf, specs=specs, scene_extent=None)
+            else:
+                model = MixtureOfGaussians(conf)
             # Initialize the parameters from checkpoint
             model.init_from_checkpoint(checkpoint, setup_optimizer=False)
         model.build_acc()
@@ -207,6 +255,18 @@ class Renderer:
                 "lpips": LearnedPerceptualImagePatchSimilarity(net_type="vgg", normalize=True).to("cuda"),
             }
 
+        # T8.5.7: optional camera subset filter (Hydra: render.eval_cameras=[...]).
+        # None / empty → no filter, eval iterates the full test split unchanged.
+        eval_cameras_filter = self.conf.render.get("eval_cameras", None)
+        if eval_cameras_filter:
+            eval_cameras_filter = list(eval_cameras_filter)
+            logger.info(
+                f"[V3-E4] render.eval_cameras filter active "
+                f"({len(eval_cameras_filter)} cameras): {eval_cameras_filter}"
+            )
+        else:
+            eval_cameras_filter = None
+
         output_path_renders = os.path.join(self.out_dir, f"ours_{int(self.global_step)}", "renders")
         os.makedirs(output_path_renders, exist_ok=True)
 
@@ -235,6 +295,19 @@ class Renderer:
         # with populated tracks_poses AND the batch carries FTheta intrinsics.
         class_psnr_records: list = []
 
+        # T8.5.7 / V3-E4 — per-camera metric aggregation. keys = camera_id
+        # strings (set by NCoreDataset's __getitem__); each value mirrors the
+        # 12 global lists above so per-camera mean is straightforward. Empty
+        # when dataset doesn't set Batch.camera_id (NeRF/Colmap path) →
+        # metrics.json byte-identical to pre-V3-E4 for those datasets.
+        per_cam: dict[str, dict[str, list]] = {}
+        _per_cam_keys = (
+            "psnr", "ssim", "lpips",
+            "cc_psnr", "cc_ssim", "cc_lpips",
+            "psnr_masked", "ssim_masked", "lpips_masked",
+            "cc_psnr_masked", "cc_ssim_masked", "cc_lpips_masked",
+        )
+
         best_psnr = -1.0
         worst_psnr = 2**16 * 1.0
 
@@ -248,8 +321,20 @@ class Renderer:
 
         for iteration, batch in enumerate(self.dataloader):
 
+            # T8.5.7: skip frames not in the requested camera subset before
+            # any GPU work. DataLoader collates the string camera_id into a
+            # length-1 list under default collation; handle both forms.
+            if eval_cameras_filter is not None:
+                _bcid = batch.get("camera_id", None)
+                if isinstance(_bcid, (list, tuple)):
+                    _bcid = _bcid[0] if len(_bcid) > 0 else None
+                if _bcid not in eval_cameras_filter:
+                    continue
+
             # Get the GPU-cached batch
             gpu_batch = self.dataset.get_gpu_batch_with_intrinsics(batch)
+            # T8.5.7: per-camera id (None on NeRF/Colmap, unused there)
+            _cam_id = getattr(gpu_batch, "camera_id", None)
 
             # Compute the outputs of a single batch
             outputs = self.model(gpu_batch)
@@ -394,12 +479,40 @@ class Renderer:
                         r["frame"] = int(iteration)
                         class_psnr_records.append(r)
 
+            # T8.5.7 / V3-E4: mirror the 12 metric lists into the per-camera
+            # dict using the last appended value of each. Skipped when the
+            # dataset doesn't set Batch.camera_id (NeRF/Colmap) so old
+            # metrics.json stays byte-identical.
+            if _cam_id is not None:
+                pc = per_cam.setdefault(_cam_id, {k: [] for k in _per_cam_keys})
+                pc["psnr"].append(psnr[-1])
+                pc["ssim"].append(ssim[-1])
+                pc["lpips"].append(lpips[-1])
+                pc["cc_psnr"].append(cc_psnr[-1])
+                pc["cc_ssim"].append(cc_ssim[-1])
+                pc["cc_lpips"].append(cc_lpips[-1])
+                pc["psnr_masked"].append(psnr_masked[-1])
+                pc["ssim_masked"].append(ssim_masked[-1])
+                pc["lpips_masked"].append(lpips_masked[-1])
+                pc["cc_psnr_masked"].append(cc_psnr_masked[-1])
+                pc["cc_ssim_masked"].append(cc_ssim_masked[-1])
+                pc["cc_lpips_masked"].append(cc_lpips_masked[-1])
+
             # Record the time
             inference_time.append(outputs["frame_time_ms"])
 
             logger.log_progress(task_name="Rendering", advance=1, iteration=f"{str(iteration)}", psnr=psnr[-1])
 
         logger.end_progress(task_name="Rendering")
+
+        # T8.5.7: sanity-check the eval_cameras filter — if the user passes a
+        # subset and 0 frames matched, fail loudly instead of writing an
+        # empty metrics.json (which would silently corrupt the comparison).
+        if eval_cameras_filter is not None and len(psnr) == 0:
+            raise RuntimeError(
+                f"[V3-E4] render.eval_cameras={eval_cameras_filter} matched 0 frames in "
+                f"the test split. Check camera_id spelling against dataset.camera_ids."
+            )
 
         mean_psnr = np.mean(psnr)
         mean_ssim = np.mean(ssim)
@@ -449,6 +562,48 @@ class Renderer:
             mean_cc_ssim_masked=float(mean_cc_ssim_masked),
             mean_cc_lpips_masked=float(mean_cc_lpips_masked),
         )
+
+        # T8.5.7 / V3-E4 — per-camera aggregated metrics. ``per_cam`` is
+        # empty for NeRF/Colmap (Batch.camera_id is None there), so
+        # metrics.json stays byte-identical on those paths. NCore eval
+        # always populates it (both train and val branches set camera_id
+        # in __getitem__).
+        if per_cam:
+            per_camera_summary: dict[str, dict] = {}
+            for cid, dlists in per_cam.items():
+                n = len(dlists["psnr"])
+                if n == 0:
+                    continue
+                per_camera_summary[cid] = {
+                    "n_frames": int(n),
+                    "mean_psnr": float(np.mean(dlists["psnr"])),
+                    "mean_ssim": float(np.mean(dlists["ssim"])),
+                    "mean_lpips": float(np.mean(dlists["lpips"])),
+                    "mean_cc_psnr": float(np.mean(dlists["cc_psnr"])),
+                    "mean_cc_ssim": float(np.mean(dlists["cc_ssim"])),
+                    "mean_cc_lpips": float(np.mean(dlists["cc_lpips"])),
+                    "mean_psnr_masked": float(np.mean(dlists["psnr_masked"])),
+                    "mean_ssim_masked": float(np.mean(dlists["ssim_masked"])),
+                    "mean_lpips_masked": float(np.mean(dlists["lpips_masked"])),
+                    "mean_cc_psnr_masked": float(np.mean(dlists["cc_psnr_masked"])),
+                    "mean_cc_ssim_masked": float(np.mean(dlists["cc_ssim_masked"])),
+                    "mean_cc_lpips_masked": float(np.mean(dlists["cc_lpips_masked"])),
+                }
+            if per_camera_summary:
+                metrics_json["per_camera"] = per_camera_summary
+                # Compact per-camera table for the console — show the masked
+                # variants which are the v2 multilayer KPI proxies.
+                pc_table = {
+                    cid: (
+                        f"n={m['n_frames']} "
+                        f"psnr_m={m['mean_psnr_masked']:.2f} "
+                        f"cc_psnr_m={m['mean_cc_psnr_masked']:.2f}"
+                    )
+                    for cid, m in per_camera_summary.items()
+                }
+                logger.log_table(
+                    f"📷 Per-Camera Metrics - Step {self.global_step}", record=pc_table
+                )
 
         # T8/B3 Phase E.6 — append per-cuboid PSNR aggregates when available.
         # ``class_psnr_records`` stays empty when the ckpt has no dyn tracks

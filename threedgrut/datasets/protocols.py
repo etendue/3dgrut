@@ -36,6 +36,10 @@ class Batch:
     # Camera/frame indices for post-processing
     camera_idx: int = -1  # 0-based camera index
     frame_idx: int = -1  # 0-based frame index (global across split)
+    # T8.5.7: Logical camera id string (e.g. "camera_front_wide_120fov"). NCoreDataset
+    # sets this in both train and val branches of __getitem__ so render.py can aggregate
+    # per-camera metrics. Non-NCore datasets (NeRF/Colmap) keep default None.
+    camera_id: Optional[str] = None
     # Pixel coordinates for post-processing
     pixel_coords: Optional[torch.Tensor] = None  # [B, H, W, 2] (x, y) with +0.5 center offset
     # Exposure prior from EXIF metadata (mean-normalized log2 exposure [1], None if unavailable)

@@ -33,7 +33,20 @@ if __name__ == "__main__":
         action="store_false",
         help="If set, extra image metrics will not be computed [True by default]",
     )
+    parser.add_argument(
+        "--eval-cameras",
+        type=str,
+        default="",
+        help=(
+            "T8.5.7 / V3-E4: comma-separated list of camera_id strings to "
+            "restrict eval to a subset (e.g. 'camera_front_wide_120fov,"
+            "camera_rear_tele_30fov'). Empty (default) = no filter, eval "
+            "iterates the full test split."
+        ),
+    )
     args = parser.parse_args()
+
+    eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
 
     renderer = Renderer.from_checkpoint(
         checkpoint_path=args.checkpoint,
@@ -41,6 +54,7 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         save_gt=args.save_gt,
         computes_extra_metrics=args.compute_extra_metrics,
+        eval_cameras=eval_cameras_list,
     )
 
     renderer.render_all()

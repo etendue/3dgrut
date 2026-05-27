@@ -14,3 +14,12 @@ max_consecutive_bvh_update: 15
 enable_normals: false
 enable_hitcounts: true
 enable_kernel_timings: false
+
+# T8.5.7: optional camera subset filter for render.py eval. When null,
+# eval iterates all test-split cameras as before. Set to a list of
+# camera_id strings (e.g. NCore "camera_front_wide_120fov") to restrict
+# eval to a subset — used by V3-E4 to evaluate a 7-cam-trained ckpt on
+# the 5-cam ring subset for byte-identical test-set comparison vs 5-cam
+# baseline. Filter is applied in render_all() before per-frame work, so
+# wall-clock scales linearly with retained frames.
+eval_cameras: null

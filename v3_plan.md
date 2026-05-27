@@ -21,8 +21,9 @@ Reconstructed cc_psnr_masked 退为辅指标——只要不显著退化（≥ v2
 
 | 档位 | 触发 Stage | **★ Novel-view PSNR ★** | Novel Sky PSNR | Novel Dynamic PSNR | Reconstructed cc_psnr_masked (辅) | LPIPS 改善 |
 |---|---|---:|---:|---:|---:|---:|
-| v2 baseline | Stage 7 | **~ 待 Stage 8.5 实测**（估测 18-22 dB） | 严重黑洞 | 严重漂移 | 24.70 | baseline |
-| **v3 保守门槛（必达）** | Stage 15 出口 | **≥ 28.0** | ≥ 28 | ≥ 25 | ≥ v2 (24.70, 不退化) | ≥ 25% |
+| v2 baseline | Stage 7 (旧, 非对称 5cam) | **~ 待 Stage 8.5 实测**（估测 18-22 dB） | 严重黑洞 | 严重漂移 | 24.70 | baseline |
+| **v3 baseline (T8.5.7)** | Stage 8.5 (对称 5cam 30k) | 待 T8.5.3/4 测 | 待测 | 待测 | **26.04** ★ (E2b, +1.34 vs Stage 7) | baseline |
+| **v3 保守门槛（必达）** | Stage 15 出口 | **≥ 28.0** | ≥ 28 | ≥ 25 | ≥ v3 baseline (26.04, 不退化) | ≥ 25% |
 | **v3 进取目标** | Stage 17 出口 | **≥ 30.0** ★ 用户目标 | ≥ 30 | ≥ 28 | ≥ 26.5 | ≥ 35% |
 | NuRec 理论极限（留 v4） | — | ~32-34（含 DiFix 专有数据） | — | — | 36.28 reconstructed | — |
 
@@ -45,8 +46,8 @@ Reconstructed cc_psnr_masked 退为辅指标——只要不显著退化（≥ v2
 | 维度 | v2 Stage 7 实测 | v3 Stage 9 起点 |
 |---|---:|---:|
 | `mean_psnr` (full, reconstructed) | 23.78（exposure OFF） | 用 exposure OFF baseline |
-| `mean_psnr_masked` (reconstructed) | 25.76（exposure OFF） | 用 exposure OFF baseline |
-| `mean_cc_psnr_masked` (reconstructed) | **24.70**（σ < 0.2 dB） | v3 辅 KPI baseline |
+| `mean_psnr_masked` (reconstructed) | 25.76（exposure OFF, Stage 7 非对称 5cam） / **15.29**（exposure ON, T8.5.7 对称 5cam 30k —— exposure 退化已知问题, V3-P1 修复） | 用对称 5cam baseline |
+| `mean_cc_psnr_masked` (reconstructed) | 24.70（Stage 7 非对称 5cam, σ < 0.2 dB） / **26.04** ★（T8.5.7 对称 5cam 30k） | v3 辅 KPI baseline 更新为 26.04 |
 | **Novel-view PSNR (±2m / ±5° hold-out)** | **❓ Stage 8.5 必测 ★** | **v3 主 KPI baseline — 待实测确认** |
 | Sky region PSNR (reconstructed) | Stage 5 出口 ≥ 30，30k 训练后衰减 | Stage 10 重新达标 |
 | **Novel Sky region** | **❓ 视觉验证已知严重黑洞** | Stage 8.5 量化 |
@@ -145,6 +146,7 @@ kanban
     Blocked
 
     Done
+        [T8.5.7 ★ V3-E4 5-cam vs 7-cam → 切对称 5-cam (30k 实测)]
 ```
 
 > Flowchart 在 VSCode/Markdown 中可正常渲染；若不支持则退化为文本列表。
@@ -154,6 +156,7 @@ kanban
 | 列 | 任务数 | 关键项 |
 |---|---:|---|
 | Backlog ⬜ | **57** | Stage 8.5 (5) + 9 (6) + 10 (4) + 11 (6) + 12 (8) + 13a (7) + 13b (7) + 14 (7) + 15 (7) + 16 (5) + 17 (3) + 18 (3) — 含 T9.0 架构图任务 |
+| Done ✅ | **1** | T8.5.7 V3-E4 (5-cam vs 7-cam KPI 对照 + 对称 5-cam 切换) |
 | In Progress 🟡 | 0 | — |
 | Review 🔵 | 0 | — |
 | Blocked ⏸ | 0 | — |
@@ -171,6 +174,7 @@ kanban
 | **T8.5.3** ★ | 8.5 | Novel-view pose 生成器 + hold-out 验证集（±1m / ±2m / ±5° / ±10° 4 档 pose 扰动）+ render.py 接入 | NEW `threedgrut/utils/novel_view.py` | 1.5 | ⬜ | — |
 | **T8.5.4** ★ | 8.5 | v2 baseline novel-view PSNR 实测（4 档 × {full / sky / dyn / bg 区域}）+ metrics.json novel_* 字段定义 | A800 + `render.py` eval | 1 | ⬜ | — |
 | **T8.5.5** | 8.5 | A800 5k smoke 验证投影校对无回归（reconstructed cc_psnr_masked ≥ 24.7 不退化 + novel-view baseline 入档） | — | 1 | ⬜ | — |
+| **T8.5.7** ★ | 8.5 | V3-E4 7-cam vs 5-cam KPI 对照实验 + per-camera PSNR breakdown 工具 + 对称 5-cam 切换 | V3-E4 (新) | 2 | ✅ | dd6c39f + 0ffd738 + 6e14059 |
 | **T9.0** | 9 | v3_architecture.md 创建（v2_architecture.md 1:1 镜像 + v3 新增模块占位） | docs | 1 | ⬜ | — |
 | **T9.1** | 9 | V3-P1.a 双边网格 1×1×1 grid（按 camera_id）port Recon-Studio | V3-P1 | 1.5 | ⬜ | — |
 | **T9.2** | 9 | V3-P1.b ExposureModel L2 reg + lr cosine decay + 2-stage freeze (step > 2000) | V3-P1 | 1 | ⬜ | — |
@@ -790,6 +794,63 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 **关联未来 task**：V3-P2 — 修 dyn→bg/road 错分（cuboid-exclusion mask 加严 / 训练后 post-process 粒子迁移）。
 
 *（待 Stage 8.5 启动时追加首条 KPI 任务条目）*
+
+---
+
+### T8.5.7 / V3-E4 — 5-cam vs 7-cam KPI 对照 + 对称 5-cam 切换（2026-05-27）
+
+**Commits**: dd6c39f (Phase 1 代码) → 0ffd738 (standalone reload fix + 知识警告) → `<next>` (对称 5-cam 切换 + 文档同步)
+
+**动机**：v2 multilayer 默认 5-cam ring 是非对称的 `[front_wide_120, rear_tele_30, cross_left_120, cross_right_120, rear_left_70]` — 用 30° 窄视角 rear-tele 占位后向，缺右后 70°，左右不对称。原计划是"5-cam vs 加 2 个相机 (rear_right_70 + front_tele_30)"对比，但用户指出 baseline 选择本身就有问题：真正的对称环视 ring 应该是 `[front_wide_120, cross_left_120, cross_right_120, rear_left_70, rear_right_70]`。三组 30k 实测后结论清晰，**应切对称 5-cam 而不是 7-cam**。
+
+**实验设计**：
+
+| 实验 | iter | camera_ids | wall-clock |
+|---|---:|---|---:|
+| **E1a** 原非对称 5cam | 5000 | front_wide + rear_tele_30 + cross_l + cross_r + rear_l | ~9 min |
+| **E1b** 7cam | 5000 | E1a + front_tele_30 + rear_right_70 | ~13 min |
+| **E1c** 7cam per-cam step parity | 7000 | E1b 同 camera_ids | ~18 min |
+| **E2a** 7cam 30k | 30000 | 全 7 个相机 | ~80 min |
+| **E2b** 对称 5cam 30k | 30000 | front_wide + cross_l + cross_r + rear_l + **rear_right_70** | ~75 min |
+
+**关键工具**：dd6c39f commit 新增 render.py `metrics.json["per_camera"]` 字段 + `--eval-cameras` hydra filter。配合 NCoreDataset val frame 切分按 `frame_idx % 8 == 0`（与 camera 数无关），同一 camera_id 在不同 train-set 配置下 val 帧集完全一致，**train-time metrics.json 的 per_camera 字典就是天然的同名公平对比工具，不需要 standalone re-eval**。
+
+**核心结果 — 3 组在 4 公共相机上 cc_psnr_masked 对照（dB）**：
+
+| Camera | E1a 5cam(原)5k | E2a 7cam 30k | E2b **对称5cam 30k** |
+|---|---:|---:|---:|
+| front_wide_120 | 20.19 | 21.24 | **21.75** |
+| cross_left_120 | 24.86 | 26.71 | **27.01** |
+| cross_right_120 | 26.87 | 28.08 | **28.58** |
+| rear_left_70 | 22.33 | 24.74 | **25.10** |
+| **4-cam mean** | **23.56** | **25.19** | **25.61** ★ |
+| **Δ vs E2b** | -2.05 | -0.42 | baseline |
+
+**rear-back 相机选择关键证据**：
+
+| 配置 | 相机 | cc_psnr_masked |
+|---|---|---:|
+| E1a 非对称 5cam | rear_tele_30 | 22.56 |
+| E2a 7cam（含 rear_tele_30） | rear_tele_30 | 23.38 |
+| **E2b 对称 5cam** | **rear_right_70** | **27.78** |
+| E2a 7cam（也含 rear_right_70） | rear_right_70 | 26.99 |
+
+**`rear_right_70` 比 `rear_tele_30` 高 +5.2 dB** — 后向用 30° 窄视角是 baseline 的主要短板。
+
+**结论 + 行动**：
+1. **7-cam 在所有公共相机上劣于对称 5-cam，平均 -0.42 dB** — 多相机几何约束没补偿训练量摊薄（每相机 1/7 vs 1/5）
+2. **对称 5-cam vs 原非对称 5-cam 大幅提升 +2.05 dB** — 主要来自 `rear_right_70` 替换 `rear_tele_30`
+3. **切换 multilayer.yaml 默认 camera_ids → 对称 5-cam** (本 commit)
+4. 后续 baseline 数字以 E2b cc_psnr_masked **26.04** (global, 5cam test set) 替换 v2 Stage 7 的 24.70
+
+**Independent observation**: 30k 训练相比 5k smoke，`raw psnr_masked` 反而下降（E2a 18.35 / E2b 15.29 vs E1a 21.42），但 `cc_psnr_masked` 大幅上升 → ExposureModel 学到了让 raw RGB 偏离 GT 的 tone shift，cc affine fit 能拉回但说明 exposure 退化严重。**这正是 V3-P1 (T9.1-T9.4) 双边网格 + L2 reg + 2-stage freeze 要修的问题**。本 task 仅记录现象。
+
+**Caveat — standalone reload 已知问题（V3-E4.1 follow-up）**：
+- `Renderer.from_checkpoint()` 对 LayeredGaussians ckpt 加载时缺少 ExposureModel state（`exposure_state` key）和可能的 sky_envmap warmup buffers 恢复，导致重新加载评估比 train-end-of-train 自带 metrics.json 低 ~3 dB
+- commit 0ffd738 加了 logger.warning 明确告知 caller，但加载链路本身未完整修复
+- 本 task 结论不依赖 standalone reload（用 train-time metrics.json per_camera 直接对比），但 V3 后续 novel-view eval / cross-clip eval 需要 standalone reload 时必须先解决 V3-E4.1
+
+**测试**：tests/test_render_per_camera.py 7 个新测试 + tests/test_trainer_masked_metrics.py 等 23 个既有测试无回归（70/70 通过 on Mac venv）。
 
 ---
 
