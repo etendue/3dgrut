@@ -1,0 +1,71 @@
+# @package _global_
+#
+# ===========================================================================
+#  V3 Stage A — Multi-Layer + Per-Track Learnable Cuboid Pose
+# ===========================================================================
+# 继承 multilayer (v2 baseline 字节等价扁平版)，只覆盖 trainer.learnable_pose.enabled = true.
+#
+# 启用效果：
+#   * LayeredGaussians._populate_tracks_impl 走 learnable 分支：每个 track 注册
+#     ``_track_quat_<tid>`` Parameter[F,4] + ``_track_trans_<tid>`` Parameter[F,3]
+#     替代原 ``_track_pose_<tid>`` buffer；另存 ``_track_pose_gt_<tid>`` buffer
+#     供 resume 检测 / 未来 viz diff。
+#   * trainer.init_pose_optimizer 注册独立 Adam (2 param groups)：
+#     rotation lr 1e-5, translation lr 1e-4 (= DriveStudio omnire ins_rotation 同款,
+#     trans 较 omnire 低 5×，因 3dgrut2 main position_lr 量级也较小)
+#   * 默认 freeze_until_iter = 5000：5000 iter 前 zero_grad 不 step，让 gaussian /
+#     scale / opacity 先在 GT pose 下收敛到 baseline 再开 pose drift。
+#   * bg_cuboid_penalty / FTheta cuboid mask 的 pose 路径 ``.detach()``，
+#     梯度只从 photometric loss 流回 pose Parameter，杜绝对抗优化。
+#
+# Acceptance gate (Stage A — A800 5k smoke)：
+#   1. enabled=true ckpt 内含 `_track_quat_<tid>`、`_track_trans_<tid>` 状态
+#      + sibling key "learnable_pose_state" 含 optimizer Adam 状态
+#   2. 5k smoke total_loss 无 NaN；前 5000 iter freeze 期 trans Parameter ≈ GT
+#      (`||t_learned - t_gt||₂ ≈ 0`，因为 grad 算了但没 step)
+#   3. 同 clip / 同 seed CLI override `trainer.learnable_pose.enabled=false`
+#      应该 byte-identical 于 multilayer baseline（关键回归门）
+#   4. 真正验证 pose 学习需要 ≥10k iter (因 freeze=5000)；Stage A 5k smoke 主要
+#      验证 forward/backward/ckpt round-trip 通畅，不发散
+#
+# A800 启动模板 (sky_backend=mlp 必须)：
+#   ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH \
+#     && export CUDA_VISIBLE_DEVICES=0 \
+#     && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+#     && cd /root/work/yusun/repo/3dgrut \
+#     && python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_poseopt \
+#       n_iterations=10000 \
+#       path=/root/work/yusun/ncore-nurec/data/ncore/clips/<clip>/pai_<clip>.json \
+#       trainer.sky_backend=mlp \
+#       out_dir=/root/work/yusun/ncore-nurec/output \
+#       experiment_name=<name>_poseopt_stageA'
+# ===========================================================================
+
+defaults:
+  - ncore_3dgut_mcmc_multilayer
+  - _self_
+
+# ─── V3 Stage A overrides ───────────────────────────────────────────────────
+trainer:
+  # sky_backend pinned to mlp here (multilayer baseline keeps null = cubemap)
+  # because the poseopt yaml is specifically for A800 / ThinkPad use where
+  # nvdiffrast is NOT available. Without this pin, viser_gui_4d viewers load
+  # the ckpt (trained with CLI sky_backend=mlp → SkyEnvmapMLP weights) into a
+  # SkyEnvmapCubemap → state_dict shape mismatch on first browser render.
+  # Identical to passing `trainer.sky_backend=mlp` on every train CLI, so the
+  # produced ckpt remains byte-equivalent.
+  sky_backend: mlp
+  learnable_pose:
+    enabled: true
+    # V3 Stage B — temporal smoothness reg (DriveStudio RigidNodes form):
+    #   second-order finite-difference penalty on per-track quat + trans
+    #   Parameters; active only when global_step >= freeze_until_iter and
+    #   the track has a triple-active frame window. Targets the visible
+    #   "顿挫感" (per-frame jitter) on dynamic objects after Stage A.
+    #
+    #   1e-2 / 1e-1 are DriveStudio-magnitude defaults; tune via ThinkPad
+    #   B1 (lambda=0) vs B2 (these defaults) A/B comparison.
+    lambda_temporal_smooth_trans: 1.0e-2
+    lambda_temporal_smooth_rot:   1.0e-1
+    # 其余字段沿用 base_gs.yaml 默认 (lr_rotation=1e-5, lr_translation=1e-4,
+    # freeze_until_iter=5000, pose-prior lambdas = 0 — Stage C)

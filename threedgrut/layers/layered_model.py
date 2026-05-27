@@ -146,6 +146,34 @@ def _quat_multiply_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
     return torch.stack([w, x, y, z], dim=-1)
 
 
+def _quat_wxyz_to_rotmat(q: torch.Tensor) -> torch.Tensor:
+    """Quaternion ``q`` of shape ``[..., 4]`` in ``(w, x, y, z)`` convention →
+    rotation matrix ``[..., 3, 3]``.
+
+    Inverse of :func:`_rotmat_to_quat_wxyz`. Caller should normalize ``q`` to
+    unit norm before calling — non-unit quaternions encode a uniform scaling
+    and produce non-orthogonal R. Used by the learnable-pose path
+    (``_compose_pose_for_track``) where Adam updates can violate unit-norm.
+    """
+    w = q[..., 0]; x = q[..., 1]; y = q[..., 2]; z = q[..., 3]
+    ww = w * w; xx = x * x; yy = y * y; zz = z * z
+    wx = w * x; wy = w * y; wz = w * z
+    xy = x * y; xz = x * z; yz = y * z
+    r00 = ww + xx - yy - zz
+    r01 = 2 * (xy - wz)
+    r02 = 2 * (xz + wy)
+    r10 = 2 * (xy + wz)
+    r11 = ww - xx + yy - zz
+    r12 = 2 * (yz - wx)
+    r20 = 2 * (xz - wy)
+    r21 = 2 * (yz + wx)
+    r22 = ww - xx - yy + zz
+    row0 = torch.stack([r00, r01, r02], dim=-1)
+    row1 = torch.stack([r10, r11, r12], dim=-1)
+    row2 = torch.stack([r20, r21, r22], dim=-1)
+    return torch.stack([row0, row1, row2], dim=-2)
+
+
 class _LayeredOptimizerView:
     """Lightweight optimizer-like wrapper that fans calls across per-layer Adams.
 
@@ -290,14 +318,20 @@ class LayeredGaussians(nn.Module):
             # dynamic_deformables: registered as a non-particle stub in the
             # registry; no module instantiated (v2.x placeholder, T1.2).
 
-        # T4.0: per-clip dynamic-rigid track poses, registered as nn.Buffer so
-        # they ride along with .to(device) / state_dict() / .cuda(). v2 assumes
-        # single-clip training (D3); multi-clip would require re-construct.
-        # Stored separately as flat names "_track_pose_<tid>" / "_track_active_<tid>"
-        # (PyTorch register_buffer disallows '.' in names) plus mirror Python
-        # dicts for ergonomic per-track lookup by name.
-        object.__setattr__(self, "tracks_poses", {})    # {tid: Tensor[F, 4, 4]}
-        object.__setattr__(self, "tracks_active", {})   # {tid: BoolTensor[F]}
+        # T4.0 / V3 Stage A: per-clip dynamic-rigid track poses.
+        # Storage mode depends on ``conf.trainer.learnable_pose.enabled``:
+        #   - false (default, v2 baseline byte-identical): one buffer
+        #     ``_track_pose_<tid>`` of shape ``[F, 4, 4]`` per track, plus
+        #     ``_track_active_<tid>`` BoolTensor[F].
+        #   - true (V3 Stage A): split into ``_track_quat_<tid>`` Parameter[F,4]
+        #     (wxyz) + ``_track_trans_<tid>`` Parameter[F,3] for SE(3) refinement
+        #     under photometric loss, plus a frozen ``_track_pose_gt_<tid>``
+        #     buffer for resume detection / future viz diff. Active mask remains
+        #     a buffer (never learnable).
+        # ``tracks_poses`` / ``tracks_active`` are derived ``@property`` dicts —
+        # NOT init-time empty dicts — so they always reflect the actual
+        # registered buffers/parameters (fixes observation #321/#349/#851 where
+        # the old Python-dict mirror went stale after ckpt load).
         # T4.5 timestamp-aligned dyn pose lookup: shared per-frame absolute
         # camera END timestamps in microseconds. Single buffer across all
         # tracks (all tracks share the same camera frame schedule). Used by
@@ -305,6 +339,128 @@ class LayeredGaussians(nn.Module):
         # None when no tracks (single-bg / road-only multi-layer).
         if tracks is not None:
             self._populate_tracks_impl(tracks)
+
+    # ------------------------------------------------------------------ V3 Stage A: learnable pose helpers
+
+    def _read_learnable_pose_flag(self) -> bool:
+        """Read ``conf.trainer.learnable_pose.enabled`` defensively.
+
+        Defaults to ``False`` so legacy configs / mock configs without the
+        ``learnable_pose`` subtree stay on the v2 buffer path (byte-identical).
+        """
+        trainer_conf = getattr(self.conf, "trainer", None)
+        if trainer_conf is None:
+            return False
+        lp = trainer_conf.get("learnable_pose", None) if hasattr(trainer_conf, "get") \
+            else getattr(trainer_conf, "learnable_pose", None)
+        if lp is None:
+            return False
+        enabled = lp.get("enabled", False) if hasattr(lp, "get") \
+            else getattr(lp, "enabled", False)
+        return bool(enabled)
+
+    def _iter_track_tids(self) -> List[str]:
+        """Sorted list of track ids currently registered.
+
+        Source of truth: ``_track_active_<tid>`` buffers (registered in both
+        buffer and learnable modes). Sorted to match the
+        ``track_ids`` indexing convention (``sorted(tracks_poses.keys())``)
+        used by ``init_layer_from_points`` (L951) — see observation #677.
+        """
+        prefix = "_track_active_"
+        tids = [name[len(prefix):] for name in self._buffers
+                if name.startswith(prefix)]
+        tids.sort()
+        return tids
+
+    def _get_track_pose_F(self, tid: str) -> int:
+        """Number of frames in a track's pose schedule. Mode-agnostic."""
+        # Learnable: quat[F, 4]; buffer: pose[F, 4, 4]; active[F]
+        q = getattr(self, f"_track_quat_{tid}", None)
+        if q is not None:
+            return int(q.shape[0])
+        p = getattr(self, f"_track_pose_{tid}", None)
+        if p is not None:
+            return int(p.shape[0])
+        a = getattr(self, f"_track_active_{tid}", None)
+        if a is not None:
+            return int(a.shape[0])
+        raise KeyError(f"No registered pose/active state for track '{tid}'")
+
+    def _compose_pose_for_track(self, tid: str, idx: int) -> torch.Tensor:
+        """Return ``[4, 4]`` SE(3) pose for ``tid`` at frame ``idx``.
+
+        Learnable mode: composes a fresh rotation matrix from the wxyz quat
+        Parameter (normalized) and trans Parameter — gradients flow back to
+        both. Buffer mode: returns the stored ``_track_pose_<tid>[idx]``
+        slice (no gradient). Mode is detected per call so a model whose
+        ``populate_tracks`` half-restored from a buffer-mode ckpt into a
+        learnable-mode session still works (see ``_populate_tracks_impl``
+        cross-mode adoption path).
+        """
+        # Buffer mode (or legacy ckpt restored before mode flip).
+        pose_buf = getattr(self, f"_track_pose_{tid}", None)
+        if pose_buf is not None:
+            return pose_buf[idx]
+        q_all = getattr(self, f"_track_quat_{tid}", None)
+        t_all = getattr(self, f"_track_trans_{tid}", None)
+        if q_all is None or t_all is None:
+            raise KeyError(f"No pose state for track '{tid}'")
+        q = q_all[idx]
+        q = q / q.norm().clamp(min=1e-12)             # Adam breaks unit-norm — renormalize per access
+        R = _quat_wxyz_to_rotmat(q)                   # [3, 3]
+        T = q.new_zeros(4, 4)
+        T[:3, :3] = R
+        T[:3, 3]  = t_all[idx]
+        T[3, 3]   = 1.0
+        return T
+
+    def _compose_pose_all_frames(self, tid: str) -> torch.Tensor:
+        """Batched variant of ``_compose_pose_for_track`` over all F frames.
+
+        Returns ``[F, 4, 4]``. Used by the ``tracks_poses`` ``@property``,
+        ``get_model_parameters``-time persistence, and any caller that wants
+        the full schedule for one track. Gradient-tracking in learnable mode.
+        """
+        pose_buf = getattr(self, f"_track_pose_{tid}", None)
+        if pose_buf is not None:
+            return pose_buf
+        q_all = getattr(self, f"_track_quat_{tid}", None)
+        t_all = getattr(self, f"_track_trans_{tid}", None)
+        if q_all is None or t_all is None:
+            raise KeyError(f"No pose state for track '{tid}'")
+        q = q_all / q_all.norm(dim=-1, keepdim=True).clamp(min=1e-12)  # [F, 4]
+        R = _quat_wxyz_to_rotmat(q)                                    # [F, 3, 3]
+        F = q.shape[0]
+        T = q.new_zeros(F, 4, 4)
+        T[:, :3, :3] = R
+        T[:, :3,  3] = t_all
+        T[:,  3,  3] = 1.0
+        return T
+
+    @property
+    def tracks_poses(self) -> dict:
+        """Dynamic ``{tid: Tensor[F, 4, 4]}`` derived from the registered
+        ``_track_pose_<tid>`` buffers OR ``_track_quat_<tid>`` + ``_track_trans_<tid>``
+        Parameters (learnable mode). Keys are returned in ``sorted(tids)`` order
+        — same convention ``init_layer_from_points`` uses to assign per-particle
+        ``track_ids``. Computed on every access; in learnable mode the tensors
+        are differentiable (do NOT cache the dict across train steps).
+        """
+        return {tid: self._compose_pose_all_frames(tid)
+                for tid in self._iter_track_tids()}
+
+    @property
+    def tracks_active(self) -> dict:
+        """Dynamic ``{tid: BoolTensor[F]}`` derived from the registered
+        ``_track_active_<tid>`` buffers. Never learnable.
+        """
+        out = {}
+        for tid in self._iter_track_tids():
+            buf = getattr(self, f"_track_active_{tid}", None)
+            if buf is not None:
+                out[tid] = buf
+        return out
 
     # ------------------------------------------------------------------ checkpoint
 
@@ -355,6 +511,23 @@ class LayeredGaussians(nn.Module):
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
             out["sky_envmap_state"] = self.layers["sky_envmap"].state_dict()
+        # V3 Stage A: LayeredGaussians-level per-track state — wxyz quat /
+        # trans nn.Parameter (learnable mode) or _track_pose_<tid> buffer
+        # (legacy/disabled mode), _track_active_<tid> buffers, and the frozen
+        # _track_pose_gt_<tid> reference buffer. ``get_model_parameters``
+        # returns a structured dict (NOT a flat nn.Module state_dict), so
+        # these would otherwise be silently dropped on save — fatal for
+        # learnable_pose since the Adam-updated quat/trans Parameters carry
+        # the only persistent copy of the refined pose. Sibling buffers
+        # ``tracks_camera_timestamps_us`` and ``track_ids`` are still re-
+        # derived by populate_tracks() / init_layer_from_points() each
+        # session, so they don't need a slot here.
+        layered_track_state = {
+            k: v.detach().cpu() for k, v in self.state_dict().items()
+            if k.startswith("_track_")
+        }
+        if layered_track_state:
+            out["layered_track_state"] = layered_track_state
         return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
@@ -421,6 +594,36 @@ class LayeredGaussians(nn.Module):
                 sky_state = checkpoint["sky_envmap_state"]
             if sky_state is not None and "sky_envmap" in self.layers:
                 self.layers["sky_envmap"].load_state_dict(sky_state)
+            # V3 Stage A: restore LayeredGaussians-level per-track state.
+            # Must run AFTER the trainer has called populate_tracks() (it does
+            # so before init_from_checkpoint, see trainer.init_model L386-449),
+            # so the buffer/Parameter slots already exist and load_state_dict
+            # only has to fill them. ``strict=False`` because we only carry
+            # _track_* entries — everything else is filled by the per-layer
+            # MoG init_from_checkpoint calls above.
+            track_state = None
+            if (
+                "model" in checkpoint
+                and isinstance(checkpoint["model"], dict)
+                and "layered_track_state" in checkpoint["model"]
+            ):
+                track_state = checkpoint["model"]["layered_track_state"]
+            elif "layered_track_state" in checkpoint:
+                track_state = checkpoint["layered_track_state"]
+            if track_state is not None and len(track_state) > 0:
+                missing_keys, unexpected_keys = self.load_state_dict(
+                    track_state, strict=False,
+                )
+                # ``missing_keys`` will contain every non-track key (per-layer
+                # MoG params, sky_envmap, etc.) — those are filled by the
+                # paths above, so we DON'T warn on them. ``unexpected_keys``
+                # signals a true ckpt schema mismatch.
+                if unexpected_keys:
+                    logger.warning(
+                        f"[ckpt] Unexpected layered_track_state keys (first "
+                        f"5): {unexpected_keys[:5]} — pose state may be "
+                        f"partially restored"
+                    )
             # T8.12 fix: ckpt state_dicts hold CPU tensors and load_state_dict
             # does not migrate device. Trainer-path eval always calls
             # ``model.cuda()`` after construction so this is invisible there;
@@ -700,8 +903,15 @@ class LayeredGaussians(nn.Module):
              callers without timestamp_us.
           3. Else → 0 (defensive fallback).
         """
-        any_track = next(iter(self.tracks_poses))
-        F = getattr(self, f"_track_pose_{any_track}").shape[0]
+        # V3 Stage A: derive F via the mode-agnostic helper instead of touching
+        # ``_track_pose_<tid>`` directly (that buffer doesn't exist in learnable
+        # mode — the wxyz quat Parameter does). ``tracks_active`` keys are the
+        # source of truth in both modes.
+        tids = self._iter_track_tids()
+        if not tids:
+            return 0
+        any_track = tids[0]
+        F = self._get_track_pose_F(any_track)
 
         if timestamp_us > 0 and hasattr(self, "tracks_camera_timestamps_us"):
             ts_buf = self.tracks_camera_timestamps_us
@@ -778,8 +988,11 @@ class LayeredGaussians(nn.Module):
                     else:
                         fallback_idx = int(nonzero[0, 0].item())
                         is_active = True
+                # V3 Stage A: route through _compose_pose_for_track so the
+                # learnable-pose Parameter path produces a fresh, gradient-
+                # tracking SE(3) from quat+trans. Buffer path is unchanged.
                 pose_list.append(
-                    getattr(self, f"_track_pose_{n}")[fallback_idx].to(device)
+                    self._compose_pose_for_track(n, fallback_idx).to(device)
                 )
                 active_track_flags.append(
                     torch.tensor(is_active, dtype=torch.bool, device=device)
@@ -788,8 +1001,10 @@ class LayeredGaussians(nn.Module):
             active_stack = torch.stack(active_track_flags)                   # [K] bool
         else:
             idx = self._resolve_pose_idx(timestamp_us, frame_id)
+            # V3 Stage A: see comment above — _compose_pose_for_track is
+            # mode-agnostic.
             pose_stack = torch.stack(
-                [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
+                [self._compose_pose_for_track(n, idx).to(device) for n in track_names]
             )                                                                # [K, 4, 4]
             # Per-track active flag at this frame; defaults to all-True when
             # the _track_active_<n> buffer is missing (pre-T4.0).
@@ -861,8 +1076,10 @@ class LayeredGaussians(nn.Module):
         # Buffers may sit on CPU even after layer Parameters move to CUDA
         # (LayeredGaussians has no explicit .to() call from trainer), so
         # sync each per-track pose tensor to the positions device.
+        # V3 Stage A: _compose_pose_for_track is mode-agnostic (buffer or
+        # learnable quat+trans Parameter); same call shape in both paths.
         pose_stack = torch.stack(
-            [getattr(self, f"_track_pose_{n}")[idx].to(device) for n in track_names]
+            [self._compose_pose_for_track(n, idx).to(device) for n in track_names]
         )
         track_ids = track_ids.to(device)
         pose_per_pt = pose_stack[track_ids]                                   # [N, 4, 4]
@@ -969,7 +1186,31 @@ class LayeredGaussians(nn.Module):
         self._populate_tracks_impl(tracks)
 
     def _populate_tracks_impl(self, tracks: dict) -> None:
-        """Shared impl for __init__ and populate_tracks paths."""
+        """Shared impl for __init__ and populate_tracks paths.
+
+        V3 Stage A: branches on ``self._read_learnable_pose_flag()``.
+
+        * **Buffer mode (default)** — legacy v2 path: register
+          ``_track_pose_<tid>`` buffer ``[F, 4, 4]`` + ``_track_active_<tid>``
+          BoolTensor[F]. Byte-identical with the pre-V3 code path.
+
+        * **Learnable mode** — split each pose into wxyz quat Parameter[F,4]
+          + trans Parameter[F,3]; also keep a frozen ``_track_pose_gt_<tid>``
+          buffer for resume detection and (future) viz diff. Active mask
+          remains a buffer.
+
+        **Resume guard** — if a learnable-mode tid is repopulated and its
+        ``_track_quat_<tid>`` Parameter already exists, the pose Parameter is
+        NOT overwritten (we assume it's been training). Only the active mask
+        and shared metadata are refreshed. This is what makes 2nd-train-from-ckpt
+        not clobber learned pose.
+
+        **Cross-mode adoption** — if learnable mode is on but only a legacy
+        ``_track_pose_<tid>`` buffer is present (resume from a buffer-mode
+        ckpt), the buffer is converted to Parameter once, then deleted.
+        """
+        learnable_mode = self._read_learnable_pose_flag()
+
         # Shared cam timestamp buffer (single tensor across all tracks).
         # Take from the first track that supplies it; verify subsequent
         # tracks match (they should — same NCore loader, same camera).
@@ -997,17 +1238,46 @@ class LayeredGaussians(nn.Module):
             active = (info["active"] if isinstance(info, dict) and "active" in info
                       else info.get("frame_info") if isinstance(info, dict)
                       else info[1])
-            buf_pose_name = f"_track_pose_{tid}"
+            buf_pose_name   = f"_track_pose_{tid}"
             buf_active_name = f"_track_active_{tid}"
-            if hasattr(self, buf_pose_name):
-                delattr(self, buf_pose_name)
+            buf_gt_name     = f"_track_pose_gt_{tid}"
+            param_quat_name = f"_track_quat_{tid}"
+            param_trans_name = f"_track_trans_{tid}"
+
+            # Active mask is identical in both modes (never learnable).
             if hasattr(self, buf_active_name):
                 delattr(self, buf_active_name)
-            self.register_buffer(buf_pose_name, poses, persistent=True)
             self.register_buffer(buf_active_name, active.to(torch.bool),
                                  persistent=True)
-            self.tracks_poses[tid] = getattr(self, buf_pose_name)
-            self.tracks_active[tid] = getattr(self, buf_active_name)
+
+            if learnable_mode:
+                # Resume guard: keep existing Parameter (already trained).
+                if (param_quat_name in self._parameters
+                        and param_trans_name in self._parameters):
+                    continue
+
+                # Cross-mode adoption: drop any leftover buffers from previous
+                # mode so register_parameter doesn't collide.
+                for stale in (buf_pose_name, buf_gt_name, param_quat_name, param_trans_name):
+                    if hasattr(self, stale):
+                        delattr(self, stale)
+
+                poses_f32 = poses.to(torch.float32)
+                R_init = poses_f32[:, :3, :3]                     # [F, 3, 3]
+                t_init = poses_f32[:, :3, 3].contiguous()         # [F, 3]
+                q_init = _rotmat_to_quat_wxyz(R_init).contiguous() # [F, 4]
+                self.register_parameter(param_quat_name,
+                                        nn.Parameter(q_init.detach().clone()))
+                self.register_parameter(param_trans_name,
+                                        nn.Parameter(t_init.detach().clone()))
+                # Frozen GT pose for resume detection + (future) viz diff.
+                self.register_buffer(buf_gt_name, poses_f32.clone(), persistent=True)
+            else:
+                # Legacy buffer path (v2 baseline, byte-identical).
+                if hasattr(self, buf_pose_name):
+                    delattr(self, buf_pose_name)
+                self.register_buffer(buf_pose_name, poses, persistent=True)
+
             # T8.2 — capture class/size when supplied by the loader. Falls back
             # silently when absent (e.g. legacy callers / partial dicts) so we
             # never block the existing pose+active contract.

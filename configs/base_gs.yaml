@@ -67,6 +67,24 @@ trainer:
     use_cuboid_mask: true       # fill image_infos["dyn_mask_cuboid"] for layered L1
     dyn_clamp_to_cuboid: false  # in-place dynamic_rigids positions clamp post-MCMC
 
+  # V3 Stage A — per-track learnable cuboid pose (SE(3) refinement).
+  # When enabled, LayeredGaussians registers wxyz quat Parameter[F,4] +
+  # trans Parameter[F,3] per track instead of a frozen pose buffer; a
+  # sibling independent Adam (init_pose_optimizer) updates them.
+  # Default off → byte-identical with v2 / pre-V3 ckpts.
+  # Lambda fields: Stage B temporal smoothness is now wired (trainer reads
+  # both lambda_temporal_smooth_* fields via _compute_pose_smoothness_term);
+  # pose-prior reg is still Stage C (placeholder, unused).
+  learnable_pose:
+    enabled: false
+    lr_rotation:       1.0e-5          # DriveStudio omnire ins_rotation lr
+    lr_translation:    1.0e-4          # 5x lower than omnire — 3dgrut2 main lr is smaller
+    freeze_until_iter: 5000            # warmup: gaussians converge under GT pose first
+    lambda_temporal_smooth_trans: 0.0  # Stage B (active when >0 ∧ step ≥ freeze)
+    lambda_temporal_smooth_rot:   0.0  # Stage B (active when >0 ∧ step ≥ freeze)
+    lambda_pose_prior_trans:      0.0  # Stage C placeholder (not yet read)
+    lambda_pose_prior_rot:        0.0  # Stage C placeholder (not yet read)
+
 enable_writer: true
 writer:
   hit_stat_frequency: 999999
