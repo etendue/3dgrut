@@ -52,18 +52,24 @@ layers:
     dynamic_rigids:
       max_n_particles: 300000
 
-# ─── 数据集 (源自 v2_full_exposure.yaml: 5-cam ring) ────────────────────
+# ─── 数据集 (T8.5.7 / V3-E4 切到对称 5-cam ring) ────────────────────────
 dataset:
   load_aux_masks: true   # T3.1.b: sseg + lidar-sseg readers (v2_road)
-  # 5-cam ring (v2_full_exposure): 平衡 front-wide + rear-tele + 两侧 cross
-  # + 一个 rear-corner, 用来学 per-camera exposure delta. 7-cam 跑 Stage 7
-  # 时 CLI 覆盖整段 camera_ids 列表.
+  # 对称 5-cam ring (T8.5.7 / V3-E4 30k 实测): front_wide_120 + 左右 cross
+  # 120 + 左右 rear 70, 完整 360° 环视且左右对称. 历史非对称 5-cam 用
+  # rear_tele_30 (单后向窄视角) 替代 rear_right_70, 30k 实测在 4 个公共
+  # 相机上 cc_psnr_masked 平均比对称 5-cam 低 -2.05 dB, 单独 rear-back
+  # 相机自身相差 +5.2 dB (rear_right_70 27.78 vs rear_tele_30 22.56).
+  # 7-cam 训练 (额外加 rear_tele_30 + front_tele_30) 30k 实测在 4 个公共
+  # 相机上 cc_psnr_masked 比对称 5-cam 平均低 -0.42 dB, 多相机摊薄训练量
+  # 没补回视角约束增益. 7-cam 跑 ablation 时 CLI 覆盖 camera_ids 列表.
+  # 详见 v3_plan.md § 5 Done Log 2026-05-27 V3-E4 条目.
   camera_ids:
     - camera_front_wide_120fov
-    - camera_rear_tele_30fov
     - camera_cross_left_120fov
     - camera_cross_right_120fov
     - camera_rear_left_70fov
+    - camera_rear_right_70fov
 
 # ─── trainer (汇总所有上游 v2 yaml) ────────────────────────────────────
 trainer:
