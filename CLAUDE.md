@@ -58,6 +58,138 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work
 9. 把"伪完成"识别为"未完成"：训练 exit 0 + ckpt 写出 ≠ task ✅。必须 metric 数字达标 + 写进 Done Log + commit hash 入看板。
 10. 跑挂了（exit ≠ 0 / 早期 RuntimeError）回头改代码时，**先写一个回归测试 pin 住这个 case**（如 4D vs 3D mask broadcast），再修代码 + Mac pytest，最后再 rsync + 重跑 A800。不要"改了就直接重跑 A800"，单测便宜，A800 贵。
 
+## Vast.ai 远程执行环境（A800 占用时备用）
+
+A800 被其他任务占用时，**Claude 可以自行起 vast.ai RTX 4090 实例**跑 V3 smoke / KPI。整套流程已在 2026-05-27 V3-L5/L8/L9 任务中跑通（详见 v3_plan.md § 5 Done Log "V3-L5 + V3-L8 + V3-L9" 条目）。
+
+- vastai CLI: `/Users/etendue/repo/ncore/.venv/bin/vastai`（v1.0.3）
+- API key: 写死在 `scripts/t8_12_fix_vast_create.sh` 里（也接受 `--api-key $VAST_API_KEY`）
+- HF token: `~/.cache/huggingface/token`（如需从 HF 下数据）
+- 推荐 image: `pytorch/pytorch:2.4.0-cuda12.1-cudnn9-devel`（vast 上 image pull 约 5-10 min on 8 Gbps host）
+- 推荐 host: California / Norway 等 inet > 1 Gbps 的节点；**避开 France `mid=67891`**（image pull 卡 25+ min 不动）
+- 5k smoke A/B 成本：~$0.45（45 min × $0.534/hr RTX 4090 48GB）
+
+### 阶段 1：创建实例 + ssh config
+
+```bash
+# 起实例（自动选最便宜 RTX 4090, 写 ~/.ssh/config 别名 vast-rtx4090）
+LABEL=v3_<task>_smoke DISK_GB=100 MAX_DPH=0.80 \
+  bash scripts/t8_12_fix_vast_create.sh
+```
+
+⚠️ **t8_12_fix_vast_create.sh 已知 bug**：脚本里的 status polling 用了旧版字段名解析（'ssh_host' 字符串 substring 模糊匹配）会卡在"timed out waiting"。实例其实是创建好的，**手动从 `vastai show instance <id> --raw` 拿 `ssh_host` / `ssh_port` 字段自己写 `~/.ssh/config`**：
+
+```python
+# Python 写入 Mac 端 ~/.ssh/config (本地 Mac 用 python3 OK)
+python3 - <<'PY'
+import re, os
+path = os.path.expanduser("~/.ssh/config")
+alias = "vast-rtx4090"
+with open(path) as f: txt = f.read()
+pat = re.compile(rf"(^|\n)Host\s+{re.escape(alias)}\b.*?(?=\nHost\s|\Z)", re.S)
+txt = pat.sub("", txt)
+txt = txt.rstrip() + "\n\nHost vast-rtx4090\n    HostName ssh<N>.vast.ai\n    Port <PORT>\n    User root\n    IdentityFile ~/.ssh/id_ed25519\n    StrictHostKeyChecking no\n    UserKnownHostsFile /dev/null\n"
+with open(path, "w") as f: f.write(txt)
+os.chmod(path, 0o600)
+PY
+```
+
+### 阶段 2：环境安装
+
+不要在 vast 容器内跑 python3 来写文件（vast pytorch container **没装 python3 系统命令**，只有 conda python；用纯 shell + awk 或 scp 推 Mac 写好的脚本）：
+
+```bash
+# 在 vast 上 clone repo + 跑 install_env_uv.sh
+ssh vast-rtx4090 'apt-get install -y -qq git python3.11-venv rsync \
+    libxcb1 libxext6 libxrender1 libsm6 libice6 libgl1 libglib2.0-0 \
+  && cd /root && git clone https://github.com/etendue/3dgrut.git \
+  && cd 3dgrut && git checkout <branch> \
+  && git submodule update --init --recursive \
+  && bash install_env_uv.sh'
+```
+
+**必装的系统 lib**（opencv-python 在 headless container 缺这些）：`libxcb1 libxext6 libxrender1 libsm6 libice6 libgl1 libglib2.0-0`。否则 `import threedgrut.datasets` 会 ImportError on `libxcb.so.1`。
+
+**install_env_uv.sh 用 `tail -30` buffer 上游输出**，看起来"卡住"实际在跑——通过 `ps -ef | grep nvcc` 或 `du -sh .venv` 监控真实进度。10-15 min 完成；slangc + kaolin 在末尾装。
+
+### 阶段 3：数据传输（A800 → vast 反向推）
+
+A800 上的 NCore 数据完整（`/root/work/yusun/ncore-nurec/data/ncore/clips/<clip>/`），**优先从 A800 推到 vast 而不是从 HF 重下**（A800 速度 3-5 MB/s, 7.2 GB clip ~23-25 min）：
+
+```bash
+# 1. A800 上生成 ssh keypair（如果没有）
+ssh a800-x2 '[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "a800@v3-rsync"'
+A800_PUB=$(ssh a800-x2 'cat ~/.ssh/id_ed25519.pub')
+
+# 2. 把 A800 pubkey 加入 vast authorized_keys（avoid 黏行：用 printf '\n%s\n'）
+ssh vast-rtx4090 "mkdir -p ~/.ssh && chmod 700 ~/.ssh \
+  && printf '\n%s\n' '$A800_PUB' >> ~/.ssh/authorized_keys \
+  && chmod 600 ~/.ssh/authorized_keys"
+
+# 3. A800 上写 ssh config 指向 vast（用 awk 不用 python3, A800 root 可能没 python3）
+ssh a800-x2 'bash -s' <<EOF
+SSH_CFG=~/.ssh/config
+awk 'BEGIN{skip=0} /^Host vast-rtx4090\b/{skip=1; next} skip==1 && /^Host /{skip=0} skip==1{next} {print}' "\$SSH_CFG" > "\$SSH_CFG.tmp"
+cat <<CFG >> "\$SSH_CFG.tmp"
+
+Host vast-rtx4090
+    HostName ssh<N>.vast.ai
+    Port <PORT>
+    User root
+    IdentityFile ~/.ssh/id_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+CFG
+mv "\$SSH_CFG.tmp" "\$SSH_CFG"
+chmod 600 "\$SSH_CFG"
+EOF
+
+# 4. 从 A800 push to vast (run_in_background=true; ~25 min for 7.2 GB)
+ssh a800-x2 'rsync -avz --info=progress2 \
+  /root/work/yusun/ncore-nurec/data/ncore/clips/<clip>/ \
+  vast-rtx4090:/root/data/ncore/clips/<clip>/'
+```
+
+### 阶段 4：训练启动
+
+```bash
+# 启动脚本走 nohup, 用 scp 推 launcher 而不是 inline ssh heredoc
+# （vast container bashrc 可能有 set -e, inline heredoc 在 pkill 没匹配时会中断）
+
+cat > /tmp/launch_smoke.sh <<'EOF'
+#!/bin/bash
+rm -f /tmp/v3_smoke.log /tmp/v3_smoke.pid
+cd /root/3dgrut
+git pull 2>&1 | tail -3
+nohup bash scripts/v3_l589_vast_smoke_ab.sh > /tmp/v3_smoke.log 2>&1 &
+echo "$!" > /tmp/v3_smoke.pid
+sleep 10; head -30 /tmp/v3_smoke.log
+EOF
+scp -q /tmp/launch_smoke.sh vast-rtx4090:/tmp/launch_smoke.sh
+ssh vast-rtx4090 'bash /tmp/launch_smoke.sh'
+```
+
+### Hydra override 严格区分 `+` vs `++`
+
+- `+key=value`：**新增** key（key 不存在）。若 yaml 已有此 key 会报 `Could not append to config. An item is already at '<key>'`。
+- `++key=value`：**override** key（key 存在与否都 OK）。**通用且不报错**。
+- 不带前缀：只能 override 已有 key（如顶层 `n_iterations=5000`）。
+
+V3-L589 的 5k smoke 首次失败因为用 `+layers.overrides.dynamic_rigids.<key>=...` 但 multilayer.yaml 已经有默认值——必须 `++` 才能 override。**所有 `layers.overrides.<layer>.<field>` 类的 CLI override 一律用 `++`**。
+
+### 销毁实例（任务完成立即清理）
+
+```bash
+echo y | /Users/etendue/repo/ncore/.venv/bin/vastai destroy instance <ID> \
+  --api-key a6d4a47d11507fec636572f4ba555a1cb2395864eac29f33035eb1bcd5712f0d
+```
+
+不要让实例闲置——RTX 4090 即使空闲也按 $0.534/hr 计费。
+
+### Monitor 使用注意
+
+跑训练 + eval 时，**不要让 Monitor grep "PSNR"**——render.py eval 阶段会逐帧打 `Frame N, PSNR: X`，几千帧会让 Monitor 被 rate limit suppression 干掉。Monitor 只 grep **关键节点**：`RUN [0-9]:|⭐ Test Metrics|^=== |Traceback|FAILED|OOM|⚡ V3-L8|🎊 Training Statistics`。
+
 ## 训练配置约定（重要）
 
 **v2 多层训练统一使用 `configs/apps/ncore_3dgut_mcmc_multilayer.yaml`**，这是 dynfix 7 层递归链 (`dynfix → 4dviz → exposure → sky → full → road → ncore_3dgut_mcmc`) 的字节等价扁平版（Hydra compose 递归 diff 0 差异，A800 1k smoke 验证通过，详见 v2_plan.md § 5 Done Log 2026-05-26 "Config 重构"条目）。
