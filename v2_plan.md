@@ -1130,8 +1130,34 @@ Active mask: `a[f-1]=a[f]=a[f+1]=1` 三连活跃才计入（避免跨 active 边
 **out-of-scope（Stage C/D 留下一步）**:
 - pose-prior `λ‖p − p_gt‖²` 默认开启 (yaml 占位仍 0)
 - fix_first/last 端点冻结
-- 双视图 / BEV / per-track drift 直方图 viz
+- ~~双视图 / BEV / per-track drift 直方图 viz~~ → ✅ Stage D.3 完成（下条）
 - A800 长训（用户暂缓 merge main）
+
+### ✅ V3 Stage D.3 — analyze_pose_drift.py `--plot` BEV / hist viz (2026-05-27, Mac edit + ThinkPad RTX 4090 验证)
+
+**改动 (1 file, +82 / -5 行)**: `scripts/analyze_pose_drift.py` —
+- main() 加 `plot=False, out_dir=None` 形参；CLI 切到 `argparse` (`--plot` + `--out-dir`)；
+- 训练循环里同步累积 `all_gt_xy = t_gt[active_mask, :2]`，供 BEV 散点用；
+- 新 `_emit_plots()` helper（懒加载 matplotlib `Agg` 后端）：写出 3 张 PNG 到 ckpt 同目录（或 `--out-dir`）：
+  1. `pose_drift_trans_hist.png` — Δt 直方图 (80 bins) + median/p99 虚线标注
+  2. `pose_drift_rot_hist.png` — Δrot° 直方图 + median/p99 标注
+  3. `pose_drift_bev.png` — cuboid GT 位置 (x,y) 散点，按 Δt (m) 着色，vmax 截到 p99，`viridis` colormap
+
+**ThinkPad 验证** (ckpt `poseopt_on_30k_freeze10k/ours_30000/ckpt_30000.pt`, Stage A only — λ=0)：
+
+| 指标 | 30k Stage A (λ=0) | 1500-iter Stage A (B1 control 对比) |
+|---|---|---|
+| trans Δ median (m) | 0.0162 | 0.0027 (≈ 6× 增长) |
+| trans Δ p99 (m) | 0.0529 | 0.0074 (≈ 7× 增长) |
+| trans Δ max (m) | 0.0755 | – |
+| rot Δ median (°) | 0.190 | 0.020 (≈ 10×) |
+| rot Δ p99 (°) | 0.638 | 0.089 (≈ 7×) |
+| rot Δ max (°) | 1.097 | – |
+| 14994 (track, frame) 活跃样本 (70 tracks) | – | – |
+
+**BEV 观察**: cuboids 沿主路向 x 轴 (-180m..+250m) 高速场景铺开，y≈0 集中；近 ego（x∈[-30, +60]m）drift 颜色显著（30-50mm），远端 drift <10mm。Top-5 drift tracks: tid 21/405/259/7/316，max Δt 71-76mm，对应 rot Δ 0.7-1.1°，仍远小于 5° 阈值。
+
+**用途**: (a) Stage A vs Stage B 30k A/B 量化对比的可视化锚；(b) 后续 pose-prior loss / 6D rot ablation 对照模板；(c) 任意 ckpt 一行命令出图，无需在 notebook 重写。
 
 ### ✅ Config 重构 — 扁平化 v2 多层训练配置链 (2026-05-26, A800 GPU 0)
 
