@@ -57,5 +57,15 @@ trainer:
   sky_backend: mlp
   learnable_pose:
     enabled: true
+    # V3 Stage B — temporal smoothness reg (DriveStudio RigidNodes form):
+    #   second-order finite-difference penalty on per-track quat + trans
+    #   Parameters; active only when global_step >= freeze_until_iter and
+    #   the track has a triple-active frame window. Targets the visible
+    #   "顿挫感" (per-frame jitter) on dynamic objects after Stage A.
+    #
+    #   1e-2 / 1e-1 are DriveStudio-magnitude defaults; tune via ThinkPad
+    #   B1 (lambda=0) vs B2 (these defaults) A/B comparison.
+    lambda_temporal_smooth_trans: 1.0e-2
+    lambda_temporal_smooth_rot:   1.0e-1
     # 其余字段沿用 base_gs.yaml 默认 (lr_rotation=1e-5, lr_translation=1e-4,
-    # freeze_until_iter=5000, lambda_* = 0)
+    # freeze_until_iter=5000, pose-prior lambdas = 0 — Stage C)

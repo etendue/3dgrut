@@ -39,6 +39,7 @@ from threedgrut.model.bg_cuboid_loss import (
 )
 from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
+from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
 from threedgrut.model.losses import ssim
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.optimizers import SelectiveAdam
@@ -932,6 +933,16 @@ class Trainer3DGRUT:
         # (v2 baseline byte-identical default).
         loss_bg_cuboid = self._compute_bg_cuboid_penalty_term(gpu_batch, trainer_conf)
 
+        # V3 Stage B — temporal smoothness reg on learnable per-track pose.
+        # Second-order finite-difference penalty (DriveStudio
+        # RigidNodes.temporal_smooth_reg form) on _track_quat_<tid> +
+        # _track_trans_<tid> Parameters. Gated triply: pose_optimizer
+        # exists (learnable_pose enabled), global_step >= freeze_until_iter
+        # (Adam is actually stepping pose), and at least one of λ_trans /
+        # λ_rot > 0. Disabled path returns torch.zeros(1) on device,
+        # baseline byte-identical when poseopt off.
+        loss_pose_smooth = self._compute_pose_smoothness_term(trainer_conf)
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -940,6 +951,7 @@ class Trainer3DGRUT:
             + lambda_scale * loss_scale
             + lambda_sky * loss_sky
             + loss_bg_cuboid
+            + loss_pose_smooth
         )
         return dict(
             total_loss=loss,
@@ -950,6 +962,7 @@ class Trainer3DGRUT:
             scale_loss=lambda_scale * loss_scale,
             sky_loss=lambda_sky * loss_sky,
             bg_cuboid_loss=loss_bg_cuboid,
+            pose_smooth_loss=loss_pose_smooth,
         )
 
     # ---------------------------------------------------------------- T8/B3
@@ -1103,6 +1116,43 @@ class Trainer3DGRUT:
             bg_layer.positions, bg_layer.density,
             poses.to(self.device), sizes.to(self.device),
             lambda_val=lam,
+        )
+
+    # ---------------------------------------------------------------- V3 Stage B
+    def _compute_pose_smoothness_term(self, trainer_conf) -> torch.Tensor:
+        """Compute the Stage B temporal smoothness reg on learnable pose.
+
+        Returns ``torch.zeros(1, device=self.device)`` when:
+          * ``pose_optimizer`` is None (learnable_pose disabled), OR
+          * ``global_step < pose_freeze_until_iter`` (freeze warmup — pose
+            Parameters are not being stepped, so we don't pay reg either),
+          * Both ``λ_temporal_smooth_trans`` / ``_rot`` are 0.
+
+        Delegates to :func:`compute_pose_smoothness_loss` for the actual
+        finite-difference math. Wires self.model + λ values + device.
+        """
+        zero = torch.zeros(1, device=self.device)
+        if self.pose_optimizer is None:
+            return zero
+        if self.global_step < self.pose_freeze_until_iter:
+            return zero
+        lp_conf = getattr(trainer_conf, "learnable_pose", None)
+        if lp_conf is None:
+            return zero
+        lam_t = float(
+            lp_conf.get("lambda_temporal_smooth_trans", 0.0)
+            if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_temporal_smooth_trans", 0.0)
+        )
+        lam_r = float(
+            lp_conf.get("lambda_temporal_smooth_rot", 0.0)
+            if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_temporal_smooth_rot", 0.0)
+        )
+        if lam_t <= 0.0 and lam_r <= 0.0:
+            return zero
+        return compute_pose_smoothness_loss(
+            self.model, lam_t, lam_r, device=self.device,
         )
 
     @torch.cuda.nvtx.range("log_validation_iter")
