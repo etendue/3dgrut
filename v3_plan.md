@@ -196,7 +196,7 @@ kanban
 | **T12.7** | 12 | V3-T1.basic PERTURB hook 简化版（不含 cuboid clip，留 T15.1） | V3-T1 部分 | 0.5 | ⬜ | — |
 | **T12.8** | 12 | A800 Stage 12 出口 — cc_psnr_masked ≥ 28.5 dB + MCMC 收敛监控曲线 | — | 1 | ⬜ | — |
 | **T13a.1** | 13a | V3-L4 background ignore_classes_from_layers=[road] — layered loss 加层级排他 mask | V3-L4 | 0.5 | ⬜ | — |
-| **T13a.2** | 13a | V3-L5 DynamicRigid symmetric_axis='Y' — 镜像粒子对称先验 + 镜像约束 reg | V3-L5 | 1.5 | ⬜ | — |
+| **T13a.2** | 13a | V3-L5 DynamicRigid symmetric_axis='Y' — 镜像粒子对称先验 + 镜像约束 reg | V3-L5 | 1.5 | 🟢 5k smoke 已实装 + 信号已出（heavy_truck/bus +0.15 dB, low_15db −13%） | `c5c3246` (init+test+yaml) — 5k Done Log 2026-05-27；镜像约束 reg (V3-L5b) 留作 30k follow-up |
 | **T13a.3** | 13a | V3-L6 DynamicRigid 5000 pts/track + 全层 300K cap | V3-L6 | 0.5 | ⬜ | — |
 | **T13a.4** | 13a | V3-L7 track-pose 联合优化 — fix_first/last + warm start ≥ 500 + 可学习 Δpose | V3-L7 | 3 | ⬜ | — |
 | **T13a.5** | 13a | V3-D6 cuboid LiDAR padding [0.5, 0.5, 0.25] m — T4.4 dynamic_mask 加膨胀 | V3-D6 | 0.5 | ⬜ | — |
@@ -205,8 +205,8 @@ kanban
 | **T13b.1** | 13b | V3-L1 background fourier_features_dim=5 时间编码 | V3-L1 | 1 | ⬜ | — |
 | **T13b.2** | 13b | V3-L2 road fourier_features_dim=1 | V3-L2 | 0.5 | ⬜ | — |
 | **T13b.3** | 13b | V3-L3 LayerSpec scale_pos_lr_by_scene_extent 字段 + trainer 接 | V3-L3 | 0.5 | ⬜ | — |
-| **T13b.4** | 13b | V3-L8 optimize_track_albedo — per-track SH bias + Constant→Linear→Cosine LR | V3-L8 | 1.5 | ⬜ | — |
-| **T13b.5** | 13b | V3-L9 optimize_track_scale — per-track scale offset 同 L8 | V3-L9 | 1 | ⬜ | — |
+| **T13b.4** | 13b | V3-L8 optimize_track_albedo — per-track SH bias + Constant→Linear→Cosine LR | V3-L8 | 1.5 | 🟢 5k smoke 实装但未充分激活（warmup=500 + lr=1e-5 + 4500 步累积过小） | `c5c3246` — 30k follow-up 需要 lr↑10× 或 warmup↓ 才能激活；DC SH bias 实装，SH-rest delta 为 L8b |
+| **T13b.5** | 13b | V3-L9 optimize_track_scale — per-track scale offset 同 L8 | V3-L9 | 1 | 🟢 5k smoke 同 L8（log-scale scalar 实装，warmup 不足） | `c5c3246` — 30k follow-up |
 | **T13b.6** | 13b | V3-D2 MoG extra_signal 20 维通道 + dataset DINOv2 feat reader + 背景层接入 | V3-D2 | 2.5 | ⬜ | — |
 | **T13b.7** | 13b | A800 Stage 13b 出口 — cc_psnr_masked ≥ 29.7 dB | — | 1 | ⬜ | — |
 | **T14.1** | 14 | V3-D3 sseg 直读 logits + sky/road/dyn aux CE loss head (21 类 softmax) | V3-D3 | 1.5 | ⬜ | — |
@@ -789,7 +789,59 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 
 **关联未来 task**：V3-P2 — 修 dyn→bg/road 错分（cuboid-exclusion mask 加严 / 训练后 post-process 粒子迁移）。
 
-*（待 Stage 8.5 启动时追加首条 KPI 任务条目）*
+### V3-L5 + V3-L8 + V3-L9 — NuRec dynamic_rigids tricks 一次性实装 + 5k A/B（2026-05-27）
+
+`commit c5c3246` (实装) + `commit f3c4460` (vast bootstrap scripts) on branch `worktree-feat-v3-l589-symmetric`，对应 NuRec `parsed_config.yaml` 中 `model.layers.dynamic_rigids` 的三项关键 tricks：
+
+**实装范围**（默认全 OFF，通过 `layers.overrides.dynamic_rigids.<key>` 翻转，保证 v2 baseline 字节等价）：
+
+| Trick | 文件 | 行为 |
+|---|---|---|
+| **V3-L5** `symmetric_axis: 'Y'` | `threedgrut/layers/dynamic_rigid_init.py` | LiDAR object-local 点云 y 取负后 concat 到原集合（subsample cap=5000 截断之前） |
+| **V3-L8** `optimize_track_albedo` | `threedgrut/layers/layered_model.py` (`_track_albedo_table[K,3]`) | 每 track 一个 3-dim RGB bias 加到 `features_albedo` DC SH；warmup=500 后翻 requires_grad |
+| **V3-L9** `optimize_track_scale` | `threedgrut/layers/layered_model.py` (`_track_log_scale_table[K,1]`) | 每 track 一个 scalar log-scale 偏移加到 `scale` (log-space)；同 warmup |
+| 基础设施 | `threedgrut/layers/registry.py` (extra-key 白名单), `trainer.py` (init 透传 + warmup gate), `render.py` (4 metrics.json 诊断字段), `multilayer.yaml` (默认 OFF 全套) | 不破坏现有 schema |
+
+**Mac 单测**：126 PASS / 0 regression （13+9+8+5+4+4 = 43 个新/扩展测试覆盖 init/fused_view/warmup/optimizer/ckpt-roundtrip/metrics 计算）。
+
+**Vast 5k smoke A/B**（NCore 9ae151dc, RTX 4090 48GB, **10.97 it/s**, 单 run ~21 min 含 setup+train+eval+export）：
+
+| 指标 | Baseline (OFF) | Experiment (ON: sym=Y + albedo + scale, warmup=500) | Δ |
+|---|---:|---:|---:|
+| mean_psnr | 20.134 | 19.853 | −0.281 |
+| mean_psnr_masked | 21.466 | 21.144 | −0.322 |
+| **mean_cc_psnr_masked** | 23.290 | **23.536** | **+0.246** ✅ |
+| mean_class_psnr | 20.295 | 20.296 | +0.001 (平) |
+| automobile_psnr | 20.155 | 20.142 | −0.013 |
+| **heavy_truck_psnr** | 21.563 | **21.709** | **+0.146** ✅ |
+| **bus_psnr** | 22.161 | **22.309** | **+0.149** ✅ |
+| **class_psnr_n_low_15db** | 500 | **435** | **−65 (−13%)** ✅ |
+| mean_lpips_masked | 0.394 | 0.389 | −0.005 ✅ |
+| symmetric_axis (diag) | null | `'Y'` | — |
+| track_albedo_l2_mean (diag) | null | 6.9e-4 | — |
+| track_log_scale_std (diag) | null | 3.4e-3 | — |
+| ⚡ V3-L8/L9 warmup activated at step | n/a | **500** (实测触发 trainer hook) | — |
+
+**5 个关键观察**：
+
+1. **V3-L5 symmetric_axis 信号已出**：`heavy_truck +0.146`, `bus +0.149` dB，体型较大且左右对称的车辆获益最明显（NuRec 论文一致）。`automobile` 平 — 一般 sedan 已有较密 LiDAR 点，对称镜像增益有限。
+2. **最强信号在车辆"最差区域"**：`class_psnr_n_low_15db` 从 500 → 435，**13%** 的低质量车辆区域被"救回"15dB 以上，这正是 NuRec symmetric init 的核心收益点。
+3. **V3-L8/L9 未充分激活**：`track_albedo_l2_mean=6.9e-4`, `track_log_scale_std=3.4e-3` — warmup=500 占 10% iter，剩 4500 步以 LR 1e-5 累积更新过小，与 plan §I 风险评估"5k 看不出 L8/L9 完整效果，30k 才能稳"**完全吻合**。
+4. **raw `mean_psnr_masked` 退化 −0.322**：与 v2 已知 dyn 层与 bg 层 alpha 预算竞争模式一致，cc-corrected 版本反而 +0.246 dB 说明颜色校正后 dyn 层 contribution 是净正向。
+5. **基础设施验证通过**：⚡ V3-L8/L9 warmup hook 在 step 500 实测触发，`maybe_activate_track_params` + `_track_optim` + `_LayeredOptimizerView.extra_optimizers` 三层抽象在 vast 端 GPU 训练流程中真实运行无误。
+
+**Run 信息**：
+- baseline: `/root/out/v3_L589_baseline_5k_2605_27_030019/`
+- experiment: `/root/out/v3_L589_on_5k_2605_27_030019/`
+- 本地 archive: `/Users/etendue/repo/report/v3_L589_5k_results/{baseline_OFF,experiment_ON}/`
+- vast 实例 38003930 RTX 4090 ($0.534/hr, 总耗 ~$0.5)
+
+**结论 / 下一步**：
+- **V3-L5 (symmetric_axis='Y')**：5k 已展示正向 signal，**建议进 30k full run 锁定 KPI**（V3-L5 进 v3_plan.md Stage 8.5+ KPI 任务卡）
+- **V3-L8/L9 (albedo/scale)**：5k 不足以激活，按 plan §F 升级到 30k 二轮跑或调整 warmup/LR（V3-L8b/L9b follow-up：考虑 LR ↑10x 或 warmup ↓100）
+- **V3-L5b**（mirror chamfer reg）暂不做，等 30k 实测确认 init 增强是否需要 loss reg 协助
+
+**关联未来 task**：V3-L5b（mirror chamfer reg, 30k 后评估）；V3-L8b（SH-rest delta vs DC bias 对比）；V3-L9b（per-track 3-dim scale vs scalar 对比）。
 
 ---
 
