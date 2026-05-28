@@ -26,15 +26,22 @@ per-particle pose lookup.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
+
+
+# V3-L5: axis-name → object-local frame coordinate index. Cuboid object-local
+# frame convention (matches load_tracks_from_ncore_cuboids euler_xyz_to_rotation
+# decoding): X=forward, Y=left, Z=up. Vehicles are predominantly Y-symmetric.
+_SYMMETRIC_AXIS_INDEX: dict[str, int] = {"X": 0, "Y": 1, "Z": 2}
 
 
 def init_dynamic_rigid_layer(
     instance_pts_dict: Dict[str, dict],
     dynamic_lidar_pts: torch.Tensor,
     max_pts_per_track: int = 5_000,
+    symmetric_axis: Optional[str] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, List[str]]:
     """Filter dyn LiDAR → object-local per track; concat across tracks.
 
@@ -46,6 +53,13 @@ def init_dynamic_rigid_layer(
         dynamic_lidar_pts: ``[M, 3]`` world frame, semantically filtered to
             dynamic classes (NCoreDataset.get_dynamic_lidar_points).
         max_pts_per_track: per-track subsample cap.
+        symmetric_axis: V3-L5 (NuRec ``symmetric_axis``). When set to ``'X'``,
+            ``'Y'``, or ``'Z'``, every per-track local-frame point is mirrored
+            across the named axis (i.e. coordinate ``i`` negated) and the
+            mirrored copy concatenated **before** the ``max_pts_per_track``
+            subsample. For vehicles (predominantly left-right symmetric) the
+            NuRec default is ``'Y'``. ``None`` disables the augmentation
+            (baseline behaviour, byte-identical to pre-V3-L5).
 
     Returns:
         positions:   ``[Σ, 3]`` object-local frame
@@ -53,6 +67,15 @@ def init_dynamic_rigid_layer(
         track_names: ``[K]`` list of track names in the order matching
                      track_ids values 0..K-1 (sorted by key for determinism)
     """
+    axis_idx: Optional[int] = None
+    if symmetric_axis is not None:
+        if symmetric_axis not in _SYMMETRIC_AXIS_INDEX:
+            raise ValueError(
+                f"symmetric_axis must be one of {sorted(_SYMMETRIC_AXIS_INDEX)} "
+                f"or None, got {symmetric_axis!r}"
+            )
+        axis_idx = _SYMMETRIC_AXIS_INDEX[symmetric_axis]
+
     track_keys = sorted(instance_pts_dict.keys())
     name_to_id = {k: i for i, k in enumerate(track_keys)}
     dtype = torch.float32
@@ -92,6 +115,18 @@ def init_dynamic_rigid_layer(
 
         track_pts = (torch.cat(collected_local, dim=0) if collected_local
                      else torch.zeros(0, 3, dtype=dtype, device=device))
+
+        # V3-L5: NuRec ``symmetric_axis`` augmentation. Concatenate the
+        # axis-mirrored copy BEFORE max_pts_per_track subsample so that the
+        # cap acts as a single combined budget — the mirror does not increase
+        # the per-track particle count when the original already saturates
+        # the cap, but for sparse tracks (rear of clip, oblique cuboids) the
+        # mirror doubles density and supplies the missing far-side LiDAR
+        # returns we never observed.
+        if axis_idx is not None and track_pts.shape[0] > 0:
+            mirrored = track_pts.clone()
+            mirrored[:, axis_idx] = -mirrored[:, axis_idx]
+            track_pts = torch.cat([track_pts, mirrored], dim=0)
 
         if track_pts.shape[0] > max_pts_per_track:
             sel = torch.randperm(track_pts.shape[0], device=device)[:max_pts_per_track]

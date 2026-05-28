@@ -167,14 +167,21 @@ class Renderer:
                 model = LayeredGaussians(
                     conf, specs=specs, scene_extent=scene_extent,
                 )
-                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
-                # V3-E4.1 fix: restore dynamic-rigid per-track pose buffers
-                # from ckpt["viz_4d"]["tracks"] so fused_view SE(3)-transforms
-                # dynamic Gaussians per-frame. Without this the 300K dyn
-                # particles stay at canonical pose and raw psnr drops ~2 dB
-                # for the train-end-of-train comparison. Mirrors the load
-                # pattern already in playground engine.py:1346-1360. Skipped
-                # silently when ckpt has no viz_4d block (pre-T8.2 ckpts).
+                # V3 Stage A/B/D.2 bugfix: ``populate_tracks`` MUST run BEFORE
+                # ``init_from_checkpoint`` for learnable_pose ckpts. Reason:
+                # ``LayeredGaussians.init_from_checkpoint`` (layered_model.py
+                # L632-672) calls ``load_state_dict(layered_track_state,
+                # strict=False)`` to restore _track_quat_/_track_trans_/
+                # _track_pose_gt_/_track_active_ entries — but
+                # ``load_state_dict`` only writes into pre-existing slots, and
+                # those slots are created by ``populate_tracks``. If we call
+                # them in the wrong order, the learned Parameter values are
+                # silently dropped ("unexpected keys" warning) and the model
+                # ends up with GT-init values from tracks_dict instead of the
+                # ckpt's learned poses (yesterday's D.2 triptych diff ≈ 0
+                # was caused by exactly this). The trainer's order is correct
+                # (trainer.init_model L386-449); render.py + engine.py were
+                # both inverted since V3-E4.1 — fixed simultaneously.
                 viz_4d = checkpoint.get("viz_4d")
                 if viz_4d is not None and isinstance(viz_4d, dict):
                     tracks_dict = viz_4d.get("tracks")
@@ -187,6 +194,7 @@ class Renderer:
                         first_tid = next(iter(tracks_dict))
                         tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
                         model.populate_tracks(tracks_dict)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
             else:
                 model = MixtureOfGaussians(conf)
                 model.init_from_checkpoint(checkpoint, setup_optimizer=False)
@@ -807,6 +815,33 @@ class Renderer:
                 sum(1 for v in cp_values if v < 15.0)
             )
             table["mean_class_psnr"] = float(np.mean(cp_values))
+
+        # V3-L5/L8/L9 — diagnostic fields. Written even when the toggles are
+        # OFF (as ``null``) so downstream A/B-comparison scripts can rely on
+        # the keys being present in every metrics.json.
+        albedo_t = getattr(self.model, "_track_albedo_table", None)
+        log_scale_t = getattr(self.model, "_track_log_scale_table", None)
+        # symmetric_axis lives on the dynamic_rigids LayerSpec.extra.
+        sym_axis_val = None
+        specs = getattr(self.model, "specs", None)
+        if specs is not None:
+            dyn = next((s for s in specs if s.name == "dynamic_rigids"), None)
+            if dyn is not None:
+                sym_axis_val = (getattr(dyn, "extra", {}) or {}).get("symmetric_axis")
+        metrics_json["symmetric_axis"] = sym_axis_val  # 'Y' / 'X' / 'Z' / null
+        metrics_json["track_albedo_l2_mean"] = (
+            float(albedo_t.detach().norm(dim=-1).mean().cpu())
+            if albedo_t is not None else None
+        )
+        metrics_json["track_log_scale_mean"] = (
+            float(log_scale_t.detach().mean().cpu())
+            if log_scale_t is not None else None
+        )
+        metrics_json["track_log_scale_std"] = (
+            float(log_scale_t.detach().std().cpu())
+            if log_scale_t is not None and log_scale_t.numel() > 1 else None
+        )
+
         metrics_path = os.path.join(self.out_dir, "metrics.json")
         with open(metrics_path, "w") as f:
             json.dump(metrics_json, f, indent=2)

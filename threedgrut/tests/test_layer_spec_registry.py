@@ -138,6 +138,104 @@ def test_specs_from_config_overrides_unknown_field_raises():
         specs_from_config(conf)
 
 
+# --------------------------------------------------------------- V3-L5/L8/L9
+def test_v3_extra_keys_routed_to_extra_dict():
+    """V3-L5/L8/L9: ``symmetric_axis`` / ``optimize_track_albedo`` /
+    ``optimize_track_scale`` / ``track_warmup_steps`` etc. are NOT
+    LayerSpec dataclass fields — they must land in ``spec.extra`` instead
+    of raising."""
+    from threedgrut.layers.registry import specs_from_config
+    conf = OmegaConf.create({
+        "layers": {
+            "enabled": ["dynamic_rigids"],
+            "overrides": {
+                "dynamic_rigids": {
+                    "max_n_particles": 700_000,
+                    "symmetric_axis": "Y",
+                    "optimize_track_albedo": True,
+                    "optimize_track_scale": True,
+                    "track_warmup_steps": 500,
+                    "track_albedo_lr": 1.0e-5,
+                    "track_scale_lr": 1.0e-5,
+                },
+            },
+        }
+    })
+    specs = specs_from_config(conf)
+    s = {sp.name: sp for sp in specs}["dynamic_rigids"]
+    assert s.max_n_particles == 700_000  # dataclass field still routed correctly
+    assert s.extra.get("symmetric_axis") == "Y"
+    assert s.extra.get("optimize_track_albedo") is True
+    assert s.extra.get("optimize_track_scale") is True
+    assert s.extra.get("track_warmup_steps") == 500
+    assert s.extra.get("track_albedo_lr") == 1.0e-5
+    assert s.extra.get("track_scale_lr") == 1.0e-5
+
+
+def test_v3_extra_keys_default_off_when_absent():
+    """No V3 overrides present → spec.extra is empty (or registry default
+    only); the OFF code paths in dynamic_rigid_init / layered_model take
+    precedence."""
+    from threedgrut.layers.registry import specs_from_config
+    conf = OmegaConf.create({
+        "layers": {"enabled": ["dynamic_rigids"]},
+    })
+    specs = specs_from_config(conf)
+    s = {sp.name: sp for sp in specs}["dynamic_rigids"]
+    # No registry default extras on dynamic_rigids (sky_envmap is the only
+    # one with built-in extras).
+    assert s.extra.get("symmetric_axis") is None
+    assert not s.extra.get("optimize_track_albedo", False)
+    assert not s.extra.get("optimize_track_scale", False)
+
+
+def test_v3_extra_keys_unknown_still_raises():
+    """A typo on a V3-style extra key must still raise (no silent no-op)."""
+    from threedgrut.layers.registry import specs_from_config
+    conf = OmegaConf.create({
+        "layers": {
+            "enabled": ["dynamic_rigids"],
+            "overrides": {
+                "dynamic_rigids": {"symmetric_axis_typo": "Y"},
+            },
+        }
+    })
+    with pytest.raises(ValueError, match="symmetric_axis_typo"):
+        specs_from_config(conf)
+
+
+def test_v3_extra_keys_preserves_registry_default_extras():
+    """sky_envmap has registry default ``extra={"backend": "cubemap",
+    "resolution": 128}``. Overriding one extra key MUST NOT drop the others."""
+    from threedgrut.layers.registry import specs_from_config
+    # We piggy-back on dynamic_rigids — sky_envmap has no V3 extra keys but
+    # we still want to make sure the merge logic preserves existing extras.
+    # Use a fresh dynamic_rigids extra default by patching registry.
+    from threedgrut.layers import registry as reg
+    # Snapshot + monkey-patch: pretend dyn_rigids ships a baked-in extra.
+    orig = reg.STANDARD_LAYERS["dynamic_rigids"]
+    try:
+        reg.STANDARD_LAYERS["dynamic_rigids"] = type(orig)(
+            **{**{f.name: getattr(orig, f.name)
+                  for f in __import__("dataclasses").fields(orig)},
+               "extra": {"_baked_in": "preserved"}},
+        )
+        conf = OmegaConf.create({
+            "layers": {
+                "enabled": ["dynamic_rigids"],
+                "overrides": {
+                    "dynamic_rigids": {"symmetric_axis": "Y"},
+                },
+            },
+        })
+        specs = specs_from_config(conf)
+        s = specs[0]
+        assert s.extra.get("_baked_in") == "preserved"
+        assert s.extra.get("symmetric_axis") == "Y"
+    finally:
+        reg.STANDARD_LAYERS["dynamic_rigids"] = orig
+
+
 def test_specs_from_config_no_overrides_section_no_change():
     """``layers.overrides`` absent → specs are pristine STANDARD_LAYERS entries."""
     from threedgrut.layers.registry import STANDARD_LAYERS, specs_from_config

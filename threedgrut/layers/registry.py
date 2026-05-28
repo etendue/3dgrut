@@ -19,6 +19,21 @@ from omegaconf import DictConfig
 from threedgrut.layers.layer_spec import LayerSpec
 
 
+# V3-L5/L8/L9: keys that ``layers.overrides.<name>.<field>`` may supply
+# beyond the LayerSpec dataclass fields. These are passed through into
+# ``LayerSpec.extra`` (merged with existing extras) so user yaml can flip
+# NuRec-style dynamic_rigids tricks without modifying the dataclass schema.
+# Add new keys here when a new ``extra``-routed knob is introduced.
+_EXTRA_OVERRIDE_KEYS: frozenset[str] = frozenset({
+    "symmetric_axis",          # V3-L5  ('X' | 'Y' | 'Z' | None)
+    "optimize_track_albedo",   # V3-L8  (bool)
+    "optimize_track_scale",    # V3-L9  (bool)
+    "track_warmup_steps",      # V3-L5/L8/L9 shared warmup (int)
+    "track_albedo_lr",         # V3-L8 optimizer LR
+    "track_scale_lr",          # V3-L9 optimizer LR
+})
+
+
 STANDARD_LAYERS: dict[str, LayerSpec] = {
     "background": LayerSpec(
         name="background", layer_id=0, max_n_particles=600_000,
@@ -83,14 +98,31 @@ def specs_from_config(conf: DictConfig) -> List[LayerSpec]:
         per_layer = overrides.get(name)
         if per_layer is not None:
             # Filter to known fields so a typo doesn't silently no-op.
-            patch = {}
+            # V3-L5/L8/L9: keys in _EXTRA_OVERRIDE_KEYS are routed into the
+            # ``extra`` dict (merged on top of registry defaults) so user
+            # yaml can flip NuRec-style knobs without bloating the
+            # LayerSpec dataclass schema.
+            patch: dict = {}
+            extra_patch: dict = {}
             for k, v in dict(per_layer).items():
-                if k not in valid_fields:
+                if k in valid_fields:
+                    patch[k] = v
+                elif k in _EXTRA_OVERRIDE_KEYS:
+                    extra_patch[k] = v
+                else:
                     raise ValueError(
                         f"Unknown LayerSpec field '{k}' in "
-                        f"conf.layers.overrides.{name}; valid: {sorted(valid_fields)}"
+                        f"conf.layers.overrides.{name}; valid: "
+                        f"{sorted(valid_fields)}; extras: "
+                        f"{sorted(_EXTRA_OVERRIDE_KEYS)}"
                     )
-                patch[k] = v
+            if extra_patch:
+                # Merge over the registry default ``extra`` (e.g. sky_envmap's
+                # {"backend": "cubemap", "resolution": 128}) so we never drop
+                # a baked-in default by listing only one new key.
+                merged_extra = dict(spec.extra or {})
+                merged_extra.update(extra_patch)
+                patch["extra"] = merged_extra
             if patch:
                 spec = dataclasses.replace(spec, **patch)
         specs.append(spec)

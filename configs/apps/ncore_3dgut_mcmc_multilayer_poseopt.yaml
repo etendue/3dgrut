@@ -55,17 +55,20 @@ trainer:
   # Identical to passing `trainer.sky_backend=mlp` on every train CLI, so the
   # produced ckpt remains byte-equivalent.
   sky_backend: mlp
-  learnable_pose:
+  # ──────────────────────────────────────────────────────────────────────
+  # V3 pose_adjustment — turn on per-track learnable cuboid pose +
+  # temporal smoothness reg. Three knobs, that's all.
+  #
+  # Stage A: SE(3) refinement (per-track wxyz quat + trans Parameter,
+  #   independent Adam, default freeze_until_iter=5000).
+  # Stage B: 1e-2 / 1e-1 are DriveStudio-magnitude defaults; tune via
+  #   ThinkPad B1 (λ=0) vs B2 (these defaults) A/B comparison.
+  #
+  # Advanced override (rarely needed):
+  #   trainer.learnable_pose.freeze_until_iter=10000
+  #   trainer.learnable_pose.lr_rotation=1e-5
+  # ──────────────────────────────────────────────────────────────────────
+  pose_adjustment:
     enabled: true
-    # V3 Stage B — temporal smoothness reg (DriveStudio RigidNodes form):
-    #   second-order finite-difference penalty on per-track quat + trans
-    #   Parameters; active only when global_step >= freeze_until_iter and
-    #   the track has a triple-active frame window. Targets the visible
-    #   "顿挫感" (per-frame jitter) on dynamic objects after Stage A.
-    #
-    #   1e-2 / 1e-1 are DriveStudio-magnitude defaults; tune via ThinkPad
-    #   B1 (lambda=0) vs B2 (these defaults) A/B comparison.
-    lambda_temporal_smooth_trans: 1.0e-2
-    lambda_temporal_smooth_rot:   1.0e-1
-    # 其余字段沿用 base_gs.yaml 默认 (lr_rotation=1e-5, lr_translation=1e-4,
-    # freeze_until_iter=5000, pose-prior lambdas = 0 — Stage C)
+    lambda_t: 1.0e-2
+    lambda_r: 1.0e-1

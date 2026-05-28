@@ -176,4 +176,118 @@ def test_state_dict_persistence_drives_full_module_save(real_conf):
     expected_ids = _seed_dyn_layer(model, n=12)
     sd = model.state_dict()
     assert "layers.dynamic_rigids.track_ids" in sd
-    assert torch.equal(sd["layers.dynamic_rigids.track_ids"].cpu(), expected_ids.cpu())
+    assert torch.equal(sd["layers.dynamic_rigids.track_ids"].cpu(),
+                       expected_ids.cpu())
+
+
+# -----------------------------------------------------------------------------
+# V3-L8/L9: per-track albedo / log-scale ckpt roundtrip
+# -----------------------------------------------------------------------------
+
+def _with_dyn_v3_layer(conf, *, albedo: bool = True, scale: bool = True):
+    """Same as ``_with_dyn_layer`` but also flips V3-L8/L9 extras on."""
+    from copy import deepcopy
+    c = deepcopy(conf)
+    overrides = {}
+    if albedo:
+        overrides["optimize_track_albedo"] = True
+    if scale:
+        overrides["optimize_track_scale"] = True
+    overrides["track_warmup_steps"] = 500
+    c.layers = {
+        "enabled": ["background", "dynamic_rigids"],
+        "overrides": {"dynamic_rigids": overrides},
+    }
+    return c
+
+
+def _seed_dyn_v3_layer(model, *, n: int = 20):
+    """``_seed_dyn_layer`` + populate_tracks (so V3 tables are registered)."""
+    bg_pos = torch.randn(4, 3) * 0.1
+    model.init_layer_from_points("background", bg_pos, setup_optimizer=False)
+    # populate_tracks → registers _track_albedo_table and/or _track_log_scale_table.
+    eye = torch.eye(4).expand(5, 4, 4).clone()
+    tracks = {
+        "alice": {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool)},
+        "bob": {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool)},
+    }
+    model.populate_tracks(tracks)
+    track_ids = torch.tensor([i % 2 for i in range(n)], dtype=torch.int64)
+    positions = torch.randn(n, 3) * 0.1
+    model.init_layer_from_points(
+        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+    )
+    model.setup_optimizer_for_test()
+    return tracks
+
+
+def test_v3_tables_present_in_get_model_parameters(real_conf):
+    """When V3-L8/L9 toggles are ON, ``get_model_parameters`` emits a
+    ``track_optim_state`` sibling key with both tables."""
+    conf = _with_dyn_v3_layer(real_conf)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
+    _seed_dyn_v3_layer(model, n=12)
+    params = model.get_model_parameters()
+    assert "track_optim_state" in params
+    tables = params["track_optim_state"]["tables"]
+    assert tables["albedo"].shape == (2, 3)
+    assert tables["log_scale"].shape == (2, 1)
+
+
+def test_v3_tables_absent_in_get_model_parameters_when_off(real_conf):
+    """OFF-toggle ckpts must NOT include the V3 sibling key (byte-identical
+    schema to v2 baseline ckpts)."""
+    conf = _with_dyn_layer(real_conf)  # no V3 overrides
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
+    _seed_dyn_layer(model, n=10)  # baseline path (no populate_tracks)
+    params = model.get_model_parameters()
+    assert "track_optim_state" not in params
+
+
+def test_v3_tables_roundtrip_via_torch_save_load(real_conf, tmp_path):
+    """Full pickled-disk roundtrip for V3-L8/L9 tables."""
+    conf = _with_dyn_v3_layer(real_conf)
+    model_a = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
+    _seed_dyn_v3_layer(model_a, n=12)
+    # Write non-zero values so the assertion catches identity-init false positives.
+    with torch.no_grad():
+        model_a._track_albedo_table.copy_(torch.tensor([[0.1, 0.2, 0.3],
+                                                        [-0.1, -0.2, -0.3]]))
+        model_a._track_log_scale_table.copy_(torch.tensor([[0.4], [-0.4]]))
+    expected_albedo = model_a._track_albedo_table.detach().clone()
+    expected_log_scale = model_a._track_log_scale_table.detach().clone()
+
+    ckpt_path = tmp_path / "v3_ckpt.pt"
+    torch.save({"model": model_a.get_model_parameters()}, ckpt_path)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+    model_b = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
+    _seed_dyn_v3_layer(model_b, n=12)  # registers fresh zero-init tables
+    model_b.init_from_checkpoint(ckpt, setup_optimizer=False)
+
+    assert torch.allclose(model_b._track_albedo_table.detach().cpu(),
+                          expected_albedo.cpu())
+    assert torch.allclose(model_b._track_log_scale_table.detach().cpu(),
+                          expected_log_scale.cpu())
+
+
+def test_v3_ckpt_load_into_off_config_is_safe(real_conf):
+    """Loading an ON-trained ckpt into an OFF-config model must not crash
+    (the unused sibling key is silently skipped)."""
+    conf_on = _with_dyn_v3_layer(real_conf)
+    conf_off = _with_dyn_layer(real_conf)
+    model_on = LayeredGaussians(conf_on, specs=specs_from_config(conf_on), scene_extent=10.0)
+    _seed_dyn_v3_layer(model_on, n=8)
+    ckpt = {"model": model_on.get_model_parameters()}
+
+    model_off = LayeredGaussians(conf_off, specs=specs_from_config(conf_off), scene_extent=10.0)
+    # No populate_tracks → no V3 tables. Loading shouldn't attach them either.
+    model_off.init_layer_from_points("background", torch.randn(2, 3),
+                                      setup_optimizer=False)
+    model_off.init_layer_from_points(
+        "dynamic_rigids", torch.randn(8, 3), setup_optimizer=False,
+    )
+    model_off.setup_optimizer_for_test()
+    model_off.init_from_checkpoint(ckpt, setup_optimizer=False)
+    assert not hasattr(model_off, "_track_albedo_table")
+    assert not hasattr(model_off, "_track_log_scale_table")

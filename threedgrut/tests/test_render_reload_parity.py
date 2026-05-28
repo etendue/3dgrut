@@ -360,3 +360,209 @@ def test_trainer_py_t9_4_computes_cc_psnr_in_val_metrics():
         "T9.4 regression: cc_psnr computation removed — gap monitoring "
         "would emit zero or stale data."
     )
+
+
+# ─── V3-E4.1 follow-up — populate_tracks BEFORE init_from_checkpoint ────────
+#
+# Original V3-E4.1 fix added populate_tracks but placed it AFTER
+# init_from_checkpoint. For buffer-mode ckpts (pre-Stage A) that's harmless,
+# because the tracks_dict GT poses equal the saved buffer values. For
+# learnable_pose ckpts (Stage A/B) it silently drops the learned
+# _track_quat_<tid> / _track_trans_<tid> Parameter values: load_state_dict in
+# LayeredGaussians.init_from_checkpoint reports them as unexpected keys
+# (slots not yet created), then populate_tracks creates the slots and fills
+# them with GT-init values from tracks_dict.
+#
+# These guards pin the corrected order in both call sites.
+
+
+_ENGINE_PY = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..",
+                 "threedgrut_playground", "engine.py")
+)
+
+
+def _engine_py_text() -> str:
+    with open(_ENGINE_PY, "r") as f:
+        return f.read()
+
+
+def _find_block(src: str, anchor: str, window: int = 4000) -> str:
+    """Slice the source text starting at ``anchor`` for ``window`` chars."""
+    idx = src.find(anchor)
+    if idx < 0:
+        raise AssertionError(
+            f"Source anchor not found: {anchor!r} — file may have been "
+            f"refactored away from the V3 ckpt-load idiom."
+        )
+    return src[idx:idx + window]
+
+
+def test_render_py_populate_tracks_before_init_from_checkpoint():
+    """render.py:from_checkpoint must call populate_tracks BEFORE
+    init_from_checkpoint for the layered branch."""
+    src = _render_py_text()
+    block = _find_block(src, "if conf.get(\"use_layered_model\"")
+    pop_at = block.find("model.populate_tracks(tracks_dict)")
+    init_at = block.find("model.init_from_checkpoint(checkpoint")
+    assert pop_at > 0, "populate_tracks call missing from layered branch"
+    assert init_at > 0, "init_from_checkpoint call missing from layered branch"
+    assert pop_at < init_at, (
+        f"V3-E4.1 follow-up regression: in render.py, populate_tracks "
+        f"appears AFTER init_from_checkpoint (pop_offset={pop_at}, "
+        f"init_offset={init_at} relative to the layered branch). For "
+        f"learnable_pose ckpts this drops the learned _track_quat_<tid> / "
+        f"_track_trans_<tid> Parameter values — load_state_dict only "
+        f"writes into pre-existing slots and those slots are created by "
+        f"populate_tracks. Swap the two lines back."
+    )
+
+
+def test_engine_py_populate_tracks_before_init_from_checkpoint():
+    """engine.py:load_3dgrt_object must call populate_tracks BEFORE
+    init_from_checkpoint for the layered branch (same logic as render.py
+    above; both call sites had the inversion since the original V3-E4.1 fix
+    and were corrected simultaneously)."""
+    src = _engine_py_text()
+    block = _find_block(src, "if use_layered:")
+    pop_at = block.find("model.populate_tracks(tracks_dict)")
+    init_at = block.find("model.init_from_checkpoint(checkpoint")
+    assert pop_at > 0, "populate_tracks call missing from engine.py layered branch"
+    assert init_at > 0, "init_from_checkpoint call missing from engine.py layered branch"
+    assert pop_at < init_at, (
+        f"V3-E4.1 follow-up regression: in engine.py:load_3dgrt_object, "
+        f"populate_tracks appears AFTER init_from_checkpoint "
+        f"(pop_offset={pop_at}, init_offset={init_at} relative to the "
+        f"use_layered branch). See render.py companion test for the same "
+        f"reasoning — swap the two lines back."
+    )
+
+
+def _make_learnable_conf():
+    """Compose a tiny multilayer conf with learnable_pose.enabled=true so
+    LayeredGaussians.populate_tracks creates Parameters, not buffers."""
+    with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
+        return compose(
+            config_name="apps/ncore_3dgut_mcmc",
+            overrides=["trainer.learnable_pose.enabled=true"],
+        )
+
+
+def test_populate_tracks_before_load_state_dict_preserves_learned_pose():
+    """Behavioural test mirroring the engine.py/render.py fix end-to-end on
+    the layered_track_state portion.
+
+    Setup: build a fake layered_track_state with _track_quat_<tid> values
+    that DIFFER from the GT poses in tracks_dict (simulate post-Stage-B
+    drift). Run the ``correct`` order on a learnable LayeredGaussians:
+      1. populate_tracks(tracks_dict)  → creates _track_quat_/_track_trans_/
+         _track_pose_gt_/_track_active_ slots, init values = GT
+      2. load_state_dict(track_state, strict=False)  → overwrites the
+         _track_quat_/_track_trans_ Parameter values with the "learned"
+         post-training values from track_state
+    Then verify the Parameters hold the LEARNED values, NOT the GT.
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    conf = _make_learnable_conf()
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=10)]
+    ckpt = _build_synthetic_ckpt(num_tracks=2, num_frames=4)
+    tracks_dict = ckpt["viz_4d"]["tracks"]
+    shared_ts = ckpt["viz_4d"]["tracks_camera_timestamps_us"]
+
+    # Build the model + populate in learnable mode.
+    model = LayeredGaussians(conf, specs=specs, scene_extent=1.0)
+    first_tid = next(iter(tracks_dict))
+    tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
+    model.populate_tracks(tracks_dict)
+
+    # Sanity: in learnable mode, _track_quat_/_track_trans_ slots exist and
+    # the GT pose buffer is registered.
+    tids = sorted(tracks_dict.keys())
+    for tid in tids:
+        assert f"_track_quat_{tid}" in model._parameters, \
+            f"populate_tracks did not register _track_quat_{tid} Parameter"
+        assert f"_track_trans_{tid}" in model._parameters, \
+            f"populate_tracks did not register _track_trans_{tid} Parameter"
+        assert f"_track_pose_gt_{tid}" in model._buffers, \
+            f"populate_tracks did not register _track_pose_gt_{tid} buffer"
+
+    # Build a "post-training" layered_track_state where the learned quat is
+    # NOT identity (different from GT init). This is what a Stage A/B 30k
+    # ckpt actually contains.
+    fake_learned_state = {}
+    for tid in tids:
+        # Different quat: rotate ~10° around z axis, non-identity for every frame.
+        q = torch.tensor([0.996, 0.0, 0.0, 0.087]).repeat(4, 1)  # ~10° z-rot
+        q = q / q.norm(dim=-1, keepdim=True)
+        fake_learned_state[f"_track_quat_{tid}"] = q.clone()
+        # Different trans: shift by [+1m, +2m, +3m] per frame
+        t = torch.tensor([[1.0, 2.0, 3.0]]).repeat(4, 1)
+        fake_learned_state[f"_track_trans_{tid}"] = t.clone()
+        # Keep GT pose buffer + active mask as-is (mirror Stage B ckpt).
+        fake_learned_state[f"_track_pose_gt_{tid}"] = \
+            model._buffers[f"_track_pose_gt_{tid}"].clone()
+        fake_learned_state[f"_track_active_{tid}"] = \
+            model._buffers[f"_track_active_{tid}"].clone()
+
+    # Run the load_state_dict portion of init_from_checkpoint (mirror
+    # layered_model.py L648-651).
+    missing, unexpected = model.load_state_dict(fake_learned_state, strict=False)
+    assert not unexpected, (
+        f"slots missing for learned keys: {unexpected[:5]} — populate_tracks "
+        f"may have failed to create _track_quat_/_track_trans_ in learnable "
+        f"mode (regression in _populate_tracks_impl)."
+    )
+
+    # Now verify the model picked up the learned values, NOT the GT.
+    for tid in tids:
+        q_loaded = model._parameters[f"_track_quat_{tid}"].detach()
+        t_loaded = model._parameters[f"_track_trans_{tid}"].detach()
+        q_expected = fake_learned_state[f"_track_quat_{tid}"]
+        t_expected = fake_learned_state[f"_track_trans_{tid}"]
+        assert torch.allclose(q_loaded, q_expected, atol=1e-6), (
+            f"_track_quat_{tid} did NOT get loaded from state_dict. "
+            f"Got {q_loaded[0]}, expected {q_expected[0]}. This means the "
+            f"V3-E4.1 follow-up fix regressed: populate_tracks must run "
+            f"BEFORE init_from_checkpoint's load_state_dict call."
+        )
+        assert torch.allclose(t_loaded, t_expected, atol=1e-6), (
+            f"_track_trans_{tid} did NOT get loaded from state_dict."
+        )
+
+        # GT pose buffer must still reflect the original tracks_dict GT
+        # (load_state_dict for _track_pose_gt_ above writes the cloned
+        # populate-time value back; this confirms the buffer slot exists).
+        gt = model._buffers[f"_track_pose_gt_{tid}"]
+        assert gt.shape == (4, 4, 4), \
+            f"_track_pose_gt_{tid} shape changed: {gt.shape}"
+
+
+def test_load_state_dict_before_populate_drops_learned_pose_unexpected():
+    """The WRONG order (which both render.py + engine.py had pre-fix) must
+    yield unexpected_keys for _track_quat_/_track_trans_. This is the
+    canary for the bug behaviour: if a future refactor lands the inverted
+    order, this test fails."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    conf = _make_learnable_conf()
+    specs = [LayerSpec(name="background", layer_id=0, max_n_particles=10)]
+
+    # Build the model BUT do NOT call populate_tracks yet — slots absent.
+    model = LayeredGaussians(conf, specs=specs, scene_extent=1.0)
+
+    fake_learned_state = {
+        "_track_quat_10": torch.tensor([0.996, 0.0, 0.0, 0.087]).repeat(4, 1),
+        "_track_trans_10": torch.zeros(4, 3),
+    }
+    missing, unexpected = model.load_state_dict(fake_learned_state, strict=False)
+    # ALL of fake_learned_state should be reported as unexpected because
+    # populate_tracks hasn't created the slots.
+    unexpected_set = set(unexpected)
+    assert "_track_quat_10" in unexpected_set, (
+        "Test premise broken: _track_quat_10 should be unexpected when "
+        "populate_tracks has not yet run. If this fails, LayeredGaussians "
+        "now eagerly creates pose slots in __init__ — that's a behaviour "
+        "change worth investigating."
+    )
+    assert "_track_trans_10" in unexpected_set

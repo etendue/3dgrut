@@ -458,9 +458,25 @@ class Trainer3DGRUT:
                                 model.populate_tracks(tracks)
                                 # Pull dyn LiDAR + filter per-cuboid → object-local
                                 dyn_pts, _ = train_dataset.get_dynamic_lidar_points()
+                                # V3-L5: read NuRec ``symmetric_axis`` from the
+                                # dynamic_rigids LayerSpec.extra (yaml override).
+                                # None → baseline (no mirror), 'Y' → vehicle
+                                # left-right symmetry init augmentation.
+                                _dyn_spec = next(
+                                    (s for s in model.specs
+                                     if s.name == "dynamic_rigids"),
+                                    None,
+                                )
+                                _sym_axis = (
+                                    (getattr(_dyn_spec, "extra", {}) or {})
+                                    .get("symmetric_axis")
+                                    if _dyn_spec is not None else None
+                                )
                                 d_pos, d_track_ids, _track_names = (
                                     init_dynamic_rigid_layer(
-                                        tracks, dyn_pts, max_pts_per_track=5_000,
+                                        tracks, dyn_pts,
+                                        max_pts_per_track=5_000,
+                                        symmetric_axis=_sym_axis,
                                     )
                                 )
                                 device = model.layers["dynamic_rigids"].device
@@ -475,6 +491,8 @@ class Trainer3DGRUT:
                                     f"{d_pos.shape[0]} particles "
                                     f"(from {dyn_pts.shape[0]} dyn LiDAR pts × "
                                     f"{len(tracks)} cuboids)"
+                                    + (f" [V3-L5 symmetric_axis={_sym_axis!r}]"
+                                       if _sym_axis else "")
                                 )
                     else:
                         # single-bg or v1: original byte-identical path
@@ -1853,6 +1871,17 @@ class Trainer3DGRUT:
                 batch=gpu_batch,
                 writer=self.tracking.writer,
             )
+
+        # V3-L8/L9: per-track albedo/scale warmup gate. Flips requires_grad
+        # on the per-track Parameter tables exactly once when
+        # global_step >= track_warmup_steps. No-op when the tables are not
+        # registered (OFF mode → baseline byte-identical).
+        if hasattr(self.model, "maybe_activate_track_params"):
+            if self.model.maybe_activate_track_params(global_step):
+                logger.info(
+                    f"⚡ V3-L8/L9: per-track albedo/scale params activated at "
+                    f"global_step={global_step} (warmup complete)"
+                )
 
         # Optimizer step
         with torch.cuda.nvtx.range(f"train_{global_step}_backprop"):
