@@ -770,7 +770,7 @@ class Trainer3DGRUT:
         (lidar_w_decay > 0 → λ_eff = λ_base * exp(-step/8000 * decay_rate)).
         Set lidar_w_decay <= 0 to disable decay.
         """
-        from threedgrut.correction.depth_prior import DepthLoss
+        from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
 
         trainer_conf = conf.trainer
         def _get(name, default):
@@ -1177,8 +1177,7 @@ class Trainer3DGRUT:
                 lambda_lidar_eff = self._lidar_lambda_decayed()
 
                 if sky is not None and self.lambda_bg_lidar > 0:
-                    from threedgrut.correction.depth_prior import compute_bg_lidar_loss
-                    sky2d = sky.squeeze(-1) if sky.dim() == pred_dist.dim() - 1 else sky
+                    sky2d = sky.squeeze(-1) if sky.dim() == pred_dist.dim() else sky
                     loss_bg_lidar = compute_bg_lidar_loss(pred_dist, sky2d.float(), self.depth_max)
 
             # ---- DepthAnythingV2 dense prior ----
