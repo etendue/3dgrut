@@ -164,3 +164,148 @@ def test_total_variation_loss_zero_uniform():
     """TV of a uniform tensor is 0."""
     x = torch.ones(2, 12, 4, 4, 4)
     assert total_variation_loss(x).item() == 0.0
+
+
+# T9.2: optimizer + scheduler + 2-stage freeze tests --------------------------
+
+def test_t9_2_adamw_with_weight_decay_constructs():
+    """AdamW accepts weight_decay=1e-4; loop runs without crash."""
+    bg = BilateralGrid(num_camera=3, grid_X=1, grid_Y=1, grid_W=1)
+    optim = torch.optim.AdamW(bg.parameters(), lr=1e-3, weight_decay=1e-4)
+    img = torch.rand(4, 4, 3)
+    for _ in range(5):
+        out = bg(0, img)
+        loss = out.sum()
+        loss.backward()
+        optim.step()
+        optim.zero_grad()
+    assert bg.grids.requires_grad
+
+
+def test_t9_2_adamw_decay_negligible_at_identity_init_zero_grad():
+    """AdamW (decoupled wd): per-step pull is ~lr*wd*θ ≈ 1e-7 for θ=1
+    regardless of gradient magnitude. 100 zero-grad steps → drift ~1e-5
+    (well below 0.001 threshold).
+
+    This is why trainer.py uses AdamW not Adam for BilateralGrid. Adam's
+    L2-coupled weight_decay flows through the m/v accumulators and gets
+    AMPLIFIED to ~lr-magnitude steps when the photometric gradient is small
+    (e.g. very early in training before geometry stabilises). Observed: with
+    plain Adam, the same 100-step zero-grad test produced 0.098 drift on
+    identity-init diagonal voxels — would compromise identity behaviour.
+    AdamW's decoupled wd fixes this.
+    """
+    bg = BilateralGrid(num_camera=2, grid_X=1, grid_Y=1, grid_W=1)
+    optim = torch.optim.AdamW(bg.parameters(), lr=1e-3, weight_decay=1e-4)
+    initial = bg.grids.detach().clone()
+    for _ in range(100):
+        loss = (bg.grids * 0).sum()  # zero grad source
+        loss.backward()
+        optim.step()
+        optim.zero_grad()
+    drift = (bg.grids - initial).abs().max().item()
+    assert drift < 0.001, (
+        f"AdamW decay drift {drift} too large; "
+        f"expected ~1e-5 (= 100 * lr * wd) at identity init"
+    )
+
+
+def _drive_optim_step(optim):
+    """Helper: do one fake optim.step() so PyTorch is happy about
+    sched.step() ordering (the 1.1+ convention is optim.step() then
+    sched.step()). Avoids the UserWarning + first-value-skip behavior."""
+    for group in optim.param_groups:
+        for p in group["params"]:
+            if p.grad is None:
+                p.grad = torch.zeros_like(p)
+    optim.step()
+    optim.zero_grad()
+
+
+def test_t9_2_cosine_annealing_lr_decreases():
+    """CosineAnnealingLR(T_max=N) anneals lr from initial → 0 over N steps."""
+    bg = BilateralGrid(num_camera=2)
+    optim = torch.optim.AdamW(bg.parameters(), lr=1e-3, weight_decay=1e-4)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=100)
+    _drive_optim_step(optim)  # avoid sched-before-optim warning
+    lr0 = optim.param_groups[0]["lr"]
+    # Step 50 → midway, cos(pi*50/100) = 0 → lr ~ 0.5 * lr0
+    for _ in range(50):
+        sched.step()
+    lr_mid = optim.param_groups[0]["lr"]
+    assert abs(lr_mid - 0.5 * lr0) < 1e-5, (
+        f"midway lr {lr_mid} != 0.5 * {lr0}"
+    )
+    # Step to end → lr ~ 0
+    for _ in range(50):
+        sched.step()
+    lr_end = optim.param_groups[0]["lr"]
+    assert lr_end < 1e-6, f"lr at T_max {lr_end} should be ~0"
+
+
+def test_t9_2_freeze_skips_optimizer_step():
+    """If we skip optim.step() during freeze, params don't change despite
+    nonzero gradients accumulating + being zeroed."""
+    bg = BilateralGrid(num_camera=2)
+    optim = torch.optim.AdamW(bg.parameters(), lr=1e-3)
+    img = torch.rand(4, 4, 3)
+    initial = bg.grids.detach().clone()
+    # 5 "frozen" iterations: backward + zero_grad without step().
+    for _ in range(5):
+        out = bg(0, img)
+        loss = out.sum()
+        loss.backward()
+        # NO optim.step() here — simulate freeze.
+        optim.zero_grad(set_to_none=True)
+    assert torch.equal(bg.grids, initial), (
+        "frozen optimizer must not change parameters"
+    )
+    # Now unfreeze: step once with new gradient → params change.
+    out = bg(0, img)
+    loss = out.sum()
+    loss.backward()
+    optim.step()
+    optim.zero_grad()
+    assert not torch.equal(bg.grids, initial), (
+        "after unfreeze + step(), parameters must update"
+    )
+
+
+def test_t9_2_scheduler_state_dict_roundtrip():
+    """CosineAnnealingLR state_dict roundtrips internal state (last_epoch,
+    _last_lr, _step_count, base_lrs, T_max) for resume.
+
+    NOTE on lr propagation: PyTorch's `load_state_dict` restores sched's
+    internal `_last_lr` and `last_epoch`, but does NOT push the lr into
+    `optim.param_groups[i]['lr']`. The optim's lr only updates on the
+    next sched.step(), which checks `optim._step_count == sched._step_count`
+    to detect ordering issues. If you load a sched state that has
+    sched._step_count=251 onto a fresh optim that's been stepped only 1
+    time, sched.step() warns + skips the lr write. The proper resume
+    pattern in our trainer is: load full ckpt → restore optim + sched +
+    model state altogether so step counts align before next sched.step().
+    """
+    bg = BilateralGrid(num_camera=2)
+    optim1 = torch.optim.AdamW(bg.parameters(), lr=1e-3, weight_decay=1e-4)
+    sched1 = torch.optim.lr_scheduler.CosineAnnealingLR(optim1, T_max=1000)
+    _drive_optim_step(optim1)
+    for _ in range(250):
+        sched1.step()
+    state = sched1.state_dict()
+
+    bg2 = BilateralGrid(num_camera=2)
+    optim2 = torch.optim.AdamW(bg2.parameters(), lr=1e-3, weight_decay=1e-4)
+    sched2 = torch.optim.lr_scheduler.CosineAnnealingLR(optim2, T_max=1000)
+    sched2.load_state_dict(state)
+
+    # Verify scheduler internal state matches post-load.
+    for key in ("last_epoch", "_step_count", "T_max", "eta_min", "base_lrs"):
+        assert sched1.state_dict()[key] == sched2.state_dict()[key], (
+            f"sched state key {key!r} did not roundtrip: "
+            f"{sched1.state_dict()[key]} vs {sched2.state_dict()[key]}"
+        )
+    # _last_lr is a list of floats; compare elementwise.
+    for a, b in zip(sched1.state_dict()["_last_lr"], sched2.state_dict()["_last_lr"]):
+        assert abs(a - b) < 1e-10, f"_last_lr mismatch: {a} vs {b}"
+    # get_last_lr() must agree (it reads the same internal _last_lr).
+    assert sched1.get_last_lr() == sched2.get_last_lr()

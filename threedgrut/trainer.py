@@ -96,6 +96,17 @@ class Trainer3DGRUT:
     exposure_optimizer: Optional[torch.optim.Optimizer] = None
     """ T6.2: independent Adam stepped alongside the main MoG optimizer. """
 
+    exposure_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None
+    """ T9.2: CosineAnnealingLR over n_iterations on the BilateralGrid Adam.
+    Stepped every iteration regardless of the freeze gate so the LR profile
+    is independent of when the optimizer actually starts updating. """
+
+    exposure_freeze_until_iter: int = 0
+    """ T9.2 / V3-P1.b: 2-stage freeze — Adam step gated until global_step
+    >= this value. 0 means immediate updates (legacy behavior). Default
+    config sets 2000 so Gaussians absorb tone first; BilateralGrid then
+    learns residual cross-channel tone (≤ ExposureModel退化 mode). """
+
     pose_optimizer: Optional[torch.optim.Optimizer] = None
     """ V3 Stage A: independent Adam over per-track wxyz quat + trans Parameters
     on LayeredGaussians.dynamic_rigids. Stepped alongside the main MoG
@@ -645,12 +656,50 @@ class Trainer3DGRUT:
             trainer_conf.get("exposure_lr", 1e-3) if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "exposure_lr", 1e-3)
         )
-        self.exposure_optimizer = torch.optim.Adam(
-            self.exposure_model.parameters(), lr=exposure_lr
+        # T9.2 / V3-P1.b: L2 reg (weight_decay) + 2-stage freeze + cosine LR
+        # decay. NOTE on weight_decay vs identity init: Adam decay pulls
+        # params toward 0, but BilateralGrid identity init has 1's at diagonal
+        # voxel positions. At lr=1e-3 / wd=1e-4 the decay component per step
+        # is ~1e-7 — negligible against photometric gradient. Trades a tiny
+        # pull-to-black baseline for a stable bound on grid magnitude growth
+        # (key for preventing the 30k ExposureModel退化 mode where exposure
+        # absorbed ~10 dB of tone shift; v3_plan.md § 2.1 R1).
+        weight_decay = float(
+            trainer_conf.get("bilateral_grid_weight_decay", 1e-4)
+            if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bilateral_grid_weight_decay", 1e-4)
+        )
+        freeze_until = int(
+            trainer_conf.get("bilateral_grid_freeze_until_iter", 2000)
+            if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bilateral_grid_freeze_until_iter", 2000)
+        )
+        self.exposure_freeze_until_iter = max(0, freeze_until)
+        # T9.2: AdamW (decoupled weight_decay) not Adam — Adam's L2-coupled
+        # decay gets amplified by momentum/RMS when the photometric gradient
+        # is small (early steps before geometry stabilises), producing
+        # ~lr-magnitude pulls toward zero rather than ~lr*wd. Decoupled
+        # decay (AdamW) keeps the per-step pull at lr*wd ≈ 1e-7 regardless
+        # of gradient magnitude — safe for identity-init BilateralGrid.
+        # See test_t9_2_weight_decay_pull_negligible_at_identity_init.
+        self.exposure_optimizer = torch.optim.AdamW(
+            self.exposure_model.parameters(),
+            lr=exposure_lr,
+            weight_decay=weight_decay,
+        )
+        # CosineAnnealingLR over the full training horizon. n_iterations
+        # comes from conf (root level, not trainer.) — same source as the
+        # main loop bound.
+        T_max = int(getattr(conf, "n_iterations", 30000))
+        self.exposure_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.exposure_optimizer, T_max=max(T_max, 1),
         )
         logger.info(
             f"📷 BilateralGrid initialized: {num_camera} cameras, "
-            f"grid={grid_X}x{grid_Y}x{grid_W}, lr={exposure_lr}"
+            f"grid={grid_X}x{grid_Y}x{grid_W}, lr={exposure_lr}, "
+            f"weight_decay={weight_decay}, "
+            f"freeze_until={self.exposure_freeze_until_iter}, "
+            f"cosine T_max={T_max}"
         )
 
         # Restore from checkpoint if resuming.
@@ -663,7 +712,17 @@ class Trainer3DGRUT:
                     self.exposure_optimizer.load_state_dict(
                         ckpt["exposure_state"]["optimizer"]
                     )
-                    logger.info("📷 BilateralGrid state restored from checkpoint")
+                    # T9.2: scheduler state is optional (older T9.1 ckpts
+                    # didn't save it). Resume without it just continues
+                    # cosine from current global_step; resume with it
+                    # restores the exact LR profile.
+                    sched_state = ckpt["exposure_state"].get("scheduler")
+                    if sched_state is not None and self.exposure_scheduler is not None:
+                        self.exposure_scheduler.load_state_dict(sched_state)
+                    logger.info(
+                        "📷 BilateralGrid state restored from checkpoint "
+                        f"(scheduler={'restored' if sched_state else 'reset'})"
+                    )
                 except (KeyError, RuntimeError) as e:
                     # T9.1: v2 ckpts store {exposure_a, exposure_b} which
                     # don't fit BilateralGrid.grids. Keep identity init.
@@ -1523,12 +1582,18 @@ class Trainer3DGRUT:
                 "schedulers": [sched.state_dict() for sched in self.post_processing_schedulers],
             }
 
-        # T6.2: per-camera ExposureModel + its independent Adam state.
+        # T6.2: per-camera ExposureModel / T9.1 BilateralGrid + its
+        # independent Adam state. T9.2: also persist the CosineAnnealingLR
+        # scheduler state so resume continues the cosine curve from the
+        # right step (otherwise resume restarts at full lr).
         if self.exposure_model is not None:
-            parameters["exposure_state"] = {
+            ex_state = {
                 "module": self.exposure_model.state_dict(),
                 "optimizer": self.exposure_optimizer.state_dict(),
             }
+            if self.exposure_scheduler is not None:
+                ex_state["scheduler"] = self.exposure_scheduler.state_dict()
+            parameters["exposure_state"] = ex_state
 
         # V3 Stage A: independent Adam for per-track learnable cuboid pose.
         # The Parameters themselves (``_track_quat_<tid>`` /
@@ -1703,11 +1768,18 @@ class Trainer3DGRUT:
                 for sched in self.post_processing_schedulers:
                     sched.step()
 
-        # T6.2: per-camera exposure optimizer step (independent of MoG opt).
+        # T6.2 / T9.2: per-camera exposure optimizer step (independent of MoG opt).
+        # T9.2 / V3-P1.b: gate the Adam step on freeze_until — let Gaussians
+        # absorb tone first; mirror the pose_optimizer freeze pattern below.
+        # Always zero grads (backward populated them) + always step scheduler
+        # so the LR profile is independent of the freeze gate.
         if self.exposure_optimizer is not None:
             with torch.cuda.nvtx.range(f"train_{global_step}_exposure_opt"):
-                self.exposure_optimizer.step()
+                if global_step >= self.exposure_freeze_until_iter:
+                    self.exposure_optimizer.step()
                 self.exposure_optimizer.zero_grad(set_to_none=True)
+                if self.exposure_scheduler is not None:
+                    self.exposure_scheduler.step()
 
         # V3 Stage A: per-track learnable pose optimizer step. During the
         # freeze warmup we still clear gradients (backward already populated
