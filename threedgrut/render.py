@@ -158,14 +158,21 @@ class Renderer:
                 model = LayeredGaussians(
                     conf, specs=specs, scene_extent=scene_extent,
                 )
-                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
-                # V3-E4.1 fix: restore dynamic-rigid per-track pose buffers
-                # from ckpt["viz_4d"]["tracks"] so fused_view SE(3)-transforms
-                # dynamic Gaussians per-frame. Without this the 300K dyn
-                # particles stay at canonical pose and raw psnr drops ~2 dB
-                # for the train-end-of-train comparison. Mirrors the load
-                # pattern already in playground engine.py:1346-1360. Skipped
-                # silently when ckpt has no viz_4d block (pre-T8.2 ckpts).
+                # V3 Stage A/B/D.2 bugfix: ``populate_tracks`` MUST run BEFORE
+                # ``init_from_checkpoint`` for learnable_pose ckpts. Reason:
+                # ``LayeredGaussians.init_from_checkpoint`` (layered_model.py
+                # L632-672) calls ``load_state_dict(layered_track_state,
+                # strict=False)`` to restore _track_quat_/_track_trans_/
+                # _track_pose_gt_/_track_active_ entries — but
+                # ``load_state_dict`` only writes into pre-existing slots, and
+                # those slots are created by ``populate_tracks``. If we call
+                # them in the wrong order, the learned Parameter values are
+                # silently dropped ("unexpected keys" warning) and the model
+                # ends up with GT-init values from tracks_dict instead of the
+                # ckpt's learned poses (yesterday's D.2 triptych diff ≈ 0
+                # was caused by exactly this). The trainer's order is correct
+                # (trainer.init_model L386-449); render.py + engine.py were
+                # both inverted since V3-E4.1 — fixed simultaneously.
                 viz_4d = checkpoint.get("viz_4d")
                 if viz_4d is not None and isinstance(viz_4d, dict):
                     tracks_dict = viz_4d.get("tracks")
@@ -178,6 +185,7 @@ class Renderer:
                         first_tid = next(iter(tracks_dict))
                         tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
                         model.populate_tracks(tracks_dict)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
             else:
                 model = MixtureOfGaussians(conf)
                 model.init_from_checkpoint(checkpoint, setup_optimizer=False)

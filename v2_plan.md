@@ -1130,8 +1130,141 @@ Active mask: `a[f-1]=a[f]=a[f+1]=1` 三连活跃才计入（避免跨 active 边
 **out-of-scope（Stage C/D 留下一步）**:
 - pose-prior `λ‖p − p_gt‖²` 默认开启 (yaml 占位仍 0)
 - fix_first/last 端点冻结
-- 双视图 / BEV / per-track drift 直方图 viz
+- ~~双视图 / BEV / per-track drift 直方图 viz~~ → ✅ Stage D.3 完成（下条）
 - A800 长训（用户暂缓 merge main）
+
+### ✅ V3 pose_adjustment — 用户友好 yaml alias (2026-05-28, Mac, default disable)
+
+**触发**: 用户要求把整套 V3 pose learning feature (Stage A learnable pose + Stage B smoothness reg) 打包成单一顶层选项，三个用户接口：`enabled` / `lambda_t` / `lambda_r`，默认 disable。
+
+**设计决策**: **不改内部代码** — 通过 OmegaConf 字符串 interpolation `${...}` 在 yaml 层做 alias。内部 `trainer.learnable_pose.*` 保留为实现细节（ckpt schema 用 `learnable_pose_state` key，改实现名会破坏 ckpt 向后兼容）。
+
+**改动 (3 files, +90 / -15 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `configs/base_gs.yaml` | 新增 `trainer.pose_adjustment: { enabled: false, lambda_t: 0.0, lambda_r: 0.0 }` 用户友好顶层节；`trainer.learnable_pose` 的 3 个对应字段改为 `${trainer.pose_adjustment.*}` interpolation；保留 lr_rotation / lr_translation / freeze_until_iter / lambda_pose_prior_* 为高级 CLI override |
+| `configs/apps/ncore_3dgut_mcmc_multilayer_poseopt.yaml` | 从 `learnable_pose: { enabled: true, lambda_temporal_smooth_trans/_rot: 1e-2/1e-1 }` 简化为 `pose_adjustment: { enabled: true, lambda_t: 1e-2, lambda_r: 1e-1 }`（compose 结果完全等价） |
+| `threedgrut/tests/test_pose_adjustment_alias.py` | NEW — 6 个测试：default off / enabled forward / lambdas forward / **legacy CLI** `trainer.learnable_pose.enabled=true` 仍可用（backward compat，OmegaConf 把 interpolation 替换为 literal） / 高级字段 (lr/freeze) 仍 CLI 可达 / multilayer_poseopt.yaml 端到端 |
+
+**用户接口（CLAUDE.md 已更新）**:
+
+```bash
+# 方式 1: multilayer + CLI
+python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+  trainer.pose_adjustment.enabled=true \
+  trainer.pose_adjustment.lambda_t=1e-2 \
+  trainer.pose_adjustment.lambda_r=1e-1 ...
+
+# 方式 2: 预设 yaml（lambdas 已固化）
+python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_poseopt ...
+```
+
+**Mac 全 V3 单测**: 50 passed + 3 skipped (1.01s) — `test_pose_adjustment_alias.py` 6/6 + `test_learnable_pose_param` 15/15 + `test_learnable_pose_smoothness` 11/11 + 3 skip + `test_pose_source_flag` 8/8 + `test_render_reload_parity` 10/10。0 回归，**所有原 `trainer.learnable_pose.enabled=true` CLI override 测试仍通过**。
+
+**关键不变量**:
+- INV-YAML-1: `trainer.pose_adjustment.{enabled,lambda_t,lambda_r}` 通过 OmegaConf interpolation 转发到 `trainer.learnable_pose.{enabled, lambda_temporal_smooth_trans, lambda_temporal_smooth_rot}`；直接 override 内部 key 仍可用（backward compat）。回归: test_pose_adjustment_alias.py
+
+### ✅ V3-E4.1 follow-up — `populate_tracks` MUST precede `init_from_checkpoint` (2026-05-28, A800 30k Stage B 验证)
+
+**触发**: D.2 三联图（昨日）在 Stage A 30k ckpt 上 diff max ≈ 0.0016（amplify=50 仍黑屏），原归因为 "drift 太小，pixel space 看不见"。今早在 A800 启 viser 看 Stage B 30k 时打出 `[WARNING] Unexpected layered_track_state keys (first 5): ['_track_quat_41', '_track_trans_41', ...]` — **真实根因暴露**：viser 引擎和 render.py 都在 `init_from_checkpoint` 之后才 `populate_tracks`，导致 `load_state_dict(layered_track_state)` 在空 model 上跑，所有 `_track_quat_<tid>` / `_track_trans_<tid>` 被报告为 unexpected keys 并**静默丢弃**；随后 `populate_tracks` 创建 Parameter slots 时只能从 `tracks_dict` 的 GT 值初始化。
+
+**后果**: ckpt 里学到的 learned pose **永远没被加载**，viser + standalone render.py 实际上一直在渲染"GT-init"而不是 trained learned pose。D.2 的 `set_pose_source("learned")` 和 `set_pose_source("gt")` 实际读到几乎相同内容 → diff ≈ 0。这影响所有 Stage A/B learnable ckpt 的离线渲染路径，**不影响训练**（trainer 顺序正确，见 trainer.init_model L386-449）。**不影响 D.3** `analyze_pose_drift.py`（直接 `torch.load(ckpt)` 读 state_dict）。
+
+**改动 (3 files, +132 / -4 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut_playground/engine.py` | 把 `populate_tracks(tracks_dict)` 移到 `init_from_checkpoint(checkpoint)` 之前，加 11 行解释注释指 trainer.init_model L386-449 |
+| `threedgrut/render.py` | 同上，加同样 12 行注释 |
+| `threedgrut/tests/test_render_reload_parity.py` | NEW 3 个测试 (+128 行)：(1) 源码 guard — engine.py 中 `populate_tracks` 出现在 `init_from_checkpoint` 之前（slice idx 比较）；(2) 同样源码 guard — render.py；(3) 行为测试 — 构造含"learned" `_track_quat_<tid>` 值的 fake layered_track_state（与 GT 不同），运行正确顺序 load，断言 `model._track_quat_<tid>` 等于 fake learned 值；额外 canary 测试断言**错误**顺序确实产生 unexpected_keys（如果未来 LayeredGaussians 改成 eager pose slot 创建，canary 会失败提示） |
+
+**Mac 单测**: `test_render_reload_parity.py` **10/10 pass** (含原 7 + 新 3) + `test_learnable_pose_param.py` 15/15 + `test_pose_source_flag.py` 8/8 — **33/33 全过** 0.86s 0 回归。
+
+**A800 实测验证 (Stage B 30k ckpt)**:
+
+1. **viser 重启后 warning 消失 ✅** — `tail /tmp/viser_stageB_30k.log` 不再有 "Unexpected layered_track_state keys"，FTheta intrinsics 加载 + 7 个 camera 就位 + listening *:8080
+2. **D.3 `analyze_pose_drift --plot` (D.3 不受 bug 影响，直接 torch.load 读 state_dict)**:
+
+| 指标 | Stage A 30k (λ=0) | **Stage B 30k (λ_t=1e-2, λ_r=1e-1)** | Δ |
+|---|---|---|---|
+| trans median (m) | 0.0162 | **0.0249** | +54% |
+| trans p90 (m) | 0.0358 | **0.1414** | **+295%** |
+| trans p99 (m) | 0.0529 | **0.3163** | **+498%** (~6×) |
+| trans max (m) | 0.0755 | **1.1936** | **+1481%** (~16×, 命中 1500-iter B2 外推预期) |
+| trans mean (m) | 0.0166 | 0.0486 | +193% |
+| rot median (°) | 0.190 | 0.153 | -19% |
+| rot p99 (°) | 0.638 | 0.881 | +38% |
+| rot max (°) | 1.097 | **21.045** | **+1820%** (tid 278 短轨迹边缘) |
+
+   **Top-5 drift tracks 全是 F_active ≤ 21 的短轨迹** (tid 278/292/414 F=9, tid 458 F=21, tid 502 F=65)，smoothness reg 在 track 边界处保护性弱。整体 trans p99 316mm 仍远小于 1m 安全阈，rot p99 0.88° 远小于 5°。
+
+3. **D.2 `render_learned_vs_gt --num-samples 8 --diff-amplify 30` (这是 bug 修复后真信号)**:
+
+| sample | camera | diff mean | diff max |
+|---|---|---|---|
+| 0 | front_wide_120 | 0.00148 | 0.65440 |
+| 1 | front_wide_120 | 0.00056 | 0.27418 |
+| 2 | cross_left_120 | 0.00009 | 0.76862 |
+| 3 | cross_left_120 | 0.00376 | 0.70355 |
+| 4 | cross_right_120 | 0.00000 | 0.00000 |
+| 5 | rear_left_70 | 0.00021 | 0.54331 |
+| **6** | rear_left_70 | **0.02972** | **0.88334** |
+| 7 | rear_right_70 | 0.00300 | 0.81356 |
+
+   sample 4 全 0 是因为该帧无 dyn cuboid 在 frame 内（远端）；其他 7 张 diff 都正常亮起。**sample 6 看到银色 SUV 整体轮廓在 diff 列高亮**（车窗 + 引擎盖 + 轮拱），photo-证明 Stage B learned 把 SUV 推到了 ~50cm 偏移位置。**对照昨天 (bug 状态) diff max 0.0016 → 现在 0.88 = 550× 强**。
+
+**关键不变量** (写入 architecture):
+- INV-CKPT-LOAD-1: `LayeredGaussians.populate_tracks()` MUST run before `init_from_checkpoint()` for layered ckpts. Regression: test_render_reload_parity.py source guards + behavioural assertion.
+
+### ✅ V3 Stage D.2 — `render_learned_vs_gt.py` + `LayeredGaussians.pose_source` flag (2026-05-27, Mac edit + ThinkPad RTX 4090 验证)
+
+**目标**: 在已学完的 ckpt 上以 GT pose render 一遍、以 learned pose render 一遍，并排显示 + 像素差异 — 把 Stage A/B 学到了什么从数字（drift mm/°）变成视觉可证。
+
+**改动 (3 files, +144 / -2 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut/layers/layered_model.py` | `set_pose_source("learned"\|"gt")` 方法 + `pose_source` `@property` (默认 "learned")。`_compose_pose_for_track` / `_compose_pose_all_frames` 顶部加 gt 短路：检测 `_track_pose_gt_<tid>` buffer 存在则返回它的 slice（no-grad）；不存在（buffer-only legacy 模式）则 fall through 到原路径，行为不变 |
+| `scripts/render_learned_vs_gt.py` | NEW — Renderer.from_checkpoint 加载 → 按 `--stride` / `--num-samples` 从 dataloader 取样 → 同一 batch 两次 forward（toggle `pose_source`）→ 三联图保存 `[GT \| Learned \| \|Δ\| × amplify]`。结束后 `set_pose_source("learned")` 复原默认 |
+| `threedgrut/tests/test_pose_source_flag.py` | NEW — 8 个单测：default="learned"；setter ValueError on bad string；gt 路由真返回 `_track_pose_gt_` slice（人为漂移 quat/trans 不影响）；batched `_compose_pose_all_frames` 同样；gt 路由 no-grad；learned 路由 grad；`tracks_poses` @property 跟随 flag；buffer-only mode（无 `_track_pose_gt_`）gt 调用安全 fall through |
+
+**Mac CPU 单测**: `test_pose_source_flag.py` 8/8 + Stage A `test_learnable_pose_param.py` 13/13 全过 (0.11s + 0.67s)。Stage B `test_learnable_pose_smoothness.py` 11 passed + 3 skipped（importorskip 守门，无回归）。
+
+**ThinkPad RTX 4090 集成测试** (ckpt `poseopt_on_30k_freeze10k/ours_30000/ckpt_30000.pt`, Stage A only — λ=0):
+- 5 个 sample 跨 dataloader stride=125（5 cam × 75 frame = 375 帧的均匀采样）
+- 5 张 triptych PNG 写出，文件名含 `cam_<camera_id>` 不再是 `cam_cam`
+- diff column: 因 Stage A 30k drift p99=53mm（pixel space ~1px@50m），diff max 0.0001-0.0016，amplify=10/50 都几乎看不见（**这是预期 + 实证**：viz 脚本工作，drift 单纯太小）
+- 视觉验证：左/中两列 GT vs Learned 渲染肉眼无差，右列基本黑色 — 与 Stage A 设计目标"低 drift"一致
+- 待对照：A800 Stage B 30k 跑完后（drift 预期 ~16× 大），diff 列应出现可见亮斑（cuboid 边缘高亮）
+
+**用途**: (a) Stage A vs Stage B 30k A/B 视觉对照；(b) pose-prior loss / 6D rot ablation 视觉锚；(c) 后续 paper figure 直接用
+
+### ✅ V3 Stage D.3 — analyze_pose_drift.py `--plot` BEV / hist viz (2026-05-27, Mac edit + ThinkPad RTX 4090 验证)
+
+**改动 (1 file, +82 / -5 行)**: `scripts/analyze_pose_drift.py` —
+- main() 加 `plot=False, out_dir=None` 形参；CLI 切到 `argparse` (`--plot` + `--out-dir`)；
+- 训练循环里同步累积 `all_gt_xy = t_gt[active_mask, :2]`，供 BEV 散点用；
+- 新 `_emit_plots()` helper（懒加载 matplotlib `Agg` 后端）：写出 3 张 PNG 到 ckpt 同目录（或 `--out-dir`）：
+  1. `pose_drift_trans_hist.png` — Δt 直方图 (80 bins) + median/p99 虚线标注
+  2. `pose_drift_rot_hist.png` — Δrot° 直方图 + median/p99 标注
+  3. `pose_drift_bev.png` — cuboid GT 位置 (x,y) 散点，按 Δt (m) 着色，vmax 截到 p99，`viridis` colormap
+
+**ThinkPad 验证** (ckpt `poseopt_on_30k_freeze10k/ours_30000/ckpt_30000.pt`, Stage A only — λ=0)：
+
+| 指标 | 30k Stage A (λ=0) | 1500-iter Stage A (B1 control 对比) |
+|---|---|---|
+| trans Δ median (m) | 0.0162 | 0.0027 (≈ 6× 增长) |
+| trans Δ p99 (m) | 0.0529 | 0.0074 (≈ 7× 增长) |
+| trans Δ max (m) | 0.0755 | – |
+| rot Δ median (°) | 0.190 | 0.020 (≈ 10×) |
+| rot Δ p99 (°) | 0.638 | 0.089 (≈ 7×) |
+| rot Δ max (°) | 1.097 | – |
+| 14994 (track, frame) 活跃样本 (70 tracks) | – | – |
+
+**BEV 观察**: cuboids 沿主路向 x 轴 (-180m..+250m) 高速场景铺开，y≈0 集中；近 ego（x∈[-30, +60]m）drift 颜色显著（30-50mm），远端 drift <10mm。Top-5 drift tracks: tid 21/405/259/7/316，max Δt 71-76mm，对应 rot Δ 0.7-1.1°，仍远小于 5° 阈值。
+
+**用途**: (a) Stage A vs Stage B 30k A/B 量化对比的可视化锚；(b) 后续 pose-prior loss / 6D rot ablation 对照模板；(c) 任意 ckpt 一行命令出图，无需在 notebook 重写。
 
 ### ✅ Config 重构 — 扁平化 v2 多层训练配置链 (2026-05-26, A800 GPU 0)
 

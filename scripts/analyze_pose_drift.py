@@ -51,7 +51,7 @@ def percentile(t: torch.Tensor, q: float) -> float:
     return float(torch.quantile(t, q).item())
 
 
-def main(ckpt_path: str) -> None:
+def main(ckpt_path: str, plot: bool = False, out_dir: str | None = None) -> None:
     ckpt = torch.load(ckpt_path, weights_only=False, map_location="cpu")
     state = ckpt["model"].get("layered_track_state") or ckpt.get("layered_track_state")
     if state is None:
@@ -74,6 +74,7 @@ def main(ckpt_path: str) -> None:
 
     all_trans_delta = []
     all_rot_delta_deg = []
+    all_gt_xy = []         # [N, 2] BEV positions of active samples for --plot scatter
     per_track_summary = []
 
     for tid in tids:
@@ -110,6 +111,7 @@ def main(ckpt_path: str) -> None:
         })
         all_trans_delta.append(trans_delta_act)
         all_rot_delta_deg.append(rot_delta_act)
+        all_gt_xy.append(t_gt[active_mask, :2])
 
     flat_trans = torch.cat(all_trans_delta)
     flat_rot = torch.cat(all_rot_delta_deg)
@@ -137,9 +139,84 @@ def main(ckpt_path: str) -> None:
               f"{d['trans_delta_median']:>8.3f}  {d['rot_delta_max_deg']:>8.3f}  "
               f"{d['rot_delta_median_deg']:>8.3f}")
 
+    if plot:
+        _emit_plots(
+            ckpt_path=ckpt_path,
+            out_dir=out_dir,
+            flat_trans=flat_trans,
+            flat_rot=flat_rot,
+            flat_xy=torch.cat(all_gt_xy),
+            n_tracks=len(tids),
+        )
+
+
+def _emit_plots(ckpt_path, out_dir, flat_trans, flat_rot, flat_xy, n_tracks):
+    import os
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    out_dir = out_dir or os.path.dirname(os.path.abspath(ckpt_path))
+    os.makedirs(out_dir, exist_ok=True)
+    tag = os.path.basename(os.path.dirname(os.path.abspath(ckpt_path)))  # e.g. ours_30000
+
+    t_np = flat_trans.numpy()
+    r_np = flat_rot.numpy()
+    xy = flat_xy.numpy()
+
+    # 1) Translation drift histogram
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.hist(t_np, bins=80, color="#3a86ff", alpha=0.85, edgecolor="black", linewidth=0.3)
+    med, p99 = float(np.median(t_np)), float(np.quantile(t_np, 0.99))
+    ax.axvline(med, color="orange", linestyle="--", label=f"median={med:.3f} m")
+    ax.axvline(p99, color="red", linestyle="--", label=f"p99={p99:.3f} m")
+    ax.set_xlabel("‖trans_learned - trans_gt‖₂ (m)")
+    ax.set_ylabel("count (track, frame) pairs")
+    ax.set_title(f"Per-frame translation drift — {tag}  (N={t_np.size}, {n_tracks} tracks)")
+    ax.legend(); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    p = os.path.join(out_dir, "pose_drift_trans_hist.png")
+    fig.savefig(p, dpi=120); plt.close(fig)
+    print(f"  wrote {p}")
+
+    # 2) Rotation drift histogram
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.hist(r_np, bins=80, color="#06d6a0", alpha=0.85, edgecolor="black", linewidth=0.3)
+    med, p99 = float(np.median(r_np)), float(np.quantile(r_np, 0.99))
+    ax.axvline(med, color="orange", linestyle="--", label=f"median={med:.3f}°")
+    ax.axvline(p99, color="red", linestyle="--", label=f"p99={p99:.3f}°")
+    ax.set_xlabel("geodesic(q_learned, q_gt) (deg)")
+    ax.set_ylabel("count (track, frame) pairs")
+    ax.set_title(f"Per-frame rotation drift — {tag}  (N={r_np.size}, {n_tracks} tracks)")
+    ax.legend(); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    p = os.path.join(out_dir, "pose_drift_rot_hist.png")
+    fig.savefig(p, dpi=120); plt.close(fig)
+    print(f"  wrote {p}")
+
+    # 3) BEV scatter: cuboid GT position colored by trans drift (clipped to p99)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    vmax = max(float(np.quantile(t_np, 0.99)), 1e-6)
+    sc = ax.scatter(xy[:, 0], xy[:, 1], c=t_np, s=4, alpha=0.7, cmap="viridis",
+                    vmin=0.0, vmax=vmax)
+    ax.set_xlabel("world x (m)")
+    ax.set_ylabel("world y (m)")
+    ax.set_title(f"BEV cuboid GT positions colored by trans drift — {tag}")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.grid(alpha=0.3)
+    cb = fig.colorbar(sc, ax=ax, label=f"trans drift (m, vmax=p99={vmax:.3f})")
+    fig.tight_layout()
+    p = os.path.join(out_dir, "pose_drift_bev.png")
+    fig.savefig(p, dpi=120); plt.close(fig)
+    print(f"  wrote {p}")
+
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} <ckpt_path>")
-        sys.exit(1)
-    main(sys.argv[1])
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("ckpt", help="path to ckpt_<iter>.pt with layered_track_state")
+    ap.add_argument("--plot", action="store_true", help="emit PNG histograms + BEV scatter next to ckpt")
+    ap.add_argument("--out-dir", default=None, help="output dir for PNGs (default: ckpt dir)")
+    args = ap.parse_args()
+    main(args.ckpt, plot=args.plot, out_dir=args.out_dir)
