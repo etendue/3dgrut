@@ -25,7 +25,8 @@ class DepthLoss(nn.Module):
     Args:
         loss_type:        "l1" | "l2" | "smooth_l1"
         normalize:        scale pred/gt by 1/max_depth before loss (default True)
-        use_inverse_depth: convert pred/gt to 1/d before loss (overrides normalize)
+        use_inverse_depth: convert pred/gt to 1/d before loss. When True,
+                           ``normalize`` is ignored.
         max_depth:        far clip (also used for normalize). default 80m.
         eps:              gt values in (eps, max_depth) are valid. default 0.01.
     """
@@ -95,8 +96,8 @@ def compute_bg_lidar_loss(
     pd = pred_depth.squeeze(-1)
     if sky_mask.sum() < 1.0:
         return torch.zeros((), device=pd.device, dtype=pd.dtype)
-    target = torch.full_like(pd, fill_value=1.0)  # normalized target = max_depth
+    # normalized target is 1.0 (= max_depth / max_depth) — scalar broadcast
     pd_norm = pd / max_depth
-    diff_sq = (pd_norm - target) ** 2
+    diff_sq = (pd_norm - 1.0) ** 2
     denom = sky_mask.sum().clamp(min=1.0)
     return (diff_sq * sky_mask).sum() / denom

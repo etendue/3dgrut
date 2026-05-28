@@ -170,6 +170,7 @@ class Trainer3DGRUT:
         self.init_experiments_tracking(conf)
         self.init_post_processing(conf)
         self.init_exposure_model(conf)
+        self.init_depth_losses(conf)  # T11.A2
         self.init_pose_optimizer(conf)
         self.init_gui(conf, self.model, self.train_dataset, self.val_dataset, self.scene_bbox)
 
@@ -758,6 +759,65 @@ class Trainer3DGRUT:
                     else:
                         raise
 
+    def init_depth_losses(self, conf: DictConfig) -> None:
+        """T11.A2: register DepthLoss + bg_lidar heads + λ params.
+
+        Wired next to init_exposure_model. Enabled by ``conf.trainer.use_lidar_depth``
+        / ``conf.trainer.use_depth_prior``. Defaults: both off → byte-identical to
+        pre-Stage-11 behavior.
+
+        λ schedule for the LiDAR head uses drivestudio's exponential decay
+        (lidar_w_decay > 0 → λ_eff = λ_base * exp(-step/8000 * decay_rate)).
+        Set lidar_w_decay <= 0 to disable decay.
+        """
+        from threedgrut.correction.depth_prior import DepthLoss
+
+        trainer_conf = conf.trainer
+        def _get(name, default):
+            if hasattr(trainer_conf, "get"):
+                return trainer_conf.get(name, default)
+            return getattr(trainer_conf, name, default)
+
+        self.use_lidar_depth = bool(_get("use_lidar_depth", False))
+        self.use_depth_prior = bool(_get("use_depth_prior", False))
+
+        self.depth_max = float(_get("depth_max", 80.0))
+        self.lambda_lidar_depth_base = float(_get("lambda_lidar_depth", 0.03))
+        self.lambda_lidar_decay_rate = float(_get("lidar_w_decay", 1.0))
+        self.lambda_bg_lidar = float(_get("lambda_bg_lidar", 0.005))
+        self.lambda_depth_prior = float(_get("lambda_depth_prior", 0.01))
+
+        # Heads constructed once; reused every train step.
+        self.lidar_depth_loss_fn = DepthLoss(
+            loss_type=str(_get("lidar_depth_loss_type", "l1")),
+            normalize=True,
+            use_inverse_depth=False,
+            max_depth=self.depth_max,
+            eps=0.01,
+        )
+        self.depth_prior_loss_fn = DepthLoss(
+            loss_type="l2",
+            normalize=False,
+            use_inverse_depth=True,
+            max_depth=self.depth_max,
+            eps=0.01,
+        )
+
+        logger.info(
+            f"init_depth_losses: use_lidar={self.use_lidar_depth} "
+            f"use_depth_prior={self.use_depth_prior} "
+            f"λ_lidar={self.lambda_lidar_depth_base} (decay={self.lambda_lidar_decay_rate}) "
+            f"λ_bg={self.lambda_bg_lidar} λ_depth={self.lambda_depth_prior}"
+        )
+
+    def _lidar_lambda_decayed(self) -> float:
+        """drivestudio L678-682: λ_lidar * exp(-step/8000 * decay_rate)."""
+        import math
+        if self.lambda_lidar_decay_rate <= 0:
+            return self.lambda_lidar_depth_base
+        decay = math.exp(-self.global_step / 8000.0 * self.lambda_lidar_decay_rate)
+        return self.lambda_lidar_depth_base * decay
+
     def init_pose_optimizer(self, conf: DictConfig) -> None:
         """V3 Stage A: independent Adam over per-track learnable cuboid pose.
 
@@ -1086,6 +1146,57 @@ class Trainer3DGRUT:
         # baseline byte-identical when poseopt off.
         loss_pose_smooth = self._compute_pose_smoothness_term(trainer_conf)
 
+        # T11.A2: image-space LiDAR sparse + bg-sky + DepthV2 dense depth
+        # supervision. All three heads are no-ops when the corresponding
+        # use_* flags are off (default false → byte-identical to pre-stage-11).
+        loss_lidar_depth = torch.zeros((), device=self.device)
+        loss_bg_lidar = torch.zeros((), device=self.device)
+        loss_depth_prior = torch.zeros((), device=self.device)
+        lambda_lidar_eff = 0.0
+
+        pred_dist = outputs.get("pred_dist") if isinstance(outputs, dict) else None
+        if pred_dist is not None and image_infos is not None:
+            sky = image_infos.get("sky_mask")
+            dyn = image_infos.get("dyn_mask_cuboid", image_infos.get("dyn_mask_sseg"))
+            valid_px = image_infos.get("valid_pixel_mask")
+
+            # ---- LiDAR sparse depth ----
+            if self.use_lidar_depth and "lidar_depth_map" in image_infos:
+                lidar_gt = image_infos["lidar_depth_map"]
+                hit = (lidar_gt > 0).float()
+                if sky is not None:
+                    sky2d = sky.squeeze(-1) if sky.dim() == hit.dim() + 1 else sky
+                    hit = hit * (1.0 - sky2d.float())
+                if dyn is not None:
+                    dyn2d = dyn.squeeze(-1) if dyn.dim() == hit.dim() + 1 else dyn
+                    hit = hit * (1.0 - dyn2d.float())
+                if valid_px is not None:
+                    vp2d = valid_px.squeeze(-1) if valid_px.dim() == hit.dim() + 1 else valid_px
+                    hit = hit * vp2d.float()
+                loss_lidar_depth = self.lidar_depth_loss_fn(pred_dist, lidar_gt, hit)
+                lambda_lidar_eff = self._lidar_lambda_decayed()
+
+                if sky is not None and self.lambda_bg_lidar > 0:
+                    from threedgrut.correction.depth_prior import compute_bg_lidar_loss
+                    sky2d = sky.squeeze(-1) if sky.dim() == pred_dist.dim() - 1 else sky
+                    loss_bg_lidar = compute_bg_lidar_loss(pred_dist, sky2d.float(), self.depth_max)
+
+            # ---- DepthAnythingV2 dense prior ----
+            if self.use_depth_prior and "depth_prior" in image_infos:
+                dp_gt = image_infos["depth_prior"]
+                valid = torch.ones_like(dp_gt)
+                if sky is not None:
+                    sky2d = sky.squeeze(-1) if sky.dim() == valid.dim() + 1 else sky
+                    valid = valid * (1.0 - sky2d.float())
+                if dyn is not None:
+                    dyn2d = dyn.squeeze(-1) if dyn.dim() == valid.dim() + 1 else dyn
+                    valid = valid * (1.0 - dyn2d.float())
+                if valid_px is not None:
+                    vp2d = valid_px.squeeze(-1) if valid_px.dim() == valid.dim() + 1 else valid_px
+                    valid = valid * vp2d.float()
+                valid = valid * (dp_gt < self.depth_max).float()
+                loss_depth_prior = self.depth_prior_loss_fn(pred_dist, dp_gt, valid)
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -1095,6 +1206,9 @@ class Trainer3DGRUT:
             + lambda_sky * loss_sky
             + loss_bg_cuboid
             + loss_pose_smooth
+            + lambda_lidar_eff * loss_lidar_depth
+            + self.lambda_bg_lidar * loss_bg_lidar
+            + self.lambda_depth_prior * loss_depth_prior
         )
         return dict(
             total_loss=loss,
@@ -1106,6 +1220,9 @@ class Trainer3DGRUT:
             sky_loss=lambda_sky * loss_sky,
             bg_cuboid_loss=loss_bg_cuboid,
             pose_smooth_loss=loss_pose_smooth,
+            lidar_depth_loss=lambda_lidar_eff * loss_lidar_depth,
+            bg_lidar_loss=self.lambda_bg_lidar * loss_bg_lidar,
+            depth_prior_loss=self.lambda_depth_prior * loss_depth_prior,
         )
 
     # ---------------------------------------------------------------- T8/B3

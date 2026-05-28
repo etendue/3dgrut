@@ -34,6 +34,16 @@ def test_l2_basic(synthetic_batch):
     assert out.item() == pytest.approx(expected, abs=1e-6)
 
 
+def test_gt_with_trailing_dim(synthetic_batch):
+    """gt_depth shape [B, H, W, 1] must squeeze to [B, H, W] and produce
+    the same loss as the [B, H, W] form (drivestudio also accepts both)."""
+    pred, gt, mask = synthetic_batch
+    loss = DepthLoss(loss_type="l1", normalize=True, max_depth=80.0)
+    out_3d = loss(pred, gt, mask)
+    out_4d = loss(pred, gt.unsqueeze(-1), mask)
+    assert out_3d.item() == pytest.approx(out_4d.item(), abs=1e-6)
+
+
 def test_inverse_depth_l2(synthetic_batch):
     """inverse-depth + L2：(1/5 - 1/10)^2 = (0.1)^2 = 0.01。"""
     pred, gt, mask = synthetic_batch
