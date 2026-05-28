@@ -39,6 +39,7 @@ from threedgrut.model.bg_cuboid_loss import (
 )
 from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
+from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
 from threedgrut.model.losses import ssim
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.optimizers import SelectiveAdam
@@ -95,6 +96,18 @@ class Trainer3DGRUT:
     exposure_optimizer: Optional[torch.optim.Optimizer] = None
     """ T6.2: independent Adam stepped alongside the main MoG optimizer. """
 
+    pose_optimizer: Optional[torch.optim.Optimizer] = None
+    """ V3 Stage A: independent Adam over per-track wxyz quat + trans Parameters
+    on LayeredGaussians.dynamic_rigids. Stepped alongside the main MoG
+    optimizer; gated by ``conf.trainer.learnable_pose.enabled`` and the
+    freeze-until-iter warmup. None when learnable pose is off. """
+
+    pose_freeze_until_iter: int = 0
+    """ V3 Stage A: warmup iterations during which the pose optimizer's
+    accumulated gradients are zeroed before any step is taken — lets the main
+    Gaussian / scale / opacity parameters converge under GT pose before the
+    pose Parameters start drifting. """
+
     _distillation_start_step: int = -1
     """ Step at which distillation starts (-1 means disabled) """
 
@@ -146,6 +159,7 @@ class Trainer3DGRUT:
         self.init_experiments_tracking(conf)
         self.init_post_processing(conf)
         self.init_exposure_model(conf)
+        self.init_pose_optimizer(conf)
         self.init_gui(conf, self.model, self.train_dataset, self.val_dataset, self.scene_bbox)
 
     def init_dataloaders(self, conf: DictConfig):
@@ -638,6 +652,86 @@ class Trainer3DGRUT:
                 self.exposure_optimizer.load_state_dict(ckpt["exposure_state"]["optimizer"])
                 logger.info("📷 ExposureModel state restored from checkpoint")
 
+    def init_pose_optimizer(self, conf: DictConfig) -> None:
+        """V3 Stage A: independent Adam over per-track learnable cuboid pose.
+
+        Gated by ``conf.trainer.learnable_pose.enabled``. The Parameters are
+        registered on ``LayeredGaussians`` itself by ``populate_tracks`` (see
+        ``_populate_tracks_impl``'s learnable branch), so this method just
+        gathers them into two param groups (one per learning rate — rotation
+        is far more sensitive than translation) and creates the optimizer.
+        The Parameters round-trip through the regular ``model.state_dict()``
+        path; we additionally save the optimizer state under
+        ``"learnable_pose_state"`` so Adam moments survive resume.
+        """
+        trainer_conf = getattr(conf, "trainer", None)
+        if trainer_conf is None:
+            return
+        lp_conf = trainer_conf.get("learnable_pose", None) if hasattr(trainer_conf, "get") \
+            else getattr(trainer_conf, "learnable_pose", None)
+        if lp_conf is None:
+            return
+        enabled = lp_conf.get("enabled", False) if hasattr(lp_conf, "get") \
+            else getattr(lp_conf, "enabled", False)
+        if not enabled:
+            return
+        # Only LayeredGaussians registers per-track Parameters; vanilla MoG
+        # has no pose state to optimize. Quietly no-op otherwise.
+        from threedgrut.layers.layered_model import LayeredGaussians
+        if not isinstance(self.model, LayeredGaussians):
+            logger.warning(
+                "🛞 learnable_pose enabled but model is not LayeredGaussians; skipping"
+            )
+            return
+        # Source of truth for which tids exist: tracks_active property keys
+        # (one entry per registered _track_active_<tid> buffer, mode-agnostic).
+        quat_params, trans_params = [], []
+        for tid in sorted(self.model.tracks_active.keys()):
+            q = getattr(self.model, f"_track_quat_{tid}", None)
+            t = getattr(self.model, f"_track_trans_{tid}", None)
+            if q is not None:
+                quat_params.append(q)
+            if t is not None:
+                trans_params.append(t)
+        if not quat_params:
+            logger.warning(
+                "🛞 learnable_pose enabled but no _track_quat_<tid> Parameters "
+                "found on model; pose_optimizer not created"
+            )
+            return
+        lr_rotation = float(
+            lp_conf.get("lr_rotation", 1.0e-5) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lr_rotation", 1.0e-5)
+        )
+        lr_translation = float(
+            lp_conf.get("lr_translation", 1.0e-4) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lr_translation", 1.0e-4)
+        )
+        self.pose_optimizer = torch.optim.Adam([
+            {"params": quat_params,  "lr": lr_rotation,    "name": "track_quat"},
+            {"params": trans_params, "lr": lr_translation, "name": "track_trans"},
+        ])
+        self.pose_freeze_until_iter = int(
+            lp_conf.get("freeze_until_iter", 5000) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "freeze_until_iter", 5000)
+        )
+        logger.info(
+            f"🛞 LearnablePose: {len(quat_params)} tracks, "
+            f"lr_rot={lr_rotation}, lr_trans={lr_translation}, "
+            f"freeze_until_iter={self.pose_freeze_until_iter}"
+        )
+
+        # Restore from checkpoint if resuming. Parameters themselves are
+        # restored via the regular model.state_dict() path (init_from_checkpoint);
+        # here we only restore the Adam moment buffers.
+        if conf.resume:
+            ckpt = torch.load(conf.resume, weights_only=False, map_location=self.device)
+            if "learnable_pose_state" in ckpt:
+                self.pose_optimizer.load_state_dict(
+                    ckpt["learnable_pose_state"]["optimizer"]
+                )
+                logger.info("🛞 LearnablePose optimizer state restored from checkpoint")
+
     @torch.cuda.nvtx.range("get_metrics")
     def get_metrics(
         self,
@@ -857,6 +951,16 @@ class Trainer3DGRUT:
         # (v2 baseline byte-identical default).
         loss_bg_cuboid = self._compute_bg_cuboid_penalty_term(gpu_batch, trainer_conf)
 
+        # V3 Stage B — temporal smoothness reg on learnable per-track pose.
+        # Second-order finite-difference penalty (DriveStudio
+        # RigidNodes.temporal_smooth_reg form) on _track_quat_<tid> +
+        # _track_trans_<tid> Parameters. Gated triply: pose_optimizer
+        # exists (learnable_pose enabled), global_step >= freeze_until_iter
+        # (Adam is actually stepping pose), and at least one of λ_trans /
+        # λ_rot > 0. Disabled path returns torch.zeros(1) on device,
+        # baseline byte-identical when poseopt off.
+        loss_pose_smooth = self._compute_pose_smoothness_term(trainer_conf)
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -865,6 +969,7 @@ class Trainer3DGRUT:
             + lambda_scale * loss_scale
             + lambda_sky * loss_sky
             + loss_bg_cuboid
+            + loss_pose_smooth
         )
         return dict(
             total_loss=loss,
@@ -875,6 +980,7 @@ class Trainer3DGRUT:
             scale_loss=lambda_scale * loss_scale,
             sky_loss=lambda_sky * loss_sky,
             bg_cuboid_loss=loss_bg_cuboid,
+            pose_smooth_loss=loss_pose_smooth,
         )
 
     # ---------------------------------------------------------------- T8/B3
@@ -920,11 +1026,28 @@ class Trainer3DGRUT:
 
         Returns ``(None, None)`` when the model has no tracks, or when no
         track is active at the batch's timestamp.
+
+        V3 Stage A: poses are detached from the autograd graph here. In
+        learnable-pose mode ``model.tracks_poses`` (now an ``@property``)
+        returns gradient-tracking tensors built from the per-track quat/trans
+        Parameters; the caller of this method feeds those poses into two
+        regularization paths — ``_maybe_fill_cuboid_mask`` (FTheta cuboid
+        projection) and ``_compute_bg_cuboid_penalty_term`` (bg opacity
+        penalty inside cuboids). If we let gradients flow back from those
+        paths to the pose Parameters, the bg layer would "drag" cuboids
+        around to escape the penalty rather than relocating particles —
+        adversarial optimization. ``.detach()`` cuts that loop, leaving
+        photometric loss + ``_transform_means_and_active`` as the only
+        gradient sources for pose.
         """
         model = self.model
         tracks_poses = getattr(model, "tracks_poses", None)
         if not tracks_poses:
             return None, None
+        # Snapshot to a plain dict of detached tensors so collect_active_cuboids_for_frame
+        # and downstream consumers can't accidentally tap pose gradients. This
+        # is a no-op for the buffer path (poses are already non-differentiable).
+        tracks_poses = {tid: p.detach() for tid, p in tracks_poses.items()}
         tracks_active = getattr(model, "tracks_active", {})
         tracks_meta = getattr(model, "tracks_metadata", {})
         # Build {tid: size} from the metadata dict (size is the cuboid full extent).
@@ -1011,6 +1134,43 @@ class Trainer3DGRUT:
             bg_layer.positions, bg_layer.density,
             poses.to(self.device), sizes.to(self.device),
             lambda_val=lam,
+        )
+
+    # ---------------------------------------------------------------- V3 Stage B
+    def _compute_pose_smoothness_term(self, trainer_conf) -> torch.Tensor:
+        """Compute the Stage B temporal smoothness reg on learnable pose.
+
+        Returns ``torch.zeros(1, device=self.device)`` when:
+          * ``pose_optimizer`` is None (learnable_pose disabled), OR
+          * ``global_step < pose_freeze_until_iter`` (freeze warmup — pose
+            Parameters are not being stepped, so we don't pay reg either),
+          * Both ``λ_temporal_smooth_trans`` / ``_rot`` are 0.
+
+        Delegates to :func:`compute_pose_smoothness_loss` for the actual
+        finite-difference math. Wires self.model + λ values + device.
+        """
+        zero = torch.zeros(1, device=self.device)
+        if self.pose_optimizer is None:
+            return zero
+        if self.global_step < self.pose_freeze_until_iter:
+            return zero
+        lp_conf = getattr(trainer_conf, "learnable_pose", None)
+        if lp_conf is None:
+            return zero
+        lam_t = float(
+            lp_conf.get("lambda_temporal_smooth_trans", 0.0)
+            if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_temporal_smooth_trans", 0.0)
+        )
+        lam_r = float(
+            lp_conf.get("lambda_temporal_smooth_rot", 0.0)
+            if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_temporal_smooth_rot", 0.0)
+        )
+        if lam_t <= 0.0 and lam_r <= 0.0:
+            return zero
+        return compute_pose_smoothness_loss(
+            self.model, lam_t, lam_r, device=self.device,
         )
 
     @torch.cuda.nvtx.range("log_validation_iter")
@@ -1341,6 +1501,16 @@ class Trainer3DGRUT:
                 "optimizer": self.exposure_optimizer.state_dict(),
             }
 
+        # V3 Stage A: independent Adam for per-track learnable cuboid pose.
+        # The Parameters themselves (``_track_quat_<tid>`` /
+        # ``_track_trans_<tid>``) ride along inside ``model.state_dict()`` —
+        # only the Adam moment buffers need a sibling key.
+        if self.pose_optimizer is not None:
+            parameters["learnable_pose_state"] = {
+                "optimizer": self.pose_optimizer.state_dict(),
+                "freeze_until_iter": self.pose_freeze_until_iter,
+            }
+
         # T8.2: 4D viz metadata for viser_gui_4d. Only written when explicitly
         # enabled via conf.viz_4d.enabled — keeps v1 ckpts byte-identical with
         # pre-T8.2 layouts. Failure logs a warning but never aborts the save.
@@ -1520,6 +1690,17 @@ class Trainer3DGRUT:
             with torch.cuda.nvtx.range(f"train_{global_step}_exposure_opt"):
                 self.exposure_optimizer.step()
                 self.exposure_optimizer.zero_grad(set_to_none=True)
+
+        # V3 Stage A: per-track learnable pose optimizer step. During the
+        # freeze warmup we still clear gradients (backward already populated
+        # them) but skip the Adam step — Parameters stay at GT init while the
+        # main Gaussians converge. After freeze_until_iter the optimizer
+        # starts updating quat/trans and pose drift begins.
+        if self.pose_optimizer is not None:
+            with torch.cuda.nvtx.range(f"train_{global_step}_pose_opt"):
+                if global_step >= self.pose_freeze_until_iter:
+                    self.pose_optimizer.step()
+                self.pose_optimizer.zero_grad(set_to_none=True)
 
         # Post backward strategy step
         with torch.cuda.nvtx.range(f"train_{global_step}_post_opt_step"):

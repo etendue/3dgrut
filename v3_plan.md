@@ -146,7 +146,7 @@ kanban
     Blocked
 
     Done
-        [T8.5.7 ★ V3-E4 5-cam vs 7-cam → 切对称 5-cam (30k 实测)]
+        [T8.5.7 ★ V3-E4 5-cam vs 7-cam → 切对称 5-cam 30k 实测]
 ```
 
 > Flowchart 在 VSCode/Markdown 中可正常渲染；若不支持则退化为文本列表。
@@ -793,7 +793,177 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 
 **关联未来 task**：V3-P2 — 修 dyn→bg/road 错分（cuboid-exclusion mask 加严 / 训练后 post-process 粒子迁移）。
 
-*（待 Stage 8.5 启动时追加首条 KPI 任务条目）*
+---
+
+### V3-E4.1 — Renderer.from_checkpoint 还原 tracks_poses + scene_extent（2026-05-27）
+
+**Commit**: `<next>` （render.py L143-178 fix + tests/test_render_reload_parity.py 新增 6 测试）
+
+**背景**：T8.5.7 commit 0ffd738 加了 `logger.warning` 标注 standalone `Renderer.from_checkpoint()` 比 train-end-of-train eval 低 **~3 dB**，但未定位根因。Phase 8.5 T8.5.4 必须用 v2 ckpt 跑 standalone novel-view eval 拿 v3 主 KPI baseline，**不修这个 bug 则 baseline 数字偏低 ~3 dB，整个 v3 KPI 校准会错**。
+
+**根因定位（5cam 5k smoke 历史数据复现 + ckpt inspection bisection）**：
+
+| 指标 | train-end (live model) | reload (修复前) | Δ |
+|---|---:|---:|---:|
+| `mean_psnr_masked` (raw) | 21.42 | 19.48 | **−1.94 dB** |
+| `mean_cc_psnr_masked` | 23.36 | 20.40 | **−2.96 dB** |
+
+raw psnr 也掉 ~2 dB 排除了"eval 漏 apply exposure"假设（两条 eval 路径都不 apply ExposureModel）。Ckpt inspection 暴露两个真实根因：
+
+1. **tracks_poses 未恢复**（主因）：训练时 `trainer.py:433` 在 dataset ready 后调 `model.populate_tracks(tracks)` 把 70 个 dynamic_rigid track 的 per-frame poses (`Tensor[599,4,4]` × 70) 写入 model buffer；但 `render.py:from_checkpoint` 路径**完全不调** populate_tracks → 300K dyn Gaussians 留在 canonical pose（不跟随车辆运动）→ 所有含动态车辆的帧 raw psnr 显著下降。Tracks pose 数据本身存在 `ckpt["viz_4d"]["tracks"][<tid>]["poses"]` + `ckpt["viz_4d"]["tracks_camera_timestamps_us"]`，只是 render.py 没读。
+2. **scene_extent 传 None 给 ctor**（次因）：`render.py:164` 传 `LayeredGaussians(conf, specs, scene_extent=None)` 而 ckpt 里有 `model.scene_extent=1.103`。MoG.init_from_checkpoint 会从 sub-dict 覆盖回正确值，所以单测 / inference 行为对 model 本身无影响，但 `model.scene_extent`（顶层）保持 None 与 live 训练态不一致，未来代码引用 `model.scene_extent` 会回归。
+
+**修复**：把 `playground/engine.py:1340-1360` 已有的正确 pattern 复制到 `threedgrut/render.py:143-178`：
+- Ctor 传 `scene_extent = float(checkpoint.get("model", {}).get("scene_extent", 1.0))`
+- `init_from_checkpoint` 后从 `viz_4d.tracks + tracks_camera_timestamps_us` 调 `populate_tracks`
+- 用 `viz_4d` 缺失 / `tracks_camera_timestamps_us` 缺失的两层 guard 兼容 v1 + pre-T8.2 ckpts
+- 删掉 0ffd738 的 misleading warning（warning 文本怀疑是 exposure_state，实际无关）
+
+**验收（A800 sym5cam 30k ckpt, byte-identical ★）**：
+
+| 指标 | train-end | reload (修复后) | Δ |
+|---|---:|---:|---:|
+| `mean_psnr_masked` | 15.2878 | **15.2878** | **0.0000** ★ |
+| `mean_cc_psnr_masked` | 26.0436 | **26.0436** | **0.0000** ★ |
+| `mean_cc_psnr` | 23.8795 | **23.8795** | 0.0000 |
+| per_camera (5 个 × 6 metric) | 全 | 全 | 全 0 ★ |
+
+远超 plan 验收门槛（差 < 0.1 dB）→ 修复完全闭合 gap，T8.5.4 可以直接启动。
+
+**测试**：
+- `tests/test_render_reload_parity.py` 新增 6 测试：4 contract（viz_4d → populate_tracks 调用 / ctor scene_extent / no-viz_4d / shared_ts 缺失）+ 2 source-level guard（greppy 检查 render.py 不会被回归性误删）— Mac venv 0.08s 全绿
+- 既有 58 个 layered / render_per_camera / track_ids / engine_layered_load 测试无回归
+
+**关联未来 task**：
+- **下一步 V3-P1 (Stage 9 T9.1-T9.5)**：bilateral grid 替换 ExposureModel + L2 reg + 2-stage freeze（Plan agent 现已确认 V3-P1 范围按原计划走，T9.3 走路线 B = eval 也 apply correction）
+- Phase 1 决策门通过：V3-E4.1 与 ExposureModel 无关，V3-P1 实施不需调整范围
+
+---
+
+### Stage 8.5 启动条目
+
+### T8.5.3 / T8.5.4 — Novel-view pose 生成器 + v3 baseline LPIPS 实测（2026-05-27）
+
+**Commits**: `b27d09e` (T8.5.3 code) + `<next>` (T8.5.4 数据回填 Done Log + KPI 表更新)
+
+**任务**:
+- T8.5.3: NEW `threedgrut/utils/novel_view.py` 4 模式扰动 (lateral_1m / lateral_2m / yaw_5deg / yaw_10deg) + render.py `--novel-view` flag + render_all 4 模式循环 + metrics.json `mean_novel_lpips_*` 字段
+- T8.5.4: A800 sym5cam 30k ckpt 上跑全 5cam 375 帧 × 5 渲染 (1 anchor + 4 novel) = 1875 renders, 14 min wall-clock
+
+**关键设计决策（用户对齐, 2026-05-27 16:00）**:
+- **Anchor**: 训练帧 c2w
+- **4 档幅度**: v3_plan 默认 (±1m / ±2m 横向平移 + ±5° / ±10° yaw 旋转)
+- **GT 策略**: 不算 PSNR vs anchor GT — 小扰动下 image content 因 parallax 变化，PSNR 是 noise floor 而非 view-extrapolation 质量。**只算 LPIPS + 视觉验证**；PSNR 留到 Stage 15 DiFix synthesized GT 可用时。
+- **无 region mask**: 不算 per-region PSNR 就不需要 mask 拆解
+- **Baseline ckpt**: T8.5.7 对称 5cam 30k（v3 实际 baseline）而非 v2 Stage 7 旧非对称 5cam
+
+**Rolling-shutter integrity**: T_to_world 和 T_to_world_end 用 **同一 world-frame delta** 同步扰动（rigid trajectory shift）。lateral 用 start frame 的 right axis 算两端平移；yaw 用 start frame 的 up axis、绕 start 位置 pivot end frame。`perturb_shutter_pair()` 处理，单测覆盖 `test_shutter_pair_lateral_preserves_rigid_shift` + `test_shutter_pair_yaw_rotates_end_around_start_origin`。
+
+**T8.5.4 关键结果（v3 Stage 8.5 baseline ★）**:
+
+| 维度 | LPIPS |
+|---|---:|
+| Anchor `mean_lpips`（重建质量参考） | **0.3702** |
+| Anchor `mean_cc_lpips` | 0.3432 |
+| Anchor `mean_lpips_masked` | 0.3286 |
+| **Novel-view avg (4 modes)** | **0.6022** ★ |
+| Novel `lateral_1m` | 0.5838 |
+| Novel `yaw_5deg` | 0.5895 |
+| Novel `lateral_2m` | 0.6168 |
+| Novel `yaw_10deg` | 0.6188 |
+
+**baseline 解读**:
+- Novel-view LPIPS 比 anchor LPIPS 劣化 **+0.23**（相对 +58-67%）
+- 4 模式 LPIPS 单调随扰动幅度增加（1m < 2m, 5° < 10°）—— 几何上合理
+- 平移与旋转幅度对 LPIPS 影响相当：1m ≈ 5°, 2m ≈ 10°
+- 重建 anchor `mean_cc_psnr_masked = 26.0436` 与 train-end metrics.json byte-identical（V3-E4.1 fix 持稳）
+
+**v3 主 KPI 起点确认**:
+- v3 进取目标：把 novel-view LPIPS **拉回接近 anchor LPIPS 0.37**（即 Stage 9-17 累计改善 ~0.23）
+- 主要改善源：Stage 10 sky inpaint（novel sky 不爆黑洞）+ Stage 11 LiDAR/DepthV2 几何先验 + Stage 15 DiFix 蒸馏
+
+**视觉验证**:
+- 4 模式 × 5 帧样本图保存在 `<out_dir>/ours_30000/novel_view/<mode>/{00000-00004}.png`
+- 抽样肉眼对照：lateral_2m 明显侧移 / yaw_10deg 明显旋转；底部 ego mask 在 novel pose 下错位形成黑椭圆（已知边界 case，所有 mode 受影响相同，不破坏相对 baseline）
+
+**Edge case 与已知限制**:
+- ego mask 沿用 anchor 帧的 mask（在 novel pose 下不严格准确），导致 LPIPS 数字略偏高。Stage 10/11 阶段 mask 管线 V3-D8/D9/P2 改进时一并修
+- LPIPS 是相对感知度量，绝对数字不直接对标 NuRec 论文（NuRec 报的是 reconstructed PSNR），与 v2 baseline 也无对照数字（v2 没跑过 novel-view）
+
+**测试**:
+- `tests/test_novel_view.py` 13 测试（CPU，0.03s）：4 模式扰动数学 + rolling-shutter rigid trajectory + torch wrapper
+- 26 个 render-related 测试全绿（test_novel_view.py + test_render_reload_parity.py + test_render_per_camera.py）
+
+**关联未来 task**:
+- Stage 10 (T10.1-T10.4): Sky envmap inpaint — 期望降 novel_lpips_lateral_2m + novel_lpips_yaw_10deg 最多（sky 区域劣化最严重）
+- Stage 11 (T11.1-T11.6): LiDAR + DepthV2 几何先验 — 期望降所有 4 模式平均（几何稳定）
+- Stage 15 (T15.2-T15.5): Cosmos-DiFix 渐进蒸馏 — 直接为 novel view 设计的伪影修复器，期望降全部模式 + 最终拉回接近 anchor 0.37
+
+---
+
+### V3-L7 / V3-StageA — 学习式 track-pose 30k 预研（Run B, ThinkPad, 2026-05-27）
+
+**Commits**: `6b84d54` (Merge stageA into main) + `bb49bc5` (V3-StageB temporal smoothness scaffolding) + `e902bf6` (StageB device fix) — 全部在 origin/main，源代码来自 `.claude/worktrees/v3-learnable-track-pose-stageA/` 已合并
+
+**任务背景**：T13a.4 / V3-L7 完整版需 fix_first/last + warm start + temporal smooth reg + pose prior reg；stageA 先把基础架构落下（learnable Parameter 替换 buffer + ckpt 持久化 + freeze-until-iter 调度），跑一次预研看 photometric loss 自校准 NCore cuboid GT 的潜力。
+
+**配置（Run B = `poseopt_on_30k_freeze10k`）**：
+
+```yaml
+trainer.learnable_pose:
+  enabled: true
+  lr_rotation: 1.0e-05               # 极保守 LR (refine, 不重学)
+  lr_translation: 0.0001
+  freeze_until_iter: 10000           # 步 0-9999 freeze, 步 10000-30000 联合优化
+  lambda_temporal_smooth_trans: 0.0  # ⏸ stageA 暂不启用
+  lambda_temporal_smooth_rot: 0.0    # ⏸ stageA 暂不启用 (T13a.4 完整版需要)
+  lambda_pose_prior_trans: 0.0       # ⏸ 同上
+  lambda_pose_prior_rot: 0.0         # ⏸ 同上
+```
+
+**代码改动机制**（[layered_model.py:321-330](.claude/worktrees/v3-learnable-track-pose-stageA/threedgrut/layers/layered_model.py:321)）：
+- v2 baseline: 每 track 一个 `_track_pose_<tid>` buffer `[F, 4, 4]`，GT 不可学
+- stageA：拆成 `_track_quat_<tid>` Parameter `[F, 4]` (wxyz) + `_track_trans_<tid>` Parameter `[F, 3]`，渲染时归一化 quat → R + trans 组合 SE(3)，photometric loss 反向传播到这 70 tracks × 599 frames
+- 同时保留 frozen `_track_pose_gt_<tid>` buffer 用于 resume detection / 未来 viz diff
+- ckpt 顶层新增 `learnable_pose_state` key（独立 nn.Module 容器 `model.layered_track_state`）
+
+**关键结果（Run B, sym5cam 30k, ThinkPad RTX 4090, 12:56 完成）**:
+
+| 指标 | T8.5.7 baseline (no poseopt) | Run B (poseopt + freeze10k) | Δ |
+|---|---:|---:|---:|
+| `mean_psnr_masked` (raw) | 15.288 | **17.344** | **+2.06 dB ★** |
+| `mean_cc_psnr_masked` | 26.044 | 25.431 | **−0.61 dB** ⚠️ |
+| `mean_class_psnr` (per-cuboid 动态车辆区域) | 17.276 | **18.958** | **+1.68 dB ★** |
+| `class_psnr_n_low_15db` | 1298 | (待确认) | — |
+
+**Ckpt 持久化验证 ✅**（`scripts/inspect_poseopt_ckpt.py` 走 Run B `ckpt_30000.pt`）：
+- 顶层 `learnable_pose_state` key 存在
+- 70 个 `_track_quat_*` Parameter (599, 4)；std min 0.36 / mean 0.44 / max 0.50 — 单位 quat 帧间正常变化
+- 70 个 `_track_trans_*` Parameter (599, 3)；std min 2.6 m / mean 22.4 m / max 88 m — 合理车辆位移
+- 70 个 `_track_pose_gt_*` frozen buffer 保留 — resume / diff 用
+- 0 个 v2 `_track_pose_*` 旧 buffer — 完全切到 learnable
+- → 历史 memory 1416/1461 "Silent Data Loss: Learnable Track Pose Parameters Not Persisted" 告警**已修复**
+
+**关键观察 + 解读**:
+1. **raw psnr +2.06 dB**：主要来自 dynamic_rigid Gaussians 不再被错误的 NCore cuboid annotation pose 拖累（自动 tracking 标注本来就 ~5-10cm / ~1° noise），photometric loss 在 freeze 解锁后让 SE(3) 自校准
+2. **class_psnr +1.68 dB**：per-cuboid 动态车辆区域直接受益，与 raw 改善方向一致
+3. **cc_psnr -0.61 dB**：cc affine 修正吸收 tone 偏差，learnable_pose 改善几何不直接受益；且 lr_pose=1e-5 量级训练 20k 步可能轻微扰动 ExposureModel 优化平衡 — 与 V3-P1 退化 mode 一致逻辑
+4. **trans std 88 m max** 是合理的高速车辆 20 秒位移，**不**是 over-fitting
+
+**已知 caveat（影响后续标 T13a.4 ✅）**:
+- ⚠️ stageA 仅启用 freeze 调度 + 基础 SE(3) Parameter 化；T13a.4 完整版还要：
+  - **fix_first/last**: Δpose 端点固定（防 collapse）
+  - **warm start ≥ 500**: freeze 解锁后渐进释放 LR
+  - **temporal_smooth reg**: 相邻帧 Δpose 平滑（StageB `bb49bc5` 已写好但 lambda=0 未启用）
+  - **pose_prior reg**: Δpose vs GT 偏离的 L2 约束
+- ⚠️ Run B ckpt reload 必须用 stageA worktree 的 render.py（含 `learnable_pose_state` 加载链）；**当前 main 分支的 render.py（V3-E4.1 fix 后）也不支持** `learnable_pose_state` 加载——加载到 buffer-mode model 会回退到 frozen GT pose，raw psnr 退回 baseline 15.29
+- ⚠️ Novel-view（T8.5.3）也尚未在 Run B ckpt 上跑过；T13a.4 完整出口要在 Stage 13a 时再 novel-view eval
+
+**V3-L7 完整版 T13a.4 状态**: ⬜ Todo (依然在 Backlog)。stageA 预研只解锁了 +2.06 dB raw 的潜力证据，**完整 V3-L7 的 +1.5 dB novel-view 增益预算仍需 fix_first/last + warm start + smooth/prior reg 一起验证**。
+
+**关联未来 task**:
+- StageB (`bb49bc5`) 已加 temporal smoothness reg 代码，下次实验把 lambda 打开（如 0.01）跑 Run C 看 cc_psnr 是否回归（解决 cc_psnr -0.61 dB 退化）
+- T13a.4 标 ✅ 的前提：fix_first/last + warm start + smooth reg + pose prior 都启用且 ablation 数据完整 + main 分支 render.py 支持 `learnable_pose_state` reload
 
 ---
 

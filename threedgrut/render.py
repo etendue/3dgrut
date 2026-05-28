@@ -48,6 +48,7 @@ class Renderer:
         writer=None,
         compute_extra_metrics=True,
         post_processing=None,
+        novel_view=False,
     ) -> None:
 
         if path:  # Replace the path to the test data
@@ -63,6 +64,9 @@ class Renderer:
         self.writer = writer
         self.compute_extra_metrics = compute_extra_metrics
         self.post_processing = post_processing
+        # T8.5.3 / V3-E3: 5x render cost when enabled — 4 extra renders per
+        # anchor frame (lateral_1m / lateral_2m / yaw_5deg / yaw_10deg).
+        self.novel_view = bool(novel_view)
 
         if conf.model.background.color == "black":
             self.bg_color = torch.zeros((3,), dtype=torch.float32, device="cuda")
@@ -101,6 +105,7 @@ class Renderer:
         model=None,
         computes_extra_metrics=True,
         eval_cameras=None,
+        novel_view=False,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -144,28 +149,46 @@ class Renderer:
                 from threedgrut.layers.layered_model import LayeredGaussians
                 from threedgrut.layers.registry import specs_from_config
 
-                logger.warning(
-                    "[T8.5.7 / V3-E4 known issue] standalone "
-                    "Renderer.from_checkpoint() of a LayeredGaussians ckpt "
-                    "yields ~3 dB lower PSNR than the train-end-of-train "
-                    "eval (which uses Renderer.from_preloaded_model with the "
-                    "live model + exposure_model + post_processing already "
-                    "attached). Some training-time state (likely the "
-                    "ExposureModel state under 'exposure_state' key, plus "
-                    "any sky_envmap warmup buffers) is not yet restored on "
-                    "this path. For V3-E4 per-camera comparison use the "
-                    "metrics.json['per_camera'] written at end-of-train "
-                    "directly — that path is correct. Tracked as follow-up "
-                    "task V3-E4.1: standalone-eval state restore."
-                )
                 specs = specs_from_config(conf)
-                # scene_extent=None — LayeredGaussians fills it from ckpt
-                # (trainer.init_model passes the same when restoring).
-                model = LayeredGaussians(conf, specs=specs, scene_extent=None)
+                # V3-E4.1 fix: pass the saved scene_extent (live trainer does
+                # the same) instead of None — mirrors engine.py:1340-1344.
+                scene_extent = float(
+                    checkpoint.get("model", {}).get("scene_extent", 1.0)
+                )
+                model = LayeredGaussians(
+                    conf, specs=specs, scene_extent=scene_extent,
+                )
+                # V3 Stage A/B/D.2 bugfix: ``populate_tracks`` MUST run BEFORE
+                # ``init_from_checkpoint`` for learnable_pose ckpts. Reason:
+                # ``LayeredGaussians.init_from_checkpoint`` (layered_model.py
+                # L632-672) calls ``load_state_dict(layered_track_state,
+                # strict=False)`` to restore _track_quat_/_track_trans_/
+                # _track_pose_gt_/_track_active_ entries — but
+                # ``load_state_dict`` only writes into pre-existing slots, and
+                # those slots are created by ``populate_tracks``. If we call
+                # them in the wrong order, the learned Parameter values are
+                # silently dropped ("unexpected keys" warning) and the model
+                # ends up with GT-init values from tracks_dict instead of the
+                # ckpt's learned poses (yesterday's D.2 triptych diff ≈ 0
+                # was caused by exactly this). The trainer's order is correct
+                # (trainer.init_model L386-449); render.py + engine.py were
+                # both inverted since V3-E4.1 — fixed simultaneously.
+                viz_4d = checkpoint.get("viz_4d")
+                if viz_4d is not None and isinstance(viz_4d, dict):
+                    tracks_dict = viz_4d.get("tracks")
+                    shared_ts = viz_4d.get("tracks_camera_timestamps_us")
+                    if tracks_dict and shared_ts is not None:
+                        # Inject shared timestamps into the first track so
+                        # _populate_tracks_impl picks them up via its
+                        # first-track scan (single shared buffer across all
+                        # tracks; same NCore camera schedule).
+                        first_tid = next(iter(tracks_dict))
+                        tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
+                        model.populate_tracks(tracks_dict)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
             else:
                 model = MixtureOfGaussians(conf)
-            # Initialize the parameters from checkpoint
-            model.init_from_checkpoint(checkpoint, setup_optimizer=False)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
         model.build_acc()
 
         # Load post-processing if present in checkpoint
@@ -210,6 +233,7 @@ class Renderer:
             writer=writer,
             compute_extra_metrics=computes_extra_metrics,
             post_processing=post_processing,
+            novel_view=novel_view,
         )
 
     @classmethod
@@ -223,6 +247,7 @@ class Renderer:
         global_step=None,
         compute_extra_metrics=False,
         post_processing=None,
+        novel_view=False,
     ):
         """Loads checkpoint for test path."""
 
@@ -240,6 +265,7 @@ class Renderer:
             writer=writer,
             compute_extra_metrics=compute_extra_metrics,
             post_processing=post_processing,
+            novel_view=novel_view,
         )
 
     @torch.no_grad()
@@ -294,6 +320,33 @@ class Renderer:
         # active track per frame; only computed when ckpt is v2 LayeredGaussians
         # with populated tracks_poses AND the batch carries FTheta intrinsics.
         class_psnr_records: list = []
+
+        # T8.5.3 / V3-E3 — novel-view perturbation accumulator. Per-mode
+        # LPIPS list (vs anchor GT). PSNR at these magnitudes is dominated
+        # by parallax shift so we report LPIPS only (perceptual robust to
+        # small content shifts). Empty when self.novel_view=False so
+        # metrics.json stays byte-identical for the default eval path.
+        from threedgrut.utils.novel_view import (
+            NOVEL_VIEW_MODES,
+            perturb_batch_shutter_pair_torch,
+        )
+        novel_lpips: dict[str, list] = (
+            {m: [] for m in NOVEL_VIEW_MODES} if self.novel_view else {}
+        )
+        # Save first N novel-view samples for visual inspection (per-mode
+        # subdir under ours_<step>/novel_view/<mode>/).
+        novel_save_first_n = 5 if self.novel_view else 0
+        if self.novel_view:
+            for m in NOVEL_VIEW_MODES:
+                os.makedirs(
+                    os.path.join(self.out_dir, f"ours_{int(self.global_step)}",
+                                 "novel_view", m),
+                    exist_ok=True,
+                )
+            logger.info(
+                f"[T8.5.3 / V3-E3] novel-view mode ON — {len(NOVEL_VIEW_MODES)}"
+                f" extra renders per anchor: {NOVEL_VIEW_MODES}"
+            )
 
         # T8.5.7 / V3-E4 — per-camera metric aggregation. keys = camera_id
         # strings (set by NCoreDataset's __getitem__); each value mirrors the
@@ -448,6 +501,46 @@ class Renderer:
                 cc_ssim_masked.append(cc_ssim[-1])
                 cc_lpips_masked.append(cc_lpips[-1])
 
+            # T8.5.3 / V3-E3 — novel-view perturbation renders. For each
+            # mode, mutate gpu_batch.T_to_world + T_to_world_end with the
+            # SAME world-frame delta (rolling-shutter rigid trajectory) and
+            # re-render. LPIPS vs anchor GT only; PSNR omitted intentionally
+            # — at ±1-2m / ±5-10° magnitudes the image content shifts enough
+            # that PSNR is dominated by parallax noise floor, not view-
+            # extrapolation quality. Skipped entirely when self.novel_view
+            # is False (metrics.json stays byte-identical with pre-T8.5.3).
+            if self.novel_view:
+                orig_T = gpu_batch.T_to_world.detach().clone()
+                orig_T_end = gpu_batch.T_to_world_end.detach().clone()
+                rgb_gt_perm = rgb_gt_full.permute(0, 3, 1, 2)
+                for mode in NOVEL_VIEW_MODES:
+                    nT, nTe = perturb_batch_shutter_pair_torch(
+                        orig_T, orig_T_end, mode,
+                    )
+                    gpu_batch.T_to_world = nT
+                    gpu_batch.T_to_world_end = nTe
+                    out_novel = self.model(gpu_batch)
+                    pred_novel = out_novel["pred_rgb"]
+                    novel_lpips[mode].append(
+                        criterions["lpips"](
+                            pred_novel.clip(0, 1).permute(0, 3, 1, 2),
+                            rgb_gt_perm,
+                        ).item()
+                    )
+                    if iteration < novel_save_first_n:
+                        torchvision.utils.save_image(
+                            pred_novel.squeeze(0).permute(2, 0, 1),
+                            os.path.join(
+                                self.out_dir, f"ours_{int(self.global_step)}",
+                                "novel_view", mode,
+                                f"{iteration:05d}.png",
+                            ),
+                        )
+                # Restore originals so downstream class_psnr / per_cam see
+                # the unperturbed batch.
+                gpu_batch.T_to_world = orig_T
+                gpu_batch.T_to_world_end = orig_T_end
+
             # T8/B3 Phase E.6 — per-cuboid class PSNR. Skipped when the model
             # has no dyn tracks loaded (single-bg / road-only multi-layer) OR
             # the batch lacks FTheta intrinsics (current dyn projection only
@@ -562,6 +655,30 @@ class Renderer:
             mean_cc_ssim_masked=float(mean_cc_ssim_masked),
             mean_cc_lpips_masked=float(mean_cc_lpips_masked),
         )
+        # T8.5.3 / V3-E3 — per-mode novel-view LPIPS averaged across all
+        # eval frames. Only populated when self.novel_view=True; absent
+        # otherwise so metrics.json stays byte-identical for the default
+        # path. Also report the 4-mode mean as the v3 baseline single
+        # number.
+        if novel_lpips and any(novel_lpips.values()):
+            nvjson: dict[str, float] = {}
+            means = []
+            for mode in NOVEL_VIEW_MODES:
+                lst = novel_lpips[mode]
+                if lst:
+                    m = float(np.mean(lst))
+                    nvjson[f"mean_novel_lpips_{mode}"] = m
+                    means.append(m)
+            if means:
+                nvjson["mean_novel_lpips_avg"] = float(np.mean(means))
+            metrics_json.update(nvjson)
+            logger.info(
+                f"[T8.5.3 / V3-E3] novel-view LPIPS — "
+                + " | ".join(
+                    f"{m}={novel_lpips and np.mean(novel_lpips[m]):.4f}"
+                    for m in NOVEL_VIEW_MODES if novel_lpips[m]
+                )
+            )
 
         # T8.5.7 / V3-E4 — per-camera aggregated metrics. ``per_cam`` is
         # empty for NeRF/Colmap (Batch.camera_id is None there), so
