@@ -48,23 +48,39 @@ layers:
   # 4 层: 来自 v2_sky.yaml (扩展自 v2_road.yaml [bg,road] 和 v2_full.yaml [+dyn])
   enabled: [background, road, dynamic_rigids, sky_envmap]
   # T8/B3 dynfix: dyn 层最大粒子数 200k → 300k
-  # V3-L5/L8/L9 (NuRec dynamic_rigids tricks): 全部 default OFF — A/B run 时
-  # CLI 用 ``+layers.overrides.dynamic_rigids.<key>=<value>`` 翻转, 例:
-  #   +layers.overrides.dynamic_rigids.symmetric_axis=Y
-  #   +layers.overrides.dynamic_rigids.optimize_track_albedo=true
-  #   +layers.overrides.dynamic_rigids.optimize_track_scale=true
   overrides:
     dynamic_rigids:
       max_n_particles: 300000
-      # V3-L5: 'Y' 启用左右对称粒子初始化 (车辆 default 推荐); null = OFF
+
+      # ─── V3-L5 symmetric_axis (NuRec ``symmetric_axis`` 对称对象初始化) ─
+      # 'Y' = 车辆左右对称 (NuRec default for sedan/truck/bus). LiDAR 在
+      # object-local frame 的点云 y 取负后 concat 到原集合 (subsample
+      # cap=5000 前), 等价于把对称车辆"看不到的另一侧"的 LiDAR 点补回去.
+      # 'X' / 'Z' 也支持但很少用 (X=纵向对称, Z=垂直对称).
+      # ``null`` (default) = OFF, baseline byte-identical.
+      #
+      # 5k vast smoke (非对称 5cam, 早期 baseline) 实测信号:
+      #   heavy_truck_psnr +0.146 / bus_psnr +0.149 / class_psnr_n_low_15db -13%
+      # 30k A800 (对称 5cam) 全开 (含 V3-L8/L9) 实测有反转 — symmetric_axis
+      # 单独 ablation 30k 待跑 (V3-L5b follow-up).
+      #
+      # CLI override: ``++layers.overrides.dynamic_rigids.symmetric_axis=Y``
       symmetric_axis: null
-      # V3-L8: per-track 3-dim RGB bias on DC SH (features_albedo[:,:3])
+
+      # ─── V3-L8/L9 per-track albedo / scale (EXPERIMENTAL, 30k 有副作用) ─
+      # 每 track 学一个 3-dim RGB bias (L8) + scalar log-scale offset (L9)
+      # 加到 features_albedo DC SH / scale (log-space). NuRec 原文用 LR 1e-5
+      # SequentialLR (Constant->Linear->Cosine), 我们简化为 fixed lr +
+      # requires_grad warmup gate.
+      #
+      # ⚠️ 30k 全开实测有副作用 (mean_class_psnr -0.12 dB, n_low_15db +21%):
+      # warmup=500 + cosine lr=1e-5 + 29500 步累积量过大, per-track offset
+      # 学过头让 dyn 层稳定性受损. 单独激活 albedo / scale 的 ablation 待跑.
+      # 建议: 暂时保持 OFF, 或调 warmup_steps>=5000 / lr<=1e-6 后再 ablation.
       optimize_track_albedo: false
-      # V3-L9: per-track log-space scale offset broadcast to all 3 axes
       optimize_track_scale: false
-      # V3 共享 warmup: requires_grad 在 global_step >= track_warmup_steps 翻转
+      # 共享 warmup: requires_grad 在 global_step >= track_warmup_steps 翻转
       track_warmup_steps: 500
-      # Per-param-group base LR (NuRec 原文 1e-5, SequentialLR Constant→Linear→Cosine)
       track_albedo_lr: 1.0e-5
       track_scale_lr: 1.0e-5
 
