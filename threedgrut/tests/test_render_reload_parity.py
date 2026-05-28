@@ -228,3 +228,83 @@ def test_render_py_source_reads_scene_extent_from_ckpt():
         "V3-E4.1 regression: Renderer.from_checkpoint() reverted to "
         "scene_extent=None instead of reading it from ckpt['model']."
     )
+
+
+# T9.3 / V3-P1.c: source-level guards for eval-time exposure_model apply ------
+
+def test_render_py_source_renderer_init_accepts_exposure_model():
+    """Renderer.__init__ must accept and store ``exposure_model``."""
+    src = _render_py_text()
+    assert "exposure_model=None" in src.replace(" ", ""), (
+        "T9.3 regression: Renderer.__init__ no longer has exposure_model "
+        "kwarg. eval would not be able to apply BilateralGrid → reverts to "
+        "v2-style raw-vs-train mismatch."
+    )
+    assert "self.exposure_model = exposure_model" in src, (
+        "T9.3 regression: Renderer.__init__ stops storing exposure_model "
+        "on self. render_all can't reach it."
+    )
+
+
+def test_render_py_source_render_all_applies_exposure_model():
+    """render_all must apply self.exposure_model after model forward +
+    post_processing, before metrics — same site the trainer applies it
+    pre-loss (trainer.py:1641-1643)."""
+    src = _render_py_text()
+    assert "self.exposure_model is not None" in src, (
+        "T9.3 regression: render_all no longer gates on exposure_model. "
+        "eval would skip the BilateralGrid apply → metrics measure "
+        "(raw_model_output vs GT), not (bilateral_grid(output) vs GT)."
+    )
+    # Ensure the apply mutates outputs["pred_rgb"] so downstream
+    # color_correct_affine + masked metrics see the corrected tensor.
+    assert 'outputs["pred_rgb"] = self.exposure_model' in src, (
+        "T9.3 regression: render_all applies exposure_model but does not "
+        "write back into outputs['pred_rgb']. Metrics downstream still "
+        "see the pre-exposure output."
+    )
+
+
+def test_render_py_source_from_checkpoint_rebuilds_bilateral_grid():
+    """from_checkpoint must reconstruct BilateralGrid from
+    ckpt['exposure_state']['module']['grids'] shape + load state."""
+    src = _render_py_text()
+    # Construct BilateralGrid (import + ctor).
+    assert "from threedgrut.correction import BilateralGrid" in src, (
+        "T9.3 regression: from_checkpoint no longer imports BilateralGrid."
+    )
+    assert "BilateralGrid(" in src
+    # Read grids tensor's shape — the only thing we have at ckpt-load time.
+    assert "module_state" in src and '"grids"' in src
+    # Legacy v2 ckpt detection so old ExposureModel ckpts don't crash.
+    assert 'exposure_a' in src and 'exposure_b' in src, (
+        "T9.3 regression: legacy v2 ckpt path removed; loading a v2 "
+        "exposure_state.module would raise KeyError."
+    )
+
+
+def _trainer_py_text() -> str:
+    """Read trainer.py source directly (avoids torchvision/CUDA imports)."""
+    path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "trainer.py")
+    )
+    with open(path, "r") as f:
+        return f.read()
+
+
+def test_trainer_py_passes_exposure_model_to_from_preloaded_model():
+    """trainer.py train-end eval must pass exposure_model so the
+    from_preloaded_model path applies BilateralGrid (the standalone
+    from_checkpoint path is covered by the render.py guards above)."""
+    src = _trainer_py_text()
+    # Find the from_preloaded_model call site (only 1 in trainer.py).
+    assert "Renderer.from_preloaded_model(" in src
+    # The block must include exposure_model=self.exposure_model. We accept
+    # whitespace variation but not the omission case.
+    flat = src.replace(" ", "").replace("\n", "")
+    assert "exposure_model=self.exposure_model" in flat, (
+        "T9.3 regression: train-end eval no longer passes self.exposure_model "
+        "to Renderer.from_preloaded_model. Train-end metrics.json would "
+        "measure raw model_output (not bilateral_grid(output)), so V3-P1 "
+        "validation comparisons would be invalid."
+    )

@@ -1529,7 +1529,12 @@ class Trainer3DGRUT:
         if conf.test_last:
             logger.log_rule("Evaluation on Test Set")
 
-            # Renderer test split
+            # Renderer test split. T9.3: pass the live exposure_model so
+            # train-end eval applies the same BilateralGrid (or legacy
+            # ExposureModel) that the train loop applied before loss.
+            # Aligns eval-time raw psnr with the train-time loss target;
+            # previously the v2 ExposureModel退化 mode produced +10.75 dB
+            # raw-vs-cc gap at 30k because eval did NOT apply exposure.
             renderer = Renderer.from_preloaded_model(
                 model=self.model,
                 out_dir=out_dir,
@@ -1539,6 +1544,7 @@ class Trainer3DGRUT:
                 global_step=self.global_step,
                 compute_extra_metrics=conf.compute_extra_metrics,
                 post_processing=self.post_processing,
+                exposure_model=self.exposure_model,
             )
             renderer.render_all()
 

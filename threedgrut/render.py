@@ -49,6 +49,7 @@ class Renderer:
         compute_extra_metrics=True,
         post_processing=None,
         novel_view=False,
+        exposure_model=None,
     ) -> None:
 
         if path:  # Replace the path to the test data
@@ -67,6 +68,14 @@ class Renderer:
         # T8.5.3 / V3-E3: 5x render cost when enabled — 4 extra renders per
         # anchor frame (lateral_1m / lateral_2m / yaw_5deg / yaw_10deg).
         self.novel_view = bool(novel_view)
+        # T9.3 / V3-P1.c: BilateralGrid (or legacy ExposureModel) applied
+        # AFTER model forward + post_processing, BEFORE metrics. Aligns the
+        # eval-time pred_rgb with the train-time loss target (which goes
+        # through trainer.py:1641-1643 exposure_model). None = no-op (legacy
+        # behavior; eval skips correction). Set by from_preloaded_model (live
+        # trainer pass-through) or from_checkpoint (reconstructs from
+        # ckpt["exposure_state"]).
+        self.exposure_model = exposure_model
 
         if conf.model.background.color == "black":
             self.bg_color = torch.zeros((3,), dtype=torch.float32, device="cuda")
@@ -215,6 +224,48 @@ class Renderer:
             num_frames = post_processing.exposure_params.shape[0]
             logger.info(f"📷 {method.upper()} loaded from checkpoint: {num_cameras} cameras, {num_frames} frames")
 
+        # T9.3 / V3-P1.c: rebuild BilateralGrid from ckpt["exposure_state"]
+        # so standalone reload eval applies the same color correction the
+        # trainer applied during training. Without this, raw psnr_masked
+        # measures (model_output vs GT) — which can be arbitrarily far off
+        # if BilateralGrid absorbed cross-channel tone (the v2 ExposureModel
+        # 退化 mechanism). With this, raw psnr_masked measures
+        # (bilateral_grid(model_output) vs GT), matching the train-time loss.
+        #
+        # Legacy v2 ExposureModel ckpts contain {exposure_a, exposure_b}
+        # instead of {grids, _rgb2gray_w} — skip with a warning so v2 ckpts
+        # still load (eval falls back to no exposure applied, matching the
+        # pre-T9.3 behavior for those ckpts).
+        exposure_model = None
+        if "exposure_state" in checkpoint:
+            from threedgrut.correction import BilateralGrid
+
+            module_state = checkpoint["exposure_state"]["module"]
+            if "grids" in module_state:
+                grids = module_state["grids"]
+                N, twelve, L_z, L_y, L_x = grids.shape
+                assert twelve == 12, f"unexpected grids shape {grids.shape}"
+                exposure_model = BilateralGrid(
+                    num_camera=N, grid_X=L_x, grid_Y=L_y, grid_W=L_z,
+                ).to("cuda")
+                exposure_model.load_state_dict(module_state, strict=True)
+                exposure_model.eval()
+                logger.info(
+                    f"📷 BilateralGrid loaded from checkpoint: "
+                    f"{N} cameras, grid={L_x}x{L_y}x{L_z}"
+                )
+            else:
+                legacy_keys = set(module_state.keys()) & {
+                    "exposure_a", "exposure_b",
+                }
+                if legacy_keys:
+                    logger.warning(
+                        f"📷 v2 ckpt exposure_state has legacy keys "
+                        f"{sorted(legacy_keys)} (old ExposureModel); "
+                        f"eval will run without exposure correction "
+                        f"(matches pre-T9.3 behaviour for v2 ckpts)."
+                    )
+
         return Renderer(
             model=model,
             conf=conf,
@@ -226,6 +277,7 @@ class Renderer:
             compute_extra_metrics=computes_extra_metrics,
             post_processing=post_processing,
             novel_view=novel_view,
+            exposure_model=exposure_model,
         )
 
     @classmethod
@@ -240,8 +292,15 @@ class Renderer:
         compute_extra_metrics=False,
         post_processing=None,
         novel_view=False,
+        exposure_model=None,
     ):
-        """Loads checkpoint for test path."""
+        """Loads checkpoint for test path.
+
+        T9.3 / V3-P1.c: accepts ``exposure_model`` so the train-end eval
+        path (trainer.py:1267-1277) can pass ``trainer.exposure_model``
+        directly — keeps eval-time pred_rgb aligned with the train-time
+        loss target. None = no-op (matches pre-T9.3 behavior).
+        """
 
         conf = model.conf
         if global_step is None:
@@ -258,6 +317,7 @@ class Renderer:
             compute_extra_metrics=compute_extra_metrics,
             post_processing=post_processing,
             novel_view=novel_view,
+            exposure_model=exposure_model,
         )
 
     @torch.no_grad()
@@ -387,6 +447,20 @@ class Renderer:
             # Apply post-processing
             if self.post_processing is not None:
                 outputs = apply_post_processing(self.post_processing, outputs, gpu_batch, training=False)
+
+            # T9.3 / V3-P1.c: apply BilateralGrid (or legacy ExposureModel)
+            # color correction so eval-time pred_rgb matches the train-time
+            # loss target (trainer.py:1641-1643 applies the same module
+            # before computing photometric loss). Without this hook, raw
+            # psnr_masked measured (raw_model_output vs GT) while training
+            # optimized (bilateral_grid(model_output) vs GT) — the v2
+            # ExposureModel退化 mode produced a +10.75 dB raw/cc gap at 30k.
+            if self.exposure_model is not None:
+                _cidx = getattr(gpu_batch, "camera_idx", None)
+                if _cidx is not None:
+                    outputs["pred_rgb"] = self.exposure_model(
+                        int(_cidx), outputs["pred_rgb"],
+                    )
 
             pred_rgb_full = outputs["pred_rgb"]
             rgb_gt_full = gpu_batch.rgb_gt
