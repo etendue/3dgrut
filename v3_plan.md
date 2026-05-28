@@ -1024,6 +1024,93 @@ trainer.learnable_pose:
 
 ---
 
+### V3-L5 + V3-L8 + V3-L9 — NuRec dynamic_rigids tricks（2026-05-27）
+
+Branch: `v3-l589-on-main` (基于 origin/main, push 至 https://github.com/etendue/3dgrut/tree/v3-l589-on-main)
+
+**Commits**（cherry-pick from worktree-feat-v3-l589-symmetric onto origin/main）:
+- `c46cf63` feat(V3-L5/L8/L9): NuRec dynamic_rigids tricks — symmetric_axis + per-track albedo/scale
+- `f5ea26d` fix(V3-L589): use Hydra ++ to override existing yaml defaults
+- `9d2e0ff` chore(V3-L589): vast.ai bootstrap + 5k smoke A/B helper scripts
+- `46eba02` docs(CLAUDE): Vast.ai 远程执行环境章节 + 5k A/B 实战经验
+
+**实装范围**（默认全 OFF，通过 `layers.overrides.dynamic_rigids.<key>` 翻转）：
+
+| Trick | 文件 | 行为 |
+|---|---|---|
+| **V3-L5** `symmetric_axis: 'Y'` | `threedgrut/layers/dynamic_rigid_init.py` | LiDAR object-local 点云 y 取负后 concat（subsample cap=5000 前） |
+| **V3-L8** `optimize_track_albedo` | `threedgrut/layers/layered_model.py` | `_track_albedo_table[K,3]` 加到 features_albedo DC SH; warmup=500 翻 requires_grad |
+| **V3-L9** `optimize_track_scale` | `threedgrut/layers/layered_model.py` | `_track_log_scale_table[K,1]` 加到 scale (log-space); 同 warmup |
+| 基础设施 | `registry.py` extra-key 白名单 / `trainer.py` warmup hook / `render.py` 4 metrics 字段 / `multilayer.yaml` 默认 OFF | — |
+
+**Mac 单测**：v3-l589-on-main worktree **133 PASS / 0 regression**（43 新增/扩展测试 + main 新增 test_render_per_camera.py 都过）。
+
+#### 5k smoke A/B（vast.ai RTX 4090, **非对称 5cam** with rear_tele_30，2026-05-27 早期）
+
+vast 38003930 RTX 4090, 10.97 it/s, 7.6 min train + 8 min eval per run。Note: 这是在 main 切对称 5cam 之前跑的，**baseline 不能直接与 30k 对比**。
+
+| 指标 | 5k Baseline (OFF) | 5k Experiment (ON) | Δ |
+|---|---:|---:|---:|
+| mean_cc_psnr_masked | 23.290 | 23.536 | **+0.246** |
+| mean_class_psnr | 20.295 | 20.296 | +0.001 |
+| heavy_truck_psnr | 21.563 | 21.709 | **+0.146** |
+| bus_psnr | 22.161 | 22.309 | **+0.149** |
+| class_psnr_n_low_15db | 500 | 435 | **−65 (−13%) ✅** |
+| track_albedo_l2_mean | null | 6.9e-4 | (warmup 不足) |
+| track_log_scale_std | null | 3.4e-3 | (warmup 不足) |
+
+**5k 结论**：V3-L5 信号正向（heavy_truck/bus +0.15, n_low_15db −13%）；V3-L8/L9 未充分激活（track_*_std ≈ 0）。
+
+#### 30k full A/B（A800 GPU 1, **对称 5cam** with rear_right_70，main baseline 26.04）
+
+A800 SXM4-80GB, 6.89 it/s, 72.5 min train + 8 min eval per run。Baseline `mean_cc_psnr_masked = 25.99 dB` **与 main report E2b 30k=26.04 仅差 −0.05 dB → 实验环境与 main 完全一致 ✅**。
+
+| 指标 | 30k Baseline (OFF, 对称5cam) | 30k Experiment (ON) | Δ | 5k Δ 对照 |
+|---|---:|---:|---:|---|
+| mean_psnr_masked | 15.68 | 15.41 | −0.27 | (5k: −0.32 同向) |
+| **mean_cc_psnr_masked** | **25.99** | **26.03** | **+0.04** | (5k: +0.25 ↓信号严重弱化) |
+| mean_cc_psnr | 23.88 | 23.88 | 0.00 | (5k: +0.23 ↓) |
+| **mean_class_psnr** | 17.73 | 17.61 | **−0.12** | (5k: 0.00 ↓**反向**) |
+| automobile_psnr | 17.65 | 17.51 | −0.14 | (5k: −0.01 ↓加剧) |
+| heavy_truck_psnr | 17.87 | **17.99** | +0.12 | (5k: +0.15 ≈) |
+| bus_psnr | 19.86 | 19.88 | +0.02 | (5k: +0.15 ↓) |
+| **class_psnr_n_low_15db** | 1042 | **1260** | **+218 (+21%) ❌** | (5k: −65 (−13%) ✅ **反转！**) |
+| (per-camera) front_wide_120 cc_psnr_masked | 21.82 | 21.78 | −0.04 | — |
+| (per-camera) rear_right_70 cc_psnr_masked | 27.50 | 27.77 | +0.27 | — |
+
+**⚠️ 30k 结果与 5k 趋势反转**：
+
+| 现象 | 5k smoke | 30k full | 解读 |
+|---|---|---|---|
+| n_low_15db | **−13%** ✅ | **+21%** ❌ | 5k 把"困难"车辆区域救回，30k 反而推垮更多 |
+| heavy_truck Δ | +0.146 | +0.12 | 量级差不多但 30k 偏弱 |
+| bus Δ | +0.149 | +0.02 | 30k 几乎归零 |
+| mean_cc_psnr_masked Δ | +0.25 | +0.04 | 30k 几乎归零 |
+
+⚠️ **A800 是 rsync mirror，experiment 30k 的 eval 在另一个并行 task (`multilayer_poseopt` 16:45 启动) overwrite render.py 之后跑**，所以 experiment metrics.json 缺失 4 个 V3 diagnostic 字段 (`symmetric_axis`, `track_albedo_l2_mean`, `track_log_scale_mean`, `track_log_scale_std`)。但**训练本身不受影响** — baseline metrics.json 含 V3 null 字段证明 render.py 在 baseline 跑时正确；experiment 训练时 ⚡ V3-L8/L9 warmup at step 500 实测触发证明 trainer.py + layered_model.py 是 V3 版本。**如需 diagnostic 数值，可从 ckpt 后处理（experiment ckpt `_track_albedo_table` / `_track_log_scale_table` Parameter 仍在）**。
+
+**Run 信息**：
+- A800 baseline: `/root/work/yusun/ncore-nurec/output/v3_L589_baseline_30k_2605_27_144607/`
+- A800 experiment: `/root/work/yusun/ncore-nurec/output/v3_L589_on_30k_2605_27_144607/`
+- 本地 archive: `/Users/etendue/repo/report/v3_L589_30k_results/{baseline_OFF,experiment_ON}/`
+- 5k vast archive: `/Users/etendue/repo/report/v3_L589_5k_results/`
+- Plan 文件：`/Users/etendue/.claude/plans/users-etendue-repo-report-nurec-av-usdz-crystalline-toast.md`
+
+**结论 + Follow-up 任务（V3-L589 不可直接 merge to main，需要 ablation 后再定）**：
+
+1. **V3-L5/L8/L9 全开** 在 30k 长跑出现副作用（n_low_15db +21%），不能合 main
+2. **可能成因**：V3-L8/L9 (per-track albedo/scale) 在 30k 才真正激活（warmup=500 后 29500 步 cosine decay LR 1e-5 累积），但**学过头**让 dyn 层 track-level offset 推到错误方向，加上 V3-L5 init 增强翻倍 dyn 粒子，让 cuboid 内分布不稳
+3. **关键 ablation 必须分开做**：
+   - **V3-L5b** sym=Y only（albedo=false, scale=false） — 隔离 init 增强单独效果，30k 数据是否仍维持 5k 的 +0.15 dB 趋势？
+   - **V3-L8b** albedo only — 单独激活 albedo 在 30k 的效果
+   - **V3-L9b** scale only — 同上 for scale
+   - **V3-L8/L9 调参**：warmup_steps 500→5000, lr 1e-5→1e-6，避免学过头
+4. **5k smoke 信号过于早期**，30k 才暴露真实效果 — **未来类似 NuRec tricks 评估必须 30k 起步**，不要再用 5k smoke 作 acceptance gate
+
+**关联未来 task**：V3-L5b（sym only 30k）；V3-L8b / V3-L9b（单独激活 30k）；V3-L8/L9 LR ablation（warmup ↑ + lr ↓）。
+
+---
+
 ## 6. v3 工作流补充（在 CLAUDE.md 基础上）
 
 CLAUDE.md 已有 v2 工作流（A800 远程执行 + 把关清单 A/B/C + 任务完成同步文档）继续适用。v3 增加以下补充：
