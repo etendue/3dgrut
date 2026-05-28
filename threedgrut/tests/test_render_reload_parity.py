@@ -308,3 +308,55 @@ def test_trainer_py_passes_exposure_model_to_from_preloaded_model():
         "measure raw model_output (not bilateral_grid(output)), so V3-P1 "
         "validation comparisons would be invalid."
     )
+
+
+# T9.4 / V3-P1.d: source-level guards for BilateralGrid health monitoring ----
+
+def test_trainer_py_t9_4_logs_exposure_grids_std():
+    """Per log_frequency train step must emit exposure/grids_std + drift +
+    lr + frozen scalars when exposure_model has a 'grids' attr (BilateralGrid)."""
+    src = _trainer_py_text()
+    assert '"exposure/grids_std"' in src, (
+        "T9.4 regression: exposure/grids_std scalar removed from per-train-step "
+        "log block. health monitoring of BilateralGrid retired."
+    )
+    assert '"exposure/grids_drift_from_identity"' in src, (
+        "T9.4 regression: drift-from-identity gauge missing. v3_plan §2.1 "
+        "退化 indicator gone — won't catch BilateralGrid absorbing tone."
+    )
+    assert '"exposure/lr"' in src and '"exposure/frozen"' in src, (
+        "T9.4 regression: cosine-LR / freeze-gate trace missing."
+    )
+
+
+def test_trainer_py_t9_4_logs_raw_minus_cc_gap():
+    """log_validation_pass must compute and log exposure/raw_minus_cc_db_val
+    when exposure_model is in play. Also wires a >2 dB warn."""
+    src = _trainer_py_text()
+    assert '"exposure/raw_minus_cc_db_val"' in src, (
+        "T9.4 regression: raw-vs-cc gap scalar missing from val logging. "
+        "Can't track V3-P1 ≤ 2 dB acceptance through training."
+    )
+    assert '"exposure/raw_minus_cc_db_masked_val"' in src, (
+        "T9.4 regression: masked variant (ego mask applied) missing. "
+        "Acceptance is on masked metrics per v3_plan §2.1."
+    )
+    # Warn must include a freeze-window buffer so it doesn't fire while
+    # BilateralGrid is still frozen at identity.
+    assert "warn_after" in src and "exposure_freeze_until_iter" in src
+    assert "[T9.4 alert]" in src
+
+
+def test_trainer_py_t9_4_computes_cc_psnr_in_val_metrics():
+    """get_metrics(split=='validation') must compute cc_psnr (+ masked) when
+    exposure_model is on, otherwise log_validation_pass has no data to
+    write the gap scalars from."""
+    src = _trainer_py_text()
+    assert 'metrics["cc_psnr"]' in src, (
+        "T9.4 regression: cc_psnr not populated in val metrics; the val "
+        "gap scalar will silently no-op forever."
+    )
+    assert "color_correct_affine" in src, (
+        "T9.4 regression: cc_psnr computation removed — gap monitoring "
+        "would emit zero or stale data."
+    )

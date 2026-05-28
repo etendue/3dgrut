@@ -910,6 +910,25 @@ class Trainer3DGRUT:
                 metrics["ssim_masked"] = metrics["ssim"]
                 metrics["lpips_masked"] = metrics["lpips"]
 
+            # T9.4 / V3-P1.d: cc_psnr (+ masked) for the V3-P1 acceptance
+            # criterion "raw vs cc gap ≤ 2 dB" — only computed when an
+            # exposure_model is in play (otherwise the gap is just normal
+            # tone correction noise, not a退化 signal). Cheap: same shape
+            # as raw, one per-image affine fit. Logged downstream by
+            # log_validation_pass as exposure/raw_minus_cc_db_val.
+            if self.exposure_model is not None:
+                from threedgrut.utils.color_correct import color_correct_affine
+                rgb_pred_cc = color_correct_affine(rgb_pred, rgb_gt)
+                metrics["cc_psnr"] = psnr(rgb_pred_cc, rgb_gt).item()
+                if mask is not None:
+                    diff_sq_cc = (rgb_pred_cc - rgb_gt).pow(2) * mask
+                    mse_masked_cc = diff_sq_cc.sum() / denom
+                    metrics["cc_psnr_masked"] = (
+                        -10.0 * torch.log10(mse_masked_cc.clamp(min=1e-10))
+                    ).item()
+                else:
+                    metrics["cc_psnr_masked"] = metrics["cc_psnr"]
+
             if iteration in self.conf.writer.log_image_views:
                 metrics["img_hit_counts"] = jet_map(outputs["hits_count"][-1], self.conf.writer.max_num_hits)
                 metrics["img_gt"] = gpu_batch.rgb_gt[-1].clip(0, 1.0)
@@ -1341,6 +1360,45 @@ class Trainer3DGRUT:
         writer.add_scalar("psnr/val", mean_psnr, global_step)
         writer.add_scalar("ssim/val", np.mean(metrics["ssim"]), global_step)
         writer.add_scalar("lpips/val", np.mean(metrics["lpips"]), global_step)
+
+        # T9.4 / V3-P1.d: BilateralGrid退化 health gauge — raw vs cc gap.
+        # v2 ExposureModel退化 mode at 30k produced raw_psnr_masked 15.29 /
+        # cc_psnr_masked 26.04 = +10.75 dB gap (cc dominates because raw
+        # output drifted far from GT and the eval-time affine fit picked up
+        # the slack). v3_plan §2.1 target: gap ≤ 2 dB. Only logged when
+        # exposure_model is on (cc_psnr is in metrics dict iff get_metrics
+        # added it under self.exposure_model branch).
+        if "cc_psnr" in metrics:
+            mean_cc_psnr = float(np.mean(metrics["cc_psnr"]))
+            mean_cc_psnr_masked = float(np.mean(metrics["cc_psnr_masked"]))
+            mean_psnr_masked = float(np.mean(metrics["psnr_masked"]))
+            gap_db = mean_cc_psnr - mean_psnr  # signed: + means cc > raw
+            gap_db_masked = mean_cc_psnr_masked - mean_psnr_masked
+            writer.add_scalar("cc_psnr/val", mean_cc_psnr, global_step)
+            writer.add_scalar("cc_psnr_masked/val", mean_cc_psnr_masked, global_step)
+            writer.add_scalar(
+                "exposure/raw_minus_cc_db_val", -gap_db, global_step,
+            )
+            writer.add_scalar(
+                "exposure/raw_minus_cc_db_masked_val",
+                -gap_db_masked,
+                global_step,
+            )
+            # Warn only after BilateralGrid has had a fair chance to learn
+            # past the freeze window + a small buffer. Catches退化 mode if
+            # raw vs cc drifts apart > 2 dB late in training.
+            warn_after = self.exposure_freeze_until_iter + 500
+            if (
+                global_step > warn_after
+                and abs(gap_db_masked) > 2.0
+            ):
+                logger.warning(
+                    f"📷 [T9.4 alert] exposure raw_minus_cc gap = "
+                    f"{-gap_db_masked:+.2f} dB at step {global_step} "
+                    f"(|gap|>2 dB target). v2 ExposureModel退化 mode "
+                    f"signal — BilateralGrid may be absorbing too much "
+                    f"tone or Gaussians too little. See v3_plan.md §2.1."
+                )
         writer.add_scalar("hits/min/val", np.mean(metrics["hits_min"]), global_step)
         writer.add_scalar("hits/max/val", np.mean(metrics["hits_max"]), global_step)
         writer.add_scalar("hits/mean/val", np.mean(metrics["hits_mean"]), global_step)
@@ -1419,6 +1477,52 @@ class Trainer3DGRUT:
                 writer.add_scalar("hits/min/train", batch_metrics["hits_min"], self.global_step)
             if "hits_max" in batch_metrics:
                 writer.add_scalar("hits/max/train", batch_metrics["hits_max"], self.global_step)
+
+            # T9.4 / V3-P1.d: BilateralGrid health monitoring. Cheap stats
+            # (no eval-time renders); fires every log_frequency step.
+            # Tracks:
+            #   exposure/grids_std            — overall magnitude of the
+            #       BilateralGrid Parameter; identity init has std ~0.4367
+            #       (12-elem 3x4 with 3 ones + 9 zeros). Monotonic increase
+            #       past unfreeze signals BilateralGrid absorbing tone.
+            #   exposure/grids_drift_from_identity — mean |grids - identity|.
+            #       The v3_plan §2.1 退化 indicator; identity-init = 0.
+            #       Should stay small (~<0.05) at 30k for a healthy v3
+            #       BilateralGrid; v2 ExposureModel退化 mode at 30k pushed
+            #       grids equivalent (exp(a), b) far from identity.
+            #   exposure/lr                   — current cosine-annealed LR.
+            #   exposure/frozen               — 1.0 while step <
+            #       freeze_until_iter, 0.0 once AdamW starts stepping.
+            if self.exposure_model is not None and hasattr(self.exposure_model, "grids"):
+                with torch.no_grad():
+                    grids = self.exposure_model.grids
+                    writer.add_scalar(
+                        "exposure/grids_std",
+                        float(grids.std().item()),
+                        self.global_step,
+                    )
+                    # Identity tile across all voxels; compute drift mean(|·|).
+                    identity_3x4 = torch.tensor(
+                        [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0]],
+                        device=grids.device, dtype=grids.dtype,
+                    ).reshape(12, 1, 1, 1)
+                    drift = (grids - identity_3x4).abs().mean().item()
+                    writer.add_scalar(
+                        "exposure/grids_drift_from_identity",
+                        float(drift),
+                        self.global_step,
+                    )
+                if self.exposure_optimizer is not None:
+                    writer.add_scalar(
+                        "exposure/lr",
+                        float(self.exposure_optimizer.param_groups[0]["lr"]),
+                        self.global_step,
+                    )
+                writer.add_scalar(
+                    "exposure/frozen",
+                    1.0 if self.global_step < self.exposure_freeze_until_iter else 0.0,
+                    self.global_step,
+                )
 
             if "timings" in batch_metrics:
                 for time_key in batch_metrics["timings"]:
