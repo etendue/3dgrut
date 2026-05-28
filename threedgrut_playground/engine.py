@@ -1342,11 +1342,20 @@ class Engine3DGRUT:
                     checkpoint.get("model", {}).get("scene_extent", 1.0)
                 )
                 model = LayeredGaussians(conf, specs=specs, scene_extent=scene_extent)
-                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
-                # Restore dynamic-rigid track buffers from ckpt["viz_4d"]["tracks"]
-                # so fused_view can SE(3)-transform dynamic positions per timestamp.
-                # Skipped silently when the ckpt has no viz_4d block (e.g. trained
-                # before T8.2) — viewer falls back to static dynamic layer.
+                # V3 Stage A/B/D.2 bugfix: ``populate_tracks`` MUST run BEFORE
+                # ``init_from_checkpoint`` for learnable_pose ckpts. Reason:
+                # ``LayeredGaussians.init_from_checkpoint`` (layered_model.py
+                # L632-672) calls ``load_state_dict(layered_track_state,
+                # strict=False)`` to restore _track_quat_/_track_trans_/
+                # _track_pose_gt_/_track_active_ entries — but
+                # ``load_state_dict`` only writes into pre-existing slots, and
+                # those slots are created by ``populate_tracks``. If we call
+                # them in the wrong order, the learned Parameter values are
+                # silently dropped ("unexpected keys" warning) and the model
+                # ends up with GT-init values from tracks_dict instead of the
+                # ckpt's learned poses. The trainer's order is correct (see
+                # trainer.init_model L386-449); engine.py and render.py both
+                # had this inverted since V3-E4.1 — fixed simultaneously.
                 viz_4d = checkpoint.get("viz_4d")
                 if viz_4d is not None and isinstance(viz_4d, dict):
                     tracks_dict = viz_4d.get("tracks")
@@ -1358,6 +1367,7 @@ class Engine3DGRUT:
                         first_tid = next(iter(tracks_dict))
                         tracks_dict[first_tid]["cam_timestamps_us"] = shared_ts
                         model.populate_tracks(tracks_dict)
+                model.init_from_checkpoint(checkpoint, setup_optimizer=False)
             else:
                 model = MixtureOfGaussians(conf)
                 model.init_from_checkpoint(checkpoint, setup_optimizer=False)

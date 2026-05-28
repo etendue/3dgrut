@@ -1133,6 +1133,58 @@ Active mask: `a[f-1]=a[f]=a[f+1]=1` 三连活跃才计入（避免跨 active 边
 - ~~双视图 / BEV / per-track drift 直方图 viz~~ → ✅ Stage D.3 完成（下条）
 - A800 长训（用户暂缓 merge main）
 
+### ✅ V3-E4.1 follow-up — `populate_tracks` MUST precede `init_from_checkpoint` (2026-05-28, A800 30k Stage B 验证)
+
+**触发**: D.2 三联图（昨日）在 Stage A 30k ckpt 上 diff max ≈ 0.0016（amplify=50 仍黑屏），原归因为 "drift 太小，pixel space 看不见"。今早在 A800 启 viser 看 Stage B 30k 时打出 `[WARNING] Unexpected layered_track_state keys (first 5): ['_track_quat_41', '_track_trans_41', ...]` — **真实根因暴露**：viser 引擎和 render.py 都在 `init_from_checkpoint` 之后才 `populate_tracks`，导致 `load_state_dict(layered_track_state)` 在空 model 上跑，所有 `_track_quat_<tid>` / `_track_trans_<tid>` 被报告为 unexpected keys 并**静默丢弃**；随后 `populate_tracks` 创建 Parameter slots 时只能从 `tracks_dict` 的 GT 值初始化。
+
+**后果**: ckpt 里学到的 learned pose **永远没被加载**，viser + standalone render.py 实际上一直在渲染"GT-init"而不是 trained learned pose。D.2 的 `set_pose_source("learned")` 和 `set_pose_source("gt")` 实际读到几乎相同内容 → diff ≈ 0。这影响所有 Stage A/B learnable ckpt 的离线渲染路径，**不影响训练**（trainer 顺序正确，见 trainer.init_model L386-449）。**不影响 D.3** `analyze_pose_drift.py`（直接 `torch.load(ckpt)` 读 state_dict）。
+
+**改动 (3 files, +132 / -4 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `threedgrut_playground/engine.py` | 把 `populate_tracks(tracks_dict)` 移到 `init_from_checkpoint(checkpoint)` 之前，加 11 行解释注释指 trainer.init_model L386-449 |
+| `threedgrut/render.py` | 同上，加同样 12 行注释 |
+| `threedgrut/tests/test_render_reload_parity.py` | NEW 3 个测试 (+128 行)：(1) 源码 guard — engine.py 中 `populate_tracks` 出现在 `init_from_checkpoint` 之前（slice idx 比较）；(2) 同样源码 guard — render.py；(3) 行为测试 — 构造含"learned" `_track_quat_<tid>` 值的 fake layered_track_state（与 GT 不同），运行正确顺序 load，断言 `model._track_quat_<tid>` 等于 fake learned 值；额外 canary 测试断言**错误**顺序确实产生 unexpected_keys（如果未来 LayeredGaussians 改成 eager pose slot 创建，canary 会失败提示） |
+
+**Mac 单测**: `test_render_reload_parity.py` **10/10 pass** (含原 7 + 新 3) + `test_learnable_pose_param.py` 15/15 + `test_pose_source_flag.py` 8/8 — **33/33 全过** 0.86s 0 回归。
+
+**A800 实测验证 (Stage B 30k ckpt)**:
+
+1. **viser 重启后 warning 消失 ✅** — `tail /tmp/viser_stageB_30k.log` 不再有 "Unexpected layered_track_state keys"，FTheta intrinsics 加载 + 7 个 camera 就位 + listening *:8080
+2. **D.3 `analyze_pose_drift --plot` (D.3 不受 bug 影响，直接 torch.load 读 state_dict)**:
+
+| 指标 | Stage A 30k (λ=0) | **Stage B 30k (λ_t=1e-2, λ_r=1e-1)** | Δ |
+|---|---|---|---|
+| trans median (m) | 0.0162 | **0.0249** | +54% |
+| trans p90 (m) | 0.0358 | **0.1414** | **+295%** |
+| trans p99 (m) | 0.0529 | **0.3163** | **+498%** (~6×) |
+| trans max (m) | 0.0755 | **1.1936** | **+1481%** (~16×, 命中 1500-iter B2 外推预期) |
+| trans mean (m) | 0.0166 | 0.0486 | +193% |
+| rot median (°) | 0.190 | 0.153 | -19% |
+| rot p99 (°) | 0.638 | 0.881 | +38% |
+| rot max (°) | 1.097 | **21.045** | **+1820%** (tid 278 短轨迹边缘) |
+
+   **Top-5 drift tracks 全是 F_active ≤ 21 的短轨迹** (tid 278/292/414 F=9, tid 458 F=21, tid 502 F=65)，smoothness reg 在 track 边界处保护性弱。整体 trans p99 316mm 仍远小于 1m 安全阈，rot p99 0.88° 远小于 5°。
+
+3. **D.2 `render_learned_vs_gt --num-samples 8 --diff-amplify 30` (这是 bug 修复后真信号)**:
+
+| sample | camera | diff mean | diff max |
+|---|---|---|---|
+| 0 | front_wide_120 | 0.00148 | 0.65440 |
+| 1 | front_wide_120 | 0.00056 | 0.27418 |
+| 2 | cross_left_120 | 0.00009 | 0.76862 |
+| 3 | cross_left_120 | 0.00376 | 0.70355 |
+| 4 | cross_right_120 | 0.00000 | 0.00000 |
+| 5 | rear_left_70 | 0.00021 | 0.54331 |
+| **6** | rear_left_70 | **0.02972** | **0.88334** |
+| 7 | rear_right_70 | 0.00300 | 0.81356 |
+
+   sample 4 全 0 是因为该帧无 dyn cuboid 在 frame 内（远端）；其他 7 张 diff 都正常亮起。**sample 6 看到银色 SUV 整体轮廓在 diff 列高亮**（车窗 + 引擎盖 + 轮拱），photo-证明 Stage B learned 把 SUV 推到了 ~50cm 偏移位置。**对照昨天 (bug 状态) diff max 0.0016 → 现在 0.88 = 550× 强**。
+
+**关键不变量** (写入 architecture):
+- INV-CKPT-LOAD-1: `LayeredGaussians.populate_tracks()` MUST run before `init_from_checkpoint()` for layered ckpts. Regression: test_render_reload_parity.py source guards + behavioural assertion.
+
 ### ✅ V3 Stage D.2 — `render_learned_vs_gt.py` + `LayeredGaussians.pose_source` flag (2026-05-27, Mac edit + ThinkPad RTX 4090 验证)
 
 **目标**: 在已学完的 ckpt 上以 GT pose render 一遍、以 learned pose render 一遍，并排显示 + 像素差异 — 把 Stage A/B 学到了什么从数字（drift mm/°）变成视觉可证。
