@@ -1133,6 +1133,38 @@ Active mask: `a[f-1]=a[f]=a[f+1]=1` 三连活跃才计入（避免跨 active 边
 - ~~双视图 / BEV / per-track drift 直方图 viz~~ → ✅ Stage D.3 完成（下条）
 - A800 长训（用户暂缓 merge main）
 
+### ✅ V3 pose_adjustment — 用户友好 yaml alias (2026-05-28, Mac, default disable)
+
+**触发**: 用户要求把整套 V3 pose learning feature (Stage A learnable pose + Stage B smoothness reg) 打包成单一顶层选项，三个用户接口：`enabled` / `lambda_t` / `lambda_r`，默认 disable。
+
+**设计决策**: **不改内部代码** — 通过 OmegaConf 字符串 interpolation `${...}` 在 yaml 层做 alias。内部 `trainer.learnable_pose.*` 保留为实现细节（ckpt schema 用 `learnable_pose_state` key，改实现名会破坏 ckpt 向后兼容）。
+
+**改动 (3 files, +90 / -15 行)**:
+
+| 文件 | 改动 |
+|---|---|
+| `configs/base_gs.yaml` | 新增 `trainer.pose_adjustment: { enabled: false, lambda_t: 0.0, lambda_r: 0.0 }` 用户友好顶层节；`trainer.learnable_pose` 的 3 个对应字段改为 `${trainer.pose_adjustment.*}` interpolation；保留 lr_rotation / lr_translation / freeze_until_iter / lambda_pose_prior_* 为高级 CLI override |
+| `configs/apps/ncore_3dgut_mcmc_multilayer_poseopt.yaml` | 从 `learnable_pose: { enabled: true, lambda_temporal_smooth_trans/_rot: 1e-2/1e-1 }` 简化为 `pose_adjustment: { enabled: true, lambda_t: 1e-2, lambda_r: 1e-1 }`（compose 结果完全等价） |
+| `threedgrut/tests/test_pose_adjustment_alias.py` | NEW — 6 个测试：default off / enabled forward / lambdas forward / **legacy CLI** `trainer.learnable_pose.enabled=true` 仍可用（backward compat，OmegaConf 把 interpolation 替换为 literal） / 高级字段 (lr/freeze) 仍 CLI 可达 / multilayer_poseopt.yaml 端到端 |
+
+**用户接口（CLAUDE.md 已更新）**:
+
+```bash
+# 方式 1: multilayer + CLI
+python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+  trainer.pose_adjustment.enabled=true \
+  trainer.pose_adjustment.lambda_t=1e-2 \
+  trainer.pose_adjustment.lambda_r=1e-1 ...
+
+# 方式 2: 预设 yaml（lambdas 已固化）
+python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_poseopt ...
+```
+
+**Mac 全 V3 单测**: 50 passed + 3 skipped (1.01s) — `test_pose_adjustment_alias.py` 6/6 + `test_learnable_pose_param` 15/15 + `test_learnable_pose_smoothness` 11/11 + 3 skip + `test_pose_source_flag` 8/8 + `test_render_reload_parity` 10/10。0 回归，**所有原 `trainer.learnable_pose.enabled=true` CLI override 测试仍通过**。
+
+**关键不变量**:
+- INV-YAML-1: `trainer.pose_adjustment.{enabled,lambda_t,lambda_r}` 通过 OmegaConf interpolation 转发到 `trainer.learnable_pose.{enabled, lambda_temporal_smooth_trans, lambda_temporal_smooth_rot}`；直接 override 内部 key 仍可用（backward compat）。回归: test_pose_adjustment_alias.py
+
 ### ✅ V3-E4.1 follow-up — `populate_tracks` MUST precede `init_from_checkpoint` (2026-05-28, A800 30k Stage B 验证)
 
 **触发**: D.2 三联图（昨日）在 Stage A 30k ckpt 上 diff max ≈ 0.0016（amplify=50 仍黑屏），原归因为 "drift 太小，pixel space 看不见"。今早在 A800 启 viser 看 Stage B 30k 时打出 `[WARNING] Unexpected layered_track_state keys (first 5): ['_track_quat_41', '_track_trans_41', ...]` — **真实根因暴露**：viser 引擎和 render.py 都在 `init_from_checkpoint` 之后才 `populate_tracks`，导致 `load_state_dict(layered_track_state)` 在空 model 上跑，所有 `_track_quat_<tid>` / `_track_trans_<tid>` 被报告为 unexpected keys 并**静默丢弃**；随后 `populate_tracks` 创建 Parameter slots 时只能从 `tracks_dict` 的 GT 值初始化。

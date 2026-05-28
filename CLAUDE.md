@@ -83,6 +83,30 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH \
 - **exposure 默认 ON**（与 dynfix 等价），如做 ablation/复跑 baseline 加 `trainer.use_exposure=false`（详见 v2_plan.md § 14.5 V3-P1）。
 - **dataset path 必须是 manifest json 文件**（`pai_<clip>.json`），不是 clip 目录。
 
+### Optional — V3 pose_adjustment（学习 dynamic cuboid 的 pose）
+
+默认 disable（v2 byte-identical）；启用方式：
+
+```bash
+# 方式 1：直接用 multilayer，CLI 打开
+python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+  trainer.pose_adjustment.enabled=true \
+  trainer.pose_adjustment.lambda_t=1e-2 \
+  trainer.pose_adjustment.lambda_r=1e-1 \
+  ...
+
+# 方式 2：用预设 yaml（lambdas 已固化为 DriveStudio 默认 1e-2 / 1e-1）
+python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_poseopt \
+  ...
+```
+
+三个用户接口：
+- `trainer.pose_adjustment.enabled` — 总开关（默认 false）
+- `trainer.pose_adjustment.lambda_t` — temporal smoothness 强度 (translation)
+- `trainer.pose_adjustment.lambda_r` — temporal smoothness 强度 (rotation)
+
+高级参数（lr / freeze_until_iter / pose-prior 占位）仍在 `trainer.learnable_pose.*` 内部 key，CLI 直接 override 即可（旧脚本也保留 backward-compat）。
+
 ## v2 开发工作流（分层高斯）
 
 v2 分层高斯（LayeredGaussians）工作以两份活文档驱动：
