@@ -705,19 +705,28 @@ class Trainer3DGRUT:
             lr=exposure_lr,
             weight_decay=weight_decay,
         )
-        # CosineAnnealingLR over the full training horizon. n_iterations
-        # comes from conf (root level, not trainer.) — same source as the
-        # main loop bound.
-        T_max = int(getattr(conf, "n_iterations", 30000))
+        # T9.2 fix: CosineAnnealingLR over the BilateralGrid's ACTUAL
+        # training horizon — n_iterations minus the freeze window. Together
+        # with the paired-step gate in the main loop (scheduler.step() only
+        # when optim.step() runs), this:
+        #   (a) avoids the PyTorch UserWarning about sched-before-optim
+        #       when scheduler ticks during the freeze window,
+        #   (b) lets the cosine curve fully decay to ~0 by end of
+        #       training instead of plateauing mid-cosine at the
+        #       freeze-shortened horizon.
+        # Example: n_iterations=30000, freeze=2000 → T_max=28000; cosine
+        # spans steps 2000-30000 inclusive.
+        n_iters = int(getattr(conf, "n_iterations", 30000))
+        T_max = max(n_iters - self.exposure_freeze_until_iter, 1)
         self.exposure_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.exposure_optimizer, T_max=max(T_max, 1),
+            self.exposure_optimizer, T_max=T_max,
         )
         logger.info(
             f"📷 BilateralGrid initialized: {num_camera} cameras, "
             f"grid={grid_X}x{grid_Y}x{grid_W}, lr={exposure_lr}, "
             f"weight_decay={weight_decay}, "
             f"freeze_until={self.exposure_freeze_until_iter}, "
-            f"cosine T_max={T_max}"
+            f"cosine T_max={T_max} (= n_iter {n_iters} - freeze)"
         )
 
         # Restore from checkpoint if resuming.
@@ -1910,15 +1919,19 @@ class Trainer3DGRUT:
         # T6.2 / T9.2: per-camera exposure optimizer step (independent of MoG opt).
         # T9.2 / V3-P1.b: gate the Adam step on freeze_until — let Gaussians
         # absorb tone first; mirror the pose_optimizer freeze pattern below.
-        # Always zero grads (backward populated them) + always step scheduler
-        # so the LR profile is independent of the freeze gate.
+        # Always zero grads (backward populated them so we don't carry stale
+        # ones into the unfreeze step). T9.2 fix: scheduler.step() ALSO gated
+        # on the same condition — calling sched.step() before optim.step()
+        # triggers PyTorch's "ordering" UserWarning every iteration during the
+        # 2k-step freeze window. Pairing them means cosine T_max should be
+        # (n_iterations - freeze_until) — set above in init_exposure_model.
         if self.exposure_optimizer is not None:
             with torch.cuda.nvtx.range(f"train_{global_step}_exposure_opt"):
                 if global_step >= self.exposure_freeze_until_iter:
                     self.exposure_optimizer.step()
+                    if self.exposure_scheduler is not None:
+                        self.exposure_scheduler.step()
                 self.exposure_optimizer.zero_grad(set_to_none=True)
-                if self.exposure_scheduler is not None:
-                    self.exposure_scheduler.step()
 
         # V3 Stage A: per-track learnable pose optimizer step. During the
         # freeze warmup we still clear gradients (backward already populated

@@ -566,3 +566,49 @@ def test_load_state_dict_before_populate_drops_learned_pose_unexpected():
         "change worth investigating."
     )
     assert "_track_trans_10" in unexpected_set
+
+
+# T9.2 fix: scheduler step paired with optim step (avoid PyTorch warn) -------
+
+def test_trainer_py_t9_2_scheduler_step_paired_with_optim_step():
+    """T9.2 fix: exposure_scheduler.step() must be INSIDE the
+    `if global_step >= freeze_until` block, paired with optimizer.step().
+    Calling sched.step() before optim.step() during the freeze window
+    triggers PyTorch's UserWarning + silently skips the first lr value.
+    """
+    src = _trainer_py_text()
+    # Find the exposure-opt block (between cuda.nvtx range marker and end).
+    nvtx_marker = 'cuda.nvtx.range(f"train_{global_step}_exposure_opt")'
+    assert nvtx_marker in src, "exposure_opt nvtx block missing"
+    block_start = src.find(nvtx_marker)
+    block_end = src.find("\n        # ", block_start + len(nvtx_marker))
+    block = src[block_start:block_end]
+    # Inside this block, find the `if global_step >= self.exposure_freeze_until_iter`
+    # gate. exposure_scheduler.step() must appear INSIDE this gate (after
+    # optimizer.step()), not after the gate (which would tick the scheduler
+    # during freeze).
+    gate = "if global_step >= self.exposure_freeze_until_iter:"
+    assert gate in block
+    gate_idx = block.find(gate)
+    scheduler_idx = block.find("exposure_scheduler.step()")
+    assert scheduler_idx > gate_idx, (
+        "T9.2 fix regression: exposure_scheduler.step() must be after "
+        "(inside) the freeze_until gate. Otherwise scheduler ticks during "
+        "the freeze window with optim.step() never called → PyTorch warns "
+        "and the first lr value is silently dropped."
+    )
+
+
+def test_trainer_py_t9_2_cosine_t_max_minus_freeze():
+    """T9.2 fix: CosineAnnealingLR T_max must be (n_iterations - freeze_until_iter),
+    not n_iterations. Pairing sched.step() to optim.step() means the
+    BilateralGrid's actual training window is (n_iter - freeze) steps —
+    cosine must span exactly that window or it plateaus mid-curve."""
+    src = _trainer_py_text()
+    flat = src.replace(" ", "").replace("\n", "")
+    # The exact computation we expect; tolerate the simple form.
+    assert "n_iters-self.exposure_freeze_until_iter" in flat, (
+        "T9.2 fix regression: cosine T_max should be (n_iter - freeze_until)."
+        " If T_max stays = n_iter, cosine plateaus at lr0*0.011 at end of "
+        "training instead of decaying to ~0."
+    )
