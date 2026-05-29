@@ -50,3 +50,24 @@ def test_multi_point_to_same_pixel_takes_nearest():
     valid = np.array([True, True])
     dmap = scatter_depth_map(uv, ray_d, valid, H=200, W=200)
     assert dmap[100, 100] == pytest.approx(5.0, abs=1e-6)
+
+
+def test_scatter_all_invalid_returns_zeros():
+    """A frame where 0 LiDAR points are valid → all-zero depth map, no crash."""
+    from scripts.dump_lidar_depth_map import scatter_depth_map
+    uv = np.array([[50.0, 50.0], [10.0, 10.0]])
+    ray_d = np.array([10.0, 5.0])
+    valid = np.array([False, False])
+    dmap = scatter_depth_map(uv, ray_d, valid, H=100, W=100)
+    assert dmap.sum() == 0.0
+    assert dmap.shape == (100, 100)
+
+
+def test_scatter_ignores_nan_in_invalid_points():
+    """NaN ray_depth on an invalid point must not corrupt the valid point's pixel."""
+    from scripts.dump_lidar_depth_map import scatter_depth_map
+    uv = np.array([[50.0, 50.0], [50.0, 50.0]])  # both map to pixel (50,50)
+    ray_d = np.array([np.nan, 7.0])              # invalid point carries NaN
+    valid = np.array([False, True])
+    dmap = scatter_depth_map(uv, ray_d, valid, H=100, W=100)
+    assert dmap[50, 50] == 7.0                   # valid point's depth, unperturbed

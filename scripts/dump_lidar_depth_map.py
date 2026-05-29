@@ -43,7 +43,7 @@ def project_pinhole(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Project Nx3 camera-frame points to image UV. Returns (uv[N,2], valid[N]).
 
-    Valid := (z > 0) ∧ (0 <= u < W) ∧ (0 <= v < H).
+    Valid := (z > 1e-3) ∧ (0 <= u < W) ∧ (0 <= v < H).
     """
     H, W = image_shape
     fx, fy, cx, cy = intrinsics["fx"], intrinsics["fy"], intrinsics["cx"], intrinsics["cy"]
@@ -68,13 +68,20 @@ def scatter_depth_map(
 
     Conflict resolution: if multiple points fall in the same pixel, keep the
     nearest (smallest ray-depth) — closest surface occludes the rest.
+
+    Invalid points (valid=False) are dropped BEFORE sorting so NaN / no-return
+    ray_depth values cannot perturb the argsort order of the valid points
+    (np.argsort with NaN is platform-dependent). All-invalid input returns an
+    all-zero map.
     """
     dmap = np.zeros((H, W), dtype=np.float32)
-    # Sort descending so the nearest point is written last and wins.
-    order = np.argsort(-ray_depth)
+    valid_idx = np.flatnonzero(valid)
+    if valid_idx.size == 0:
+        return dmap
+    sub_depth = ray_depth[valid_idx]
+    # Descending so the nearest point is written last and wins the pixel.
+    order = valid_idx[np.argsort(-sub_depth)]
     for i in order:
-        if not valid[i]:
-            continue
         u, v = uv[i]
         ui, vi = int(np.floor(u)), int(np.floor(v))
         if 0 <= ui < W and 0 <= vi < H:
