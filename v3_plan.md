@@ -177,10 +177,10 @@ kanban
 | **T8.5.7** ★ | 8.5 | V3-E4 7-cam vs 5-cam KPI 对照实验 + per-camera PSNR breakdown 工具 + 对称 5-cam 切换 | V3-E4 (新) | 2 | ✅ | dd6c39f + 0ffd738 + 6e14059 |
 | **T9.0** | 9 | v3_architecture.md 创建（v2_architecture.md 1:1 镜像 + v3 新增模块占位） | docs | 1 | ⬜ | — |
 | **T9.1** | 9 | V3-P1.a 双边网格 1×1×1 grid（按 camera_id）port Recon-Studio | V3-P1 | 1.5 | ✅ | 8644660 |
-| **T9.2** | 9 | V3-P1.b ExposureModel L2 reg + lr cosine decay + 2-stage freeze (step > 2000) | V3-P1 | 1 | ✅ | 9fc75f7 |
+| **T9.2** | 9 | V3-P1.b ExposureModel L2 reg + lr cosine decay + 2-stage freeze (step > 2000) | V3-P1 | 1 | ✅ | 9fc75f7 + 9d9766a (sched-optim ordering fix) |
 | **T9.3** | 9 | V3-P1.c 训练 forward 与 eval `color_correct_affine` 用同一套 bilateral grid（消除 raw vs cc 分歧） | V3-P1 | 0.5 | ✅ | c07b92d |
-| **T9.4** | 9 | V3-P1.d 健康度监控 — 训练日志 `exposure_a.std` + raw/cc PSNR ratio，> 2 dB 警报 | V3-P1 | 0.5 | ✅ | 830fa55 |
-| **T9.5** | 9 | A800 5k smoke + 30k 出口 — cc_psnr_masked ≥ 26.5 dB + raw vs cc 差 ≤ 2 dB | V3-P1 出口 | 1.5 | ✅ | A800 9ae151dc |
+| **T9.4** | 9 | V3-P1.d 健康度监控 — 训练日志 `exposure_a.std` + raw/cc PSNR ratio，> 2 dB 警报 | V3-P1 | 0.5 | ✅ | 830fa55 + 0278f57 (val loop apply fix) |
+| **T9.5** | 9 | A800 5k smoke + 30k 出口 — cc_psnr_masked ≥ 26.5 dB + raw vs cc 差 ≤ 2 dB | V3-P1 出口 | 1.5 | ✅ | A800 9ae151dc + ThinkPad 30k 复现 |
 | **T10.1** | 10 | V3-L10 sky envmap inpaint hole-filling — threshold 0.05 + kernel 10 | V3-L10 | 1 | ⬜ | — |
 | **T10.2** | 10 | V3-L11 sRGB↔linear gamma 合成 — composite_in_linear_space=false | V3-L11 | 0.5 | ⬜ | — |
 | **T10.3** | 10 | V3-L12 sky_envmap 前 1k 步冻结 warm-up — min_grad_updates=1000 | V3-L12 | 0.5 | ⬜ | — |
@@ -437,6 +437,18 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 - LiDAR ray 在 Sky 区域 NaN/inf（Stage 10 已修，但残余风险）→ valid mask 排除 sky；或 LiDAR depth > 100 m clip
 - DepthAnythingV2 与 LiDAR 度量不一致（DepthV2 是 scale-shift invariant 相对深度，NuRec 用 metric 版本）→ Stage 11 用 NuRec metric 微调版；fallback 用 scale 对齐 head
 - A800 it/s 跌破 5 → LiDAR ray batch 降到 1024；或每 2 step 一次 LiDAR loss
+
+**数据资产发现（2026-05-29 实施 T11.C1/D1 时，A800 schema 探查）**：clip 内 NuRec nre-tools 已预生成多个 aux 通道，与 Stage 11 深度监督直接相关：
+
+| aux store | 体积 | schema（A800 实测） | 与本 Stage 关系 |
+|---|---|---|---|
+| `aux.depth.zarr.itar` | 4.7 GB | `aux/depth/<camera_id>/<ts>` → dense `[1036,1848] float16` 每帧深度图 | **预生成稠密深度（极可能即 NuRec DepthAnythingV2 metric depth）**。T11.D1 的 `dump_depth_priors.py` 某种程度重造了它；**未来 clip 可直接加一个 "depth" AuxReader 读它，省掉 DepthV2 推理 dump**（待验证其度量与坐标约定） |
+| `aux.lidar-camvis.zarr.itar` | 3.5 MB | `lidar_camera_visibility/<lidar_id>/<ts>` → `[N_points,1] uint8` 每点可见性码 | **per-point 相机可见性，NOT per-pixel (u,v,depth)**。我的 dump 仍需自投影算深度；camvis 仅提供"该点对某相机是否可见"的布尔/码 |
+| `aux.lidar-sseg.zarr.itar` | 1.8 MB | per-point 语义 label（已由 `LidarSsegAuxReader` 用于 road/dynamic 层 init） | 动态类剔除来源 |
+
+**结论（回答 camvis 关系问题）**：我 `dump_lidar_depth_map.py` 的 LiDAR→camera 投影几何与 NuRec `lidar-camvis` 同源（同一 "point-in-camera visibility" 投影），但产物不同——camvis 是每点可见性，我的是每像素 ray-depth 图。第一版几何 dump 正确、够 Stage 11 出口用，**不必改**。
+
+**→ Stage 13a 邻近增强机会（已确认数据可用）**：scatter 成深度图前用 aux 过滤累积点 —— (a) 用 `lidar-camvis` 每点可见性做**正确遮挡剔除**（当前 `scatter_depth_map` 只有 nearest-wins 近似，远点会错误贡献到"近处无回波"像素）；(b) 用 `lidar-sseg` label **剔除动态类点**，消除时间窗口累积的移动车辆拖影（直接关联车道线退化问题）。两者数据均已在 clip 内，Stage 13a 可直接接入。
 
 ---
 
@@ -1162,6 +1174,23 @@ A800 SXM4-80GB, 6.89 it/s, 72.5 min train + 8 min eval per run。Baseline `mean_
 2. **cc_psnr_masked = 26.23 dB**（T9.5 门槛 26.5 dB，差 0.27 dB）— 与 symmetric_axis + pose_adjustment 开启有关；纯 bilateral grid 效果预计略高于此基线
 3. **5k→30k 健康曲线正常**：raw psnr 随训练单调提升（24.61→27.44），与旧 ExposureModel 30k raw 下降的病态行为相反
 4. `symmetric_axis: "Y"` 已写入 metrics.json，验证配置正确传递
+
+**Follow-up fixes（2026-05-29 ThinkPad RTX 4090 验证）**：
+
+1. **`9d9766a` — T9.2 sched-optim ordering fix**：T9.4 5k smoke 暴露 PyTorch `UserWarning: scheduler.step() before optimizer.step()` — freeze 期 `optim.zero_grad()` 不 step 但 sched 仍 tick，触发 1.1+ deprecated 调用模式 + 静默 skip 第一个 cosine LR 值。修复：把 `scheduler.step()` 也 gate 在 `freeze_until` 内，配合 `T_max = n_iterations - freeze_until` 让 BilateralGrid 真实训练窗口跑完 cosine 衰减到 0。+2 source-level guards.
+
+2. **`0278f57` — T9.4 val loop apply fix**：T9.5 30k smoke 暴露 TB 监控里 `val/psnr` 在 step 25k 跌到 13.72，但同 ckpt 的 test_last raw_psnr_masked=27.25（差 +13.5 dB「假退化」）。根因：T9.3 的 apply hook 加到了 `render.py:render_all` 和 `trainer.step_iter`，但漏改 `trainer.run_validation_pass`。修复：val loop 同样 apply `self.exposure_model`，让训练中 val 监控与 test_last 路径一致。验证（ThinkPad 1k smoke val_freq=500）：val_gap_masked=+1.61 dB / test_gap_masked=+1.64 dB（同方向、同量级 ✓）。
+
+**ThinkPad RTX 4090 30k 重现验证（2026-05-29，无 pose_adjustment）**：
+
+| 指标 | A800 30k（含 symY + pose_adj） | ThinkPad 30k（仅 BilateralGrid） |
+|---|---:|---:|
+| raw psnr_masked | 27.44 | **27.25** |
+| cc psnr_masked | 26.23 | 26.05 |
+| raw/cc 差 | 1.21 dB | 1.20 dB |
+| mean_class_psnr | 25.17 | 24.37 |
+
+→ raw/cc 健康度差异 < 0.01 dB → **BilateralGrid 是 V3-P1 主导效应**，pose_adjustment 的边际贡献集中在 class_psnr (+0.80 dB)。
 
 **遗留**：T9.0（v3_architecture.md 创建）未做，阻塞低，可后续补充。
 
