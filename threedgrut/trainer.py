@@ -43,6 +43,7 @@ from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
 from threedgrut.model.losses import ssim
 from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
 from threedgrut.model.model import MixtureOfGaussians
+from threedgrut.utils.eval_metrics import compute_lidar_psnr  # T11.F1
 from threedgrut.optimizers import SelectiveAdam
 from threedgrut.render import Renderer
 from threedgrut.strategy.base import BaseStrategy
@@ -1006,6 +1007,25 @@ class Trainer3DGRUT:
                 else:
                     metrics["cc_psnr_masked"] = metrics["cc_psnr"]
 
+            # T11.F1: LiDAR-domain depth PSNR per validation frame. Mirrors
+            # render.py PATH 1 (two-path rule, CLAUDE.md §B L51-54). Only
+            # computed when image_infos carries lidar_depth_map AND outputs has
+            # pred_dist (NCore with load_lidar_depth_map=True). NaN → not stored
+            # (caller's _flatten_list_of_dicts skips absent frames; log_validation_pass
+            # uses "lidar_psnr" in metrics guard before np.mean).
+            _image_infos_v = getattr(gpu_batch, "image_infos", None) or {}
+            _pred_dist_v = outputs.get("pred_dist") if isinstance(outputs, dict) else None
+            if (
+                _pred_dist_v is not None
+                and isinstance(_image_infos_v, dict)
+                and "lidar_depth_map" in _image_infos_v
+            ):
+                _lidar_gt_v = _image_infos_v["lidar_depth_map"]
+                _hit_v = (_lidar_gt_v > 0).float()
+                _lp_v = compute_lidar_psnr(_pred_dist_v, _lidar_gt_v, _hit_v)
+                if _lp_v == _lp_v:  # not NaN
+                    metrics["lidar_psnr"] = _lp_v
+
             if iteration in self.conf.writer.log_image_views:
                 metrics["img_hit_counts"] = jet_map(outputs["hits_count"][-1], self.conf.writer.max_num_hits)
                 metrics["img_gt"] = gpu_batch.rgb_gt[-1].clip(0, 1.0)
@@ -1535,6 +1555,16 @@ class Trainer3DGRUT:
         writer.add_scalar("hits/min/val", np.mean(metrics["hits_min"]), global_step)
         writer.add_scalar("hits/max/val", np.mean(metrics["hits_max"]), global_step)
         writer.add_scalar("hits/mean/val", np.mean(metrics["hits_mean"]), global_step)
+
+        # T11.F1: LiDAR-domain depth PSNR — only present when dataset has
+        # load_lidar_depth_map=True and at least one val frame had LiDAR hits.
+        if "lidar_psnr" in metrics:
+            mean_lidar_psnr_val = float(np.mean(metrics["lidar_psnr"]))
+            writer.add_scalar("lidar_psnr/val", mean_lidar_psnr_val, global_step)
+            logger.info(
+                f"[T11.F1] lidar_psnr/val={mean_lidar_psnr_val:.3f} dB"
+                f" over {len(metrics['lidar_psnr'])} frames"
+            )
 
         loss = np.mean(metrics["losses"]["total_loss"])
         writer.add_scalar("loss/total/val", loss, global_step)
