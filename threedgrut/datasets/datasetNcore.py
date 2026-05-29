@@ -1052,7 +1052,12 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 frame_time_ms = self._compute_frame_time_ms(camera_sensor, camera_frame_index)
                 camera_index = self.camera_ids.index(camera_id)
 
-                return {
+                val_ts_us = int(
+                    camera_sensor.frames_timestamps_us[
+                        camera_frame_index, ncore.data.FrameTimepoint.END
+                    ]
+                )
+                val_batch = {
                     "rgb": to_torch(rgb, device="cpu"),
                     "valid": to_torch(valid, device="cpu"),
                     "T_camera_to_world": to_torch(T_sensor_startend[0], device="cpu"),
@@ -1061,12 +1066,41 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     "frame_idx": -1,  # Validation: -1 signals novel-view mode for PPISP
                     "camera_idx": camera_index,
                     # T4.5: validation frame's absolute camera END timestamp
-                    "timestamp_us": int(
-                        camera_sensor.frames_timestamps_us[
-                            camera_frame_index, ncore.data.FrameTimepoint.END
-                        ]
-                    ),
+                    "timestamp_us": val_ts_us,
                 }
+
+                # T11.F1: the val/test split must ALSO load lidar_depth_map +
+                # depth_prior — render.py offline eval (make_test → this branch)
+                # is the path that writes the G1 metrics.json, and mean_lidar_psnr
+                # needs image_infos["lidar_depth_map"] here. The C1/D1 injection
+                # lived only in the train branch above (L957-997), so eval saw
+                # no maps and mean_lidar_psnr came out absent. Mirror it here:
+                # same END-timestamp key + render-res resize (NEAREST for sparse
+                # LiDAR hits, LINEAR for dense DepthV2).
+                if self.load_lidar_depth_map or self.load_depth_prior:
+                    w_render, h_render = self._camera_resolutions[camera_id]
+                    if self.load_lidar_depth_map:
+                        self._ensure_lidar_depth_reader()
+                        dmap = self._lidar_depth_reader.read(camera_id, val_ts_us)
+                        if dmap.shape[0] != h_render or dmap.shape[1] != w_render:
+                            dmap = cv2.resize(
+                                dmap, (w_render, h_render), interpolation=cv2.INTER_NEAREST
+                            )
+                        val_batch["lidar_depth_map"] = to_torch(
+                            dmap.astype(np.float32), device="cpu"
+                        )
+                    if self.load_depth_prior:
+                        self._ensure_depth_prior_reader()
+                        dprior = self._depth_prior_reader.read(camera_id, val_ts_us)
+                        if dprior.shape[0] != h_render or dprior.shape[1] != w_render:
+                            dprior = cv2.resize(
+                                dprior, (w_render, h_render), interpolation=cv2.INTER_LINEAR
+                            )
+                        val_batch["depth_prior"] = to_torch(
+                            dprior.astype(np.float32), device="cpu"
+                        )
+
+                return val_batch
 
             raise IndexError(f"Out of range validation sample {idx}")
 
