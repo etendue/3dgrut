@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""V3-R1.1 unit tests for per-layer SH degree override via LayerSpec.sh_degree."""
+"""V3-R1.1 unit tests for LayerSpec.sh_degree field.
+
+NOTE: per-layer SH-degree reduction by shrinking features_specular is
+DISABLED (reserved for future freeze-based redesign).  The field still
+exists on LayerSpec and round-trips through the dataclass / yaml config, but
+init_layer_from_points always uses layer.max_n_features (the global degree)
+so that the fused-view renderer's uniform-width invariant is preserved.
+"""
 from __future__ import annotations
 
 import os
@@ -24,9 +31,16 @@ def test_layerspec_accepts_explicit_sh_degree():
     assert spec.sh_degree == 1
 
 
-def test_road_layer_sh_degree_is_1():
-    """V3-R1.1 acceptance: road layer caps SH at degree 1 (DC + 3 linear)."""
-    assert STANDARD_LAYERS["road"].sh_degree == 1
+def test_road_layer_sh_degree_is_none_reserved():
+    """V3-R1.1 (disabled): road layer's sh_degree is None (reserved/unused).
+
+    Per-layer SH-degree reduction by shrinking features_specular is
+    incompatible with the fused-view renderer: all particle layers must share
+    one specular width (the renderer uses the reference layer's max_n_features).
+    A future freeze-based approach would consume LayerSpec.sh_degree — the
+    field stays in place so that redesign is a small change.
+    """
+    assert STANDARD_LAYERS["road"].sh_degree is None
 
 
 def test_background_layer_sh_degree_default():
@@ -70,12 +84,18 @@ def real_conf():
         return compose(config_name="apps/ncore_3dgut_mcmc_multilayer")
 
 
-def test_init_layer_from_points_road_uses_spec_sh_degree(real_conf):
-    """V3-R1.1: road layer gets sh_degree=1 width, not global degree-3 width.
+def test_init_layer_from_points_road_uses_global_sh_degree(real_conf):
+    """Fused-renderer constraint: road layer uses the GLOBAL SH degree width.
 
-    init_layer_from_points with setup_optimizer=False allocates features_specular
-    with sh_degree_to_specular_dim(spec.sh_degree) = 9 when spec.sh_degree=1,
-    not sh_degree_to_specular_dim(layer.max_n_features) = 45 for degree-3.
+    The fused-view renderer concatenates ALL particle layers' features_specular
+    into one tensor and evaluates a single global SH degree from the reference
+    layer's max_n_features.  Therefore every layer — including road — must
+    allocate features_specular with sh_degree_to_specular_dim(layer.max_n_features)
+    = 45 for global degree-3, regardless of spec.sh_degree.
+
+    LayerSpec.sh_degree is reserved for a future freeze-based redesign (keep
+    width 45, zero+freeze road's order>=2 coefficients) and is currently unused
+    by init_layer_from_points.
     """
     from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.registry import specs_from_config
@@ -89,7 +109,7 @@ def test_init_layer_from_points_road_uses_spec_sh_degree(real_conf):
     )
     specs = specs_from_config(conf)
     assert specs[0].name == "road"
-    assert specs[0].sh_degree == 1, "precondition: road spec must have sh_degree=1"
+    assert specs[0].sh_degree is None, "precondition: road spec.sh_degree must be None (reserved/unused)"
 
     lg = LayeredGaussians(conf=conf, specs=specs, scene_extent=10.0)
     N = 16
@@ -97,11 +117,12 @@ def test_init_layer_from_points_road_uses_spec_sh_degree(real_conf):
     lg.init_layer_from_points("road", positions, setup_optimizer=False)
 
     road_layer = lg.layers["road"]
-    expected_specular_dim = sh_degree_to_specular_dim(1)  # 9
+    global_max = conf.model.progressive_training.max_n_features  # 3
+    expected_specular_dim = sh_degree_to_specular_dim(global_max)  # 45
     assert road_layer.features_specular.shape == (N, expected_specular_dim), (
         f"road features_specular shape = {road_layer.features_specular.shape}, "
-        f"expected ({N}, {expected_specular_dim}) for sh_degree=1; "
-        f"got degree-3 width ({sh_degree_to_specular_dim(3)}) instead?"
+        f"expected ({N}, {expected_specular_dim}) for global sh_degree={global_max}; "
+        f"fused renderer requires uniform specular width across all layers."
     )
 
 

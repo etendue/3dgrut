@@ -33,7 +33,7 @@ class LayerSpec:
         is_particle_layer: False for sky_envmap / dynamic_deformables (v2 stub)
             -- skipped by LayeredMCMCStrategy and fused_view.
         density_init: log-space initial density for new particles.
-        sh_degree: per-layer SH degree cap; None = use global progressive_training value.
+        sh_degree: RESERVED/unused. Per-layer SH degree cap (incompatible with fused renderer; see field comment).
         scale_xy_max: linear-metre upper bound on XY scale, compared against exp(scale_log); None disables.
         scale_z_max: linear-metre upper bound on Z scale, compared against exp(scale_log); None disables.
         anisotropy_ratio_max: cap on max/min scale eigenvalue ratio; None disables.
@@ -52,11 +52,12 @@ class LayerSpec:
     # MCMC perturb. None = no override (LayeredMCMCStrategy leaves the sub's
     # default _get_perturb_mask=ones in place).
     perturb_scale_mask: tuple[float, float, float] | None = None
-    # V3-R1.1: per-layer SH degree cap. None = use global
-    # conf.model.progressive_training.max_n_features. Road layer uses 1
-    # (DC + 3 linear) so the high-contrast lane-marking color does not
-    # over-fit to the training camera frustum and degrade under +/-2m
-    # lateral / +/-10 deg yaw novel-view perturbation.
+    # RESERVED / currently unused. Per-layer SH-degree reduction by shrinking
+    # features_specular is incompatible with the fused-view renderer (all
+    # particle layers must share one specular width; the renderer uses the
+    # reference layer's max_n_features). A future freeze-based approach (keep
+    # width 45, zero+freeze road's order>=2 coefficients) would consume this
+    # field. Leaving the field in place so that redesign is a small change.
     sh_degree: int | None = None
     # V3-R1.2: per-layer scale upper bounds in LINEAR units (physical metres).
     # A later clamp compares these against exp(scale_log) -- i.e. the physical
