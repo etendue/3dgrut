@@ -41,6 +41,7 @@ from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
 from threedgrut.model.losses import ssim
+from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.optimizers import SelectiveAdam
 from threedgrut.render import Renderer
@@ -770,8 +771,6 @@ class Trainer3DGRUT:
         (lidar_w_decay > 0 → λ_eff = λ_base * exp(-step/8000 * decay_rate)).
         Set lidar_w_decay <= 0 to disable decay.
         """
-        from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
-
         trainer_conf = conf.trainer
         def _get(name, default):
             if hasattr(trainer_conf, "get"):
