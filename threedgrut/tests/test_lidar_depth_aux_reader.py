@@ -69,3 +69,39 @@ def test_depthv2_aux_reader_is_subclass(fake_depth_dir):
     assert isinstance(reader, LidarDepthAuxReader)
     got = reader.read(cam_id, ts)
     np.testing.assert_array_equal(got, expected)
+
+
+def test_has_frame_missing_returns_false(fake_depth_dir):
+    """has_frame must report False for a frame that was never dumped."""
+    root, cam_id, _, _ = fake_depth_dir
+    reader = LidarDepthAuxReader(root)
+    assert reader.has_frame(cam_id, timestamp_us=9999999999) is False
+
+
+def test_wrong_npz_key_raises_clear_error(tmp_path):
+    """An npz missing the 'depth' key raises a KeyError that names the path."""
+    cam_id = "camera_front_wide_120fov"
+    ts = 555
+    cam_dir = tmp_path / cam_id
+    cam_dir.mkdir(parents=True)
+    # Wrong key: 'd' instead of 'depth'
+    np.savez_compressed(cam_dir / f"{ts}.npz", d=np.zeros((4, 4), dtype=np.float32))
+    reader = LidarDepthAuxReader(tmp_path)
+    with pytest.raises(KeyError, match="no 'depth' key"):
+        reader.read(cam_id, ts)
+
+
+def test_cache_eviction_bounds_memory(tmp_path):
+    """With cache_maxsize=2, reading 3 distinct frames evicts the oldest."""
+    cam_id = "cam"
+    cam_dir = tmp_path / cam_id
+    cam_dir.mkdir(parents=True)
+    for ts in (1, 2, 3):
+        np.savez_compressed(cam_dir / f"{ts}.npz", depth=np.full((2, 2), float(ts), dtype=np.float32))
+    reader = LidarDepthAuxReader(tmp_path, cache_maxsize=2)
+    reader.read(cam_id, 1)
+    reader.read(cam_id, 2)
+    reader.read(cam_id, 3)  # evicts ts=1
+    assert (cam_id, 1) not in reader._cache
+    assert (cam_id, 2) in reader._cache
+    assert (cam_id, 3) in reader._cache

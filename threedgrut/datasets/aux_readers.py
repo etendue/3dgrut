@@ -213,10 +213,22 @@ class LidarDepthAuxReader:
             fallback).
     """
 
-    def __init__(self, root: Union[str, Path], default_shape: Optional[Tuple[int, int]] = None) -> None:
+    def __init__(
+        self,
+        root: Union[str, Path],
+        default_shape: Optional[Tuple[int, int]] = None,
+        cache_maxsize: int = 256,
+    ) -> None:
         self.root = Path(root)
         self.default_shape = default_shape
+        # Bounded FIFO cache: unlike the unbounded growth that would reach
+        # ~14GB on a full-res 30k run, keep at most cache_maxsize decoded
+        # maps. The existing zarr readers in this file don't cache decoded
+        # arrays at all; this is a middle ground (recent-frame reuse without
+        # unbounded RAM). cache_maxsize <= 0 disables caching entirely.
+        self.cache_maxsize = cache_maxsize
         self._cache: dict[Tuple[str, int], np.ndarray] = {}
+        self._cache_order: list[Tuple[str, int]] = []
 
     def _path(self, camera_id: str, timestamp_us: int) -> Path:
         return self.root / camera_id / f"{int(timestamp_us)}.npz"
@@ -227,8 +239,8 @@ class LidarDepthAuxReader:
     def read(self, camera_id: str, timestamp_us: int) -> np.ndarray:
         """Return the ``[H, W]`` float32 depth map for one (camera, frame).
 
-        Cached after first read. Missing frame → zeros (if default_shape set)
-        or FileNotFoundError.
+        Cached (bounded FIFO, cache_maxsize) after first read. Missing frame →
+        zeros (if default_shape set) or FileNotFoundError.
         """
         key = (camera_id, int(timestamp_us))
         if key in self._cache:
@@ -240,9 +252,23 @@ class LidarDepthAuxReader:
             depth = np.zeros(self.default_shape, dtype=np.float32)
         else:
             with np.load(path) as f:
+                if "depth" not in f:
+                    raise KeyError(
+                        f"{type(self).__name__}: npz at {path} has no 'depth' "
+                        f"key (found: {list(f.keys())})"
+                    )
                 depth = f["depth"].astype(np.float32)
-        self._cache[key] = depth
+        self._cache_put(key, depth)
         return depth
+
+    def _cache_put(self, key: Tuple[str, int], depth: np.ndarray) -> None:
+        if self.cache_maxsize <= 0:
+            return
+        self._cache[key] = depth
+        self._cache_order.append(key)
+        while len(self._cache_order) > self.cache_maxsize:
+            evicted = self._cache_order.pop(0)
+            self._cache.pop(evicted, None)
 
 
 class DepthV2AuxReader(LidarDepthAuxReader):
