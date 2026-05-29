@@ -39,6 +39,7 @@ from threedgrut.model.bg_cuboid_loss import (
 )
 from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
+from threedgrut.model.road_reg import compute_effective_rank_loss
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
 from threedgrut.model.losses import ssim
 from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
@@ -1224,6 +1225,24 @@ class Trainer3DGRUT:
                 valid = valid * (dp_gt < self.depth_max).float()
                 loss_depth_prior = self.depth_prior_loss_fn(pred_dist, dp_gt, valid)
 
+        # V3-R1.3: effective-rank reg on road-layer scales (suppresses
+        # needle-shaped lane-marking Gaussians that overfit to the training
+        # camera direction). No-op unless lambda > 0 AND a road layer exists.
+        loss_road_eff_rank = torch.zeros(1, device=self.device)
+        lambda_road_eff_rank = float(
+            trainer_conf.get("lambda_road_eff_rank", 0.0) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "lambda_road_eff_rank", 0.0)
+        )
+        if (
+            lambda_road_eff_rank > 0.0
+            and hasattr(self.model, "layers")
+            and "road" in self.model.layers
+        ):
+            with torch.cuda.nvtx.range("loss-road-eff-rank"):
+                loss_road_eff_rank = compute_effective_rank_loss(
+                    self.model.layers["road"].scale
+                )
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -1236,6 +1255,7 @@ class Trainer3DGRUT:
             + lambda_lidar_eff * loss_lidar_depth
             + self.lambda_bg_lidar * loss_bg_lidar
             + self.lambda_depth_prior * loss_depth_prior
+            + lambda_road_eff_rank * loss_road_eff_rank
         )
         return dict(
             total_loss=loss,
@@ -1250,6 +1270,7 @@ class Trainer3DGRUT:
             lidar_depth_loss=lambda_lidar_eff * loss_lidar_depth,
             bg_lidar_loss=self.lambda_bg_lidar * loss_bg_lidar,
             depth_prior_loss=self.lambda_depth_prior * loss_depth_prior,
+            road_eff_rank_loss=lambda_road_eff_rank * loss_road_eff_rank,
         )
 
     # ---------------------------------------------------------------- T8/B3

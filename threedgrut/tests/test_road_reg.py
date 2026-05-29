@@ -93,3 +93,38 @@ def test_clamp_hard_caps_win_over_tight_ratio():
     out_exp = torch.exp(out)
     assert torch.all(out_exp[:, :2] <= 0.3 + 1e-6)
     assert torch.all(out_exp[:, 2] <= 0.05 + 1e-6), "Z cap must hold even for tight ratio"
+
+
+from threedgrut.model.road_reg import compute_effective_rank_loss
+
+
+def test_effective_rank_loss_isotropic_minimum():
+    """Isotropic Gaussians (s_x == s_y == s_z) attain MIN entropy loss."""
+    iso = torch.zeros(4, 3)  # log(1,1,1) -> isotropic
+    needle = torch.tensor([[0.0, 0.0, -5.0]] * 4)  # huge anisotropy
+    L_iso = compute_effective_rank_loss(iso)
+    L_needle = compute_effective_rank_loss(needle)
+    assert L_iso.item() < L_needle.item(), (
+        f"isotropic loss {L_iso.item()} should be < needle loss {L_needle.item()}"
+    )
+
+
+def test_effective_rank_loss_mask_selects_subset():
+    """Mask selects which particles contribute."""
+    log_scale = torch.zeros(10, 3)
+    log_scale[5:, 2] = -5.0  # particles 5..9 are needles
+    mask_isos = torch.tensor([1.0] * 5 + [0.0] * 5)
+    mask_needles = torch.tensor([0.0] * 5 + [1.0] * 5)
+    L_iso = compute_effective_rank_loss(log_scale, mask=mask_isos)
+    L_needle = compute_effective_rank_loss(log_scale, mask=mask_needles)
+    assert L_iso.item() < L_needle.item()
+
+
+def test_effective_rank_loss_grad_flows():
+    """Gradient is non-zero at an anisotropic point (verifies real grad flow,
+    not just graph connectivity — isotropic input is a saddle with zero grad)."""
+    log_scale = torch.tensor([[0.0, 0.0, -2.0]] * 4, requires_grad=True)
+    L = compute_effective_rank_loss(log_scale)
+    L.backward()
+    assert log_scale.grad is not None
+    assert (log_scale.grad != 0).any(), "gradient should be non-zero at anisotropic point"
