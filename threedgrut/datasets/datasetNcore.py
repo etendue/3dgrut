@@ -34,6 +34,7 @@ from ncore.impl.common.transformations import HalfClosedInterval
 from scipy import ndimage
 
 from threedgrut.datasets.aux_readers import (
+    DepthV2AuxReader,
     LidarDepthAuxReader,
     LidarSsegAuxReader,
     SsegAuxReader,
@@ -109,6 +110,13 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # loss. Default False → v1 / Stage 1-10 path byte-identical.
         load_lidar_depth_map: bool = False,
         lidar_depth_aux_root: Optional[str] = None,
+        # Stage 11 T11.D1: pre-dumped DepthAnythingV2 metric depth priors.
+        # When True, reads <depth_prior_aux_root>/<camera_id>/<ts_end_us>.npz
+        # (written by scripts/dump_depth_priors.py) and injects a per-frame
+        # "depth_prior" into the batch dict → image_infos for the depth_prior
+        # loss. Default False → Stage 1-10 path byte-identical.
+        load_depth_prior: bool = False,
+        depth_prior_aux_root: Optional[str] = None,
     ):
         super().__init__()
 
@@ -177,6 +185,13 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self.lidar_depth_aux_root: Optional[str] = lidar_depth_aux_root
         self._lidar_depth_reader: Optional["LidarDepthAuxReader"] = None
         self._lidar_depth_reader_initialized: bool = False
+
+        # Stage 11 T11.D1: pre-dumped DepthAnythingV2 depth-prior reader (lazy-built
+        # in _ensure_depth_prior_reader after camera resolutions are known).
+        self.load_depth_prior: bool = load_depth_prior
+        self.depth_prior_aux_root: Optional[str] = depth_prior_aux_root
+        self._depth_prior_reader: Optional["DepthV2AuxReader"] = None
+        self._depth_prior_reader_initialized: bool = False
 
         self.split: str = split
 
@@ -960,6 +975,27 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     depth_map.astype(np.float32), device="cpu"
                 )
 
+            # T11.D1: per-frame DepthAnythingV2 metric depth prior → batch["depth_prior"].
+            # Same END-timestamp key + render-res resize as lidar_depth_map above.
+            # Dense metric map (no sparse hits) → bilinear resize is fine.
+            if self.load_depth_prior and sampled_camera_id is not None:
+                self._ensure_depth_prior_reader()
+                ts_us = int(
+                    camera_sensor.frames_timestamps_us[
+                        camera_frame_index, ncore.data.FrameTimepoint.END
+                    ]
+                )
+                depth_prior = self._depth_prior_reader.read(sampled_camera_id, ts_us)  # [H_full, W_full]
+                w_render, h_render = self._camera_resolutions[sampled_camera_id]
+                if depth_prior.shape[0] != h_render or depth_prior.shape[1] != w_render:
+                    # Bilinear: dense metric depth, no sparse hits to preserve.
+                    depth_prior = cv2.resize(
+                        depth_prior, (w_render, h_render), interpolation=cv2.INTER_LINEAR
+                    )
+                batch_dict["depth_prior"] = to_torch(
+                    depth_prior.astype(np.float32), device="cpu"
+                )
+
             return batch_dict
 
         else:
@@ -1206,6 +1242,40 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self._lidar_depth_reader_initialized = True
         logger.info(
             f"NCoreDataset[{self.split}] lidar depth reader ready: root={root} "
+            f"default_shape=({h_full},{w_full})"
+        )
+
+    # ---- T11.D1: lazy DepthAnythingV2 depth-prior reader init ----
+    def _ensure_depth_prior_reader(self) -> None:
+        """Lazily build the DepthV2AuxReader rooted at the dumped depth priors.
+
+        Idempotent; no-op when load_depth_prior=False. Default root is
+        ``<clip_dir>/aux/depth_anything_v2``. default_shape mirrors the LiDAR
+        reader (T11.C1): first camera's full resolution so a missing frame
+        returns an all-zeros map. Maps are dumped at native full resolution;
+        ``__getitem__`` resizes to the render resolution.
+
+        NOTE: a concurrent C1 review flagged that default_shape should be
+        per-camera NATIVE resolution rather than first-cam res; this reader
+        mirrors whatever C1 currently does (first-cam res) so both readers stay
+        identical — a separate pre-G1 fixup will correct BOTH together.
+        """
+        if not self.load_depth_prior or self._depth_prior_reader_initialized:
+            return
+        if self.depth_prior_aux_root is not None:
+            root = Path(self.depth_prior_aux_root)
+        else:
+            root = self.sequence_meta_file_path.parent / "aux" / "depth_anything_v2"
+        # Use the first camera's full resolution as the zeros fallback shape
+        # (mirrors _ensure_lidar_depth_reader for cross-reader consistency).
+        first_cam = self.camera_ids[0]
+        w_full, h_full = self._camera_resolutions[first_cam]
+        self._depth_prior_reader = DepthV2AuxReader(
+            root, default_shape=(h_full, w_full), cache_maxsize=256
+        )
+        self._depth_prior_reader_initialized = True
+        logger.info(
+            f"NCoreDataset[{self.split}] depth prior reader ready: root={root} "
             f"default_shape=({h_full},{w_full})"
         )
 
@@ -1474,6 +1544,15 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             if "image_infos" not in batch_dict:
                 batch_dict["image_infos"] = {}
             batch_dict["image_infos"]["lidar_depth_map"] = _to_gpu(batch["lidar_depth_map"])
+
+        # --- T11.D1: DepthV2 depth prior → Batch.image_infos["depth_prior"] -----
+        # Independent of sky_mask / lidar_depth_map; load_depth_prior can be on
+        # alone. [H, W] float32 (metric meters) → collate adds batch dim →
+        # [B, H, W], matching what the trainer's depth_prior loss expects.
+        if "depth_prior" in batch and batch["depth_prior"] is not None:
+            if "image_infos" not in batch_dict:
+                batch_dict["image_infos"] = {}
+            batch_dict["image_infos"]["depth_prior"] = _to_gpu(batch["depth_prior"])
 
         # --- T4.5: camera END timestamp → Batch.timestamp_us --------------------
         # Universal time coordinate for dyn pose lookup, sseg key alignment.
