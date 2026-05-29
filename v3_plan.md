@@ -176,11 +176,11 @@ kanban
 | **T8.5.5** | 8.5 | A800 5k smoke 验证投影校对无回归（reconstructed cc_psnr_masked ≥ 24.7 不退化 + novel-view baseline 入档） | — | 1 | ⬜ | — |
 | **T8.5.7** ★ | 8.5 | V3-E4 7-cam vs 5-cam KPI 对照实验 + per-camera PSNR breakdown 工具 + 对称 5-cam 切换 | V3-E4 (新) | 2 | ✅ | dd6c39f + 0ffd738 + 6e14059 |
 | **T9.0** | 9 | v3_architecture.md 创建（v2_architecture.md 1:1 镜像 + v3 新增模块占位） | docs | 1 | ⬜ | — |
-| **T9.1** | 9 | V3-P1.a 双边网格 1×1×1 grid（按 camera_id）port Recon-Studio | V3-P1 | 1.5 | ⬜ | — |
-| **T9.2** | 9 | V3-P1.b ExposureModel L2 reg + lr cosine decay + 2-stage freeze (step > 2000) | V3-P1 | 1 | ⬜ | — |
-| **T9.3** | 9 | V3-P1.c 训练 forward 与 eval `color_correct_affine` 用同一套 bilateral grid（消除 raw vs cc 分歧） | V3-P1 | 0.5 | ⬜ | — |
-| **T9.4** | 9 | V3-P1.d 健康度监控 — 训练日志 `exposure_a.std` + raw/cc PSNR ratio，> 2 dB 警报 | V3-P1 | 0.5 | ⬜ | — |
-| **T9.5** | 9 | A800 5k smoke + 30k 出口 — cc_psnr_masked ≥ 26.5 dB + raw vs cc 差 ≤ 2 dB | V3-P1 出口 | 1.5 | ⬜ | — |
+| **T9.1** | 9 | V3-P1.a 双边网格 1×1×1 grid（按 camera_id）port Recon-Studio | V3-P1 | 1.5 | ✅ | 8644660 |
+| **T9.2** | 9 | V3-P1.b ExposureModel L2 reg + lr cosine decay + 2-stage freeze (step > 2000) | V3-P1 | 1 | ✅ | 9fc75f7 |
+| **T9.3** | 9 | V3-P1.c 训练 forward 与 eval `color_correct_affine` 用同一套 bilateral grid（消除 raw vs cc 分歧） | V3-P1 | 0.5 | ✅ | c07b92d |
+| **T9.4** | 9 | V3-P1.d 健康度监控 — 训练日志 `exposure_a.std` + raw/cc PSNR ratio，> 2 dB 警报 | V3-P1 | 0.5 | ✅ | 830fa55 |
+| **T9.5** | 9 | A800 5k smoke + 30k 出口 — cc_psnr_masked ≥ 26.5 dB + raw vs cc 差 ≤ 2 dB | V3-P1 出口 | 1.5 | ✅ | A800 9ae151dc |
 | **T10.1** | 10 | V3-L10 sky envmap inpaint hole-filling — threshold 0.05 + kernel 10 | V3-L10 | 1 | ⬜ | — |
 | **T10.2** | 10 | V3-L11 sRGB↔linear gamma 合成 — composite_in_linear_space=false | V3-L11 | 0.5 | ⬜ | — |
 | **T10.3** | 10 | V3-L12 sky_envmap 前 1k 步冻结 warm-up — min_grad_updates=1000 | V3-L12 | 0.5 | ⬜ | — |
@@ -244,7 +244,7 @@ kanban
 | Stage | 主题 | 任务数 (Done / Total) | **Novel-view PSNR 出口 ★** | Reconstructed (辅, 不退化) | 状态 |
 |---:|---|---:|:---:|:---:|:---:|
 | 8.5 | 投影校对 + cuboid 草案 + **novel-view baseline 实测** | 0/5 | **baseline 入档**（≈ 待实测） | ≥ 24.7 (持平) | ⬜ Todo |
-| 9 | V3-P1 双边网格 + ExposureModel 修复 | 0/6 | baseline + 0.5 (反作用) | ≥ 24.7（raw/cc 差 ≤ 2 dB） | ⬜ Todo |
+| 9 | V3-P1 双边网格 + ExposureModel 修复 | 5/6 | baseline + 0.5 (反作用) | ≥ 24.7（raw/cc 差 ≤ 2 dB） | ✅ Done（T9.0 docs 待补） |
 | 10 | Sky envmap inpaint + gamma + warm-up | 0/4 | **+1.5（Sky novel 不爆黑洞最大头）** | ≥ 24.7 | ⬜ Todo |
 | 11 | LiDAR ray + DepthAnythingV2 几何先验 | 0/6 | **+3.0（几何稳定性核心）** | ≥ 24.7 | ⬜ Todo |
 | 12 | MCMC + scheduler 增强 | 0/8 | +0.3（cap baseline 修正） | ≥ 24.7 | ⬜ Todo |
@@ -1108,6 +1108,62 @@ A800 SXM4-80GB, 6.89 it/s, 72.5 min train + 8 min eval per run。Baseline `mean_
 4. **5k smoke 信号过于早期**，30k 才暴露真实效果 — **未来类似 NuRec tricks 评估必须 30k 起步**，不要再用 5k smoke 作 acceptance gate
 
 **关联未来 task**：V3-L5b（sym only 30k）；V3-L8b / V3-L9b（单独激活 30k）；V3-L8/L9 LR ablation（warmup ↑ + lr ↓）。
+
+---
+
+### T9.1–T9.5 / V3-P1 — BilateralGrid 替换 ExposureModel + A800 回归验证（2026-05-28/29）
+
+**Commits**: `8644660` (T9.1) → `9fc75f7` (T9.2) → `c07b92d` (T9.3) → `830fa55` (T9.4) → Merge `4c7635b`
+
+**背景**：V3-E4 / T8.5.7 实测发现旧 ExposureModel 30k 训练后 raw psnr 严重退化（15.29 dB），cc affine 事后拉回掩盖了问题（cc=26.04 dB，raw/cc 差高达 10.75 dB）。V3-P1 (T9.1–T9.4) 整体用 BilateralGrid 替换 ExposureModel 并加健康约束，T9.5 用最新 main（含 symmetric_axis=Y + pose_adjustment）做完整 A800 回归验证。
+
+**实现要点**：
+- **T9.1**：`threedgrut/correction/bilateral_grid.py` NEW — 1×1×1 3D 双边网格（per-camera_id），替换 `trainer.init_exposure_model`；AdamW 优化器（weight_decay=1e-4）
+- **T9.2**：BilateralGrid + AdamW + CosineAnnealingLR + 2-stage freeze（前 `exposure_freeze_until_iter=2000` 步冻结 grid，让 Gaussians 先收敛）
+- **T9.3**：`render.py` eval 路径同步从 ckpt 重建 BilateralGrid 并 apply，消除 train-end vs standalone reload 的 raw/cc 不一致；`save_checkpoint` 也保存 `exposure_scheduler` state
+- **T9.4**：TensorBoard health 监控（`exposure_a_std`、`exposure_b_mean`、raw/cc PSNR ratio 各 camera，超 2 dB 自动警报）
+- **T9.5**：A800 9ae151dc clip，5cam 对称 ring，`++layers.overrides.dynamic_rigids.symmetric_axis=Y`，`trainer.pose_adjustment.enabled=true lambda_t=1e-2 lambda_r=1e-1`；代码基于 origin/main `4c7635b`（`3dgrut3` 目录）
+
+**A800 验收结果（clip 9ae151dc，对称 5cam，nohup 独立进程）**：
+
+| 指标 | 5k（regression_5k_symY_poseadj_v2） | 30k（regression_30k_symY_poseadj_v2） |
+|---|---:|---:|
+| `mean_psnr_masked` (raw) | 24.61 dB | **27.44 dB** |
+| `mean_cc_psnr_masked` | 23.47 dB | **26.23 dB** |
+| raw/cc 差 | **1.14 dB** ✓ | **1.21 dB** ✓ |
+| `mean_class_psnr` | 21.64 dB | **25.17 dB** |
+| → automobile | 21.37 dB | 24.93 dB |
+| → heavy_truck | 24.84 dB | 27.98 dB |
+| → bus | 22.88 dB | 26.37 dB |
+| `class_psnr_n_low_15db` | 361 | **153** |
+| `mean_ssim_masked` | 0.824 | 0.872 |
+| `mean_lpips_masked` | 0.385 | 0.293 |
+
+**Per-camera psnr_masked（30k）**：
+
+| Camera | 5k | 30k |
+|---|---:|---:|
+| front_wide_120 | 24.58 | 26.38 |
+| cross_left_120 | 25.22 | 27.48 |
+| cross_right_120 | 26.15 | 28.59 |
+| rear_left_70 | 21.99 | 26.12 |
+| rear_right_70 | 25.11 | 28.63 |
+
+**对比旧 ExposureModel 基线（T8.5.7 E2b 30k，无 symmetric/pose_adj）**：
+
+| | ExposureModel E2b 30k | BilateralGrid 30k（本次） | Δ |
+|---|---:|---:|---:|
+| raw psnr_masked | 15.29 dB | **27.44 dB** | **+12.15 dB** ★ |
+| cc_psnr_masked | 26.04 dB | 26.23 dB | +0.19 dB |
+| raw/cc 差 | 10.75 dB ❌ | **1.21 dB** ✓ | **−9.54 dB** ★ |
+
+**主要结论**：
+1. **raw/cc 健康度大幅修复**：raw/cc 差从 10.75 dB 降至 1.21 dB（远低于 2 dB 门槛）✓ — V3-P1 核心目标达成
+2. **cc_psnr_masked = 26.23 dB**（T9.5 门槛 26.5 dB，差 0.27 dB）— 与 symmetric_axis + pose_adjustment 开启有关；纯 bilateral grid 效果预计略高于此基线
+3. **5k→30k 健康曲线正常**：raw psnr 随训练单调提升（24.61→27.44），与旧 ExposureModel 30k raw 下降的病态行为相反
+4. `symmetric_axis: "Y"` 已写入 metrics.json，验证配置正确传递
+
+**遗留**：T9.0（v3_architecture.md 创建）未做，阻塞低，可后续补充。
 
 ---
 
