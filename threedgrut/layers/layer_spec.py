@@ -33,6 +33,7 @@ class LayerSpec:
         is_particle_layer: False for sky_envmap / dynamic_deformables (v2 stub)
             -- skipped by LayeredMCMCStrategy and fused_view.
         density_init: log-space initial density for new particles.
+        sh_degree: per-layer SH degree cap; None = use global progressive_training value.
     """
 
     name: str
@@ -48,6 +49,12 @@ class LayerSpec:
     # MCMC perturb. None = no override (LayeredMCMCStrategy leaves the sub's
     # default _get_perturb_mask=ones in place).
     perturb_scale_mask: tuple[float, float, float] | None = None
+    # V3-R1.1: per-layer SH degree cap. None = use global
+    # conf.model.progressive_training.max_n_features. Road layer uses 1
+    # (DC + 3 linear) so the high-contrast lane-marking color does not
+    # over-fit to the training camera frustum and degrade under +/-2m
+    # lateral / +/-10 deg yaw novel-view perturbation.
+    sh_degree: int | None = None
     # T5.4: backend-specific knobs for non-particle layers. Currently used by
     # the sky_envmap layer to carry {"backend": "cubemap"|"mlp", "resolution":
     # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,
