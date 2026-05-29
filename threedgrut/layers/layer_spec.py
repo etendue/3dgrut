@@ -34,6 +34,9 @@ class LayerSpec:
             -- skipped by LayeredMCMCStrategy and fused_view.
         density_init: log-space initial density for new particles.
         sh_degree: per-layer SH degree cap; None = use global progressive_training value.
+        scale_xy_max: linear-metre upper bound on XY scale, compared against exp(scale_log); None disables.
+        scale_z_max: linear-metre upper bound on Z scale, compared against exp(scale_log); None disables.
+        anisotropy_ratio_max: cap on max/min scale eigenvalue ratio; None disables.
     """
 
     name: str
@@ -55,6 +58,19 @@ class LayerSpec:
     # over-fit to the training camera frustum and degrade under +/-2m
     # lateral / +/-10 deg yaw novel-view perturbation.
     sh_degree: int | None = None
+    # V3-R1.2: per-layer scale upper bounds in LINEAR units (physical metres).
+    # A later clamp compares these against exp(scale_log) -- i.e. the physical
+    # scale, NOT the raw log-space parameter -- after every MCMC
+    # post_optimizer_step. None disables. Road uses (0.3, 0.05): XY 0.3m ~=
+    # lane-stripe width x 2; Z 0.05m keeps the disc thin on the LiDAR-Z surface.
+    scale_xy_max: float | None = None
+    scale_z_max: float | None = None
+    # V3-R1.2: per-layer anisotropy ratio cap (max scale eigenvalue /
+    # min scale eigenvalue). Prevents needle-shaped Gaussians that
+    # overfit to a single training-camera direction. None disables.
+    # Road layer uses 8.0 -- generous enough for elongated lane stripes
+    # yet bounded enough to suppress hair-thin novel-view artifacts.
+    anisotropy_ratio_max: float | None = None
     # T5.4: backend-specific knobs for non-particle layers. Currently used by
     # the sky_envmap layer to carry {"backend": "cubemap"|"mlp", "resolution":
     # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,
