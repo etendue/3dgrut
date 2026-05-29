@@ -1284,7 +1284,11 @@ class LayeredGaussians(nn.Module):
             colors = torch.full((N, 3), 0.5, dtype=dtype, device=device)
 
         features_albedo = (colors.to(dtype=dtype, device=device) - 0.5) / _SH_C0
-        num_specular_dims = sh_degree_to_specular_dim(layer.max_n_features)
+        # V3-R1.1: per-layer SH cap via spec.sh_degree (None = inherit global).
+        # Road layer uses sh_degree=1 to reduce view-dep overfit on lane
+        # markings under novel-view perturbation (+/-2m lateral / +/-10 deg yaw).
+        effective_sh = spec.sh_degree if spec.sh_degree is not None else layer.max_n_features
+        num_specular_dims = sh_degree_to_specular_dim(effective_sh)
         features_specular = torch.zeros((N, num_specular_dims), dtype=dtype, device=device)
 
         # Tensors keep their incoming device. Caller (Trainer) is responsible
