@@ -612,3 +612,34 @@ def test_trainer_py_t9_2_cosine_t_max_minus_freeze():
         " If T_max stays = n_iter, cosine plateaus at lr0*0.011 at end of "
         "training instead of decaying to ~0."
     )
+
+
+# T9.4 fix: val loop must apply exposure_model (train/val/test parity) -------
+
+def test_trainer_py_t9_4_val_loop_applies_exposure_model():
+    """T9.4 fix: run_validation_pass must apply exposure_model after
+    model.forward + post_processing, mirroring trainer.step_iter (L1712)
+    and render.py:render_all (L451). Without it, val metrics measure raw
+    model output WITHOUT BilateralGrid correction → val/psnr scalar shows
+    退化-mode-like trajectory (T9.5 30k: val/psnr 20.44→13.72 across val
+    passes) that contradicts the actual test_last raw psnr_masked=27.25
+    for the same ckpt — misleading the monitoring story by ~13.5 dB.
+    """
+    src = _trainer_py_text()
+    # Find the run_validation_pass impl.
+    rvp_idx = src.find("def run_validation_pass(self")
+    assert rvp_idx >= 0, "run_validation_pass missing"
+    # Body extends to next def or end of file.
+    body_end = src.find("\n    def ", rvp_idx + 5)
+    body = src[rvp_idx:body_end if body_end > 0 else len(src)]
+
+    assert "self.exposure_model is not None" in body, (
+        "T9.4 fix regression: run_validation_pass no longer gates on "
+        "exposure_model. Val metrics will measure raw pre-correction "
+        "output → cc/raw gap scalar will show fake退化 mode."
+    )
+    assert 'outputs["pred_rgb"] = self.exposure_model(' in body, (
+        "T9.4 fix regression: val loop doesn't write back through "
+        "exposure_model. get_metrics will compute psnr on uncorrected "
+        "rgb_pred."
+    )

@@ -2052,6 +2052,19 @@ class Trainer3DGRUT:
                 # Apply post-processing for validation (novel view mode)
                 if self.post_processing is not None:
                     outputs = apply_post_processing(self.post_processing, outputs, gpu_batch, training=False)
+                # T9.4 fix: also apply exposure_model so val metrics are
+                # consistent with train-step loss (trainer.py:1712-1716) AND
+                # test_last eval via render.py:render_all (T9.3 apply hook).
+                # Without this, during-training val/psnr scalar measures raw
+                # model output WITHOUT BilateralGrid correction → trajectory
+                # looks like v2 ExposureModel退化 (e.g. T9.5 30k val/psnr
+                # at step 25k = 13.72 vs test_last raw psnr_masked = 27.25
+                # for the same ckpt; +13.5 dB BilateralGrid head-room
+                # invisible without this apply).
+                if self.exposure_model is not None:
+                    outputs["pred_rgb"] = self.exposure_model(
+                        gpu_batch.camera_idx, outputs["pred_rgb"]
+                    )
                 profilers["inference"].end()
 
                 batch_losses = self.get_losses(gpu_batch, outputs)
