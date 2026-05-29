@@ -1589,6 +1589,28 @@ class Trainer3DGRUT:
             if self.conf.loss.use_scale:
                 scale_loss = np.mean(batch_metrics["losses"]["scale_loss"])
                 writer.add_scalar("loss/scale/train", scale_loss, global_step)
+            # T11.C2 observability: per-head depth-loss curves so Stage 11
+            # exit (G1) can show "lidar/depth_prior loss converges monotone"
+            # as evidence instead of only the folded loss/total/train.
+            if getattr(self, "use_lidar_depth", False):
+                if "lidar_depth_loss" in batch_metrics["losses"]:
+                    writer.add_scalar(
+                        "loss/lidar_depth/train",
+                        np.mean(batch_metrics["losses"]["lidar_depth_loss"]),
+                        global_step,
+                    )
+                if "bg_lidar_loss" in batch_metrics["losses"]:
+                    writer.add_scalar(
+                        "loss/bg_lidar/train",
+                        np.mean(batch_metrics["losses"]["bg_lidar_loss"]),
+                        global_step,
+                    )
+            if getattr(self, "use_depth_prior", False) and "depth_prior_loss" in batch_metrics["losses"]:
+                writer.add_scalar(
+                    "loss/depth_prior/train",
+                    np.mean(batch_metrics["losses"]["depth_prior_loss"]),
+                    global_step,
+                )
             if self.post_processing is not None and "post_processing_reg_loss" in batch_metrics["losses"]:
                 post_processing_reg_loss = np.mean(batch_metrics["losses"]["post_processing_reg_loss"])
                 writer.add_scalar(
