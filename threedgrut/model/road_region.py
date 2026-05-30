@@ -174,6 +174,11 @@ def compute_bg_road_opacity_penalty(
     if lambda_val == 0.0 or N == 0 or height_field["grid_z"].numel() == 0:
         return torch.zeros((), device=device, dtype=bg_density_raw.dtype)
 
+    assert bg_density_raw.reshape(-1).shape[0] == N, (
+        f"compute_bg_road_opacity_penalty: bg_density_raw has {bg_density_raw.reshape(-1).shape[0]} "
+        f"elements but bg_positions has {N} rows — they must match."
+    )
+
     # Spatial mask is piecewise-constant in positions — no grad through it.
     with torch.no_grad():
         positions_xy = bg_positions[:, :2].detach()

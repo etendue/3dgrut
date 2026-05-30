@@ -87,3 +87,12 @@ def test_penalty_grad_flows_to_density_only():
     assert bgd.grad is not None and bgd.grad.abs().sum() > 0
     # positions must NOT receive gradient (mask is no_grad)
     assert bgp.grad is None or bgp.grad.abs().sum() == 0
+
+
+def test_penalty_shape_mismatch_raises():
+    import pytest as _pt
+    road = torch.cat([torch.zeros(4,2), torch.zeros(4,1)], dim=-1)
+    hf = build_road_height_field(road, cell_size=1.0)
+    bgp = torch.zeros(5,3); bgd = torch.zeros(3, requires_grad=True)  # mismatch 5 vs 3
+    with _pt.raises(Exception):
+        compute_bg_road_opacity_penalty(bgp, bgd, hf, z_band=0.4, lambda_val=1.0)
