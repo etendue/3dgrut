@@ -31,6 +31,7 @@ from threedgrut.model.class_psnr import (
 )
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.color_correct import color_correct_affine
+from threedgrut.utils.eval_metrics import compute_lidar_psnr  # T11.F1
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import create_summary_writer
 from threedgrut.utils.render import apply_post_processing
@@ -375,6 +376,9 @@ class Renderer:
         cc_psnr_masked = []
         cc_ssim_masked = []
         cc_lpips_masked = []
+        # T11.F1: LiDAR-domain depth PSNR accumulator. NaN frames (no LiDAR
+        # coverage) are skipped so cameras without LiDAR don't poison the mean.
+        lidar_psnrs: list = []
         inference_time = []
         # T8/B3 Phase E.6 — per-cuboid (per-class) PSNR. Records one entry per
         # active track per frame; only computed when ckpt is v2 LayeredGaussians
@@ -574,6 +578,25 @@ class Renderer:
                 cc_psnr_masked.append(cc_psnr[-1])
                 cc_ssim_masked.append(cc_ssim[-1])
                 cc_lpips_masked.append(cc_lpips[-1])
+
+            # T11.F1: LiDAR-domain depth PSNR per frame. Requires pred_dist in
+            # outputs AND lidar_depth_map in gpu_batch.image_infos (NCore only;
+            # NeRF/Colmap batches have neither → lidar_psnrs stays empty →
+            # mean_lidar_psnr absent from metrics.json, byte-identical for those
+            # datasets). NaN returned when a frame has 0 valid hit pixels →
+            # skip so it doesn't pull the mean down to -inf.
+            _image_infos = getattr(gpu_batch, "image_infos", None) or {}
+            _pred_dist = outputs.get("pred_dist") if isinstance(outputs, dict) else None
+            if (
+                _pred_dist is not None
+                and isinstance(_image_infos, dict)
+                and "lidar_depth_map" in _image_infos
+            ):
+                _lidar_gt = _image_infos["lidar_depth_map"]  # [B, H, W]
+                _hit = (_lidar_gt > 0).float()
+                _lp = compute_lidar_psnr(_pred_dist, _lidar_gt, _hit)
+                if _lp == _lp:  # not NaN
+                    lidar_psnrs.append(_lp)
 
             # T8.5.3 / V3-E3 — novel-view perturbation renders. For each
             # mode, mutate gpu_batch.T_to_world + T_to_world_end with the
@@ -815,6 +838,17 @@ class Renderer:
                 sum(1 for v in cp_values if v < 15.0)
             )
             table["mean_class_psnr"] = float(np.mean(cp_values))
+
+        # T11.F1: mean LiDAR-domain depth PSNR. Only written when at least one
+        # frame had valid LiDAR coverage (lidar_psnrs non-empty); absent on
+        # NeRF/Colmap paths → metrics.json byte-identical for those datasets.
+        if lidar_psnrs:
+            metrics_json["mean_lidar_psnr"] = float(np.mean(lidar_psnrs))
+            table["mean_lidar_psnr"] = float(np.mean(lidar_psnrs))
+            logger.info(
+                f"[T11.F1] mean_lidar_psnr={metrics_json['mean_lidar_psnr']:.3f} dB"
+                f" over {len(lidar_psnrs)} frames"
+            )
 
         # V3-L5/L8/L9 — diagnostic fields. Written even when the toggles are
         # OFF (as ``null``) so downstream A/B-comparison scripts can rely on

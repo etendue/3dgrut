@@ -37,7 +37,7 @@ from __future__ import annotations
 import io
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 from PIL import Image
@@ -186,3 +186,97 @@ def discover_aux_path(clip_dir: Union[str, Path], aux_type: str) -> Optional[Pat
             f"{clip_dir}: {matches}"
         )
     return matches[0]
+
+
+# ---------------------------------------------------------------------------
+# Stage 11 T11.B2 — per-frame npz depth-map readers (NOT zarr.itar pattern)
+# ---------------------------------------------------------------------------
+
+
+class LidarDepthAuxReader:
+    """Reads pre-dumped LiDAR → image-plane depth maps (Stage 11 T11.B2).
+
+    Layout: ``<root>/<camera_id>/<timestamp_us>.npz`` with a single key
+    ``depth`` of shape ``[H, W]`` float32 (ray-depth, 0 = no LiDAR hit).
+
+    This is a deliberately simple per-frame npz reader — NOT the zarr.itar
+    pattern of SsegAuxReader / LidarSsegAuxReader above. It loads depth maps
+    that scripts/dump_lidar_depth_map.py wrote, decoupled from NCore's packed
+    aux archives.
+
+    Args:
+        root: directory containing ``<camera_id>/<timestamp_us>.npz`` files.
+        default_shape: when set, a missing frame returns an all-zeros
+            ``[H, W]`` map (no LiDAR coverage is a legal situation → hit_mask
+            naturally zeros out the loss). When None, a missing frame raises
+            FileNotFoundError (caller must explicitly opt into the zeros
+            fallback).
+    """
+
+    def __init__(
+        self,
+        root: Union[str, Path],
+        default_shape: Optional[Tuple[int, int]] = None,
+        cache_maxsize: int = 256,
+    ) -> None:
+        self.root = Path(root)
+        self.default_shape = default_shape
+        # Bounded FIFO cache: unlike the unbounded growth that would reach
+        # ~14GB on a full-res 30k run, keep at most cache_maxsize decoded
+        # maps. The existing zarr readers in this file don't cache decoded
+        # arrays at all; this is a middle ground (recent-frame reuse without
+        # unbounded RAM). cache_maxsize <= 0 disables caching entirely.
+        self.cache_maxsize = cache_maxsize
+        self._cache: dict[Tuple[str, int], np.ndarray] = {}
+        self._cache_order: list[Tuple[str, int]] = []
+
+    def _path(self, camera_id: str, timestamp_us: int) -> Path:
+        return self.root / camera_id / f"{int(timestamp_us)}.npz"
+
+    def has_frame(self, camera_id: str, timestamp_us: int) -> bool:
+        return self._path(camera_id, timestamp_us).exists()
+
+    def read(self, camera_id: str, timestamp_us: int) -> np.ndarray:
+        """Return the ``[H, W]`` float32 depth map for one (camera, frame).
+
+        Cached (bounded FIFO, cache_maxsize) after first read. Missing frame →
+        zeros (if default_shape set) or FileNotFoundError.
+        """
+        key = (camera_id, int(timestamp_us))
+        if key in self._cache:
+            return self._cache[key]
+        path = self._path(camera_id, timestamp_us)
+        if not path.exists():
+            if self.default_shape is None:
+                raise FileNotFoundError(f"{type(self).__name__}: missing {path}")
+            depth = np.zeros(self.default_shape, dtype=np.float32)
+        else:
+            with np.load(path) as f:
+                if "depth" not in f:
+                    raise KeyError(
+                        f"{type(self).__name__}: npz at {path} has no 'depth' "
+                        f"key (found: {list(f.keys())})"
+                    )
+                depth = f["depth"].astype(np.float32)
+        self._cache_put(key, depth)
+        return depth
+
+    def _cache_put(self, key: Tuple[str, int], depth: np.ndarray) -> None:
+        if self.cache_maxsize <= 0:
+            return
+        self._cache[key] = depth
+        self._cache_order.append(key)
+        while len(self._cache_order) > self.cache_maxsize:
+            evicted = self._cache_order.pop(0)
+            self._cache.pop(evicted, None)
+
+
+class DepthV2AuxReader(LidarDepthAuxReader):
+    """Reads pre-dumped DepthAnythingV2 metric depth maps (Stage 11 T11.D2).
+
+    Identical npz layout to LidarDepthAuxReader, just rooted at the DepthV2
+    dump directory (aux/depth_anything_v2/<camera_id>/<timestamp_us>.npz).
+    Kept as a distinct class so the dataset can hold two readers with clear
+    names and so future DepthV2-specific handling has a home.
+    """
+    pass

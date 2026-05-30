@@ -185,12 +185,11 @@ kanban
 | **T10.2** | 10 | V3-L11 sRGB↔linear gamma 合成 — composite_in_linear_space=false | V3-L11 | 0.5 | ⬜ | — |
 | **T10.3** | 10 | V3-L12 sky_envmap 前 1k 步冻结 warm-up — min_grad_updates=1000 | V3-L12 | 0.5 | ⬜ | — |
 | **T10.4** | 10 | A800 Stage 10 出口 — Sky region PSNR ≥ 30 dB + 新视角无黑洞（视觉验证） | — | 1.5 | ⬜ | — |
-| **T11.1** | 11 | V3-T8 trainer 每步 6144 cam ray + 2048 LiDAR ray batch (1:1 比例) | V3-T8 | 1.5 | ⬜ | — |
-| **T11.2** | 11 | V3-T9 LiDAR depth/intensity ray loss head（NuRec 主训练同等权重） | V3-T9 | 2 | ⬜ | — |
-| **T11.3** | 11 | V3-R2 lidar_divergence=0.002 rad cone 抗锯齿 — tracer 端 expose | V3-R2 | 1 | ⬜ | — |
-| **T11.4** | 11 | V3-D1 DepthAnythingV2 metric depth prior reader + dataset 接入 + depth loss head | V3-D1 | 2 | ⬜ | — |
-| **T11.5** | 11 | V3-E1 val_lidar=true — LiDAR domain PSNR 独立报告 + metrics.json 新字段 | V3-E1 | 0.5 | ⬜ | — |
-| **T11.6** | 11 | A800 Stage 11 出口 — cc_psnr_masked ≥ 28.0 dB + LiDAR PSNR 独立报告 | — | 2 | ⬜ | — |
+| **T11.1/2** | 11 | **改 image-space**: LiDAR depth + bg_lidar loss head（`depth_prior.py`，复用 tracer pred_dist，非 ray-space） | V3-T8/9 | 1.5 | ✅ | `ae36867`+`3b091d8`+`eb4433f` |
+| **T11.3** | 11 | V3-R2 lidar_divergence cone 抗锯齿 — **defer**（出口不依赖，tracer Slang 改动大） | V3-R2 | 1 | ⏭️ defer | — |
+| **T11.4** | 11 | V3-D1 DepthAnythingV2 metric depth prior — reader + dataset 接入 + depth loss head | V3-D1 | 2 | ✅ | `f6e4e52`+`f12c304` |
+| **T11.5** | 11 | V3-E1 `mean_lidar_psnr` — render.py+trainer 双路 + 三层 eval-path 修复 | V3-E1 | 0.5 | ✅ | `c368b0c`+`f33dc89`+`9ac0d51` |
+| **T11.6** | 11 | A800 30k 出口 — **工程✓ KPI✗**: cc_psnr_masked 25.98 不退化, novel-view LPIPS Δ-0.0015 无提升, lidar_psnr 20.68 | — | 2 | 🟡 见 Done Log | `yaml opt-in` |
 | **T12.1** | 12 | V3-T2 opacity_threshold=0.005 与 NuRec 校对，记录当前 mcmc.py 实际值 | V3-T2 | 0.5 | ⬜ | — |
 | **T12.2** | 12 | V3-T3 binom_n_max=51 / noise_lr=5000 校对 | V3-T3 | 0.5 | ⬜ | — |
 | **T12.3** | 12 | V3-T4 add/relocate 双阶上限 — layered_mcmc.yaml 加 add_cap_ratio=0.9 / overall=2M | V3-T4 | 1 | ⬜ | — |
@@ -274,7 +273,7 @@ flowchart LR
   S85["Stage 8.5 ★<br/>R3/R4 + cuboid 草案<br/>+ novel-view pose 生成器<br/>+ v2 baseline novel-view 实测"]:::milestone
   S9["Stage 9<br/>V3-P1 ExposureModel 修复<br/>novel +0.5 (反作用小) / raw≈cc"]:::todo
   S10["Stage 10<br/>Sky inpaint+gamma+warm-up<br/>novel +1.5 / Sky novel ≥28"]:::todo
-  S11["Stage 11<br/>LiDAR ray + DepthV2 几何先验<br/>novel +3.0 几何稳定性 (核心)"]:::todo
+  S11["Stage 11<br/>LiDAR + DepthV2 深度监督 (image-space)<br/>工程✓ 但 novel-view 无提升; opt-in yaml"]:::done
   S12["Stage 12<br/>MCMC + scheduler 增强<br/>novel +0.3"]:::todo
   S13a["Stage 13a<br/>Track-pose + symmetric + cuboid padding<br/>novel +1.5 / dyn novel 不漂移"]:::todo
   S13b["Stage 13b<br/>per-track albedo/scale + Fourier + DINOv2<br/>novel +0.5"]:::todo
@@ -787,6 +786,36 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 
 > 按 Stage 顺序追加。每条包含：日期 + commit hash + Stage / Task ID + 实际改动摘要 + 关键验收数据（实测 PSNR / it/s / 耗时）。
 > v3 启动后填充。初始为空。
+
+### Stage 11 — LiDAR + DepthAnythingV2 image-space 深度监督（2026-05-30）
+
+**路线**：改走 **image-space**（drivestudio 风格，复用 tracer 的 `pred_dist`），非 plan 原定 ray-space 旁路 forward —— tracer 已逐像素返回深度，省一遍 forward。T11.3（lidar_divergence cone）defer，出口不依赖。
+
+**Commits（branch `worktree-stage11-lidar-depthv2`）**：
+- `ae36867` T11.A1 `DepthLoss` + `compute_bg_lidar_loss`（`threedgrut/correction/depth_prior.py`）+ 9 单测
+- `3b091d8`+`f512fb4`+`eb4433f` T11.A2 trainer 三 loss 接入 + grad-check tripwire + NameError 回归（`compute_bg_lidar_loss` 提 module 级 import + AST guard）
+- `7c50f99` per-head depth loss TB 记录（`loss/lidar_depth`、`loss/bg_lidar`、`loss/depth_prior`）
+- `f24fb36`+`f721044` T11.B1 LiDAR→image 投影脚本（`scripts/dump_lidar_depth_map.py`）+ NaN/遮挡鲁棒
+- `9c39f61`+`8836928` T11.B2 `LidarDepthAuxReader`/`DepthV2AuxReader`（npz-per-frame）+ 有界缓存
+- `f12c304` T11.C1 dump_clip 主体（FthetaForwardProjector 复用）+ datasetNcore train 分支注入
+- `f6e4e52` T11.D1 DepthV2 下载 + dump（`scripts/dump_depth_priors.py`，HF `Depth-Anything-V2-Metric-Outdoor-Large-hf`）
+- `c368b0c`+`f33dc89`+`9ac0d51` T11.F1 `mean_lidar_psnr`（`threedgrut/utils/eval_metrics.py`，render.py+trainer 双路）+ **三层 eval-path 修复**（make_test 工厂 + val/test `__getitem__` 分支转发 depth flags）
+- yaml 可配置选项（`configs/apps/ncore_3dgut_mcmc_multilayer.yaml`，默认全 OFF opt-in）
+
+**实测（A800，clip 9ae151dc，sym5cam 30k，vs baseline `v3_kpi_sym5cam_30k`）**：
+| 指标 | baseline | Stage11(+depth) | 判定 |
+|---|---|---|---|
+| cc_psnr_masked | 26.04 | **25.98**（Δ-0.06） | **不退化 ✓** |
+| novel-view LPIPS (4模式avg) | 0.6022 | **0.6007**（Δ-0.0015 噪声级） | **无提升 ✗** |
+| 视觉 A/B（viser 3dgut） | — | **肉眼无差别** | 印证无提升 |
+| mean_lidar_psnr | — | 20.68（< 25 NuRec ref） | 口径未校准 |
+| it/s | — | 4.68（30k≈107min） | — |
+
+**结论**：⚠️ **工程链路完整且正确**（dump→注入→3 loss→eval 全验证），但 **depth 监督在当前配置下对 novel-view 无可观测效果**，主 KPI（+3.0）未达成。量化（LPIPS）+ 视觉 A/B 一致。
+**根因（疑）**：`lidar_w_decay=1.0` 让 LiDAR λ 到 30k 衰到 ~2.4% + depth_prior inverse-depth 早饱和（27→0 by step 1000）→ **监督训练中途消失**；且 30k/5cam 下 RGB 信号已 pin 住几何（高斯 LiDAR 初始化），先验改进空间小。呼应 plan 风险 R13/R14。
+**已沉淀为 opt-in yaml 选项**（默认 OFF，baseline 字节等价）。**调参待验方向**：`lidar_w_decay=0`（全程监督）+ 提 `lambda_depth_prior` + depth_prior 换不饱和 loss。
+
+**数据资产发现（A800 schema 探查）**：clip 内 NuRec nre-tools 已预生成 `aux.depth.zarr.itar`（4.7GB，每相机 dense f16 深度，疑即 DepthV2 metric，未来可直读省 dump）+ `aux.lidar-camvis.zarr.itar`（每点 uint8 可见性，非 per-pixel 深度）。**Stage 13a 增强机会**：scatter 前用 camvis 做遮挡剔除 + lidar-sseg 剔动态点（消移动车拖影，关联车道线退化）。
 
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 
