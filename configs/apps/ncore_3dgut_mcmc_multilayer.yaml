@@ -87,6 +87,19 @@ layers:
 # ─── 数据集 (T8.5.7 / V3-E4 切到对称 5-cam ring) ────────────────────────
 dataset:
   load_aux_masks: true   # T3.1.b: sseg + lidar-sseg readers (v2_road)
+
+  # ── Stage 11 (T11): image-space depth supervision inputs (默认 OFF, opt-in) ──
+  # 读 scripts/dump_lidar_depth_map.py / dump_depth_priors.py 预 dump 的
+  # 每帧深度图 (aux/lidar_depth/ + aux/depth_anything_v2/) 注入
+  # image_infos["lidar_depth_map"] / ["depth_prior"]. train/val/test 三路均接.
+  # 配合 trainer.use_lidar_depth / use_depth_prior 使用; 任一为 true 时打开对应项.
+  # Stage 11 30k 实测 (sym5cam): 接通正确但 novel-view 无可观测提升 (LPIPS
+  # Δ-0.0015, 视觉 A/B 无差别), reconstructed 不退化. 详见 v3_plan.md § 5
+  # Done Log 2026-05-30 Stage 11 条目. 默认 false 保持 baseline 字节等价.
+  load_lidar_depth_map: false   # T11.C1: <clip>/aux/lidar_depth/<cam>/<ts>.npz
+  load_depth_prior: false       # T11.D1: <clip>/aux/depth_anything_v2/<cam>/<ts>.npz
+  lidar_depth_aux_root: null    # null → <clip_dir>/aux/lidar_depth
+  depth_prior_aux_root: null    # null → <clip_dir>/aux/depth_anything_v2
   # 对称 5-cam ring (T8.5.7 / V3-E4 30k 实测): front_wide_120 + 左右 cross
   # 120 + 左右 rear 70, 完整 360° 环视且左右对称. 历史非对称 5-cam 用
   # rear_tele_30 (单后向窄视角) 替代 rear_right_70, 30k 实测在 4 个公共
@@ -116,6 +129,27 @@ trainer:
   # 若想 ablation 关闭, CLI 加 trainer.use_exposure=false
   use_exposure: true
   exposure_lr: 1.0e-3
+
+  # ── Stage 11 (T11): LiDAR + DepthAnythingV2 depth supervision (默认 OFF) ──
+  # 三个 image-space depth loss head (threedgrut/correction/depth_prior.py):
+  #   lidar_depth  — LiDAR 投影稀疏 ray-depth, L1+normalize, λ 带 drivestudio
+  #                  指数衰减 (lidar_w_decay > 0 → λ_eff=λ*exp(-step/8000*decay))
+  #   bg_lidar     — sky 区域远场 anchor (MSE→max_depth), 防 sky 高斯坍缩
+  #   depth_prior  — DepthV2 稠密 metric depth, L2+inverse-depth
+  # 配合 dataset.load_lidar_depth_map / load_depth_prior (上面) + 预 dump 深度图.
+  # ⚠ Stage 11 30k 实测结论: 实现正确、reconstructed 不退化, 但 novel-view
+  #   无可观测提升 (LPIPS Δ-0.0015). 疑因 lidar_w_decay 衰减 + inverse-depth
+  #   早饱和使监督在训练中途消失 + 30k/5cam RGB 信号已 pin 住几何. 调参方向:
+  #   lidar_w_decay=0 (全程监督) + 提 λ_depth_prior + depth_prior 换不饱和 loss.
+  #   详见 v3_plan.md § 5 Done Log 2026-05-30 Stage 11 条目.
+  use_lidar_depth: false      # 总开关 (LiDAR ray-depth + bg_lidar)
+  use_depth_prior: false      # 总开关 (DepthAnythingV2 dense depth)
+  lambda_lidar_depth: 0.03    # LiDAR depth L1 权重 (drivestudio car2sim=0.03)
+  lidar_w_decay: 1.0          # >0 启用指数衰减; 设 0 让 LiDAR 全程监督
+  lambda_bg_lidar: 0.005      # sky 远场 anchor 权重
+  lambda_depth_prior: 0.01    # DepthV2 dense depth 权重
+  lidar_depth_loss_type: l1   # l1 | l2 | smooth_l1
+  depth_max: 80.0             # 深度有效范围上限 (m), normalize/clip 用
 
   # v2_full_4dviz_dynfix (T8/B3): bg-layer opacity 在 cuboid 内被压制,
   # 让 MCMC relocate 把死粒子转移到 donor, dyn 层接管 cuboid 内部.
