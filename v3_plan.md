@@ -190,6 +190,8 @@ kanban
 | **T11.4** | 11 | V3-D1 DepthAnythingV2 metric depth prior — reader + dataset 接入 + depth loss head | V3-D1 | 2 | ✅ | `f6e4e52`+`f12c304` |
 | **T11.5** | 11 | V3-E1 `mean_lidar_psnr` — render.py+trainer 双路 + 三层 eval-path 修复 | V3-E1 | 0.5 | ✅ | `c368b0c`+`f33dc89`+`9ac0d51` |
 | **T11.6** | 11 | A800 30k 出口 — **工程✓ KPI✗**: cc_psnr_masked 25.98 不退化, novel-view LPIPS Δ-0.0015 无提升, lidar_psnr 20.68 | — | 2 | 🟡 见 Done Log | `yaml opt-in` |
+| **T11.7** | 11 | 通道隔离 30k + C1 口径/约定审计 — LiDAR-only novel LPIPS −0.0045 / lidar_psnr +2dB, DepthV2-only −0.0027; **根因2坐实**(dense-view RGB pin 几何), 路线转 D 档稀疏视角 | T11.6 | 1.5 | ✅ 见 Done Log | `test_lidar_psnr_calibration.py` |
+| **T11.8** | 11 | D 档稀疏视角 ablation (3-cam, LiDAR-ON vs OFF) — **假设证伪**: 稀疏下 depth 反让 novel LPIPS −0.004(全4模式), vs dense +0.0045 符号翻转 → 深度监督对 novel-view 无稳健效应; KPI 杠杆转 DiFix | T11.7 | 1 | ✅ 见 Done Log | `CLI only` |
 | **T12.1** | 12 | V3-T2 opacity_threshold=0.005 与 NuRec 校对，记录当前 mcmc.py 实际值 | V3-T2 | 0.5 | ⬜ | — |
 | **T12.2** | 12 | V3-T3 binom_n_max=51 / noise_lr=5000 校对 | V3-T3 | 0.5 | ⬜ | — |
 | **T12.3** | 12 | V3-T4 add/relocate 双阶上限 — layered_mcmc.yaml 加 add_cap_ratio=0.9 / overall=2M | V3-T4 | 1 | ⬜ | — |
@@ -1165,6 +1167,63 @@ distillation (Stage C，DiFix 输出回灌训练) — 看 novel-view Δ 决定 R
    ABI 问题
 
 ---
+
+### Stage 11 后续 — 通道隔离实验 + LiDAR-PSNR 口径/约定审计（2026-06-01）
+
+承接上条 "调参待验方向"。A800 双卡并行跑**通道隔离** 30k（clip 9ae151dc，sym5cam），各自对照 baseline `v3_kpi_sym5cam_30k`，baseline 用同一 `render.py --novel-view` 协议重跑确保口径一致（重跑得 0.6022，与旧 Done Log 字节级吻合）。
+
+**配方**（CLI override，multilayer yaml 不改）：
+- **GPU0 LiDAR-only**：`use_lidar_depth=true use_depth_prior=false lidar_w_decay=0 lambda_lidar_depth=0.1`
+- **GPU1 DepthV2-only**：`use_depth_prior=true use_lidar_depth=false lambda_depth_prior=0.1`
+
+**实测（protocol-identical A/B）**：
+| 指标 | baseline | LiDAR-only | DepthV2-only |
+|---|---|---|---|
+| novel-view LPIPS (4模式avg) | 0.6022 | **0.5977 (−0.0045)** | **0.5995 (−0.0027)** |
+| ├ lateral_1m / 2m | 0.5838 / 0.6168 | 0.5788 / 0.6109 | 0.5811 / 0.6122 |
+| ├ yaw_5° / 10° | 0.5895 / 0.6188 | 0.5865 / 0.6145 | 0.5884 / 0.6161 |
+| cc_psnr_masked | 26.044 | 26.011 (Δ-0.03) | 26.045 (Δ+0.00) |
+| cc_lpips_masked | 0.3022 | 0.3006 | 0.2971 |
+| mean_lidar_psnr | — | **22.67**（vs 原 combined 20.68，+1.99） | n/a |
+
+**结论**：
+1. **两通道在全部 4 个 novel 模式上一致小幅改善**（同号同量级，非噪声）；**LiDAR-only(−0.0045) ≈ DepthV2-only(−0.0027)×1.7**，均**不退化**重建。
+2. **去衰减+提权重让 LiDAR 监督真正生效**：`mean_lidar_psnr` 20.68→22.67（+2dB），证伪 "监督中途消失" 是唯一问题；**但 novel-view 仍仅 −0.0045（≈0.7% 相对，远低 +3.0dB KPI）**→ **根因 2 坐实**：dense 5-cam/30k 下 RGB 已 pin 住几何，几何正确的全程强深度监督也只换边缘级 novel-view 收益。
+3. **路线判定**：通往 +3.0 KPI **不在深度监督调参**，而在 **D 档（稀疏 2-3 cam regime，让先验真正起作用）** 或其他 novel-view 杠杆（DiFix 合成 GT 等）。深度监督价值在 LiDAR-domain 几何精度（lidar_psnr）与重建稳定性，而非 dense-view 外推。
+
+**LiDAR-PSNR 口径 + 深度约定审计（C1，Mac 本地零 GPU）**：
+- `mean_lidar_psnr=20.68/22.67` 是**真实数字非口径 artifact**：两条 eval 路径（`render.py` / `trainer.py`）均用默认 `max_depth=100`（有意对齐 NuRec ref），dump/loss 的 80m clip 对 100²-norm 无影响（无 80–100 区间数据）。
+- **`pred_dist` = ray-depth**（tracer `canonicalRayDistance` = 沿单位方向射线欧氏距离）。故 **LiDAR loss 约定匹配 ✓**（ray vs ray），**DepthV2 loss 不匹配**（z vs ray，`dump_depth_priors.py` 注释承认 deliberate）。其 "中心 z≈ray <5%" 理由在 **120° 宽 FOV 边缘失效**（ray=z/cosθ，θ=60° 时≈2×），且 inverse-depth 只吸收**全局**尺度、吸收不了**逐像素** cosθ 偏差 → DepthV2 通道被压制的真实嫌疑。
+- **B 档待办（新登记）**：dump_depth_priors 时把 DAv2 z-depth→ray-depth 逐像素转换（相机内参可得），或 depth_prior loss 限中心区；预期能抬高 DepthV2 通道，但天花板仍受根因 2 限制。
+- **C2 回归 guard**：新增 `threedgrut/tests/test_lidar_psnr_calibration.py`（7 测，Mac CPU）— pin 默认 `max_depth=100`、AST guard 两条 eval 路径口径一致（CLAUDE.md §B 双路不变量）、把 ray/z 约定锚进代码。`pytest` 12 passed（含现有 5 个 eval_metrics）。
+
+**产物**：ckpt 与 novel-view 渲染存于 `output/s11_lidaronly_decay0_30k/` + `output/s11_depthv2only_30k/`（各含 `novel_eval/.../ours_30000/novel_view/`）。
+
+### Stage 11 后续 — 稀疏视角 ablation（D 档，验证 LiDAR 深度有效性）（2026-06-01）
+
+承接上条根因 2（"dense 5-cam RGB 已 pin 住几何，深度先验无发挥空间"）。**假设**：削到稀疏视角让 RGB 欠约束后，LiDAR 深度先验的 novel-view 增益应**放大**。A800 双卡并行跑 **3-cam 前向**（`camera_ids=[front_wide, cross_left, cross_right]`，去掉 2 个 rear）的 depth-ON vs OFF 对照，30k。
+
+**配方**：GPU0 = 3-cam + LiDAR-only（`use_lidar_depth=true lidar_w_decay=0 lambda_lidar_depth=0.1`）；GPU1 = 3-cam + depth 全关（稀疏 baseline）。CLI override，无代码改动。
+
+**实测（同一 3-cam 测试集，within-regime A/B）**：
+| 指标 | baseline(OFF) | LiDAR-ON | Δ(OFF−ON) |
+|---|---|---|---|
+| novel-view LPIPS (4模式avg) | **0.5781** | **0.5821** | **−0.0040（ON 反而更差）** |
+| ├ lateral_1m / 2m | 0.5559 / 0.5938 | 0.5603 / 0.5966 | −0.0044 / −0.0028 |
+| ├ yaw_5° / 10° | 0.5673 / 0.5953 | 0.5716 / 0.5997 | −0.0043 / −0.0044 |
+| cc_psnr_masked | 26.302 | 26.285 | −0.017 |
+| mean_lidar_psnr | — | **23.96**（>5-cam 22.67） | — |
+
+**结论 — 假设证伪 ⛔**：
+1. **稀疏 regime 下 LiDAR 深度监督全 4 模式一致让 novel-view 略变差（−0.004）**，而非预期的放大正增益。对照 dense 5-cam 的 Δ(OFF−ON)=**+0.0045**（深度略好）→ **跨 regime 符号翻转 + 量级都 ~0.004**：说明 image-space LiDAR 深度监督对 novel-view **没有稳健正效应**，dense 下的微弱"提升"是噪声而非真实先验价值。
+2. **口径提醒**：3-cam 与 5-cam 的 novel LPIPS 绝对值不可直接比（测试帧集不同——3-cam 不含较难的 rear，故绝对值更低）；唯一合法对照是**各 regime 内的 Δ(ON−OFF)**。
+3. **疑似机理**：稀疏下强 LiDAR λ=0.1 把优化容量过度拉向"拟合 LiDAR 覆盖像素（地面/近景/下半幅）"，挤占了 RGB 光度对欠约束区域（决定 novel-view 外观）的容量 → 净负。`lidar_psnr` 越调越高（20.7→22.7→24.0）但 novel-view 不跟随，印证深度监督价值在 **LiDAR-domain 几何精度**而非 RGB 外推。
+
+**路线判定（重要）**：**通往 +3.0dB novel-view KPI 的杠杆不是深度监督（任何 regime / 任何通道）**。深度监督保留为 opt-in，价值在 LiDAR-domain 几何保真 + 重建稳定性。novel-view KPI 应转向 **DiFix 合成 novel-view GT** 或 novel-view 专项监督/正则（Stage 15+）。C 档 DepthV2 z→ray 修正可作为提升 lidar_psnr/几何精度的备选，但不再期望它救 novel-view。
+
+**产物**：`output/s11_sparse3cam_lidar_30k/` + `output/s11_sparse3cam_baseline_30k/`（各含 `novel_eval/`）。
+
+**视觉 A/B 确认（viser `--renderer 3dgut` 双实例 8090/8091）+ 机理收口**：用户肉眼对比 ON vs OFF **看不出谁更好**（与 Δ−0.004 一致，实锤负向）。更关键的观察：去掉后向 2 相机后**后向视角两 ckpt 都很烂**，揭示根本机理 —— **image-space LiDAR 深度监督绑在训练相机上**（loss 只在有训练相机的像素比 pred_dist vs lidar_depth_map；3-cam 时后向无相机 → 后向无任何深度监督，即便原始 lidar_top_360fov 是 360°）。故 depth 监督**结构上无法给"无相机方向"补信息**：覆盖方向 RGB 已 pin 几何（depth 冗余），无覆盖方向 depth 也使不上劲（两边一样烂）。**两 regime 无增益至此从"测出"升级为"讲通"**：novel-view 外推缺的是**外观/辐射信息**，深度监督给不了 → 唯一杠杆是加真实相机覆盖 或 **DiFix 生成式补全外观**（Stage 15）；ray-space LiDAR 能补无覆盖方向的*几何*但仍补不了*外观*，亦非答案。
 
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 
