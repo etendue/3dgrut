@@ -33,6 +33,10 @@ class LayerSpec:
         is_particle_layer: False for sky_envmap / dynamic_deformables (v2 stub)
             -- skipped by LayeredMCMCStrategy and fused_view.
         density_init: log-space initial density for new particles.
+        sh_degree: RESERVED/unused. Per-layer SH degree cap (incompatible with fused renderer; see field comment).
+        scale_xy_max: linear-metre upper bound on XY scale, compared against exp(scale_log); None disables.
+        scale_z_max: linear-metre upper bound on Z scale, compared against exp(scale_log); None disables.
+        anisotropy_ratio_max: cap on max/min scale eigenvalue ratio; None disables.
     """
 
     name: str
@@ -48,6 +52,26 @@ class LayerSpec:
     # MCMC perturb. None = no override (LayeredMCMCStrategy leaves the sub's
     # default _get_perturb_mask=ones in place).
     perturb_scale_mask: tuple[float, float, float] | None = None
+    # RESERVED / currently unused. Per-layer SH-degree reduction by shrinking
+    # features_specular is incompatible with the fused-view renderer (all
+    # particle layers must share one specular width; the renderer uses the
+    # reference layer's max_n_features). A future freeze-based approach (keep
+    # width 45, zero+freeze road's order>=2 coefficients) would consume this
+    # field. Leaving the field in place so that redesign is a small change.
+    sh_degree: int | None = None
+    # V3-R1.2: per-layer scale upper bounds in LINEAR units (physical metres).
+    # A later clamp compares these against exp(scale_log) -- i.e. the physical
+    # scale, NOT the raw log-space parameter -- after every MCMC
+    # post_optimizer_step. None disables. Road uses (0.3, 0.05): XY 0.3m ~=
+    # lane-stripe width x 2; Z 0.05m keeps the disc thin on the LiDAR-Z surface.
+    scale_xy_max: float | None = None
+    scale_z_max: float | None = None
+    # V3-R1.2: per-layer anisotropy ratio cap (max scale eigenvalue /
+    # min scale eigenvalue). Prevents needle-shaped Gaussians that
+    # overfit to a single training-camera direction. None disables.
+    # Road layer uses 8.0 -- generous enough for elongated lane stripes
+    # yet bounded enough to suppress hair-thin novel-view artifacts.
+    anisotropy_ratio_max: float | None = None
     # T5.4: backend-specific knobs for non-particle layers. Currently used by
     # the sky_envmap layer to carry {"backend": "cubemap"|"mlp", "resolution":
     # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,

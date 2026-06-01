@@ -21,6 +21,7 @@ from omegaconf import OmegaConf
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.model.bg_cuboid_loss import clamp_layer_positions_to_cuboids
+from threedgrut.model.road_reg import clamp_layer_scales
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.strategy.mcmc import MCMCStrategy
 from threedgrut.utils.logger import logger
@@ -90,6 +91,9 @@ class LayeredMCMCStrategy(BaseStrategy):
         # owner cuboid after MCMC perturb/add. Pure no-op when conf gate off
         # or when the layer / metadata are missing.
         self._maybe_clamp_dynamic_rigids()
+        # V3-R1.2 — road-layer scale clamp (XY/Z upper bound + anisotropy ratio).
+        # No-op for layers whose LayerSpec leaves all 3 clamp fields None.
+        self._maybe_clamp_road_scales()
         return any_updated
 
     def _maybe_clamp_dynamic_rigids(self) -> None:
@@ -141,6 +145,33 @@ class LayeredMCMCStrategy(BaseStrategy):
             clamp_layer_positions_to_cuboids(
                 dyn.positions.data, track_ids_buf, track_keys_sorted, sizes_map,
             )
+
+    def _maybe_clamp_road_scales(self) -> None:
+        """V3-R1.2: in-place clamp per-layer scale params for layers whose
+        LayerSpec sets any of scale_xy_max / scale_z_max / anisotropy_ratio_max.
+
+        Road uses (0.3m, 0.05m, 8x); all other layers leave the three fields
+        None, so clamp_layer_scales is a no-op and this loop skips them —
+        byte-identical training for non-road layers.
+        """
+        layers = getattr(self.model, "layers", None)
+        if layers is None:
+            return
+        for spec in self.specs:
+            if not spec.is_particle_layer:
+                continue
+            if (
+                spec.scale_xy_max is None
+                and spec.scale_z_max is None
+                and spec.anisotropy_ratio_max is None
+            ):
+                continue
+            layer = layers.get(spec.name) if hasattr(layers, "get") else layers[spec.name]
+            if layer is None or layer.scale.numel() == 0:
+                continue
+            with torch.no_grad():
+                # copy_ (not .data=) bumps the param version so autograd/optimizer stay consistent
+                layer.scale.copy_(clamp_layer_scales(layer.scale.detach(), spec))
 
     def suspend(self) -> None:
         super().suspend()

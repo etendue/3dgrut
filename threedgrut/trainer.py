@@ -39,6 +39,7 @@ from threedgrut.model.bg_cuboid_loss import (
 )
 from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
+from threedgrut.model.road_reg import compute_effective_rank_loss
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
 from threedgrut.model.losses import ssim
 from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
@@ -123,6 +124,10 @@ class Trainer3DGRUT:
 
     _distillation_start_step: int = -1
     """ Step at which distillation starts (-1 means disabled) """
+
+    road_height_field: Optional[dict] = None
+    """ V3-R2: BEV road-surface height field precomputed at setup from road-layer positions.
+    None when bg_road_penalty disabled or no road layer present. """
 
     @staticmethod
     def create_from_checkpoint(resume: str, conf: DictConfig):
@@ -510,6 +515,26 @@ class Trainer3DGRUT:
             model.build_acc()
             model.setup_optimizer()
             global_step = 0
+
+        # V3-R2: precompute BEV road-surface height field for the bg-in-road
+        # opacity penalty (built once from initial road positions; road is
+        # Z-locked + low scale-LR so the surface is stable through training).
+        self.road_height_field = None
+        brp = self._bg_road_conf(getattr(conf, "trainer", {}))
+        if brp["enabled"]:
+            layers = getattr(self.model, "layers", None)
+            if layers is not None and "road" in layers:
+                road_layer = layers["road"]
+                if road_layer.positions.numel() > 0:
+                    from threedgrut.model.road_region import build_road_height_field
+                    self.road_height_field = build_road_height_field(
+                        road_layer.positions.detach(), cell_size=brp["cell_size"]
+                    )
+                    logger.info(
+                        f"[V3-R2] road height field built: "
+                        f"{int(self.road_height_field['occupied'].sum())} occupied cells "
+                        f"@ {brp['cell_size']}m"
+                    )
 
         self.global_step = global_step
         self.n_epochs = int((conf.n_iterations + len(train_dataset) - 1) / len(train_dataset))
@@ -1164,6 +1189,10 @@ class Trainer3DGRUT:
         # (v2 baseline byte-identical default).
         loss_bg_cuboid = self._compute_bg_cuboid_penalty_term(gpu_batch, trainer_conf)
 
+        # V3-R2: bg-in-road opacity penalty (push road-surface bg particles
+        # down so MCMC relocates them; road layer takes over via photometric).
+        loss_bg_road = self._compute_bg_road_penalty_term(trainer_conf)
+
         # V3 Stage B — temporal smoothness reg on learnable per-track pose.
         # Second-order finite-difference penalty (DriveStudio
         # RigidNodes.temporal_smooth_reg form) on _track_quat_<tid> +
@@ -1224,6 +1253,24 @@ class Trainer3DGRUT:
                 valid = valid * (dp_gt < self.depth_max).float()
                 loss_depth_prior = self.depth_prior_loss_fn(pred_dist, dp_gt, valid)
 
+        # V3-R1.3: effective-rank reg on road-layer scales (suppresses
+        # needle-shaped lane-marking Gaussians that overfit to the training
+        # camera direction). No-op unless lambda > 0 AND a road layer exists.
+        loss_road_eff_rank = torch.zeros(1, device=self.device)
+        lambda_road_eff_rank = float(
+            trainer_conf.get("lambda_road_eff_rank", 0.0) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "lambda_road_eff_rank", 0.0)
+        )
+        if (
+            lambda_road_eff_rank > 0.0
+            and hasattr(self.model, "layers")
+            and "road" in self.model.layers
+        ):
+            with torch.cuda.nvtx.range("loss-road-eff-rank"):
+                loss_road_eff_rank = compute_effective_rank_loss(
+                    self.model.layers["road"].scale
+                )
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -1232,10 +1279,12 @@ class Trainer3DGRUT:
             + lambda_scale * loss_scale
             + lambda_sky * loss_sky
             + loss_bg_cuboid
+            + loss_bg_road
             + loss_pose_smooth
             + lambda_lidar_eff * loss_lidar_depth
             + self.lambda_bg_lidar * loss_bg_lidar
             + self.lambda_depth_prior * loss_depth_prior
+            + lambda_road_eff_rank * loss_road_eff_rank
         )
         return dict(
             total_loss=loss,
@@ -1246,10 +1295,12 @@ class Trainer3DGRUT:
             scale_loss=lambda_scale * loss_scale,
             sky_loss=lambda_sky * loss_sky,
             bg_cuboid_loss=loss_bg_cuboid,
+            bg_road_loss=loss_bg_road,
             pose_smooth_loss=loss_pose_smooth,
             lidar_depth_loss=lambda_lidar_eff * loss_lidar_depth,
             bg_lidar_loss=self.lambda_bg_lidar * loss_bg_lidar,
             depth_prior_loss=self.lambda_depth_prior * loss_depth_prior,
+            road_eff_rank_loss=lambda_road_eff_rank * loss_road_eff_rank,
         )
 
     # ---------------------------------------------------------------- T8/B3
@@ -1289,6 +1340,52 @@ class Trainer3DGRUT:
                 else getattr(cfg, "use_cuboid_mask", True)
             ),
         }
+
+    # ---------------------------------------------------------------- V3-R2
+    def _bg_road_conf(self, trainer_conf) -> dict:
+        """Pull the bg_road_penalty sub-dict from trainer conf with safe defaults.
+        Returns {"enabled": False, ...} when absent."""
+        cfg = (
+            trainer_conf.get("bg_road_penalty", None) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "bg_road_penalty", None)
+        )
+        if cfg is None:
+            return {"enabled": False, "lambda_max": 0.0, "warmup_iters": 0,
+                    "cell_size": 1.0, "z_band": 0.4}
+        def g(k, d):
+            return cfg.get(k, d) if hasattr(cfg, "get") else getattr(cfg, k, d)
+        return {
+            "enabled": bool(g("enabled", False)),
+            "lambda_max": float(g("lambda", 0.0)),
+            "warmup_iters": int(g("lambda_warmup_iters", 0)),
+            "cell_size": float(g("cell_size", 1.0)),
+            "z_band": float(g("z_band", 0.4)),
+        }
+
+    def _compute_bg_road_penalty_term(self, trainer_conf) -> torch.Tensor:
+        """V3-R2: scalar bg-in-road opacity penalty. Pushes background particles
+        on the road surface to low opacity so MCMC relocates them, letting the
+        road layer take over. Returns zeros(1) when disabled / no field / lambda 0.
+        """
+        zero = torch.zeros(1, device=self.device)
+        cfg = self._bg_road_conf(trainer_conf)
+        if not cfg["enabled"]:
+            return zero
+        hf = getattr(self, "road_height_field", None)
+        if hf is None:
+            return zero
+        from threedgrut.model.bg_cuboid_loss import lambda_schedule
+        lam = lambda_schedule(self.global_step, cfg["lambda_max"], cfg["warmup_iters"])
+        if lam == 0.0:
+            return zero
+        layers = getattr(self.model, "layers", None)
+        if layers is None or "background" not in layers:
+            return zero
+        from threedgrut.model.road_region import compute_bg_road_opacity_penalty
+        bg = layers["background"]
+        return compute_bg_road_opacity_penalty(
+            bg.positions, bg.density, hf, z_band=cfg["z_band"], lambda_val=lam,
+        ).reshape(1)
 
     def _gather_active_tracks_for_batch(self, gpu_batch):
         """Return (poses [T,4,4], sizes [T,3]) for tracks active at this batch.

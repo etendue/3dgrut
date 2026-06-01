@@ -425,6 +425,8 @@ flowchart TB
 | `threedgrut/layers/dynamic_mask.py` | T4.4 ✅ (b22a506, 纯 PyTorch scanline AABB) |
 | `threedgrut/strategy/layered_mcmc.py` | T2.2 ✅ (7ad883b) |
 | `threedgrut/model/layered_loss.py` | T3.4 ✅ (9077fd6, region-weighted L1 纯函数) |
+| `threedgrut/model/road_reg.py` | **V3-R1.2/1.3 ✅ (75ab6f9, clamp_layer_scales + compute_effective_rank_loss + compute_depth_tv_loss 纯函数)** —— road scale clamp（实测生效但 novel-view null）|
+| `threedgrut/model/road_region.py` | **V3-R2 ✅ (7bf4992, build_road_height_field + query_ground_z + compute_bg_road_opacity_penalty)** —— bg-in-road opacity penalty，**首个真正有效改动**：5k A/B 路面 bg 粒子 −86%、road opacity +28% 反超主导、cc_psnr_masked +0.65 dB；镜像 bg_cuboid_loss.py |
 | `threedgrut/datasets/ncore_semantic.py` | T3.1.a ✅ (e8cb490, Cityscapes palette 常量) |
 | `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) |
 | `threedgrut/datasets/tracks_loader.py` | T4.1.b ✅ (b22a506) + T4.5 ✅ (4807951, load_tracks_from_ncore_cuboids) |
@@ -633,6 +635,8 @@ flowchart TB
 | **T8.5.7 / V3-E4** Stage 8.5 baseline cc_psnr_masked 27.78 (rear_right_70) vs Stage 7 baseline 22.56 (rear_tele_30), 单 rear-back 相机选择带来 **+5.2 dB** | T8.5.7 ✅ | A800 E2b 对称 5cam 30k 实测; 详见 v3_plan.md § 5 Done Log 2026-05-27 V3-E4 |
 | **T8.5.7 / V3-E4** 对称 5-cam 30k cc_psnr_masked 26.04 (global) / 25.61 (4-cam mean), 比 7-cam 30k 全面高 +0.42 dB on 4 公共相机 | T8.5.7 ✅ | A800 E2a vs E2b 实测; multilayer.yaml 默认 camera_ids 切换 |
 | **T8.5.7 / V3-E4.1** (V3 follow-up) `Renderer.from_checkpoint` standalone reload of LayeredGaussians ckpt 偏差 ~3 dB (ExposureModel state 未恢复) | T8.5.7 → V3-E4.1 ⬜ | 0ffd738 加 logger.warning; V3-E4 本身用 train-time metrics.json per_camera 绕开此 bug; V3 后续 novel-view eval 需要先解决 |
+| **V3-R1.1 架构约束** `_FusedView.get_features()` concat 所有粒子层 `features_specular` 成单张量、渲染器用 ref 层（background）`max_n_features` 统一求值 SH ⇒ **所有粒子层 SH 宽度必须一致**。单层降阶不能缩张量（`validate_fields` 断言 + concat 维度双重失败），须 freeze 法（保 45 维、zero+freeze road order≥2 系数）。CPU 测试 `setup_optimizer=False` 跳过 validate_fields 不抓此 bug | V3-R1.1 ⬜ (中和于 `1117493`) | GPU train AssertionError @ layered_model.py:1308 `init_layer_from_points→validate_fields`；`LayerSpec.sh_degree` 字段保留为 reserved infra |
+| **V3-R2 核心机制** road 层渲染由 background 主导（路面 XY 内 75 万 alive bg opacity 主导 vs road 11 万 op 中位 0.014 隐形）⇒ road-only 改动（SH/clamp/effrank）对画面零影响。`bg_road_penalty` 压低路面区 bg opacity → MCMC relocate 搬走 → road 接管。grad 只过 bg density，spatial mask（BEV height field `\|z-ground\|<z_band`）no_grad，镜像 bg_cuboid_loss；base 默认 off 字节兼容 | V3-R2 ✅ (`7bf4992`+`41fc55d`) | 5k A/B 实测：路面 bg 粒子 246729→33996 (−86%)、road opacity_sum 24768→31602 (+28% 反超)、cc_psnr_masked 23.09→23.74 (+0.65 dB)；viser 肉眼用户验收路面完整度 ON≫OFF；8 单测 + bg_cuboid 范式对齐 |
 
 ---
 

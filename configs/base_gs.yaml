@@ -67,6 +67,23 @@ trainer:
     use_cuboid_mask: true       # fill image_infos["dyn_mask_cuboid"] for layered L1
     dyn_clamp_to_cuboid: false  # in-place dynamic_rigids positions clamp post-MCMC
 
+  # V3-R2: bg-in-road opacity penalty. Penalizes opacity of background
+  # particles on the road surface (BEV height field, |z-ground|<z_band) so
+  # MCMC relocates them and the road layer takes over the road. enabled=false
+  # = byte-identical with pre-V3-R2. lambda ramps 0->lambda over warmup.
+  bg_road_penalty:
+    enabled: false
+    lambda: 0.1
+    lambda_warmup_iters: 1000
+    cell_size: 1.0
+    z_band: 0.4
+
+  # V3-R1.3: effective rank reg on road layer scales. Penalizes needle-
+  # shaped Gaussians that overfit to a single training-camera direction
+  # and break under novel-view +/-2m / +/-10deg perturbation. 0.0 = off
+  # (v2 byte-identical). Typical: 0.005 - 0.02.
+  lambda_road_eff_rank: 0.0
+
   # ──────────────────────────────────────────────────────────────────────
   # V3 pose_adjustment — user-facing alias for the per-track learnable
   # cuboid pose feature (Stage A SE(3) refinement + Stage B temporal

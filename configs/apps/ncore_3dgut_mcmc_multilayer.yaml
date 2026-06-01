@@ -161,6 +161,17 @@ trainer:
     dyn_clamp_to_cuboid: true   # LayeredMCMCStrategy._post_optimizer_step 把
                                 # dynamic_rigids.positions 钳回 |local| ≤ size/2
 
+  # V3-R2 — bg-in-road opacity penalty (active for road-takeover experiment).
+  bg_road_penalty:
+    enabled: true
+    lambda: 0.1
+    lambda_warmup_iters: 1000
+    cell_size: 1.0
+    z_band: 0.4
+
+  # V3-R1.3 — road-layer effective rank reg (active, V3-R1 Phase 1).
+  lambda_road_eff_rank: 0.01
+
 # ─── 4D viz metadata 入 ckpt (源自 v2_full_4dviz.yaml) ─────────────────
 viz_4d:
   enabled: true
