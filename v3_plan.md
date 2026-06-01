@@ -856,9 +856,32 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 | psnr_masked | 24.36 | **24.96** | +0.60 dB |
 
 - **viser 肉眼验收（用户, 2026-06-01）**：「penalty on 路面完整很多，比 off 好很多；大位移大角度也好很多」。**机制完全奏效：bg 撤出路面 → road 接管 → opacity 主导权翻转。**
-- **遗留问题**：BEV 俯视下路面仍有空洞（两臂都有，ON 好很多）。根因 = road 来自稀疏 LiDAR 路面点（`road_init.py` 5cm BEV grid + KNN-Z），LiDAR 未命中区（侧前/远处/遮挡）无 road 粒子，且前向相机无 BEV 监督 → 几何空洞。属 Phase 2A 几何监督（Stage 11 LiDAR 加密 + DepthAnythingV2）范畴。
+- **遗留问题**：BEV 俯视下路面仍有空洞（两臂都有，ON 好很多）。属 Phase 2A 范畴。⚠️ **根因已被 Phase 2A 量化诊断修正**（见下节）：初版判断"LiDAR 未命中区无 road 粒子 → 几何空洞"**不准确**——`road_init.py` KNN-Z 无距离剔除，整个 bbox 网格都被铺满 road 粒子；真正主因是**水平薄盘只被掠射环视监督 → 远场/侧向/遮挡处 road 半透明（A 类）+ MCMC relocate 把死亡尾部聚集留洞（B 类）**，baseline 里被 bg 替路面撑满所以看不出，V3-R2 赶走 bg 后才暴露。
 
 **踩坑备忘**：① ThinkPad 双卡选 4090 必须 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1`（CUDA 默认 FASTEST_FIRST 与 nvidia-smi PCI 序相反）；② 根目录 `render.py` 需单独 rsync（只同步 threedgrut/+configs/ 会留 stale render.py 无 `--novel-view`）；③ ThinkPad 会休眠杀 nohup 进程，长任务用 `setsid nohup systemd-inhibit --what=sleep:idle`；④ `/tmp` 日志休眠/重启被清，产物写持久盘 `~/work/output`；⑤ viser 真实路径 `threedgrut_playground/viser_gui_4d.py --gs_object`（非 `threedgrut/gui/`）。
+
+### Phase 2A — BEV 路面空洞量化诊断（2026-06-01）
+
+承接 V3-R2 遗留问题，把"路面俯视有空洞"拆成可测的两类并用 B3_30k ckpt 实测，**修正了根因**。
+
+- **新增诊断基建**（Mac/CPU，纯 numpy/scipy，无 ckpt 无需 torch/GPU）：
+  - [`threedgrut_playground/utils/bev_holes.py`](threedgrut_playground/utils/bev_holes.py) `compute_bev_hole_stats()`：在 ego corridor 网格上分离 **A 类透明洞**（有粒子但 max opacity < floor）/ **B 类几何洞**（cell 无粒子），输出占比 + count/opacity 网格。grid 按 ego corridor 限界（非 particle bbox，否则 bg 粒子 sprawl 几百米致网格 OOM——已 pin 回归测试）。
+  - [`scripts/diagnose_road_bev_holes.py`](scripts/diagnose_road_bev_holes.py)：load ckpt → 提取 road/bg positions + `sigmoid(density)` → ego 轨迹 → road-only / bg-only / road∪bg 三趟 + 两张 BEV 热力图。
+  - [`threedgrut/tests/test_bev_holes.py`](threedgrut/tests/test_bev_holes.py)：9 单测（Mac `pytest --noconftest` 全绿）。
+- **B3_30k 实测**（penalty-OFF baseline，ego ±12m corridor，6210 cells，cell 0.5m）：
+  - 验证锚点：road opacity 中位 **0.0297**（与 L841 "0.014" 同量级，证实 `sigmoid(density)` 提取无误）。
+
+  | pass | B 类几何洞 | A 类透明洞@0.05 | 不透明覆盖@0.1 | @0.3 |
+  |---|---|---|---|---|
+  | road-only | 15.2% | 14.3% | **68.1%** | 54.4% |
+  | bg-only | 13.3% | 10.3% | — | — |
+  | road∪bg（俯视所见） | **1.6%** | 4.6% | **91.7%** | 82.7% |
+
+  - **road 自身覆盖缺口 ≈32%（floor 0.1）≈ 一半几何(15%) + 一半透明(17%)**；baseline 里 bg 补到 91.7% → 真空洞仅 1.6%。
+- **关键结论**：baseline road 只覆盖 68%，bg 替它撑满 → 看不出洞；**V3-R2 赶走 bg（−86%）后 road 那 32% 缺口被暴露 = 残留 BEV 空洞**。R2 用"哪里监督好哪里清晰 + 别处露洞"换掉"到处模糊但填满"。
+- **热力图证实空间分布**：road 空洞集中在 **ego 起点后方 + 远侧向**（前向环视掠射看不到处）；被监督处 opacity 直接拉满（双峰，非均匀半透明）。
+- **修复方向**（数据支持，需 A 类 + B 类两手）：A 类→road opacity floor / 反透明正则 / Stage 11 几何监督；B 类→road relocate `max_relocation_fraction<1`（`mcmc.py:121` 已有旋钮）或关 road relocate。
+- **遗留**：精确 ON 残留数字需重跑 penalty-ON ckpt（5k A/B ON ckpt 已被 ThinkPad /tmp 休眠清理）——Step 2 A800 5k ON/OFF 复测中。
 
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 

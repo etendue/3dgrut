@@ -464,6 +464,9 @@ flowchart TB
 | `threedgrut/tests/test_cuboid_wireframe.py` | T8.5 ✅ (Stage 8 Mac, 9 测试: shape / vertex range / unique pairs / identity / translation / size scale / z90 rotation / class_color / instance_color) |
 | `threedgrut_playground/README_4D.md` | T8.x ✅ (Stage 8 Mac, 用户文档 Quick Start + GUI + ckpt schema + fallback + troubleshooting) |
 | `WP_V2_Report.md` | T7.5 ✅ (Stage 7 结题, 231 行: KPI 三组对比 + ExposureModel 失控诊断 + cc_PSNR 解读 + V3-P1 整合方案) |
+| `threedgrut_playground/utils/bev_holes.py` | **Phase 2A ✅** — `compute_bev_hole_stats()` ego-corridor 网格分离 A 类透明洞/B 类几何洞 + count/opacity 网格；grid 按 corridor 限界（防 bg sprawl OOM）；纯 numpy/scipy 无 torch |
+| `scripts/diagnose_road_bev_holes.py` | **Phase 2A ✅** — CLI: ckpt→road/bg sigmoid(density)→road-only/bg-only/road∪bg 三趟 + BEV 热力图；B3_30k 实测 road 覆盖 68%、bg 替补到 91.7%、真洞 1.6% |
+| `threedgrut/tests/test_bev_holes.py` | **Phase 2A ✅** (9 tests, Mac `pytest --noconftest` 全绿；含 corridor-bound sprawl OOM 回归测试) |
 
 ### 6.2 修改文件
 
