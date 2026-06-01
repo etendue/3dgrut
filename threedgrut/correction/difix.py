@@ -133,6 +133,15 @@ class DifixPostProcessor(nn.Module):
         # Bridge HF cache layout to vendored pix2pix's hardcoded /work/models/base/ paths.
         self._ensure_tokenizer_symlinks(ckpt)
 
+        # Add third_party/Fixer/ to sys.path so the vendored
+        # pix2pix_turbo_*.py's `from model import ...` (line 49) resolves to
+        # third_party/Fixer/model.py rather than failing as a top-level
+        # `model` module miss. Verified on ThinkPad cosmos container 2026-06-01.
+        import sys
+        fixer_dir = Path(__file__).resolve().parent.parent.parent / "third_party" / "Fixer"
+        if str(fixer_dir) not in sys.path:
+            sys.path.insert(0, str(fixer_dir))
+
         # Lazy import so this module loads cleanly on hosts (e.g. Mac dev) that
         # do not have cosmos_predict2 / transformer_engine / imaginaire.
         try:
@@ -200,7 +209,14 @@ class DifixPostProcessor(nn.Module):
         )
         x = x.to(device="cuda", dtype=self._dtype)
 
-        y = self._model(x)                                  # (B,3,target_h,target_w)
+        # nv-tlabs/Fixer inference_pretrained_model.py::model_inference wraps
+        # forward in autocast so the DiT (which holds some fp32 buffers /
+        # parameters internally even after .to(bfloat16)) sees a matching
+        # dtype at the x_embedder Linear. Without this we get
+        # ``RuntimeError: expected mat1 and mat2 to have the same dtype,
+        # but got: float != c10::BFloat16`` mid-forward.
+        with torch.autocast(device_type="cuda", dtype=self._dtype, enabled=True):
+            y = self._model(x)                              # (B,3,target_h,target_w)
 
         # Resize back, denormalize, clamp, NCHW -> NHWC, restore dtype.
         y = F.interpolate(

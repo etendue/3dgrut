@@ -959,7 +959,93 @@ $HF_HOME/nvidia-Fixer/
 - DiFix `_ensure_tokenizer_symlinks()` requires `/work/` writeable（root OK；non-root host 需 `sudo mkdir -p /work/models/base`）
 - cosmos_predict2 ↔ flash-attn ABI 兼容是核心装机风险，不是 plan 之前列的 transformer_engine（TE build with cudnn-dev 实测可解）
 
-**关联未来 task**：V3-T15.2 Stage A.3（cosmos-predict2-container 路径下重跑 forward smoke + 完整 metrics.json `mean_psnr_difix` 实测）
+**关联未来 task**：V3-T15.2 Stage A.3 ✅（**已完成 2026-06-01**，见下方）；
+后续 Stage A.4（在已 commit ckpt 上跑完整 render.py `+render.use_difix=true` eval，
+拿 `mean_psnr_difix` 数据完成 Done Log v3 KPI 表）
+
+---
+
+### V3-T15.2 Stage A.3 — ThinkPad cosmos Docker 真实 forward smoke 完整通过（2026-06-01）
+
+**Commit**: `<next>` (`threedgrut/correction/difix.py` autocast 修复 + 完整实测
+数据 Done Log)
+
+**目标**：在 ThinkPad RTX 4090 + cosmos-predict2-container:1.2 Docker 里跑通
+`DifixPostProcessor.forward()`，拿首批 forward 延迟/shape/range 实测数字。
+
+**🎉 完全成功 — 5/5 验证通过**：
+
+| metric | 实测值 |
+|---|---|
+| 第一次 forward (含 lazy_init + load 3.8 GB pretrained_fixer.pkl) | **11.5 s** |
+| 第二次 (CUDA kernel warm-up) | 1235.8 ms |
+| 第 3-4 次 steady-state hot forward | **78 / 81 ms / frame** |
+| UNet (Text2ImagePipeline DiT) 参数 | 674.33 M |
+| VAE (DC-AE tokenizer + Wan2.1 VAE) 参数 | 76.79 M |
+| Input shape | (1, 956, 1408, 3) float32 ∈ [0, 1] — NCore FTheta 渲染分辨率 |
+| Output shape | (1, 956, 1408, 3) float32 ∈ **[0.206, 0.746]** |
+| Shape 一致性 | ✅ 输入输出完全一致 |
+| Range validity | ✅ 输出在 [0, 1] 内（denoised 不是 sharp clip，正常）|
+| Lazy import 契约 | ✅ DifixPostProcessor 加载时 cosmos_predict2 不 import |
+
+延迟基线：~80 ms/frame on RTX 4090；对比 README 报 A100 50.6 ms / H20 61.7 ms /
+H100 26.5 ms，4090 略慢于 A100 for bf16 inference，符合预期。
+
+**走通的环境组合**（**下次复现的关键参数**）：
+
+| 项 | 值 |
+|---|---|
+| Vast.ai / ThinkPad / A800 | **ThinkPad** (本地 GPU + Docker，避开 vast.ai 网络/装机不确定性) |
+| Docker base image | `nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2` (43.2 GB / 13.5 GB on-disk) |
+| 预装关键 deps | torch 2.7.0a0 cu12.9 NV nightly / **transformer_engine 2.2.0+c55e425** (NV custom build) / **flash_attn 2.7.3** (ABI 已匹配) / diffusers 0.33.1 / safetensors 0.5.3 / huggingface_hub 0.32.4 |
+| 需手动装的 deps | `pip install --no-deps cosmos-predict2==1.0.9` + `pip install lpips natsort` (lpips/natsort 在 cosmos image 缺，但 difix forward 不依赖；建议补) |
+| HF cache layout | `/home/yusun/.cache/huggingface/nvidia-Fixer/{pretrained/pretrained_fixer.pkl, base/{model_fast_tokenizer.pt, tokenizer_fast.pth}}` 总 5.3 GB |
+| `/work/models/base/` symlink | `_ensure_tokenizer_symlinks()` 在 container 内自动创建 → `/root/.cache/huggingface/nvidia-Fixer/base/*` |
+| docker run flags | `--gpus all -v ~/3dgrut2_difix:/work -v ~/.cache/huggingface:/root/.cache/huggingface -w /work --entrypoint /bin/bash` |
+
+#### 本次新增/修改
+
+1. **`threedgrut/correction/difix.py` 关键修复**（在 Vast.ai 上未发现，ThinkPad 真跑才暴露）：
+   - `_lazy_init()` 新增 sys.path 插入 `third_party/Fixer/`，让 vendored `pix2pix_turbo_*.py:49` `from model import ...` 解析到 `third_party/Fixer/model.py`（否则 ModuleNotFoundError: top-level 'model'）
+   - `forward()` 包 `torch.autocast(device_type="cuda", dtype=bfloat16)`，对齐 nv-tlabs/Fixer 原 `inference_pretrained_model.py::model_inference` 的 forward 上下文（否则 DiT `x_embedder.proj` Linear 报 `RuntimeError: expected mat1 and mat2 to have the same dtype, but got: float != c10::BFloat16`）
+2. **`Mac CPU pytest test_difix_smoke.py` 仍 5/5 全绿**（lazy-import 契约 + identity shortcut + missing ckpt RuntimeError + 坏 shape ValueError + HF_HOME fallback path 全过）
+
+#### 装机踩坑教训（vs Stage A.2 Vast.ai）
+
+ThinkPad cosmos Docker 路径**跳过了 Vast.ai 的 4 个 build blocker**：
+
+| Vast.ai blocker | ThinkPad cosmos Docker |
+|---|---|
+| torch 2.6.0+cu124 vs torchvision 0.19 不兼容 | cosmos image 预装 torch 2.7 NV nightly + torchvision matched |
+| transformer_engine 需 build (cudnn.h 缺) | TE 2.2.0+c55e425 预装 |
+| flash_attn ABI mismatch (cxx11_abi=True vs torch=False) | flash_attn 2.7.3 预装 ABI 已对齐 torch |
+| flash_attn 2.5.8 setup.py bdist_wheel 失败 | 不需 build |
+
+**最大教训**：cosmos image 价值 = 跳过所有 GPU-build C++ ABI 兼容问题。对于本仓库
+任何依赖 NVIDIA cosmos / TE / flash-attn 栈的 v3 实验（**包括将来的 Stage 15 progressive
+distillation, Stage 16 hash-grid deformable, Stage 17 secondary ray 等**），**默认走
+cosmos image** 比原生 pip 装机省 3-4 小时。
+
+#### 网络 / 文件传输 学到的工作流
+
+ThinkPad 在中国，**huggingface.co 直接访问被 GFW 阻挡**；container 内同样无网。
+HF endpoint 国内镜像 `hf-mirror.com` 也是兜底方案。本次实际走 **Mac (HF 可达) →
+rsync (5.2 GB ~3 min on 局域网) → ThinkPad** 路径。复杂点：
+
+- Container 内创建的目录是 root uid 0，host yusun (uid 1000) rsync 写入受阻
+  → 在 container 内 `chown -R 1000:1000 /root/.cache/huggingface/nvidia-Fixer/`
+  （挂载点改 host 文件 uid）后 rsync 通
+
+#### 下次 Stage A.4 任务（数据已就绪）
+
+- 在 ThinkPad container 已 mount 的 `/work` 里跑 `python render.py --checkpoint
+  <某 NCore ckpt> --out-dir /tmp/difix_eval +render.use_difix=true`，拿到
+  完整 metrics.json `mean_psnr_difix` / `mean_ssim_difix` / `mean_lpips_difix`
+  对比 baseline，决定是否上 Stage B/C distillation
+- 预计延迟 80 ms/frame × 375 frames ≈ 30 s 额外 eval 时间（trivial）
+
+**关联未来 task**：T15.4 progressive distillation（Stage C）/ T8.5.4 novel-view
+4-mode loop（Stage B 自然接通）/ V3-T15.2 Stage A.4 (real-ckpt eval Δ-PSNR)
 
 #### Stage A.3 尝试（2026-06-01 当日同 session，已 cancel）
 
