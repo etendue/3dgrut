@@ -52,7 +52,13 @@ def main() -> None:
                     help="Override DiFix ckpt path (default $HF_HOME/nvidia-Fixer/pretrained/pretrained_fixer.pkl)")
     ap.add_argument("--max-frames", type=int, default=0,
                     help="Optionally limit number of frames for a quick smoke (0 = all)")
+    ap.add_argument("--save-difix-dir", type=Path, default=None,
+                    help="If set, save each DiFix-processed pred PNG into this dir (e.g. <out>/ours_<step>/difix). "
+                         "Filename mirrors the source render PNG (00000.png ... 00374.png).")
     args = ap.parse_args()
+    if args.save_difix_dir is not None:
+        args.save_difix_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[eval] saving DiFix PNGs to {args.save_difix_dir}")
 
     render_paths = sorted(args.renders_dir.glob("*.png"))
     gt_paths = sorted(args.gt_dir.glob("*.png"))
@@ -99,6 +105,13 @@ def main() -> None:
         torch.cuda.synchronize(); t0 = time.time()
         pred_difix = difix(pred)                    # (1, H, W, 3) float32 ∈ [0,1]
         torch.cuda.synchronize(); timings_ms.append((time.time() - t0) * 1000)
+
+        if args.save_difix_dir is not None:
+            # NHWC → NCHW for torchvision.save_image, then write
+            torchvision.utils.save_image(
+                pred_difix.squeeze(0).permute(2, 0, 1).clip(0, 1),
+                args.save_difix_dir / rp.name,
+            )
 
         difix_psnr.append(
             psnr_m(pred_difix.permute(0, 3, 1, 2),
