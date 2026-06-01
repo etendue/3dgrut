@@ -48,24 +48,32 @@ If pip-only fails, fall back to Path A.
 
 ## Weight layout (downloaded by `scripts/download_difix.sh`)
 
+Real layout from `hf download nvidia/Fixer` (verified Vast.ai 2026-06-01,
+5.2 GB total):
+
 ```
 $HF_HOME/nvidia-Fixer/
-├── pretrained_fixer.pkl              # Pix2Pix_Turbo state_dict (~1.2 GB)
-└── models/base/
-    ├── model_fast_tokenizer.pt       # DC-AE tokenizer
-    └── tokenizer_fast.pth
+├── pretrained/
+│   └── pretrained_fixer.pkl          # Pix2Pix_Turbo state_dict (3.8 GB)
+└── base/
+    ├── model_fast_tokenizer.pt       # MiniTrainDIT (1.2 GB)
+    └── tokenizer_fast.pth            # Wan2.1 VAE (221 MB)
 ```
 
-The vendored `pix2pix_turbo_nocond_cosmos_base_faster_tokenizer.py` hardcodes:
+The vendored `pix2pix_turbo_nocond_cosmos_base_faster_tokenizer.py` hardcodes
+Docker-layout absolute paths:
 
 ```python
-config.dit_path = '/work/models/base/model_fast_tokenizer.pt'
+config.dit_path           = '/work/models/base/model_fast_tokenizer.pt'
 config.tokenizer["vae_pth"] = '/work/models/base/tokenizer_fast.pth'
 ```
 
-When running outside the Docker `/work` layout, you must override these paths
-via `DifixPostProcessor.__init__` arguments — see `threedgrut/correction/difix.py`
-for the parameter list.
+`DifixPostProcessor._ensure_tokenizer_symlinks()` (in
+`threedgrut/correction/difix.py`) bridges this automatically at first forward:
+it creates idempotent symlinks `/work/models/base/{model_fast_tokenizer.pt,
+tokenizer_fast.pth}` pointing to the HF cache's `base/` files. **Requires
+write access to `/work/`** — the Docker container has this; off-Docker hosts
+(e.g. Vast.ai instances) usually do too, as root.
 
 ## License
 

@@ -891,11 +891,75 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 
 **遗留**：
 
-- (a) Vast.ai 真实 forward smoke（H100/A100/RTX 4090 起 cosmos-predict2 Docker，跑 `pretrained_fixer.pkl` + 一张 NCore 渲染 PNG 验证 `mean_psnr_difix` 在 [-5, +5] dB 内）—— 与本 Stage A 解耦，单独排期
+- (a) Vast.ai 真实 forward smoke — 见下方 V3-T15.2 Stage A.2 装机验证条目；本次会话尝试但被 flash-attn build 阻塞，下次走 cosmos-predict2-container Docker 路径
 - (b) Stage B（novel_view 4-mode fan-out 时 `mean_novel_<mode>_psnr_difix` 字段自然 fan-out）依赖 T8.5.4 完成
 - (c) Stage C（trainer.py progressive distillation，T15.4） — 看 Stage A 实测 Δ PSNR 大小再决定
 
 **关联未来 task**：T15.4 progressive distillation（Stage C） / T8.5.4 novel-view 4-mode loop（Stage B 自然接通） / Vast.ai 真实 forward smoke
+
+---
+
+### V3-T15.2 Stage A.2 — Vast.ai 装机验证 + Path Layout Fix（2026-06-01）
+
+**Commit**: `<next>` （`threedgrut/correction/difix.py` path resolution + `_ensure_tokenizer_symlinks()` + `third_party/Fixer/INSTALL.md` 实测 layout + smoke test 同步）
+
+**目标**：在 Vast.ai RTX 4090 上真实跑通 `DifixPostProcessor.forward()`，验证 lazy-import 设计 + 拿到首批 forward 延迟 / shape / range 数字。
+
+**实际结果**：装机验证至 90% 进度，**真实 forward smoke 被 flash-attn build 阻塞，未跑通**。但本次会话产出 2 个不可少的工件：
+
+#### 工件 1：difix.py path layout 修复（已 commit）
+
+V-3 `hf download nvidia/Fixer` 实测落盘后发现 **真实 layout 与 Stage A 假设不符**：
+
+```
+$HF_HOME/nvidia-Fixer/
+├── pretrained/pretrained_fixer.pkl       # 3.8 GB（不是 nvidia-Fixer/pretrained_fixer.pkl）
+└── base/                                  # 不是 models/base/
+    ├── model_fast_tokenizer.pt           # 1.2 GB
+    └── tokenizer_fast.pth                # 221 MB
+```
+
+总大小 **5.2 GB**（Stage A plan 估的 1.5 GB 严重低估）。修复落入 difix.py：
+
+- `_resolve_ckpt_path()` 改为返回 `nvidia-Fixer/pretrained/pretrained_fixer.pkl`
+- 新增 `_ensure_tokenizer_symlinks()`：在 `_lazy_init` 内幂等创建 `/work/models/base/{model_fast_tokenizer.pt, tokenizer_fast.pth}` symlink → HF cache 实际位置，桥接 vendored `pix2pix_turbo_*.py` 硬编码的 Docker layout
+- INSTALL.md 同步实测 layout + 标注 symlink 桥接机制
+- Mac smoke test 同步更新 (`pretrained/` 子目录路径)，5/5 仍全绿
+
+#### 工件 2：vast.ai 装机踩坑清单（决定下次怎么走）
+
+本次 Vast.ai RTX 4090 实例（38869096, $0.609/hr, pytorch:2.4.0-cuda12.1-cudnn9-devel base image）走原生 pip 装 cosmos-predict2 stack，踩了 **4 个连续 blocker**：
+
+| 阶段 | 问题 | 修复 / 结论 |
+|---|---|---|
+| 1 | `pip install cosmos-predict2==1.0.9` 升级 torch 到 2.6.0+cu124，torchvision 0.19 不兼容（`torchvision::nms does not exist`） | `pip install torchvision==0.21.0` align 到 cu124 ✅ |
+| 2 | `transformer_engine` 不在 cosmos-predict2 PyPI deps，需手动装；首次 build 失败 `fatal error: cudnn.h: No such file or directory` | `apt install libcudnn9-dev-cuda-12` (9.23.0.39) + `CUDA_HOME=/usr/local/cuda TORCH_CUDA_ARCH_LIST="8.9" pip install transformer-engine[pytorch]==1.13 --no-build-isolation` → TE 1.13.0 装好 ✅ |
+| 3 | TE 装好后 `from cosmos_predict2.pipelines.text2image import Text2ImagePipeline` 触发 → `imaginaire.models.vlm_qwen` → `AssertionError: flash_attn_2 not available` | cosmos_predict2 通过 imaginaire VLM 间接依赖 flash-attn；`pip install flash-attn==2.8.3` → import 时 `undefined symbol: _ZN3c105ErrorC2ENS_...__cxx1112basic_string` (ABI mismatch) ❌ |
+| 4 | 尝试 `FLASH_ATTENTION_FORCE_CXX11_ABI=FALSE pip install flash-attn==2.5.8 --no-build-isolation` 强制 cxx11_abi=0（torch 实测 `_GLIBCXX_USE_CXX11_ABI=False`）；conda-forge `flash-attn` 等版本都 require py3.12+ / cuda-cudart 13 | flash-attn build 在 cu124 + torch 2.6.0 cxx11_abi=0 组合下 setup.py bdist_wheel 反复失败；2 个独立 run 都没 pass ❌ |
+
+**装机投入**：~2.5 小时 + ~$1.5 vast.ai 费用。
+
+#### 下次怎么走（建议路径优先级）
+
+1. **★ 推荐**：vast.ai 实例直接用 `nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2` 作 base image（不是 pytorch:2.4.0）。NVIDIA 官方预装 TE + flash-attn + imaginaire + cosmos_predict2 + 匹配 torch；跳过所有 build。需先确认 nvcr 镜像在 vast 上能 pull（无 NGC API key 公开）。
+2. 备选：保持 pytorch base，降级 torch 到 2.4.0+cu121 + 找匹配的 TE / flash-attn 预编译 wheel 组合（cosmos-predict2 1.0.9 可能 require torch>=2.5，需 verify）
+3. 备选：装完 stack 后用 `unittest.mock` patch 掉 `imaginaire.models.vlm_qwen` (Pix2Pix_Turbo `use_text_encoder=False`，VLM 路径不在 runtime 必经)，绕过 flash-attn 依赖 — hack 但快速验证 forward 是否真的不需 flash-attn
+
+#### 已完成 ≠ 未完成 — 工件清单
+
+✅ V-1 vast.ai 实例创建 + ssh setup（脚本 `scripts/t8_12_fix_vast_create.sh` polling fields 用 jq 替代 python3 json.loads，避开 control-char bug）
+✅ V-3 权重下载完整（5.2 GB，hf download nvidia/Fixer）
+🟡 V-2 部分装机（torch 2.6 / TE 1.13 / cosmos_predict2 / imaginaire / diffusers / lpips OK；flash-attn 卡）
+❌ V-4 真实 forward smoke 未跑（被 V-2 阻塞）
+✅ V-5 实例销毁（$0.609/hr 不浪费）+ 本 Done Log 完整记录
+
+#### 关键不变量更新
+
+- DiFix 权重总大小 **5.2 GB** (3.8 + 1.2 + 0.221)，不是 plan 假设的 1.5 GB → vast 实例 disk 必须 ≥ 100 GB 给 conda env + 镜像 + 权重 + 缓存
+- DiFix `_ensure_tokenizer_symlinks()` requires `/work/` writeable（root OK；non-root host 需 `sudo mkdir -p /work/models/base`）
+- cosmos_predict2 ↔ flash-attn ABI 兼容是核心装机风险，不是 plan 之前列的 transformer_engine（TE build with cudnn-dev 实测可解）
+
+**关联未来 task**：V3-T15.2 Stage A.3（cosmos-predict2-container 路径下重跑 forward smoke + 完整 metrics.json `mean_psnr_difix` 实测）
 
 ---
 

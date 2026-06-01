@@ -70,11 +70,53 @@ class DifixPostProcessor(nn.Module):
         self._model = None
 
     def _resolve_ckpt_path(self) -> Path:
+        """Path to the Pix2Pix_Turbo state_dict pickle.
+
+        Real layout from ``hf download nvidia/Fixer``:
+            $HF_HOME/nvidia-Fixer/pretrained/pretrained_fixer.pkl  (3.8 GB)
+            $HF_HOME/nvidia-Fixer/base/model_fast_tokenizer.pt     (1.2 GB)
+            $HF_HOME/nvidia-Fixer/base/tokenizer_fast.pth          (221 MB)
+        """
         if self._ckpt_path:
             return Path(self._ckpt_path)
         import os
         hf_home = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
-        return Path(hf_home) / "nvidia-Fixer" / "pretrained_fixer.pkl"
+        return Path(hf_home) / "nvidia-Fixer" / "pretrained" / "pretrained_fixer.pkl"
+
+    def _ensure_tokenizer_symlinks(self, ckpt: Path) -> None:
+        """Bridge HF cache layout to vendored pix2pix_turbo_*.py hardcoded paths.
+
+        ``third_party/Fixer/pix2pix_turbo_nocond_cosmos_base_faster_tokenizer.py``
+        hardcodes:
+            config.dit_path           = '/work/models/base/model_fast_tokenizer.pt'
+            config.tokenizer["vae_pth"] = '/work/models/base/tokenizer_fast.pth'
+
+        These are the Docker layout. Off-Docker (e.g. Vast.ai), we symlink
+        ``/work/models/base/{dit,vae}`` to the HF cache's ``base/`` siblings
+        so the import-time ``Pix2Pix_Turbo.initialize_cosmos_model()`` finds
+        them. Idempotent.
+        """
+        import os
+        base_dir = ckpt.parent.parent / "base"   # nvidia-Fixer/base/
+        targets = {
+            Path("/work/models/base/model_fast_tokenizer.pt"): base_dir / "model_fast_tokenizer.pt",
+            Path("/work/models/base/tokenizer_fast.pth"):     base_dir / "tokenizer_fast.pth",
+        }
+        for link, real in targets.items():
+            if not real.exists():
+                raise RuntimeError(
+                    f"DiFix tokenizer file missing in HF cache: {real}. "
+                    "Re-run scripts/download_difix.sh — incomplete download?"
+                )
+            link.parent.mkdir(parents=True, exist_ok=True)
+            if link.is_symlink() or link.exists():
+                try:
+                    if link.resolve() == real.resolve():
+                        continue  # already correct
+                    link.unlink()
+                except (OSError, FileNotFoundError):
+                    pass
+            os.symlink(real, link)
 
     def _lazy_init(self) -> None:
         if self._model is not None:
@@ -87,6 +129,9 @@ class DifixPostProcessor(nn.Module):
                 "Run scripts/download_difix.sh on the GPU host first "
                 "(see third_party/Fixer/INSTALL.md)."
             )
+
+        # Bridge HF cache layout to vendored pix2pix's hardcoded /work/models/base/ paths.
+        self._ensure_tokenizer_symlinks(ckpt)
 
         # Lazy import so this module loads cleanly on hosts (e.g. Mac dev) that
         # do not have cosmos_predict2 / transformer_engine / imaginaire.

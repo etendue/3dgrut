@@ -72,8 +72,12 @@ def test_forward_rejects_bad_shape():
 
 
 def test_ckpt_path_falls_back_to_hf_home(monkeypatch, tmp_path):
-    """When ckpt_path is None, resolver uses HF_HOME (or default cache)."""
+    """When ckpt_path is None, resolver uses HF_HOME (or default cache).
+
+    Real layout from ``hf download nvidia/Fixer`` is
+    ``<HF_HOME>/nvidia-Fixer/pretrained/pretrained_fixer.pkl`` (HF mirrors
+    the repo's ``pretrained/`` subdirectory)."""
     monkeypatch.setenv("HF_HOME", str(tmp_path))
     m = DifixPostProcessor(enabled=True, ckpt_path=None)
-    expected = tmp_path / "nvidia-Fixer" / "pretrained_fixer.pkl"
+    expected = tmp_path / "nvidia-Fixer" / "pretrained" / "pretrained_fixer.pkl"
     assert m._resolve_ckpt_path() == expected
