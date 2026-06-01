@@ -127,6 +127,7 @@ class Renderer:
         computes_extra_metrics=True,
         eval_cameras=None,
         novel_view=False,
+        use_difix=False,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -138,6 +139,12 @@ class Renderer:
                 None / empty → no filter. Injected into ``conf.render.eval_cameras``
                 so the same Hydra-style key works for both ckpt eval and
                 training-end eval.
+            use_difix: V3-T15.2 Stage A.4 — when True, inject
+                ``conf.render.use_difix = True`` so Renderer.__init__ builds
+                an enabled DifixPostProcessor and render_all() computes the
+                ``mean_*_difix`` metric trio. Pre-T15.2 ckpts have no
+                ``use_difix`` key in their embedded conf, so we must inject
+                here rather than relying on conf default.
         """
 
         checkpoint = torch.load(checkpoint_path, weights_only=False)
@@ -154,6 +161,9 @@ class Renderer:
         # works on the OmegaConf used here (see L107-110 patterns above).
         if eval_cameras:
             conf["render"]["eval_cameras"] = list(eval_cameras)
+        # V3-T15.2 Stage A.4: CLI --use-difix injection (same dict-style pattern).
+        if use_difix:
+            conf["render"]["use_difix"] = True
 
         object_name = Path(conf.path).stem
         experiment_name = conf["experiment_name"]

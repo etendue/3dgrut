@@ -1045,7 +1045,103 @@ rsync (5.2 GB ~3 min on 局域网) → ThinkPad** 路径。复杂点：
 - 预计延迟 80 ms/frame × 375 frames ≈ 30 s 额外 eval 时间（trivial）
 
 **关联未来 task**：T15.4 progressive distillation（Stage C）/ T8.5.4 novel-view
-4-mode loop（Stage B 自然接通）/ V3-T15.2 Stage A.4 (real-ckpt eval Δ-PSNR)
+4-mode loop（Stage B 自然接通）/ V3-T15.2 Stage A.4 ✅ (real-ckpt eval Δ-PSNR — 完成，见下)
+
+---
+
+### V3-T15.2 Stage A.4 — Real ckpt Δ-PSNR (2026-06-01)
+
+**Commit**: `<next>` （render.py `--use-difix` CLI flag + `scripts/eval_difix_pngs.py`
+离线 PNG eval 脚本 + Done Log 实测数据）
+
+**目标**：在真实 V3 ckpt (`v3_kpi_sym5cam_30k/ckpt_last.pt`, 30k iter,
+LayeredGaussians 5-cam) 上跑 render eval，量化 DiFix 在 reproduction view
+（训练分布内）的 PSNR/SSIM/LPIPS 净 Δ，为 Stage B/C 决策提供基线。
+
+#### 🎉 实测数据 (ThinkPad RTX 4090, 375 frames)
+
+| metric | baseline | + DiFix | Δ | 解读 |
+|---|---|---|---|---|
+| **mean_psnr** | 14.578 | **14.877** | **+0.299 dB** ✅ | DiFix 在 reproduction view 净增益 |
+| mean_ssim | 0.7727 | 0.7582 | **-0.0145** | structural similarity 略降 |
+| mean_lpips | 0.3691 | 0.3770 | **+0.0078** (worse) | perceptual 略变差 |
+| forward (mean) | — | 109 ms/frame | — | RTX 4090 bf16 (与 Stage A.3 80ms 差异 = 含 PNG IO) |
+| first forward | — | 9.97 s | — | 含 lazy_init + 3.8 GB ckpt load |
+
+**关键发现 — 与 plan 假设的偏差**：
+
+| 来源 | 估计 / 实测 |
+|---|---|
+| v3_plan §2.8 Stage 15 estimate | reproduction +0.8-1.5 dB（cc mask 后）, novel-view +2.0 dB |
+| Stage A.4 实测 (reproduction view, no cc, no mask) | **+0.30 dB PSNR** |
+| 解读 | DiFix 对 reproduction view (训练分布内) 增益 **比 plan 估的低 50-70%**；预期 novel-view 增益更大（DiFix 论文 / Difix3D+ 的核心使用场景） |
+
+SSIM/LPIPS 略降的根因：DiFix 强制 576×1024 输入，对原始 956×1408 渲染做了
+2 次 bilinear resize，损失高频细节 → 结构 / 感知相似度受损。PSNR 仍正增益
+说明 DiFix 在重建的低频/中频上 dominant 起作用（去伪影 + 颜色一致性）。
+
+#### 走通的环境工作流（2 阶段，cosmos image 网络阻断绕道）
+
+阻断：cosmos container 内 pip + torch hub 都打不通 PyPI / pytorch.org（中国
+环境 + container 网络 stack 异常）。SSL EOF 持续失败，conda/pypi mirror 也不通。
+
+**解决工作流**：
+
+1. **Stage 1 — Mac 准备所有缺失资源**：
+   - `pip download --no-deps -d /tmp/<dir>` 下 `torchmetrics`, `cosmos-predict2==1.0.9`,
+     `lpips`, `natsort` 4 个 wheel (~1.5 MB)
+   - rsync 给 ThinkPad host
+2. **Stage 2 — host 复制到 container + 离线 install**：
+   - `docker cp /tmp/<wheels> difix-eval:/tmp/<wheels>` 进入 container
+   - `pip install --no-cache-dir --no-index --find-links=/tmp/<dir> --no-deps <pkgs>`
+   - VGG16 LPIPS 权重同样路径：host `~/.cache/torch/hub/checkpoints/vgg16-397923af.pth`
+     → `docker cp` 到 container `/root/.cache/torch/hub/checkpoints/`
+
+#### 新增 / 修改
+
+1. **`render.py` 新增 `--use-difix` CLI flag** + 在 `Renderer.from_checkpoint`
+   inject `conf["render"]["use_difix"] = True`（dict-style 覆盖匹配
+   `eval_cameras` 现有 pattern）
+2. **`threedgrut/render.py::Renderer.from_checkpoint(use_difix=False)`** 新增 kwarg
+3. **NEW `scripts/eval_difix_pngs.py`** (~150 lines)：离线 PNG eval 脚本
+   - 读 `<out>/ours_<step>/{renders,gt}/*.png` 配对 (375 pairs)
+   - 每帧 DiFix forward → 算 baseline + DiFix 的 PSNR/SSIM/LPIPS
+   - 输出 `metrics_difix.json` 含 `mean_*` (baseline) + `mean_*_difix` + `delta_*` 三组字段
+   - 与 render.py 流程**解耦**：不需要 cosmos container 内安装 3dgrut2 CUDA tracer
+     (即便 cosmos image 缺 tiny-cuda-nn / slangc / OptiX build chain)
+
+#### 工作流模式（下次复现这类 cross-env 操作）
+
+cosmos container 适合 **DiFix model 推理** 但**不适合**跑 3dgrut2 train/eval
+（CUDA tracer kernels 需 slangc + OptiX + ninja build，cosmos image 缺这套）。
+**正确分工**：
+
+| 阶段 | 环境 | 任务 |
+|---|---|---|
+| Render → PNG + baseline metrics | **ThinkPad host conda `3dgrut2` env** | render.py 跑 baseline (无 DiFix), 保存 pred/gt PNG 对，metrics.json |
+| DiFix → Δ metrics | **cosmos container** | offline PNG eval, 每帧 DiFix forward, 写 metrics_difix.json |
+
+对 v3 之后所有 NCore + cosmos 栈联合实验（Stage 11 LiDAR ray supervision /
+Stage 17 secondary ray 等），可复用同样 2 阶段 pattern。
+
+#### 工件清单
+
+- `/home/yusun/work/output/difix_a4_baseline/v3_kpi_sym5cam_30k/.../ours_30000/`
+  - `renders/00000.png ... 00374.png` (375 pred PNGs)
+  - `gt/00000.png ... 00374.png` (375 gt PNGs)
+  - `../metrics.json` (baseline, 含 mean_psnr=14.578)
+  - `../metrics_difix.json` (含 mean_psnr_difix=14.877, Δ=+0.299)
+
+#### 下次 Stage B 任务（直接可跑）
+
+T8.5.4: novel_view 4-mode loop 接入 render.py eval — 复用 Stage A.4 工作流：
+1. ThinkPad `3dgrut2` conda env 跑 render.py 含 4 档 novel-view perturbation
+   pose → 输出 4 套 PNG (lateral_1m / lateral_2m / yaw_5deg / yaw_10deg)
+2. cosmos container 跑 `eval_difix_pngs.py` × 4 → 拿
+   `mean_novel_<mode>_psnr_difix` 实测 Δ；预期 novel-view Δ > reproduction +0.3 dB
+
+**关联未来 task**：T8.5.4 (novel_view loop) → Stage B / T15.4 progressive
+distillation (Stage C，DiFix 输出回灌训练) — 看 novel-view Δ 决定 ROI
 
 #### Stage A.3 尝试（2026-06-01 当日同 session，已 cancel）
 
