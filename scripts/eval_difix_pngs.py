@@ -46,7 +46,10 @@ def load_png_to_tensor(p: Path) -> torch.Tensor:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--renders-dir", required=True, type=Path)
-    ap.add_argument("--gt-dir", required=True, type=Path)
+    ap.add_argument("--gt-dir", required=False, type=Path, default=None,
+                    help="Optional. If provided, compute baseline + DiFix PSNR/SSIM/LPIPS Δ. "
+                         "Omit for novel-view inputs where ground truth doesn't exist — "
+                         "only DiFix forward + (optional) PNG save happens.")
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--ckpt", type=str, default=None,
                     help="Override DiFix ckpt path (default $HF_HOME/nvidia-Fixer/pretrained/pretrained_fixer.pkl)")
@@ -61,22 +64,29 @@ def main() -> None:
         print(f"[eval] saving DiFix PNGs to {args.save_difix_dir}")
 
     render_paths = sorted(args.renders_dir.glob("*.png"))
-    gt_paths = sorted(args.gt_dir.glob("*.png"))
-    assert len(render_paths) == len(gt_paths), \
-        f"render/gt count mismatch: {len(render_paths)} vs {len(gt_paths)}"
+    have_gt = args.gt_dir is not None
+    if have_gt:
+        gt_paths = sorted(args.gt_dir.glob("*.png"))
+        assert len(render_paths) == len(gt_paths), \
+            f"render/gt count mismatch: {len(render_paths)} vs {len(gt_paths)}"
+    else:
+        gt_paths = [None] * len(render_paths)
     if args.max_frames > 0:
         render_paths = render_paths[: args.max_frames]
         gt_paths = gt_paths[: args.max_frames]
     n = len(render_paths)
     print(f"[eval] processing {n} frames "
-          f"({args.renders_dir} ↔ {args.gt_dir})")
+          f"({args.renders_dir} ↔ {args.gt_dir or '(no gt, save-only)'})")
 
-    # Metrics modules (data_range=1 since pixels live in [0, 1]).
-    psnr_m = PeakSignalNoiseRatio(data_range=1).to("cuda")
-    ssim_m = StructuralSimilarityIndexMeasure(data_range=1.0).to("cuda")
-    lpips_m = LearnedPerceptualImagePatchSimilarity(
-        net_type="vgg", normalize=True
-    ).to("cuda")
+    # Metrics modules — only allocate when we have gt.
+    if have_gt:
+        psnr_m = PeakSignalNoiseRatio(data_range=1).to("cuda")
+        ssim_m = StructuralSimilarityIndexMeasure(data_range=1.0).to("cuda")
+        lpips_m = LearnedPerceptualImagePatchSimilarity(
+            net_type="vgg", normalize=True
+        ).to("cuda")
+    else:
+        psnr_m = ssim_m = lpips_m = None
 
     # DiFix wrapper. Lazy init triggers on first forward.
     difix = DifixPostProcessor(enabled=True, ckpt_path=args.ckpt)
@@ -91,15 +101,17 @@ def main() -> None:
 
     for i, (rp, gp) in enumerate(zip(render_paths, gt_paths)):
         pred = load_png_to_tensor(rp)               # (1, H, W, 3) float32
-        gt = load_png_to_tensor(gp)
-        # Baseline (pred vs gt, no DiFix)
-        baseline_psnr.append(
-            psnr_m(pred.permute(0, 3, 1, 2), gt.permute(0, 3, 1, 2)).item())
-        baseline_ssim.append(
-            ssim_m(pred.permute(0, 3, 1, 2), gt.permute(0, 3, 1, 2)).item())
-        baseline_lpips.append(
-            lpips_m(pred.clip(0, 1).permute(0, 3, 1, 2),
-                    gt.permute(0, 3, 1, 2)).item())
+        gt = load_png_to_tensor(gp) if gp is not None else None
+
+        # Baseline metrics (pred vs gt) — only when gt provided
+        if have_gt:
+            baseline_psnr.append(
+                psnr_m(pred.permute(0, 3, 1, 2), gt.permute(0, 3, 1, 2)).item())
+            baseline_ssim.append(
+                ssim_m(pred.permute(0, 3, 1, 2), gt.permute(0, 3, 1, 2)).item())
+            baseline_lpips.append(
+                lpips_m(pred.clip(0, 1).permute(0, 3, 1, 2),
+                        gt.permute(0, 3, 1, 2)).item())
 
         # DiFix
         torch.cuda.synchronize(); t0 = time.time()
@@ -107,45 +119,55 @@ def main() -> None:
         torch.cuda.synchronize(); timings_ms.append((time.time() - t0) * 1000)
 
         if args.save_difix_dir is not None:
-            # NHWC → NCHW for torchvision.save_image, then write
             torchvision.utils.save_image(
                 pred_difix.squeeze(0).permute(2, 0, 1).clip(0, 1),
                 args.save_difix_dir / rp.name,
             )
 
-        difix_psnr.append(
-            psnr_m(pred_difix.permute(0, 3, 1, 2),
-                   gt.permute(0, 3, 1, 2)).item())
-        difix_ssim.append(
-            ssim_m(pred_difix.permute(0, 3, 1, 2),
-                   gt.permute(0, 3, 1, 2)).item())
-        difix_lpips.append(
-            lpips_m(pred_difix.clip(0, 1).permute(0, 3, 1, 2),
-                    gt.permute(0, 3, 1, 2)).item())
+        # DiFix metrics — only when gt provided
+        if have_gt:
+            difix_psnr.append(
+                psnr_m(pred_difix.permute(0, 3, 1, 2),
+                       gt.permute(0, 3, 1, 2)).item())
+            difix_ssim.append(
+                ssim_m(pred_difix.permute(0, 3, 1, 2),
+                       gt.permute(0, 3, 1, 2)).item())
+            difix_lpips.append(
+                lpips_m(pred_difix.clip(0, 1).permute(0, 3, 1, 2),
+                        gt.permute(0, 3, 1, 2)).item())
 
-        if (i + 1) % 25 == 0 or i == n - 1:
-            print(f"  [{i+1:3d}/{n}] "
-                  f"psnr={baseline_psnr[-1]:5.2f}→{difix_psnr[-1]:5.2f} "
-                  f"lpips={baseline_lpips[-1]:.3f}→{difix_lpips[-1]:.3f} "
-                  f"({timings_ms[-1]:.0f} ms)")
+        if (i + 1) % 25 == 0 or i == n - 1 or not have_gt:
+            if have_gt:
+                print(f"  [{i+1:3d}/{n}] "
+                      f"psnr={baseline_psnr[-1]:5.2f}→{difix_psnr[-1]:5.2f} "
+                      f"lpips={baseline_lpips[-1]:.3f}→{difix_lpips[-1]:.3f} "
+                      f"({timings_ms[-1]:.0f} ms)")
+            else:
+                print(f"  [{i+1:3d}/{n}] DiFix forward {timings_ms[-1]:.0f} ms"
+                      + (f"  saved → {(args.save_difix_dir/rp.name).name}"
+                         if args.save_difix_dir else ""))
 
     def avg(xs: list[float]) -> float:
         return float(sum(xs) / len(xs)) if xs else 0.0
 
-    out = {
+    out: dict = {
         "n_frames": n,
-        "mean_psnr": avg(baseline_psnr),
-        "mean_ssim": avg(baseline_ssim),
-        "mean_lpips": avg(baseline_lpips),
-        "mean_psnr_difix": avg(difix_psnr),
-        "mean_ssim_difix": avg(difix_ssim),
-        "mean_lpips_difix": avg(difix_lpips),
-        "delta_psnr": avg(difix_psnr) - avg(baseline_psnr),
-        "delta_ssim": avg(difix_ssim) - avg(baseline_ssim),
-        "delta_lpips": avg(difix_lpips) - avg(baseline_lpips),
+        "have_gt": have_gt,
         "mean_difix_forward_ms": avg(timings_ms),
         "first_forward_ms": timings_ms[0] if timings_ms else 0.0,
     }
+    if have_gt:
+        out.update({
+            "mean_psnr": avg(baseline_psnr),
+            "mean_ssim": avg(baseline_ssim),
+            "mean_lpips": avg(baseline_lpips),
+            "mean_psnr_difix": avg(difix_psnr),
+            "mean_ssim_difix": avg(difix_ssim),
+            "mean_lpips_difix": avg(difix_lpips),
+            "delta_psnr": avg(difix_psnr) - avg(baseline_psnr),
+            "delta_ssim": avg(difix_ssim) - avg(baseline_ssim),
+            "delta_lpips": avg(difix_lpips) - avg(baseline_lpips),
+        })
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(out, indent=2))
     print()
