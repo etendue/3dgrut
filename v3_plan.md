@@ -816,6 +816,49 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 **已沉淀为 opt-in yaml 选项**（默认 OFF，baseline 字节等价）。**调参待验方向**：`lidar_w_decay=0`（全程监督）+ 提 `lambda_depth_prior` + depth_prior 换不饱和 loss。
 
 **数据资产发现（A800 schema 探查）**：clip 内 NuRec nre-tools 已预生成 `aux.depth.zarr.itar`（4.7GB，每相机 dense f16 深度，疑即 DepthV2 metric，未来可直读省 dump）+ `aux.lidar-camvis.zarr.itar`（每点 uint8 可见性，非 per-pixel 深度）。**Stage 13a 增强机会**：scatter 前用 camvis 做遮挡剔除 + lidar-sseg 剔动态点（消移动车拖影，关联车道线退化）。
+### V3-R1 + V3-R2 — Road 层独立性专项（车道线模糊变形根因攻坚，2026-05-30/06-01）
+
+**分支**：`claude/v3-r1-road-phase1`（rebased onto Stage 11 main，建 PR 合并中）。
+**缘起**：用户主诉「road gaussian 和 background 交集多，车道线在大位移/大角度 novel-view 下模糊变形」。研究报告（`docs/superpowers/plans/road-gaussian-background-*.md`）初判主因为 road 层 view-dep SH 过拟合 + scale 失控；实测推翻了这一判断，定位到**真正根因 = background 占领路面、road 隐形**。
+
+#### 阶段 A：V3-R1 road-only 微调（commits `e64f275`→`1117493`）— **实测 null，但产出关键架构发现**
+
+| 子项 | 改动 | commit | 结果 |
+|---|---|---|---|
+| V3-R1.1 SH 降阶 | road 层 SH degree 3→1（缩 features_specular 张量宽度 45→9） | `e64f275`+`0a20689`，后 `1117493` 中和 | ❌ **与 fused-view 渲染器架构不兼容** |
+| V3-R1.2 scale clamp | road `scale_xy_max=0.3 / scale_z_max=0.05 / anisotropy_ratio_max=8.0` + `clamp_layer_scales` + LayeredMCMCStrategy post-step hook | `cc88784`+`75ab6f9` | 🟡 生效但 novel-view null |
+| V3-R1.3 eff-rank reg | road scale 谱熵正则 `lambda_road_eff_rank=0.01` 接入 get_losses | `0abc230` | 🟡 null |
+
+**关键架构发现（写入不变量）**：`_FusedView.get_features()`（[layered_model.py:289](threedgrut/layers/layered_model.py)）把所有粒子层的 `features_specular` 沿粒子维 concat 成单张量，渲染器用 ref 层（background, degree 3）的 `max_n_features` 统一求值 SH → **所有层 SH 宽度必须一致**。单层降阶不能靠缩张量（`validate_fields` 断言失败 + concat 维度不匹配），必须改 freeze 法（保 45 维、zero+freeze road order≥2 系数）。CPU 测试因 `setup_optimizer=False` 跳过 `validate_fields` 未抓到，GPU 训练才暴露。
+
+**A/B 实测（ThinkPad 4090, clip 9ae151dc）**：
+- 5k：novel_lpips_avg 0.5985(baseline) vs 0.5993(V3-R1)，cc_psnr_masked 23.29 vs 23.44
+- 30k：novel_lpips_avg 0.6021 vs 0.6030，cc_psnr_masked 26.05 vs 25.94
+- 方向在 5k/30k 间翻转 → 纯噪声。**结论：road-only 微调对画面零影响。**
+
+#### 阶段 B：根因诊断（ckpt 粒子分布分析 + viser 肉眼）
+
+**铁证（30k ckpt 实测）**：路面 XY 范围内 **75 万 alive background 粒子**（opacity 主导），road 仅 11 万、opacity 中位 **0.014**（近乎透明）。→ **路面 99% 由 background 渲染，road 是隐形配角**，这解释了为何所有 road-only 改动无效。现有 `bg_dyn_cuboid_penalty` 只罚动态车框内 bg，**无任何机制管路面区**。
+
+#### 阶段 C：V3-R2 bg-in-road opacity penalty（commits `7bf4992`+`41fc55d`）— ✅ **首个真正有效改动**
+
+- **新模块** [`threedgrut/model/road_region.py`](threedgrut/model/road_region.py)：`build_road_height_field`（road 粒子 BEV 网格 → per-cell median ground Z）/ `query_ground_z` / `compute_bg_road_opacity_penalty`。镜像 `bg_cuboid_loss.py`（grad 只过 density，spatial mask no_grad，lambda warmup）。8 单测。
+- **trainer 接线**：setup 时建 height field（road Z-locked 故固定）；get_losses 加 `loss_bg_road`；config `bg_road_penalty{enabled/lambda=0.1/lambda_warmup_iters=1000/cell_size=1.0/z_band=0.4}`，base 默认 off，multilayer on。
+- **机制 A/B 实测（5k, ThinkPad 4090, penalty ON vs OFF）**：
+
+| 指标 | OFF | ON | Δ |
+|---|---|---|---|
+| 路面上 bg 粒子数 | 246,729 | **33,996** | **−86%** |
+| 路面上 bg opacity 总和 | 34,068 | **4,591** | −87% |
+| road 层 opacity 总和 | 24,768 | **31,602** | **+28%（road 反超主导）** |
+| road opacity 中位 | 0.063 | 0.077 | +22% |
+| **cc_psnr_masked（守护）** | 23.09 | **23.74** | **+0.65 dB** |
+| psnr_masked | 24.36 | **24.96** | +0.60 dB |
+
+- **viser 肉眼验收（用户, 2026-06-01）**：「penalty on 路面完整很多，比 off 好很多；大位移大角度也好很多」。**机制完全奏效：bg 撤出路面 → road 接管 → opacity 主导权翻转。**
+- **遗留问题**：BEV 俯视下路面仍有空洞（两臂都有，ON 好很多）。根因 = road 来自稀疏 LiDAR 路面点（`road_init.py` 5cm BEV grid + KNN-Z），LiDAR 未命中区（侧前/远处/遮挡）无 road 粒子，且前向相机无 BEV 监督 → 几何空洞。属 Phase 2A 几何监督（Stage 11 LiDAR 加密 + DepthAnythingV2）范畴。
+
+**踩坑备忘**：① ThinkPad 双卡选 4090 必须 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1`（CUDA 默认 FASTEST_FIRST 与 nvidia-smi PCI 序相反）；② 根目录 `render.py` 需单独 rsync（只同步 threedgrut/+configs/ 会留 stale render.py 无 `--novel-view`）；③ ThinkPad 会休眠杀 nohup 进程，长任务用 `setsid nohup systemd-inhibit --what=sleep:idle`；④ `/tmp` 日志休眠/重启被清，产物写持久盘 `~/work/output`；⑤ viser 真实路径 `threedgrut_playground/viser_gui_4d.py --gs_object`（非 `threedgrut/gui/`）。
 
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 
