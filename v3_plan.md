@@ -969,17 +969,16 @@ $HF_HOME/nvidia-Fixer/
 （status=loading, cur=stopped）耗时过长，**用户判断 cosmos image 在 vast.ai
 环境下可能拉不下来 → 主动 cancel + destroy**。实例零运行时间销毁。
 
-**下次 Stage A.3 可选路径**（按可行性排序）：
+**下次 Stage A.3 可选路径**（更新 2026-06-01，按可行性排序）：
 
-1. **NGC 直接 docker pull 测试**：先在 Mac 本地或 A800 上 `docker pull
-   nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2` 验证镜像可公开访问 +
-   实际大小；如果是 20+ GB 巨型 image，vast.ai 拉时间不可接受
-2. **A800 上跑 forward smoke**：A800 conda env "3dgrut" 现成 + 已有 cu12 toolchain；
-   在独立 conda env (`3dgrut_difix`) 装 cosmos-predict2 stack，避开污染主训练 env；
-   优点：网络稳定 + 数据/ckpt 已在 A800；缺点：需先确认 A800 显卡可装 TE / flash-attn
-3. **pinned wheel combo**：torch 2.4.0+cu121 + transformer_engine 1.11 + flash-attn 2.4.x
+1. **★ ThinkPad RTX 4090 + 用户预备的 docker 环境**（已选）：A800 已排除（无 docker
+   环境）；ThinkPad 有 RTX 4090 (memory #1733 CUDA_DEVICE_ORDER=PCI_BUS_ID 选 GPU 1)。
+   用户准备 `nvcr.io/nvidia/cosmos/cosmos-predict2-container:1.2` 的 docker pull。
+   流程：本地 docker pull → run --gpus all -v 3dgrut2:/work → 进 container 跑
+   download_difix.sh + forward smoke。**网络稳定 + 不烧 vast.ai 钱 + 零装机**
+2. **pinned wheel combo**：torch 2.4.0+cu121 + transformer_engine 1.11 + flash-attn 2.4.x
    （这套老组合 cxx11_abi=0 wheel 多）；用 pytorch 默认 vast image 走原生 pip
-4. **离线 fix → metric**：跳过 in-process 集成，render.py 落 PNG → 独立 Docker 跑
+3. **离线 fix → metric**：跳过 in-process 集成，render.py 落 PNG → 独立 Docker 跑
    inference_pretrained_model.py CLI → Python 脚本算 metrics。架构不优雅但绕开所有
    ABI 问题
 
