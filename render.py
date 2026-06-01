@@ -54,6 +54,16 @@ if __name__ == "__main__":
             "5x render cost; off by default."
         ),
     )
+    parser.add_argument(
+        "--use-difix",
+        action="store_true",
+        help=(
+            "V3-T15.2: enable DiFix (HF nvidia/Fixer) post-processing during "
+            "eval. Adds mean_psnr_difix / mean_ssim_difix / mean_lpips_difix "
+            "to metrics.json. Requires cosmos_predict2 + DiFix weights — see "
+            "third_party/Fixer/INSTALL.md."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
@@ -66,6 +76,7 @@ if __name__ == "__main__":
         computes_extra_metrics=args.compute_extra_metrics,
         eval_cameras=eval_cameras_list,
         novel_view=args.novel_view,
+        use_difix=args.use_difix,
     )
 
     renderer.render_all()

@@ -23,3 +23,16 @@ enable_kernel_timings: false
 # baseline. Filter is applied in render_all() before per-frame work, so
 # wall-clock scales linearly with retained frames.
 eval_cameras: null
+
+# V3-T15.2: optional DiFix (HuggingFace nvidia/Fixer) post-processing during
+# render.py eval. Default off → metrics.json byte-identical with pre-T15.2.
+# When ``use_difix=true``, render_all() computes ``mean_psnr_difix`` /
+# ``mean_ssim_difix`` / ``mean_lpips_difix`` alongside the raw metrics by
+# running pred_rgb through threedgrut/correction/difix.py::DifixPostProcessor.
+# Requires the DiFix dep stack (cosmos_predict2 / imaginaire /
+# transformer_engine / diffusers) and downloaded weights — see
+# third_party/Fixer/INSTALL.md. NOT for the A800 3dgrut env; use Vast.ai or
+# the cosmos-predict2 Docker container instead.
+use_difix: false
+difix_ckpt_path: null    # null → $HF_HOME/nvidia-Fixer/pretrained_fixer.pkl
+difix_timestep: 250      # diffusion timestep (README CLI example value)

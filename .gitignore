@@ -25,6 +25,12 @@ thirdparty/kaolin/
 threedgrt_tracer/.ninja_log
 threedgrt_tracer/include/3dgrt/kernels/slang/*.cuh*
 *.egg-info
+
+# DiFix vendored code: ignore caches; weights live in $HF_HOME, never in tree.
+third_party/Fixer/__pycache__/
+third_party/Fixer/*.pkl
+third_party/Fixer/*.pt
+third_party/Fixer/*.pth
 .idea
 
 grid_search
