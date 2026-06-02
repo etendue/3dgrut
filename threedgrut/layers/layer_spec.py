@@ -77,3 +77,15 @@ class LayerSpec:
     # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,
     # because the auto-generated __eq__/__hash__ skip this field.
     extra: dict = field(default_factory=dict, compare=False)
+
+
+def particle_layer_names_excluding(specs, exclude_layer_names) -> list[str]:
+    """Phase 2A: particle-layer names in spec order, minus ``exclude_layer_names``.
+
+    Pure (torch-free) so it unit-tests on a minimal env. Used by
+    ``LayeredGaussians.get_density_excluding`` to build the opacity-reg density
+    over every particle layer except the exempted ones (e.g. road), so
+    ``lambda_opacity`` stops starving a structured/LiDAR-init layer.
+    """
+    exclude = set(exclude_layer_names or ())
+    return [s.name for s in specs if s.is_particle_layer and s.name not in exclude]

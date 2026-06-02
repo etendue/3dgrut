@@ -239,6 +239,7 @@ kanban
 | **T18.1** | 18 | WP_V3_Report.md 编写（镜像 WP_V2_Report.md 结构） | docs | 1.5 | ⬜ | — |
 | **T18.2** | 18 | v3 双档判定（保守 ≥ 30 / 进取 ≥ 34）+ V4 backlog 转出 | docs | 0.5 | ⬜ | — |
 | **T18.3** | 18 | v3_plan.md / v3_architecture.md 最终同步 + git commit | docs | 0.5 | ⬜ | — |
+| **P2A-FE.1** | Phase 2A (backlog) | **调查给训练加 fisheye / 宽FOV 相机以补路面监督** — Phase 2A 已证实路面空洞根因是**相机掠射欠观测路面**（非 LiDAR 盲区；相机距离为主因、LiDAR 距离次因）。fisheye 朝下+宽视场直接给路面 patch 光度梯度，**从源头消洞**（优于 Fix v1 仅"止饿死"的治标）。关键点：① 引擎已是 **3DGUT，原生支持畸变相机**（UT/7 sigma 点，无需 undistort），fisheye 接入主要是内参(Kannala-Brandt/OpenCV fisheye)+外参标定+**pinhole/fisheye 混合联训**（可复用现有 per-cam exposure scale/bias，参考 UniGaussian）；② **分辨率-覆盖 tradeoff**：fisheye 把像素摊到宽视场→单位面积采样密度反而可能更低，**近场路面收益最大、远场仍需窄/长焦相机**（fisheye 是补充非替代）；③ **~160° 为最佳折中**（>180° UT 投影会崩，arXiv 2508.06968）；④ 忽略畸变代价巨大（KITTI-360 fisheye：正确建模 24.65 dB vs naive undistort 12.6 dB，UniGaussian）；⑤ 3DGUT vs analytic-Jacobian(DirectFisheye-GS) 在宽外景有效性有争议，需在本数据基准。详见 §5 Done Log 2026-06-02 "fisheye 研究报告"（参考：3DGUT 2412.12507 / Fisheye-GS 2409.04751 / UniGaussian 2411.15355 / FisheyeGaussianLift 2511.17210 / ParkGaussian 2601.01386） | V3-R2 / Phase 2A | 5 | ⬜ | — |
 
 ### 1.3 当前 Stage 状态汇总（**主 KPI: novel-view PSNR ↑**；reconstructed 为辅 KPI）
 
@@ -858,10 +859,64 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 | psnr_masked | 24.36 | **24.96** | +0.60 dB |
 
 - **viser 肉眼验收（用户, 2026-06-01）**：「penalty on 路面完整很多，比 off 好很多；大位移大角度也好很多」。**机制完全奏效：bg 撤出路面 → road 接管 → opacity 主导权翻转。**
-- **遗留问题**：BEV 俯视下路面仍有空洞（两臂都有，ON 好很多）。根因 = road 来自稀疏 LiDAR 路面点（`road_init.py` 5cm BEV grid + KNN-Z），LiDAR 未命中区（侧前/远处/遮挡）无 road 粒子，且前向相机无 BEV 监督 → 几何空洞。属 Phase 2A 几何监督（Stage 11 LiDAR 加密 + DepthAnythingV2）范畴。
+- **遗留问题**：BEV 俯视下路面仍有空洞（两臂都有，ON 好很多）。属 Phase 2A 范畴。⚠️ **根因已被 Phase 2A 量化诊断修正**（见下节）：初版判断"LiDAR 未命中区无 road 粒子 → 几何空洞"**不准确**——`road_init.py` KNN-Z 无距离剔除，整个 bbox 网格都被铺满 road 粒子；真正主因是**水平薄盘只被掠射环视监督 → 远场/侧向/遮挡处 road 半透明（A 类）+ MCMC relocate 把死亡尾部聚集留洞（B 类）**，baseline 里被 bg 替路面撑满所以看不出，V3-R2 赶走 bg 后才暴露。
 
 **踩坑备忘**：① ThinkPad 双卡选 4090 必须 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1`（CUDA 默认 FASTEST_FIRST 与 nvidia-smi PCI 序相反）；② 根目录 `render.py` 需单独 rsync（只同步 threedgrut/+configs/ 会留 stale render.py 无 `--novel-view`）；③ ThinkPad 会休眠杀 nohup 进程，长任务用 `setsid nohup systemd-inhibit --what=sleep:idle`；④ `/tmp` 日志休眠/重启被清，产物写持久盘 `~/work/output`；⑤ viser 真实路径 `threedgrut_playground/viser_gui_4d.py --gs_object`（非 `threedgrut/gui/`）。
 
+### Phase 2A — BEV 路面空洞量化诊断（2026-06-01）
+
+承接 V3-R2 遗留问题，把"路面俯视有空洞"拆成可测的两类并用 B3_30k ckpt 实测，**修正了根因**。
+
+- **新增诊断基建**（Mac/CPU，纯 numpy/scipy，无 ckpt 无需 torch/GPU）：
+  - [`threedgrut_playground/utils/bev_holes.py`](threedgrut_playground/utils/bev_holes.py) `compute_bev_hole_stats()`：在 ego corridor 网格上分离 **A 类透明洞**（有粒子但 max opacity < floor）/ **B 类几何洞**（cell 无粒子），输出占比 + count/opacity 网格。grid 按 ego corridor 限界（非 particle bbox，否则 bg 粒子 sprawl 几百米致网格 OOM——已 pin 回归测试）。
+  - [`scripts/diagnose_road_bev_holes.py`](scripts/diagnose_road_bev_holes.py)：load ckpt → 提取 road/bg positions + `sigmoid(density)` → ego 轨迹 → road-only / bg-only / road∪bg 三趟 + 两张 BEV 热力图。
+  - [`threedgrut/tests/test_bev_holes.py`](threedgrut/tests/test_bev_holes.py)：9 单测（Mac `pytest --noconftest` 全绿）。
+- **B3_30k 实测**（penalty-OFF baseline，ego ±12m corridor，6210 cells，cell 0.5m）：
+  - 验证锚点：road opacity 中位 **0.0297**（与 L841 "0.014" 同量级，证实 `sigmoid(density)` 提取无误）。
+
+  | pass | B 类几何洞 | A 类透明洞@0.05 | 不透明覆盖@0.1 | @0.3 |
+  |---|---|---|---|---|
+  | road-only | 15.2% | 14.3% | **68.1%** | 54.4% |
+  | bg-only | 13.3% | 10.3% | — | — |
+  | road∪bg（俯视所见） | **1.6%** | 4.6% | **91.7%** | 82.7% |
+
+  - **road 自身覆盖缺口 ≈32%（floor 0.1）≈ 一半几何(15%) + 一半透明(17%)**；baseline 里 bg 补到 91.7% → 真空洞仅 1.6%。
+- **关键结论**：baseline road 只覆盖 68%，bg 替它撑满 → 看不出洞；**V3-R2 赶走 bg（−86%）后 road 那 32% 缺口被暴露 = 残留 BEV 空洞**。R2 用"哪里监督好哪里清晰 + 别处露洞"换掉"到处模糊但填满"。
+- **热力图证实空间分布**：road 空洞集中在 **ego 起点后方 + 远侧向**（前向环视掠射看不到处）；被监督处 opacity 直接拉满（双峰，非均匀半透明）。
+- **修复方向**（数据支持，需 A 类 + B 类两手）：A 类→road opacity floor / 反透明正则 / Stage 11 几何监督；B 类→road relocate `max_relocation_fraction<1`（`mcmc.py:121` 已有旋钮）或关 road relocate。
+- **遗留**：精确 ON 残留数字需重跑 penalty-ON ckpt（5k A/B ON ckpt 已被 ThinkPad /tmp 休眠清理）——Step 2 A800 5k ON/OFF 复测中。
+
+#### 续（2026-06-02）：饥饿机制事实核查 + Fix v1（road 豁免 lambda_opacity）
+
+承接上面"修复方向"，先**事实核查**根因再动手，结果**修正了机制判断**。
+
+- **新增核查工具**（CPU，纯 numpy/scipy）：[`scripts/diagnose_road_starvation.py`](scripts/diagnose_road_starvation.py)（T1 死亡量级 / T2 按 ego 距离 / T3 按 LiDAR 距离 / T4 2×2 解耦 + dead/alive 散点）+ [`scripts/_dump_road_lidar_xy.py`](scripts/_dump_road_lidar_xy.py)（A800 dump 200 万 LiDAR road 点）。
+- **干净 5k A/B（同 config，本次 A800 实测）**：penalty 按设计奏效——road opacity 中位 0.031→0.036、覆盖@0.1 77.4%→81.6%、bg 覆盖 81%→68%（被赶出），合并覆盖 ~96% 基本持平。
+- **核查结论（区分 dead op≤0.005 vs faint op<0.1 两个人群）**：
+  - **5k：dead 仅 2.7%、空间近乎均匀**（T2 2.7%→3.1%）→ **推翻**"死亡+relocate 掏空"为 5k 主因；真实主因是 **faint（67%）随监督强结构化**：ego 近 55%→远 92%、不透明粒子贴轨迹（ego p50 7.0m vs faint 12.3m）。
+  - **30k（B3）：dead 暴涨到 32%、远场偏置**（近 27%→远 47%），dead 粒子被 relocate 堆到轨迹 + **perturb 随机游走甩到 ±1000m**（noise∝(1−opacity)），→ 远场路面清空 = B 类几何洞 15%。**relocate/perturb 掏空机制在 30k 被证实**（5k 看不到，迭代涌现）。
+  - **T4 解耦**：相机距离是**主因**（固定 LiDAR，远 ego faint 54.7%→66.3%），LiDAR 距离是**次因**（+5pp）。LiDAR 覆盖其实很密（200 万点，64% road 粒子在 0.1m 内），真盲区仅 ~12% 且与相机远场重叠。**根因 = 相机欠观测**（无 top-down 视角），非 LiDAR 盲区。
+- **Fix v1（commit 待补）**：road 层**豁免 `lambda_opacity`**——停掉饿死 road 的恒定下压力，无监督 road 粒子停留在 init opacity 附近（不再死亡→不被 relocate/perturb 甩走→LiDAR 先验表面保留）。
+  - 实现：新增 opt-in config `loss.exempt_layers_opacity_reg`（默认 `[]` 字节等价）+ `LayeredGaussians.get_density_excluding(exclude)` + 纯函数 `particle_layer_names_excluding`（torch-free，6 单测 Mac 全绿）+ trainer 接线（空 list 走原路径）。
+  - **A800 30k 同 config A/B 实测**（`phase2a_30k_on_baseline` 无 fix vs `phase2a_30k_on_roadexempt` `++loss.exempt_layers_opacity_reg=[road]`，commit `e457648`）：**机制完全奏效，洞大幅消除，代价是 ~0.18 dB（接近噪声）**。
+
+  | 指标 | baseline | roadexempt(fix) | Δ |
+  |---|---|---|---|
+  | road **dead%**(op≤0.005) | 29.1% | **0.2%** | **−99%** ✓ |
+  | road opacity 中位 | 0.037 | **0.264** | ×7 |
+  | road 覆盖@0.1 | 82.0% | **92.9%** | +10.9pp |
+  | road 覆盖@0.3 | 71.4% | **88.0%** | +16.6pp |
+  | road **B类几何洞** | 9.8% | **4.4%** | −5.4pp |
+  | road∪bg 覆盖@0.1 | 94.2% | **98.0%** | +3.8pp |
+  | road∪bg B类洞 | 1.2% | **0.4%** | −0.8pp |
+  | **mean_cc_psnr（守护）** | 25.99 | 25.81 | **−0.18 dB**（≈噪声）|
+  | mean_psnr | 27.17 | 27.06 | −0.11 dB |
+  | LPIPS | 0.359 | 0.367 | +0.008 |
+
+  - **结论**：Fix v1 把 road 饿死率从 29%→0.2%、路面覆盖 +11~17pp、合并 BEV 洞率 6%→2%，**用户报告的俯视空洞应基本填上**；photometric 守护 ~−0.18 dB cc_psnr（接近 V3-R1 记录的 ±0.1 dB run 间噪声）。代价来源 = 无监督区 road 停在 ~init opacity 渲成灰面（预测的风险）。**近 quality-neutral + 大幅完整性提升**。
+  - **viser 肉眼验收（用户, 2026-06-02）**：「中段行程路面基本完整（符合预期）；残留黑区主要由**光照/阴影（如建筑物投影）**造成，属另一类问题，非路面 starvation 机制」→ **用户接受当前状态，Fix v1 合入**。
+  - **结论**：**Step3 ✅** —— Fix v1（road 豁免 lambda_opacity）合入。残留黑区根因转移到 **appearance/exposure/阴影建模**（与本次 road 几何/opacity 修复正交），不在 Phase 2A 范畴。
+  - **后续（backlog，非阻塞）**：① 若要回收 0.18 dB：LiDAR 置信度 gate 豁免（只豁免 LiDAR 命中区）/ 温和 opacity floor 替代全豁免；② 治本路面监督仍是 **P2A-FE.1** fisheye；③ 残留阴影黑区 → 另立 exposure/shadow 任务（超出 Phase 2A）。
 ### V3-T15.2 Stage A — HF nvidia/Fixer 推理 wrapper + render.py post-process 钩子（2026-05-27）
 
 **Commit**: `<next>` （`third_party/Fixer/` 源码 vendor + `threedgrut/correction/difix.py` + `threedgrut/render.py` hook + `scripts/download_difix.sh` + `threedgrut/tests/test_difix_smoke.py` + `configs/render/3dgrt.yaml` config flags + `v3_plan.md` Stage 15 同步）
