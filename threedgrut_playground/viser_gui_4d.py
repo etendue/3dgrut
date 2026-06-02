@@ -51,6 +51,7 @@ from threedgrut_playground.utils.cuboid import (
     cuboid_world_edges,
     instance_color,
 )
+from threedgrut_playground.utils.difix_client import DifixClient
 from threedgrut_playground.utils.viser_math import mat_to_wxyz
 from threedgrut_playground.utils.viser_overlay_compositor import (
     PolylineLayerSpec,
@@ -89,7 +90,8 @@ class Viser4DViewer:
                  metadata: Optional[FourDMetadata],
                  target_fps: float = 20.0,
                  initial_fov_rad: Optional[float] = None,
-                 multi_cam_poses: Optional[dict] = None):
+                 multi_cam_poses: Optional[dict] = None,
+                 difix_server: Optional[str] = None):
         self.engine = engine
         self.meta = metadata
         self.port = port
@@ -188,6 +190,18 @@ class Viser4DViewer:
         # Render dirtiness — set by camera move, slider drag, visibility toggle.
         self.need_update = True
 
+        # DiFix novel-view post-process (optional). When --difix_server is set,
+        # rendered frames are shipped to an out-of-process DiFix server (cosmos
+        # Docker env) and the corrected frame is sent to the browser instead.
+        # The toggle defaults OFF so DiFix costs nothing until the user opts in.
+        # See difix_server.py / utils/difix_client.py. The connection is lazy —
+        # nothing is contacted until the first frame is actually fixed.
+        self.difix_client: Optional[DifixClient] = (
+            DifixClient.from_addr(difix_server) if difix_server else None
+        )
+        self.difix_enabled: bool = False
+        self.difix_rtt = None  # viser text handle, populated in _build_static_gui
+
         # --- viser server + GUI ---
         self.server = viser.ViserServer(port=self.port)
         self._clear_engine_meshes()
@@ -243,6 +257,24 @@ class Viser4DViewer:
                     "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0)
                 self.fps = self.server.gui.add_text("FPS", initial_value="-1",
                                                     disabled=True)
+                # DiFix novel-view fix toggle — only when --difix_server was
+                # given. Enabling routes each rendered frame through the
+                # out-of-process DiFix server before display (~9–11 FPS).
+                if self.difix_client is not None:
+                    self.difix_checkbox = self.server.gui.add_checkbox(
+                        "DiFix (novel-view fix)", initial_value=False)
+                    self.difix_rtt = self.server.gui.add_text(
+                        "DiFix RTT", initial_value="-", disabled=True)
+                    self.server.gui.add_markdown(
+                        "_DiFix 启用后约 9–11 FPS，适合静止精修；"
+                        "连续拖动建议关闭。_")
+
+                    @self.difix_checkbox.on_update
+                    def _(_, _self=self):
+                        _self.difix_enabled = bool(_self.difix_checkbox.value)
+                        _self.need_update = True
+                        print(f"[DiFix] enabled={_self.difix_enabled}",
+                              flush=True)
             else:
                 self.server.gui.add_text(
                     "Mode",
@@ -1047,6 +1079,24 @@ class Viser4DViewer:
         img = (rgba[0, :, :, :3] * 255).to(torch.uint8)
         return img.cpu().numpy()
 
+    def _maybe_difix(self, img: np.ndarray) -> np.ndarray:
+        """Route a rendered ``(H,W,3)`` uint8 frame through the DiFix server.
+
+        No-op (returns ``img`` unchanged) when the toggle is off or no server
+        was configured. ``DifixClient.fix`` degrades gracefully — on any socket
+        / protocol error it returns the raw frame, so this never blocks or
+        crashes the interactive loop.
+        """
+        if not self.difix_enabled or self.difix_client is None:
+            return img
+        out = self.difix_client.fix(img)
+        if self.difix_rtt is not None:
+            self.difix_rtt.value = (
+                f"{self.difix_client.last_rtt_ms:.0f} ms"
+                if self.difix_client.healthy else "unavailable"
+            )
+        return out
+
     @torch.no_grad()
     def update(self) -> None:
         """Outer render loop: advance timeline, then re-render if dirty.
@@ -1099,6 +1149,11 @@ class Viser4DViewer:
                 print(e)
                 interval = 1
                 continue
+            # DiFix novel-view post-process (optional, out-of-process). Applied
+            # to the Gaussian backdrop *before* any overlay so cuboid wireframes
+            # drawn on top aren't "corrected" away. No-op / graceful fallback
+            # when disabled or the server is unreachable.
+            img = self._maybe_difix(img)
             # B2: FTheta cuboid overlay — project + alpha-blend wireframes
             # into the backdrop so they share the fisheye projection
             # (cuboid wireframes drawn via add_line_segments use pinhole
@@ -1457,6 +1512,14 @@ def main() -> None:
                         help="Optional NCore dataset path for 4D fallback when ckpt has no viz_4d.")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--target_fps", type=float, default=20.0)
+    parser.add_argument("--difix_server", type=str, default=None,
+                        help="host:port of an out-of-process DiFix server "
+                             "(e.g. 127.0.0.1:8765). When set, a 'DiFix' toggle "
+                             "appears under Render Controls; enabling it routes "
+                             "each rendered frame through DiFix before display. "
+                             "Start the server with "
+                             "threedgrut_playground/difix_server.py inside the "
+                             "cosmos Docker env. Default: off.")
     parser.add_argument("--no_gaussian_render", action="store_true",
                         help="Skip Engine3DGRUT init + Gaussian background "
                              "rendering. Required on Ampere datacenter SKUs "
@@ -1551,6 +1614,7 @@ def main() -> None:
         target_fps=args.target_fps,
         initial_fov_rad=math.radians(args.initial_fov_deg),
         multi_cam_poses=multi_cam_poses,
+        difix_server=args.difix_server,
     )
     # Phase A diagnostic block — one-shot startup print, no GUI/render side
     # effects. See plan v2-t8-13-t8-14-bug-happy-starfish.md for the 4-bug

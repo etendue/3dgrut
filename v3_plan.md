@@ -1168,6 +1168,71 @@ distillation (Stage C，DiFix 输出回灌训练) — 看 novel-view Δ 决定 R
 
 ---
 
+### V3-T15.2 Stage A.5 — DiFix viser 交互式实时集成（独立进程 IPC，2026-06-02）
+
+**Commit**: `<next>`（NEW `threedgrut_playground/difix_server.py` +
+`threedgrut_playground/utils/difix_client.py` + `difix_protocol.py`,
+MOD `threedgrut_playground/viser_gui_4d.py`, NEW `threedgrut/tests/test_difix_ipc.py`）
+
+**目标**：把 A.4 的离线 DiFix 后处理变成 **viser 交互式显示选项** —— 勾选开关后
+渲染帧经 DiFix 修复再推浏览器，实时目视 novel-view 去伪影效果。评估可行性 + 实时性。
+
+**架构（独立进程 + 本地 TCP）**：DiFix 依赖栈（cosmos_predict2 / TE / flash-attn）
+只在 cosmos Docker 内可用，viser viewer 在 host `3dgrut2` conda env，两环境不可合并；
+故 DiFix 跑成**容器内独立 server**，viewer 通过 **raw-uint8 over localhost TCP** 传帧。
+server 用 **per-connection daemon 线程**（accept 后开线程处理该 conn，僵死/半开连接不阻塞
+其他连接）+ 每连接 socket timeout 自清理 + 全局 `gpu_lock` 串行 GPU forward。
+接入点：`viser_gui_4d.update()` 在 `fast_render()` 之后、`set_background_image()` 之前
+插 `_maybe_difix(img)`（→ `DifixClient.fix`，失败 graceful fallback 原帧、不阻塞 viewer）。
+
+#### 🎉 端到端实测（ThinkPad RTX 4090，clip 9ae151dc，2026-06-02）
+
+| 项 | 实测 |
+|---|---|
+| 真实渲染帧尺寸 | 1920×1080（FTheta novel-view 渲染输出） |
+| **热端到端 RTT（IPC + DiFix forward）** | **93 ms/帧**（median；min 92 / max 96，n=5） |
+| 冷启动首帧（含 TCP 连接） | 1212 ms |
+| 纯 DiFix forward（A.3 对照） | 78–81 ms |
+| **IPC 净增** | **~13 ms**（6.2 MB FHD 帧 GPU→CPU→TCP→GPU 往返，raw-uint8 协议） |
+| server warmup（lazy_init + 3.8GB 权重 + kernel compile） | 15.9 s（开机一次，之后帧帧 hot） |
+| 图像正确性 | changed 94.1% + 输入输出 shape 一致（DiFix 真处理 + IPC 无损） |
+| 视觉效果 | before/after 目视：顶部/边缘水波纹伪影 + 中心道路黑洞 **显著消除** |
+
+**实时性结论**：启用后单帧 ≈ 渲染时间 + 93 ms → on-demand **~7–10 FPS**，适合"停下精修"；
+不勾选零开销维持原 ~20 FPS。raw-uint8 协议优于 JPEG（IPC 仅 +13ms，JPEG 编解码更慢）。
+
+#### 验证矩阵
+- ✅ Mac CPU 单测 **20 个**（`test_difix_ipc.py` 15 + `test_difix_smoke.py` 5）：protocol
+  round-trip/分片/坏magic + client RTT/降级/重连/from_addr + server `_serve_one`/transform
+  uint8↔float/真实 serve+client 端到端 + **并发(僵死client不阻塞正常client)**
+- ✅ 容器 server warmup + listening :8765（`cosmos-predict2-container:1.2`，`--gpus device=1`）
+- ✅ host viewer 启动 + FTheta ckpt(1920×1080) 加载 + 连 difix_server + viser listening :8080
+- ✅ 端到端 RTT 93ms + before/after 去伪影目视确认
+- ✅ **容错实测**：server 不可达 → fix 1.14ms 返回原帧(healthy=False,不抛)；僵死连接在场 →
+  正常 client 仍被服务(threading 修复后实测 PASS)；server 恢复 → client 自动重连成功
+- 🟡 浏览器交互目视（用户在 `http://<thinkpad>:8080` 勾 "DiFix (novel-view fix)" 实时对比）
+
+#### 容错 / 健壮性（直接回答"DiFix 服务连不上 viewer 还正常吗"）
+viewer **永远正常工作**，DiFix 只是"有则锦上添花、无则透明降级"：
+- **server 进程没起（connection refused）**：`fix()` 立即(~1ms)返回原帧 + `healthy=False`
+  + RTT 显示 "unavailable"，viewer 流畅维持原渲染（实测连续 5 帧稳定 passthrough）。
+- **server 起着但连接僵死**：原 `serve()` 单连接串行会让后续 `fix()` 每帧 timeout（viewer 卡）
+  → **已修复为 per-connection threading**（commit 内），实测僵死 client 在场时正常 client 仍被
+  及时服务。
+- **server 中途恢复**：`DifixClient` 失败后自动重连，下一帧即恢复 DiFix（实测 PASS）。
+- 任何 socket/协议异常都被 `DifixClient.fix` 的 try/except 兜底返回原帧，**绝不崩 viewer**。
+
+#### 工程要点 / 踩坑
+- ThinkPad 双 mirror：容器用 `~/3dgrut2_difix`（-v mount），host conda 用 `~/repo/3dgrut2`
+  （pip -e）；两者落后 main（缺 renderer dropdown）→ host viewer 删 `Engine3DGRUT(renderer=...)`
+  一行即兼容旧 engine（dropdown/`--renderer` 保留无害，set_renderer 已 try/except 包裹）
+- `--gpus '"device=1"'` 让容器只看 4090（否则 cuda:0=T2000 3.7GB → OOM）
+- 容器裸环境 `from threedgrut.correction.difix` 可直接 import（无需 conftest stub，实测 PKG_IMPORT_OK）
+- 用法：server = cosmos 容器内 `python -m threedgrut_playground.difix_server --port 8765`；
+  viewer = host `python threedgrut_playground/viser_gui_4d.py --gs_object <ckpt> --difix_server 127.0.0.1:8765`
+
+---
+
 ### Stage 11 后续 — 通道隔离实验 + LiDAR-PSNR 口径/约定审计（2026-06-01）
 
 承接上条 "调参待验方向"。A800 双卡并行跑**通道隔离** 30k（clip 9ae151dc，sym5cam），各自对照 baseline `v3_kpi_sym5cam_30k`，baseline 用同一 `render.py --novel-view` 协议重跑确保口径一致（重跑得 0.6022，与旧 Done Log 字节级吻合）。
