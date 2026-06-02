@@ -29,6 +29,7 @@ from threedgrut.model.class_psnr import (
     collect_active_tracks_for_frame,
     compute_class_psnr,
 )
+from threedgrut.correction.difix import DifixPostProcessor
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.color_correct import color_correct_affine
 from threedgrut.utils.eval_metrics import compute_lidar_psnr  # T11.F1
@@ -85,6 +86,16 @@ class Renderer:
         else:
             assert False, f"{conf.model.background.color} is not a supported background color."
 
+        # V3-T15.2: optional DiFix post-process. Module-level import above is
+        # safe on dev machines without cosmos_predict2 because DifixPostProcessor
+        # uses lazy import — the heavy stack is only loaded if ``enabled=True``
+        # and ``forward`` is actually invoked.
+        self.difix = DifixPostProcessor(
+            enabled=bool(conf.render.get("use_difix", False)),
+            ckpt_path=conf.render.get("difix_ckpt_path", None),
+            timestep=int(conf.render.get("difix_timestep", 250)),
+        )
+
     def create_test_dataloader(self, conf):
         """Create the test dataloader for the given configuration."""
         from threedgrut.datasets.utils import configure_dataloader_for_platform
@@ -116,6 +127,7 @@ class Renderer:
         computes_extra_metrics=True,
         eval_cameras=None,
         novel_view=False,
+        use_difix=False,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -127,6 +139,12 @@ class Renderer:
                 None / empty → no filter. Injected into ``conf.render.eval_cameras``
                 so the same Hydra-style key works for both ckpt eval and
                 training-end eval.
+            use_difix: V3-T15.2 Stage A.4 — when True, inject
+                ``conf.render.use_difix = True`` so Renderer.__init__ builds
+                an enabled DifixPostProcessor and render_all() computes the
+                ``mean_*_difix`` metric trio. Pre-T15.2 ckpts have no
+                ``use_difix`` key in their embedded conf, so we must inject
+                here rather than relying on conf default.
         """
 
         checkpoint = torch.load(checkpoint_path, weights_only=False)
@@ -143,6 +161,9 @@ class Renderer:
         # works on the OmegaConf used here (see L107-110 patterns above).
         if eval_cameras:
             conf["render"]["eval_cameras"] = list(eval_cameras)
+        # V3-T15.2 Stage A.4: CLI --use-difix injection (same dict-style pattern).
+        if use_difix:
+            conf["render"]["use_difix"] = True
 
         object_name = Path(conf.path).stem
         experiment_name = conf["experiment_name"]
@@ -367,6 +388,12 @@ class Renderer:
         cc_psnr = []
         cc_ssim = []
         cc_lpips = []
+        # V3-T15.2: DiFix post-process metrics. Populated only when
+        # self.difix.enabled is True; otherwise the lists stay empty and
+        # metrics.json gets no difix_* keys (byte-identical pre-T15.2).
+        psnr_difix = []
+        ssim_difix = []
+        lpips_difix = []
         # T6F.2: masked 双指标（Stage 6-fix）—— Batch.mask 由 NCoreDataset
         # 注入 ego mask 后非 None；NeRF/Colmap 等 dataset mask=None 时直接
         # 复制全图值保证 byte-identical 回归. masked-cc 同理.
@@ -519,6 +546,29 @@ class Renderer:
                     rgb_gt_full.permute(0, 3, 1, 2),
                 ).item()
             )
+
+            # V3-T15.2: optional DiFix post-process metrics. Runs against the
+            # raw pred_rgb (not color-corrected) so the comparison is the pure
+            # "diffusion fixer Δ" rather than mixed with affine cc. Skipped
+            # entirely when use_difix=false → no GPU work, byte-identical with
+            # pre-T15.2 metrics.json.
+            if self.difix.enabled:
+                pred_rgb_difix = self.difix(pred_rgb_full)
+                psnr_difix.append(
+                    criterions["psnr"](pred_rgb_difix, rgb_gt_full).item()
+                )
+                ssim_difix.append(
+                    criterions["ssim"](
+                        pred_rgb_difix.permute(0, 3, 1, 2),
+                        rgb_gt_full.permute(0, 3, 1, 2),
+                    ).item()
+                )
+                lpips_difix.append(
+                    criterions["lpips"](
+                        pred_rgb_difix.clip(0, 1).permute(0, 3, 1, 2),
+                        rgb_gt_full.permute(0, 3, 1, 2),
+                    ).item()
+                )
 
             # Color-corrected metrics
             pred_rgb_cc = color_correct_affine(pred_rgb_full, rgb_gt_full)
@@ -776,6 +826,15 @@ class Renderer:
                     for m in NOVEL_VIEW_MODES if novel_lpips[m]
                 )
             )
+
+        # V3-T15.2: append DiFix aggregates only when the lists were populated
+        # (i.e. self.difix.enabled was true on this run). Otherwise no key is
+        # written, keeping metrics.json byte-identical with pre-T15.2.
+        if psnr_difix:
+            metrics_json["mean_psnr_difix"] = float(np.mean(psnr_difix))
+            metrics_json["mean_ssim_difix"] = float(np.mean(ssim_difix))
+            metrics_json["mean_lpips_difix"] = float(np.mean(lpips_difix))
+            table["mean_psnr_difix"] = float(np.mean(psnr_difix))
 
         # T8.5.7 / V3-E4 — per-camera aggregated metrics. ``per_cam`` is
         # empty for NeRF/Colmap (Batch.camera_id is None there), so
