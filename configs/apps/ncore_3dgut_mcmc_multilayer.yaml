@@ -116,6 +116,17 @@ dataset:
     - camera_rear_left_70fov
     - camera_rear_right_70fov
 
+# ─── loss (Phase 2A Fix v1) ──────────────────────────────────────────
+loss:
+  # Phase 2A Fix v1: exempt the road layer from the opacity L1 decay
+  # (lambda_opacity). Stops under-supervised road particles from being
+  # starved → killed → relocated/perturb-flung off the LiDAR surface → BEV
+  # road holes. 30k A/B (commit e457648): road dead 29.1%→0.2%, opaque
+  # coverage @0.1 82→93% / @0.3 71→88%, combined BEV hole 6%→2%, at −0.18 dB
+  # cc_psnr (≈ run-to-run noise). User-accepted 2026-06-02.
+  # Set to [] to disable (revert to byte-identical baseline).
+  exempt_layers_opacity_reg: [road]
+
 # ─── trainer (汇总所有上游 v2 yaml) ────────────────────────────────────
 trainer:
   layered_loss: true       # v2_road: region-weighted L1
