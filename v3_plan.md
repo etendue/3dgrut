@@ -912,7 +912,9 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
   | LPIPS | 0.359 | 0.367 | +0.008 |
 
   - **结论**：Fix v1 把 road 饿死率从 29%→0.2%、路面覆盖 +11~17pp、合并 BEV 洞率 6%→2%，**用户报告的俯视空洞应基本填上**；photometric 守护 ~−0.18 dB cc_psnr（接近 V3-R1 记录的 ±0.1 dB run 间噪声）。代价来源 = 无监督区 road 停在 ~init opacity 渲成灰面（预测的风险）。**近 quality-neutral + 大幅完整性提升**。
-  - **待办**：① viser/热力图肉眼确认无灰板 artifact（数字强但未视觉验收）；② 若要回收 0.18 dB：LiDAR 置信度 gate 豁免（只豁免 LiDAR 命中区）/ 改用温和 opacity floor 替代全豁免；③ 治本仍是 P2A-FE.1 fisheye 真监督。**Step3 ✅ 机制验证通过（fix 有效），标 🟢→ 视觉验收后转 ✅**。
+  - **viser 肉眼验收（用户, 2026-06-02）**：「中段行程路面基本完整（符合预期）；残留黑区主要由**光照/阴影（如建筑物投影）**造成，属另一类问题，非路面 starvation 机制」→ **用户接受当前状态，Fix v1 合入**。
+  - **结论**：**Step3 ✅** —— Fix v1（road 豁免 lambda_opacity）合入。残留黑区根因转移到 **appearance/exposure/阴影建模**（与本次 road 几何/opacity 修复正交），不在 Phase 2A 范畴。
+  - **后续（backlog，非阻塞）**：① 若要回收 0.18 dB：LiDAR 置信度 gate 豁免（只豁免 LiDAR 命中区）/ 温和 opacity floor 替代全豁免；② 治本路面监督仍是 **P2A-FE.1** fisheye；③ 残留阴影黑区 → 另立 exposure/shadow 任务（超出 Phase 2A）。
 
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 
