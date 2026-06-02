@@ -793,6 +793,26 @@ class LayeredGaussians(nn.Module):
     # forward attribute reads and Parameter writes through to that layer so the
     # existing Trainer + MCMCStrategy + renderer code paths continue working.
 
+    def get_density_excluding(self, exclude_layer_names) -> torch.Tensor:
+        """Phase 2A: fused activated density over particle layers NOT in
+        ``exclude_layer_names``.
+
+        Used by the trainer's opacity L1 reg so a structured, LiDAR-initialised
+        layer (road) can be exempted from ``lambda_opacity``. Without that
+        exemption, under-supervised road particles are pushed to death by the
+        constant L1 decay, then relocated / perturb-flung off the surface ->
+        BEV road holes (Phase 2A fact-check). With an empty exclude list this
+        returns the same fused density as ``get_density()``.
+        """
+        from threedgrut.layers.layer_spec import particle_layer_names_excluding
+
+        names = particle_layer_names_excluding(self.specs, exclude_layer_names)
+        pieces = [self.layers[n].get_density() for n in names if n in self.layers]
+        if not pieces:
+            ref = next(iter(self.layers.values()))
+            return torch.zeros(1, device=ref.device)
+        return torch.cat(pieces, dim=0)
+
     def forward(self, gpu_batch, train: bool = False, frame_id: int = 0):
         """Render the scene through whatever layer setup we have.
 

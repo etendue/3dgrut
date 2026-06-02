@@ -467,6 +467,9 @@ flowchart TB
 | `threedgrut_playground/utils/bev_holes.py` | **Phase 2A ✅** — `compute_bev_hole_stats()` ego-corridor 网格分离 A 类透明洞/B 类几何洞 + count/opacity 网格；grid 按 corridor 限界（防 bg sprawl OOM）；纯 numpy/scipy 无 torch |
 | `scripts/diagnose_road_bev_holes.py` | **Phase 2A ✅** — CLI: ckpt→road/bg sigmoid(density)→road-only/bg-only/road∪bg 三趟 + BEV 热力图；B3_30k 实测 road 覆盖 68%、bg 替补到 91.7%、真洞 1.6% |
 | `threedgrut/tests/test_bev_holes.py` | **Phase 2A ✅** (9 tests, Mac `pytest --noconftest` 全绿；含 corridor-bound sprawl OOM 回归测试) |
+| `scripts/diagnose_road_starvation.py` | **Phase 2A ✅** — 饥饿事实核查 CLI: T1 死亡量级 / T2 按 ego 距离 / T3 按 LiDAR 距离 / T4 2×2 解耦 + dead/alive 散点。证实：5k dead 仅 3% 均匀、faint 随相机监督强结构化；30k dead 32% 远场偏置+被 relocate/perturb 甩走 |
+| `scripts/_dump_road_lidar_xy.py` | **Phase 2A ✅** — A800 helper：hydra compose + `datasets.make` → `get_road_lidar_points` → 存 LiDAR road XY npy（核查 T3/T4 用） |
+| `threedgrut/tests/test_layer_exempt_opacity.py` | **Phase 2A ✅** (6 tests, Mac `--noconftest` 全绿；importlib 独立载入 layer_spec 避开 torch；测 `particle_layer_names_excluding` 选择逻辑) |
 
 ### 6.2 修改文件
 
@@ -489,6 +492,10 @@ flowchart TB
 | `threedgrut/strategy/mcmc.py` | 抽 `_get_add_cap()` 钩子 (62fc509)；抽 `_get_perturb_mask()` 钩子 (默认 ones, v1 byte-identical, road spec 注 1,1,0)；add/relocate 同步 track_ids buffer (T4.5) | T2.1 ✅ / T3.4 ✅ / T4.5 ✅ |
 | `threedgrut/strategy/layered_mcmc.py` | sub 构造时 `_install_perturb_mask` 注入 spec.perturb_scale_mask | T3.4 ✅ |
 | `configs/base_gs.yaml` | + `use_layered_model: false` + `layers.enabled: [background]` + `trainer.layered_loss: false` 默认 (T1.2/T3.4)；+ `trainer.use_sky_envmap` + `sky_backend (null=spec default)` + `sky_resolution` + `sky_lr` + `lambda_sky` (T5.3 Stage 5)；+ `trainer.use_exposure` + `exposure_lr` (T6.2 Stage 6) | T1.2 ✅ / T3.4 ✅ / T5.3 ✅ / T6.2 ✅ |
+| `threedgrut/layers/layer_spec.py` (Phase 2A Fix v1) | + `particle_layer_names_excluding(specs, exclude)` 纯 helper (torch-free) | Phase 2A 🟡 |
+| `threedgrut/layers/layered_model.py` (Phase 2A Fix v1) | + `get_density_excluding(exclude)` 按粒子层 fuse density（排除豁免层），供 opacity reg 用 | Phase 2A 🟡 |
+| `threedgrut/trainer.py` (Phase 2A Fix v1) | opacity reg：`loss.exempt_layers_opacity_reg` 非空时用 `get_density_excluding` 排除该层（road），否则走原 `get_density()` | Phase 2A 🟡 |
+| `configs/base_gs.yaml` (Phase 2A Fix v1) | + `loss.exempt_layers_opacity_reg: []`（opt-in，默认空=字节等价）；fix run 用 `++...=[road]` | Phase 2A 🟡 |
 | `schemas/scene_manifest.schema.json` | layer_assignments 字段 | T7.5 ⏭ 跳过 (仓库无 schemas/ 目录, scene_manifest 在 v2 是隐式的 NCore SDK manifest_json, 未做 JSON Schema 校验; 转 V3 backlog) |
 
 ### 6.3 复用外部代码（不修改源头，借代码或思想）

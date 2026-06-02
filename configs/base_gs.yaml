@@ -214,6 +214,12 @@ loss:
 
   use_opacity: false
   lambda_opacity: 0.0
+  # Phase 2A: layer names exempted from the opacity L1 reg (lambda_opacity).
+  # Default [] = byte-identical (reg over all particle layers). Setting e.g.
+  # [road] stops lambda_opacity from starving under-supervised road particles
+  # (which otherwise die -> get relocated/perturb-flung -> BEV surface holes).
+  # Only consumed by LayeredGaussians.get_density_excluding (no-op for MoG).
+  exempt_layers_opacity_reg: []
 
   use_scale: false
   lambda_scale: 0.0

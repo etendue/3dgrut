@@ -883,6 +883,20 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 - **修复方向**（数据支持，需 A 类 + B 类两手）：A 类→road opacity floor / 反透明正则 / Stage 11 几何监督；B 类→road relocate `max_relocation_fraction<1`（`mcmc.py:121` 已有旋钮）或关 road relocate。
 - **遗留**：精确 ON 残留数字需重跑 penalty-ON ckpt（5k A/B ON ckpt 已被 ThinkPad /tmp 休眠清理）——Step 2 A800 5k ON/OFF 复测中。
 
+#### 续（2026-06-02）：饥饿机制事实核查 + Fix v1（road 豁免 lambda_opacity）
+
+承接上面"修复方向"，先**事实核查**根因再动手，结果**修正了机制判断**。
+
+- **新增核查工具**（CPU，纯 numpy/scipy）：[`scripts/diagnose_road_starvation.py`](scripts/diagnose_road_starvation.py)（T1 死亡量级 / T2 按 ego 距离 / T3 按 LiDAR 距离 / T4 2×2 解耦 + dead/alive 散点）+ [`scripts/_dump_road_lidar_xy.py`](scripts/_dump_road_lidar_xy.py)（A800 dump 200 万 LiDAR road 点）。
+- **干净 5k A/B（同 config，本次 A800 实测）**：penalty 按设计奏效——road opacity 中位 0.031→0.036、覆盖@0.1 77.4%→81.6%、bg 覆盖 81%→68%（被赶出），合并覆盖 ~96% 基本持平。
+- **核查结论（区分 dead op≤0.005 vs faint op<0.1 两个人群）**：
+  - **5k：dead 仅 2.7%、空间近乎均匀**（T2 2.7%→3.1%）→ **推翻**"死亡+relocate 掏空"为 5k 主因；真实主因是 **faint（67%）随监督强结构化**：ego 近 55%→远 92%、不透明粒子贴轨迹（ego p50 7.0m vs faint 12.3m）。
+  - **30k（B3）：dead 暴涨到 32%、远场偏置**（近 27%→远 47%），dead 粒子被 relocate 堆到轨迹 + **perturb 随机游走甩到 ±1000m**（noise∝(1−opacity)），→ 远场路面清空 = B 类几何洞 15%。**relocate/perturb 掏空机制在 30k 被证实**（5k 看不到，迭代涌现）。
+  - **T4 解耦**：相机距离是**主因**（固定 LiDAR，远 ego faint 54.7%→66.3%），LiDAR 距离是**次因**（+5pp）。LiDAR 覆盖其实很密（200 万点，64% road 粒子在 0.1m 内），真盲区仅 ~12% 且与相机远场重叠。**根因 = 相机欠观测**（无 top-down 视角），非 LiDAR 盲区。
+- **Fix v1（commit 待补）**：road 层**豁免 `lambda_opacity`**——停掉饿死 road 的恒定下压力，无监督 road 粒子停留在 init opacity 附近（不再死亡→不被 relocate/perturb 甩走→LiDAR 先验表面保留）。
+  - 实现：新增 opt-in config `loss.exempt_layers_opacity_reg`（默认 `[]` 字节等价）+ `LayeredGaussians.get_density_excluding(exclude)` + 纯函数 `particle_layer_names_excluding`（torch-free，6 单测 Mac 全绿）+ trainer 接线（空 list 走原路径）。
+  - **验证中**：A800 30k 同 config A/B —— `phase2a_30k_on_baseline`（无 fix）vs `phase2a_30k_on_roadexempt`（`++loss.exempt_layers_opacity_reg=[road]`）。出口看 dead%↓ / road 远场覆盖↑ / **cc_psnr_masked 守护不退化**。🟡 结果待回填。
+
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 
 可视化基础设施 sub-stage，承担 v3 训练前的"看清楚问题"诉求，复用 B3_30k ckpt 不重跑训练。

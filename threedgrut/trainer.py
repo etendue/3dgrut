@@ -1151,7 +1151,16 @@ class Trainer3DGRUT:
         lambda_opacity = 0.0
         if self.conf.loss.use_opacity:
             with torch.cuda.nvtx.range(f"loss-opacity"):
-                loss_opacity = torch.abs(self.model.get_density()).mean()
+                # Phase 2A: optionally exempt structured layers (e.g. road) from
+                # the opacity L1 decay so lambda_opacity doesn't starve their
+                # under-supervised particles. Default [] -> original behaviour
+                # (reg over all particle layers); only LayeredGaussians honours it.
+                exempt = list(getattr(self.conf.loss, "exempt_layers_opacity_reg", []) or [])
+                if exempt and hasattr(self.model, "get_density_excluding"):
+                    density_for_reg = self.model.get_density_excluding(exempt)
+                else:
+                    density_for_reg = self.model.get_density()
+                loss_opacity = torch.abs(density_for_reg).mean()
                 lambda_opacity = self.conf.loss.lambda_opacity
 
         # Scale regularization
