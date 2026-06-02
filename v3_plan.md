@@ -237,6 +237,7 @@ kanban
 | **T18.1** | 18 | WP_V3_Report.md 编写（镜像 WP_V2_Report.md 结构） | docs | 1.5 | ⬜ | — |
 | **T18.2** | 18 | v3 双档判定（保守 ≥ 30 / 进取 ≥ 34）+ V4 backlog 转出 | docs | 0.5 | ⬜ | — |
 | **T18.3** | 18 | v3_plan.md / v3_architecture.md 最终同步 + git commit | docs | 0.5 | ⬜ | — |
+| **P2A-FE.1** | Phase 2A (backlog) | **调查给训练加 fisheye / 宽FOV 相机以补路面监督** — Phase 2A 已证实路面空洞根因是**相机掠射欠观测路面**（非 LiDAR 盲区；相机距离为主因、LiDAR 距离次因）。fisheye 朝下+宽视场直接给路面 patch 光度梯度，**从源头消洞**（优于 Fix v1 仅"止饿死"的治标）。关键点：① 引擎已是 **3DGUT，原生支持畸变相机**（UT/7 sigma 点，无需 undistort），fisheye 接入主要是内参(Kannala-Brandt/OpenCV fisheye)+外参标定+**pinhole/fisheye 混合联训**（可复用现有 per-cam exposure scale/bias，参考 UniGaussian）；② **分辨率-覆盖 tradeoff**：fisheye 把像素摊到宽视场→单位面积采样密度反而可能更低，**近场路面收益最大、远场仍需窄/长焦相机**（fisheye 是补充非替代）；③ **~160° 为最佳折中**（>180° UT 投影会崩，arXiv 2508.06968）；④ 忽略畸变代价巨大（KITTI-360 fisheye：正确建模 24.65 dB vs naive undistort 12.6 dB，UniGaussian）；⑤ 3DGUT vs analytic-Jacobian(DirectFisheye-GS) 在宽外景有效性有争议，需在本数据基准。详见 §5 Done Log 2026-06-02 "fisheye 研究报告"（参考：3DGUT 2412.12507 / Fisheye-GS 2409.04751 / UniGaussian 2411.15355 / FisheyeGaussianLift 2511.17210 / ParkGaussian 2601.01386） | V3-R2 / Phase 2A | 5 | ⬜ | — |
 
 ### 1.3 当前 Stage 状态汇总（**主 KPI: novel-view PSNR ↑**；reconstructed 为辅 KPI）
 
@@ -895,7 +896,23 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
   - **T4 解耦**：相机距离是**主因**（固定 LiDAR，远 ego faint 54.7%→66.3%），LiDAR 距离是**次因**（+5pp）。LiDAR 覆盖其实很密（200 万点，64% road 粒子在 0.1m 内），真盲区仅 ~12% 且与相机远场重叠。**根因 = 相机欠观测**（无 top-down 视角），非 LiDAR 盲区。
 - **Fix v1（commit 待补）**：road 层**豁免 `lambda_opacity`**——停掉饿死 road 的恒定下压力，无监督 road 粒子停留在 init opacity 附近（不再死亡→不被 relocate/perturb 甩走→LiDAR 先验表面保留）。
   - 实现：新增 opt-in config `loss.exempt_layers_opacity_reg`（默认 `[]` 字节等价）+ `LayeredGaussians.get_density_excluding(exclude)` + 纯函数 `particle_layer_names_excluding`（torch-free，6 单测 Mac 全绿）+ trainer 接线（空 list 走原路径）。
-  - **验证中**：A800 30k 同 config A/B —— `phase2a_30k_on_baseline`（无 fix）vs `phase2a_30k_on_roadexempt`（`++loss.exempt_layers_opacity_reg=[road]`）。出口看 dead%↓ / road 远场覆盖↑ / **cc_psnr_masked 守护不退化**。🟡 结果待回填。
+  - **A800 30k 同 config A/B 实测**（`phase2a_30k_on_baseline` 无 fix vs `phase2a_30k_on_roadexempt` `++loss.exempt_layers_opacity_reg=[road]`，commit `e457648`）：**机制完全奏效，洞大幅消除，代价是 ~0.18 dB（接近噪声）**。
+
+  | 指标 | baseline | roadexempt(fix) | Δ |
+  |---|---|---|---|
+  | road **dead%**(op≤0.005) | 29.1% | **0.2%** | **−99%** ✓ |
+  | road opacity 中位 | 0.037 | **0.264** | ×7 |
+  | road 覆盖@0.1 | 82.0% | **92.9%** | +10.9pp |
+  | road 覆盖@0.3 | 71.4% | **88.0%** | +16.6pp |
+  | road **B类几何洞** | 9.8% | **4.4%** | −5.4pp |
+  | road∪bg 覆盖@0.1 | 94.2% | **98.0%** | +3.8pp |
+  | road∪bg B类洞 | 1.2% | **0.4%** | −0.8pp |
+  | **mean_cc_psnr（守护）** | 25.99 | 25.81 | **−0.18 dB**（≈噪声）|
+  | mean_psnr | 27.17 | 27.06 | −0.11 dB |
+  | LPIPS | 0.359 | 0.367 | +0.008 |
+
+  - **结论**：Fix v1 把 road 饿死率从 29%→0.2%、路面覆盖 +11~17pp、合并 BEV 洞率 6%→2%，**用户报告的俯视空洞应基本填上**；photometric 守护 ~−0.18 dB cc_psnr（接近 V3-R1 记录的 ±0.1 dB run 间噪声）。代价来源 = 无监督区 road 停在 ~init opacity 渲成灰面（预测的风险）。**近 quality-neutral + 大幅完整性提升**。
+  - **待办**：① viser/热力图肉眼确认无灰板 artifact（数字强但未视觉验收）；② 若要回收 0.18 dB：LiDAR 置信度 gate 豁免（只豁免 LiDAR 命中区）/ 改用温和 opacity floor 替代全豁免；③ 治本仍是 P2A-FE.1 fisheye 真监督。**Step3 ✅ 机制验证通过（fix 有效），标 🟢→ 视觉验收后转 ✅**。
 
 ### V3-VIZ — 可视化诊断 + viser GUI 增强（2026-05-26）
 
