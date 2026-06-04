@@ -2,6 +2,9 @@
 #
 # ===========================================================================
 #  NCore 3DGUT MCMC Multi-Layer — 单文件扁平配置 (2026-05-26)
+#  ★ v3 baseline (2026-06-03 重生): R2 bg_road_penalty + Phase2A road-opacity
+#    豁免 + BilateralGrid exposure + LiDAR depth (生效配方 λ0.1/decay0);
+#    eff_rank 剔除 (null 噪声). 详见 v3_plan.md Done Log "v3 baseline 重生".
 # ===========================================================================
 # 本 yaml 是 ncore_3dgut_mcmc_v2_full_4dviz_dynfix.yaml 7 层递归链的
 # 字节等价扁平版, 把以下链路上所有 override 合并进一份文件:
@@ -13,9 +16,10 @@
 #   * 4 个 layer: background / road / dynamic_rigids / sky_envmap
 #   * region-weighted L1 (trainer.layered_loss)
 #   * sky envmap (默认 cubemap; A800 必须 CLI 加 trainer.sky_backend=mlp)
-#   * per-camera affine exposure (use_exposure=true, 与 dynfix 保持一致;
-#     注: Stage 7 实证 exposure 会让 raw psnr_masked 退化, V3-P1 计划修复.
-#     若复跑 baseline 推荐 CLI 覆盖 trainer.use_exposure=false)
+#   * per-camera affine exposure (use_exposure=true) — 实现已由 V3-P1 (T9.x)
+#     从旧 ExposureModel 替换为 BilateralGrid: raw psnr 15.29→27.44 (+12dB),
+#     raw/cc 差 10.75→1.21dB. ⚠ 旧"复跑 baseline 关 use_exposure"建议已作废,
+#     v3 baseline 保持 ON.
 #   * 4D viz metadata 入 ckpt (viz_4d.enabled=true)
 #   * T8/B3: bg-layer cuboid 内 opacity penalty + cuboid mask + dyn 位置 clamp
 #   * dynamic_rigids.max_n_particles 调到 300k (= dynfix)
@@ -93,11 +97,11 @@ dataset:
   # 每帧深度图 (aux/lidar_depth/ + aux/depth_anything_v2/) 注入
   # image_infos["lidar_depth_map"] / ["depth_prior"]. train/val/test 三路均接.
   # 配合 trainer.use_lidar_depth / use_depth_prior 使用; 任一为 true 时打开对应项.
-  # Stage 11 30k 实测 (sym5cam): 接通正确但 novel-view 无可观测提升 (LPIPS
-  # Δ-0.0015, 视觉 A/B 无差别), reconstructed 不退化. 详见 v3_plan.md § 5
-  # Done Log 2026-05-30 Stage 11 条目. 默认 false 保持 baseline 字节等价.
-  load_lidar_depth_map: false   # T11.C1: <clip>/aux/lidar_depth/<cam>/<ts>.npz
-  load_depth_prior: false       # T11.D1: <clip>/aux/depth_anything_v2/<cam>/<ts>.npz
+  # Stage 11 30k 实测 (sym5cam): 接通正确, reconstructed 不退化, novel-view
+  # 无稳健提升 (LiDAR-only LPIPS -0.0045 噪声级), 但 lidar_psnr +2dB 几何精度.
+  # ★ v3 baseline 纳入 LiDAR (不纳 DepthV2). 详见 v3_plan.md Done Log Stage 11.
+  load_lidar_depth_map: true    # ★ v3 baseline ON: <clip>/aux/lidar_depth/<cam>/<ts>.npz (4196 npz dump 已存在)
+  load_depth_prior: false       # DepthV2 不纳入 (z/ray 口径 bug 未修 + 噪声级)
   lidar_depth_aux_root: null    # null → <clip_dir>/aux/lidar_depth
   depth_prior_aux_root: null    # null → <clip_dir>/aux/depth_anything_v2
   # 对称 5-cam ring (T8.5.7 / V3-E4 30k 实测): front_wide_120 + 左右 cross
@@ -135,9 +139,9 @@ trainer:
   # sky_backend / sky_resolution 保持 null (registry default = cubemap@128);
   # A800 nvdiffrast 不可用 → CLI 加 trainer.sky_backend=mlp
 
-  # v2_full_exposure: per-camera affine exposure (Adam, exposure_lr)
-  # 注: Stage 7 实证 raw psnr_masked 退化 (15.63 vs 25.76 dB), V3-P1 待修.
-  # 若想 ablation 关闭, CLI 加 trainer.use_exposure=false
+  # v2_full_exposure: per-camera affine exposure → V3-P1 已替换为 BilateralGrid
+  # (threedgrut/correction/bilateral_grid.py). raw/cc 差降至 1.21dB (健康).
+  # ablation 关闭: CLI 加 trainer.use_exposure=false
   use_exposure: true
   exposure_lr: 1.0e-3
 
@@ -153,10 +157,10 @@ trainer:
   #   早饱和使监督在训练中途消失 + 30k/5cam RGB 信号已 pin 住几何. 调参方向:
   #   lidar_w_decay=0 (全程监督) + 提 λ_depth_prior + depth_prior 换不饱和 loss.
   #   详见 v3_plan.md § 5 Done Log 2026-05-30 Stage 11 条目.
-  use_lidar_depth: false      # 总开关 (LiDAR ray-depth + bg_lidar)
-  use_depth_prior: false      # 总开关 (DepthAnythingV2 dense depth)
-  lambda_lidar_depth: 0.03    # LiDAR depth L1 权重 (drivestudio car2sim=0.03)
-  lidar_w_decay: 1.0          # >0 启用指数衰减; 设 0 让 LiDAR 全程监督
+  use_lidar_depth: true       # ★ v3 baseline ON: LiDAR ray-depth + bg_lidar (用户决策 2026-06-03)
+  use_depth_prior: false      # DepthV2 不纳入 (z/ray 口径 bug + 噪声级)
+  lambda_lidar_depth: 0.1     # Stage 11 生效配方 (默认 0.03+decay=开了没用, lidar_psnr 仅 20.68)
+  lidar_w_decay: 0            # 0 = 全程监督 (Stage 11: lidar_psnr 20.68→22.67, +2dB)
   lambda_bg_lidar: 0.005      # sky 远场 anchor 权重
   lambda_depth_prior: 0.01    # DepthV2 dense depth 权重
   lidar_depth_loss_type: l1   # l1 | l2 | smooth_l1
@@ -180,8 +184,10 @@ trainer:
     cell_size: 1.0
     z_band: 0.4
 
-  # V3-R1.3 — road-layer effective rank reg (active, V3-R1 Phase 1).
-  lambda_road_eff_rank: 0.01
+  # V3-R1.3 — road-layer effective rank reg.
+  # ⚠ A/B 实测 null (5k/30k 方向翻转=纯噪声, 详见 v3_plan Done Log V3-R1).
+  # ★ v3 baseline 剔除 (设回 0.0, 用户决策 2026-06-03), 不污染基线锚点.
+  lambda_road_eff_rank: 0.0
 
 # ─── 4D viz metadata 入 ckpt (源自 v2_full_4dviz.yaml) ─────────────────
 viz_4d:

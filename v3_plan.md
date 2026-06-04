@@ -23,6 +23,7 @@ Reconstructed cc_psnr_masked 退为辅指标——只要不显著退化（≥ v2
 |---|---|---:|---:|---:|---:|---:|
 | v2 baseline | Stage 7 (旧, 非对称 5cam) | **~ 待 Stage 8.5 实测**（估测 18-22 dB） | 严重黑洞 | 严重漂移 | 24.70 | baseline |
 | **v3 baseline (T8.5.7)** | Stage 8.5 (对称 5cam 30k) | 待 T8.5.3/4 测 | 待测 | 待测 | **26.04** ★ (E2b, +1.34 vs Stage 7) | baseline |
+| **v3 baseline 重生 ✅ (2026-06-03, 从头30k A)** | LiDAR+R2+exempt | **novel LPIPS 0.5987** (主KPI口径, 略优于旧 0.6022) | — | — | **25.79** (lidar_psnr 22.69) | baseline |
 | **v3 保守门槛（必达）** | Stage 15 出口 | **≥ 28.0** | ≥ 28 | ≥ 25 | ≥ v3 baseline (26.04, 不退化) | ≥ 25% |
 | **v3 进取目标** | Stage 17 出口 | **≥ 30.0** ★ 用户目标 | ≥ 30 | ≥ 28 | ≥ 26.5 | ≥ 35% |
 | NuRec 理论极限（留 v4） | — | ~32-34（含 DiFix 专有数据） | — | — | 36.28 reconstructed | — |
@@ -48,7 +49,7 @@ Reconstructed cc_psnr_masked 退为辅指标——只要不显著退化（≥ v2
 | `mean_psnr` (full, reconstructed) | 23.78（exposure OFF） | 用 exposure OFF baseline |
 | `mean_psnr_masked` (reconstructed) | 25.76（exposure OFF, Stage 7 非对称 5cam） / **15.29**（exposure ON, T8.5.7 对称 5cam 30k —— exposure 退化已知问题, V3-P1 修复） | 用对称 5cam baseline |
 | `mean_cc_psnr_masked` (reconstructed) | 24.70（Stage 7 非对称 5cam, σ < 0.2 dB） / **26.04** ★（T8.5.7 对称 5cam 30k） | v3 辅 KPI baseline 更新为 26.04 |
-| **Novel-view PSNR (±2m / ±5° hold-out)** | **❓ Stage 8.5 必测 ★** | **v3 主 KPI baseline — 待实测确认** |
+| **Novel-view LPIPS (4 档 avg, 主 KPI)** | T8.5.4 旧 baseline 0.6022 | **v3 baseline 重生 (2026-06-03 从头30k A): 0.5987 ✅** (略优; cc_psnr 25.79, lidar_psnr 22.69) |
 | Sky region PSNR (reconstructed) | Stage 5 出口 ≥ 30，30k 训练后衰减 | Stage 10 重新达标 |
 | **Novel Sky region** | **❓ 视觉验证已知严重黑洞** | Stage 8.5 量化 |
 | **Novel Dynamic region** | **❓ 视觉验证已知严重漂移** | Stage 8.5 量化 |
@@ -790,6 +791,47 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 
 > 按 Stage 顺序追加。每条包含：日期 + commit hash + Stage / Task ID + 实际改动摘要 + 关键验收数据（实测 PSNR / it/s / 耗时）。
 > v3 启动后填充。初始为空。
+
+### v3 baseline 重生（2026-06-03）— ✅ 定稿（对照 A：从头 30k λ0.1）+ resume 退化根因诊断
+
+**背景**：经 PR #6–#11（Stage 11 LiDAR / R1-R2 / Phase 2A / DiFix），`multilayer.yaml` 默认行为已偏离旧 baseline（novel LPIPS 0.6022 / cc_psnr 26.04）的配置。用户决策重新冻结一次 baseline 作为 Stage 12+ 统一锚点。
+
+**配置改动**（`configs/apps/ncore_3dgut_mcmc_multilayer.yaml`，6 处，**尚未 commit**）：
+- `lambda_road_eff_rank: 0.01 → 0.0`（剔除 V3-R1 实测 null 噪声）
+- `use_lidar_depth: false → true` + `load_lidar_depth_map: false → true`（纳入 LiDAR，dataset+trainer 两处同改）
+- `lambda_lidar_depth: 0.03 → 0.1` + `lidar_w_decay: 1.0 → 0`（Stage 11 生效配方；默认 0.03+decay 等于开了没用 lidar_psnr 仅 20.68）
+- `use_depth_prior` 保持 false（不纳 DepthV2：z/ray 口径 bug + 噪声级）
+- exposure 注释纠正（V3-P1 已用 BilateralGrid 替换 ExposureModel，保持 use_exposure=true；删过时的"复跑 baseline 关 exposure"建议）
+- 保留 bg_road_penalty(R2) + exempt_layers_opacity_reg=[road]（Phase2A Fix v1）
+
+**★ 新 baseline 定稿数据（对照 A：从头连续 30k λ0.1，`render.py --novel-view`，clip 9ae151dc sym5cam）**：
+
+| 指标 | **A (新 baseline)** | 旧 baseline (T8.5.4) | Δ |
+|---|---|---|---|
+| **mean_novel_lpips_avg（主 KPI）** | **0.5987** | 0.6022 | **−0.0035 略改善（不退化）** |
+| ├ lateral_1m / 2m | 0.5791 / 0.6096 | 0.5838 / 0.6168 | 全档 ≤ 旧 |
+| ├ yaw_5° / 10° | 0.5892 / 0.6171 | 0.5895 / 0.6188 | 全档 ≤ 旧 |
+| mean_cc_psnr_masked（辅） | 25.79 | 26.04 | −0.25（守护线 24.7 之上）|
+| mean_psnr_masked | 27.02 | — | — |
+| **mean_lidar_psnr** | **22.69** | (旧无 LiDAR) | LiDAR 生效配方坐实（vs 没生效 20.68）|
+| anchor mean_lpips_masked | 0.323 | 0.329 | −0.006 |
+
+- **结论**：A 主 KPI（novel LPIPS）不退化反略优；辅 KPI cc_psnr 25.79 在守护线之上（−0.25 = R2+Fix v1 已接受 trade-off，与 Phase 2A road-exempt 30k=25.81 吻合）；新增 LiDAR 几何精度 lidar_psnr 22.69。**A 定稿为 v3 新 baseline。**
+- baseline ckpt: `a800:/root/work/yusun/ncore-nurec/output/v3_base_scratch30k_lam01/...-0406_204815/ours_30000/ckpt_30000.pt`
+
+**⚠️ resume 续训退化诊断（双对照坐实 + 代码穷尽排查）**：
+- 首版误用 `5k smoke→resume→30k`，cc_psnr 仅 **23.87**（−2.17，破守护线）。双对照 30k（均从头连续）定位根因：
+
+  | run | cc_psnr_masked |
+  |---|---|
+  | 原 resume run (λ0.1) | 23.87 🚩 |
+  | A: 从头 λ0.1 | **25.79** ✅ (+1.92 vs resume) |
+  | B: 从头 λ0.03 | 25.85（vs A 差 0.06 噪声 → LiDAR λ 与退化无关）|
+
+- **根因 = resume 续训本身**（A 比 resume +1.92，唯一差异是从头 vs resume）。代码层穷尽排除 4 候选：MCMC strategy(stateless,`get_strategy_parameters`→`{}`) / optimizer(save L125+load L528 完整 round-trip) / build_acc(3DGUT no-op) / lr scheduler(stateless f(step)+max_steps 固定 30000)。**真因在运行时**（疑 MCMC densification 两进程 RNG 分叉），确证留 backlog（task #6）。
+- **实用结论**：MCMC+多层 resume 续训不可靠，**baseline 一律从头训**。
+
+**口径厘清**：当前 v3 主 KPI = **novel-view LPIPS**（§0.2/§6.1 写的 novel-view PSNR 是历史遗留；PSNR 留待 Stage 15 DiFix synthesized GT 就绪）。
 
 ### Stage 11 — LiDAR + DepthAnythingV2 image-space 深度监督（2026-05-30）
 
