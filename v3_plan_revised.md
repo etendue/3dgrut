@@ -68,10 +68,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [P0.1 车辆 class_psnr 实测（跑现成工具）]
-        [P0.2 行人 sseg-based per-class 评测（新建）]
-        [P0.3 车道线 lane-mask/BEV-crop LPIPS]
-        [P0.4 per-class evaluator 整合 + metrics 字段 + 4档novel拆解]
         [P1.1 sseg 精修动静边界（cuboid×sseg 求交）]
         [P1.3 per-track albedo/scale + per-track cap]
         [P1.3b Fourier albedo feature（4D-SH 时变颜色，gate=P1.3）]
@@ -94,6 +90,7 @@ kanban
     "Blocked"
 
     "Done"
+        [✅ P0.1-P0.4 per-class evaluator 落地+实测（2026-06-04）: 车24.04/人15.68/road LPIPS0.154]
         [继承: v3 baseline 重生（2026-06-03）]
         [继承: V3-R2 bg-in-road penalty +0.65]
         [继承: Phase 2A road 豁免 opacity]
@@ -107,10 +104,10 @@ kanban
 
 | 新 ID | Phase | 主题 | 继承自旧 ID | 估时(d) | 状态 | 改动/新增 |
 |---|---|---|---|---:|:---:|---|
-| **P0.1** | 0 | 车辆 class_psnr 实测 — 现 baseline ckpt 跑现成 [`class_psnr.py`](threedgrut/model/class_psnr.py) | 部分 T17.2 | 0.5 | ⬜ | — |
-| **P0.2** ★ | 0 | **行人/骑行 sseg-based per-class 评测（新建）** — [`ncore_semantic.py`](threedgrut/datasets/ncore_semantic.py) person/rider/bicycle 类表 → per-class PSNR/LPIPS | 新 | 2 | ⬜ | — |
-| **P0.3** ★ | 0 | **车道线指标** — lane/marking mask PSNR/LPIPS 或道路 BEV-crop LPIPS（绕开沥青主导） | 新 | 1.5 | ⬜ | — |
-| **P0.4** | 0 | per-class evaluator 整合 + `metrics.json` 字段规范 + 4 档 novel pose 拆解（车/人/路/bg） | T17.2 V3-E2 | 1 | ⬜ | — |
+| **P0.1** | 0 | 车辆 class_psnr 实测 — 现 baseline ckpt 跑现成 [`class_psnr.py`](threedgrut/model/class_psnr.py) | 部分 T17.2 | 0.5 | ✅ | 实测 24.04（本就接通） |
+| **P0.2** ★ | 0 | **行人/骑行 sseg-based per-class 评测（新建）** — [`ncore_semantic.py`](threedgrut/datasets/ncore_semantic.py) person/rider/bicycle 类表 → per-class PSNR/LPIPS | 新 | 2 | ✅ | `per_class_eval.py`+11测；人 15.68 |
+| **P0.3** ★ | 0 | **车道线指标** — lane/marking mask PSNR/LPIPS 或道路 BEV-crop LPIPS（绕开沥青主导） | 新 | 1.5 | ✅ | road-crop LPIPS 0.154 |
+| **P0.4** | 0 | per-class evaluator 整合 + `metrics.json` 字段规范 + 4 档 novel pose 拆解（车/人/路/bg） | T17.2 V3-E2 | 1 | ✅ | render.py+dataset 双路径；novel 拆解 🟡缓 |
 | **P1.1** ★ | 1 | **sseg 精修动静边界** — cuboid 定 track × sseg 定像素求交；动态 loss 只路由 sseg-actor 像素，AABB 内非 actor（影子/车底）还给 bg | 部分 T14.1 V3-D3 + T14.2 V3-D4 | 2.5 | ⬜ | ROI/工程比最佳 |
 | **P1.2** ★ | 1 | **track-pose 完整版** — 补 fix_first/last + temporal smooth + pose prior，**修 −0.61 cc 退化** + novel eval | T13a.4 V3-L7 | 2 | 🟡 stageA 已合 main | `6b84d54`+`bb49bc5`+`e902bf6`+`47fefa7`（class_psnr +1.68 / raw +2.06） |
 | **P1.3** | 1 | per-track albedo（SH bias，DC only）+ per-track scale + per-track 粒子上限 | T13b.4 L8 + T13b.5 L9 + T13a.3 L6 | 2 | ⬜ | — |
@@ -130,19 +127,23 @@ kanban
 
 | Phase | 主题 | 任务数 (Done/Total) | 主验收（per-class actor） | 背景守护 | 状态 |
 |---:|---|---:|---|:---:|:---:|
-| **0** ★ | 把目标测出来（前置/便宜/无新训练） | 0/4 | **per-class 真实数字+缺口入档** | — | ⬜ 门 |
+| **0** ★ | 把目标测出来（前置/便宜/无新训练） | 4/4 | **per-class 真实数字+缺口入档** ✅ | cc 25.79 守住 | ✅ 门(过) |
 | **1** ★ | 车辆（高 ROI/已验证） | 0/7（含 AH-0/1/2） | 车辆 class_psnr 闭合 gap | ≥ 24.7 | ⬜ |
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
 | **3** | 道路/车道线 | 0/2 | 车道线锐度（lane LPIPS↓） | ≥ 24.7 | ⬜ |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
-| **总计** | — | **0/17** | — | — | — |
+| **总计** | — | **4/17** | — | — | — |
 
-> **per-class gap 表（待 P0 实测回填）**：
+> **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
 > |---|---|---|---|
-> | 车辆 class_psnr | _待 P0.1_ | _闭合_ | _待定_ |
-> | 行人 per-class | _待 P0.2（预期≈地板）_ | _从无到有_ | **最大单一缺口** |
-> | 车道线 lane LPIPS | _待 P0.3_ | _锐度↑_ | _待定_ |
+> | 车辆 class_psnr | **24.04**（auto 23.79 / truck 27.32 / bus 24.74，3420 rec） | 闭合至 ≥ 25.5 | 中等 ~+1.5 |
+> | 行人 person PSNR | **15.68**（301 帧 / 3.97M px；**bg 在行人像素的误差地板，非行人重建——行人无专属高斯**） | 加模型后从 15.68 升至 ≥ 22 | **最大缺口 ~−8 dB（modeled 车 vs unmodeled 人）** |
+> | rider / bicycle PSNR | rider 17.76（仅 2 帧·过稀不可信）/ bicycle 29.97（94 帧·已可） | — | rider 样本不足 |
+> | 车道线 road-crop | PSNR 29.20（沥青主导虚高）/ **LPIPS 0.154**（375 帧 / 250M px） | LPIPS↓（锐度↑） | 待 P3 对照基线 |
+>
+> ⚠️ **方法论修正**：per-class LPIPS 用全图 GT-fill，对**小目标**（person/rider/bicycle）受区域面积主导（lpips≈0 是面积假象非质量）→ 小 actor **以 per-class PSNR 为准**；LPIPS 仅对**大区域 road_crop（0.154）**有意义（正是 P0.3 车道线锐度信号）。
+> ⚠️ **行人 15.68 的正确读法**：dynamic 层仅含车（by_class 仅 auto/truck/bus，无 person/rider/bicycle）→ **行人确实无专属模型（原假设「完全未建模」成立，未被推翻）**。15.68 = bg/静态场景在行人像素处的 PSNR = **未建模行人（尤指移动行人）的误差地板**，**不是行人重建质量**；它混合了静态行人（被 bg 烤进、偏高）与移动行人（bg 跟不上、偏低），绝对值仅作 Phase 2 的 **before-anchor**（加模型后应上升）。Phase 2 框定仍是「**从无到有**」，仍是最大单一缺口（modeled 车 24 vs unmodeled 人 15.68）。
 
 ### 1.4 任务依赖图（Phase 0 → 三分支并行）
 
@@ -358,7 +359,13 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 - **asset-harvester-verify**：真实 NCore 端到端跑通，3 车+3 人各 ~99k 高斯，可运行性闸门已解。
 
 **新条目（本 plan 启动后填充）**：
-- _待 Phase 0 实测回填 per-class baseline …_
+- **2026-06-04 Phase 0 per-class evaluator 落地 + baseline 实测**（A.1 / C / D）：
+  - 新建 [`per_class_eval.py`](threedgrut/model/per_class_eval.py)（`compute_per_class_metrics` / `compute_lpips_in_mask`(GT-fill) / `class_mask_from_sseg`，纯张量、LPIPS 依赖注入、cv2/NCore-free）+ [`tests/test_per_class_eval.py`](threedgrut/tests/test_per_class_eval.py)（11 测试，Mac `.venv`/py3.12 全绿，跑法 `pytest ... --noconftest`）。
+  - [`datasetNcore.py`](threedgrut/datasets/datasetNcore.py)：**根因修复**——sseg 原只在 **train 分支**（L935）加载，**val/test 分支（eval 真路径）从未加载**（与 lidar/depth 同款双路径坑，L1077-1084 注释已记载同类修复）；在 val 分支补 sseg 加载 + raw `semantic_sseg` 透传到 `image_infos`（render-res NEAREST resize）。
+  - [`render.py`](threedgrut/render.py) `render_all()`：逐帧 per-class 累积 + metrics.json 新字段 `mean_{person,rider,bicycle}_{psnr,lpips}` / `*_n_records` / `*_total_pixels` / `mean_road_crop_{psnr,lpips}`。
+  - **A800 实测**（baseline ckpt，GPU0，~3min）：车 class_psnr **24.04** / person **15.68**(301帧/3.97Mpx) / rider 17.76(2帧) / bicycle 29.97(94帧) / road_crop PSNR 29.20·LPIPS **0.154**。
+  - **守护线零回归**：cc_psnr_masked **25.789**(=25.79) / novel_lpips_avg **0.5987**(=0.5987) / lidar_psnr **22.69**(=22.69)——改动纯增量。
+  - **结论**：① 行人**确实无专属模型**（by_class 仅车）——15.68 是 **bg 在行人像素的误差地板**（before-anchor，**非行人重建质量**），混静/动行人；Phase 2 框定维持「从无到有」，最大缺口确认（车 24 vs 人 15.68，~−8dB）；② 小 actor LPIPS GT-fill 受面积主导，per-class PSNR 为准；③ P0.4 的「4 档 novel pose per-class 拆解」标 🟡 stretch 暂缓（novel 无真 GT），全图 novel 监控不退化。
 
 ---
 

@@ -953,6 +953,11 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 batch_dict["sky_mask"] = to_torch(sky_mask, device="cpu")
                 batch_dict["road_mask"] = to_torch(road_mask, device="cpu")
                 batch_dict["dyn_mask_sseg"] = to_torch(dyn_mask, device="cpu")
+                # P0.2/P0.3: raw sseg id map (uint8 [H, W]) for the per-class
+                # evaluator. Kept raw (not pre-split per class) so render.py can
+                # derive any class mask from one passthrough — person/rider/
+                # bicycle (P0.2) + road (P0.3). Eval-only; training never reads it.
+                batch_dict["semantic_sseg"] = to_torch(sseg, device="cpu")
 
             # T11.C1: per-frame LiDAR depth map → batch["lidar_depth_map"].
             # Keyed by the same END timestamp the dump script wrote (matches
@@ -1099,6 +1104,36 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                         val_batch["depth_prior"] = to_torch(
                             dprior.astype(np.float32), device="cpu"
                         )
+
+                # P0.2/P0.3: the val/test split must ALSO load the sseg masks.
+                # The T3.1.b sseg injection lived ONLY in the train branch above
+                # (L935-960), so render.py offline eval (make_test → this branch,
+                # the path that writes metrics.json) saw no sseg → the per-class
+                # evaluator (person/rider/bicycle + road_crop) got nothing. This
+                # is the exact two-path pitfall the lidar/depth block above
+                # documents; mirror it here with the same END-ts key + render-res
+                # NEAREST resize (semantic ids must not be interpolated).
+                if self.load_aux_masks:
+                    self._ensure_aux_readers()
+                    w_render, h_render = self._camera_resolutions[camera_id]
+                    sseg = self._sseg_reader.read(camera_id, val_ts_us)  # [H_full, W_full] uint8
+                    if sseg.shape[0] != h_render or sseg.shape[1] != w_render:
+                        sseg = cv2.resize(
+                            sseg, (w_render, h_render), interpolation=cv2.INTER_NEAREST
+                        )
+                    val_batch["sky_mask"] = to_torch(
+                        (sseg == SKY_CLASS_ID).astype(np.float32), device="cpu"
+                    )
+                    val_batch["road_mask"] = to_torch(
+                        np.isin(sseg, np.asarray(list(ROAD_CLASS_IDS))).astype(np.float32),
+                        device="cpu",
+                    )
+                    val_batch["dyn_mask_sseg"] = to_torch(
+                        np.isin(sseg, np.asarray(list(DYNAMIC_CLASS_IDS))).astype(np.float32),
+                        device="cpu",
+                    )
+                    # Raw id map for the per-class evaluator (render.py reads it).
+                    val_batch["semantic_sseg"] = to_torch(sseg, device="cpu")
 
                 return val_batch
 
@@ -1568,6 +1603,10 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 "road_mask": _to_gpu(batch["road_mask"]),
                 "dyn_mask_sseg": _to_gpu(batch["dyn_mask_sseg"]),
             }
+            # P0.2/P0.3: raw sseg id map alongside the split masks (same
+            # load_aux_masks gate). render.py's per-class evaluator reads it.
+            if "semantic_sseg" in batch:
+                batch_dict["image_infos"]["semantic_sseg"] = _to_gpu(batch["semantic_sseg"])
 
         # --- T11.C1: LiDAR depth map → Batch.image_infos["lidar_depth_map"] -----
         # Independent of sky_mask: load_lidar_depth_map can be on without aux
