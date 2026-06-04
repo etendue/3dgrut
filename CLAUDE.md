@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## A800 远程执行环境（重要）
 
-Claude 可以**直接通过 `ssh a800-x2` 访问 A800 GPU 主机**执行训练 / 集成测试等 GPU 任务。不需要把"A800 上的任务"标记为待用户手动操作；不需要等待用户确认。所有 v2 plan 里写"A800 探测 / 5k smoke / 30k KPI"等任务都是 Claude 直接 ssh 跑。
+Claude 可以**直接通过 `ssh a800-x2` 访问 A800 GPU 主机**执行训练 / 集成测试等 GPU 任务。不需要把"A800 上的任务"标记为待用户手动操作；不需要等待用户确认。plan（现以 [`v3_plan_revised.md`](v3_plan_revised.md) 为准）里写"A800 探测 / 5k smoke / 30k KPI"等任务都是 Claude 直接 ssh 跑。
 
 - 远程主机别名：`a800-x2`（~/.ssh/config 已配置）
 - 远程仓库路径：`/root/work/yusun/repo/3dgrut`
@@ -36,7 +36,7 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work
 
 执行模式：用 `Bash` 工具单条 `ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut && ...'` 心跳；长任务（≥ 5 min）用 `run_in_background=true`，Claude 会被自动通知完成；用 `tee /tmp/<run>.log` 同步 grep "PSNR" / 错误。
 
-**触发同步 plan/architecture 时机不变**：远程任务跑完后，把实际 PSNR / commit hash / iter speed 等写回 v2_plan.md § 5 Done Log + v2_architecture.md § 7 关键不变量。
+**触发同步 plan/architecture 时机不变**：远程任务跑完后，把实际 per-class PSNR / LPIPS / commit hash / iter speed 等写回 [`v3_plan_revised.md`](v3_plan_revised.md) § 6 Done Log + [`v2_architecture.md`](v2_architecture.md) § 7 关键不变量。
 
 ### A800 操作 + 文档同步 严格把关清单（防资源浪费）
 
@@ -54,13 +54,13 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work
 7. 训练日志最后的 `🎊 Training Statistics` + `⭐ Test Metrics` 两表都要看到。如果只有训练表没有测试表，说明 eval 没跑——多半是 `n_iterations` 未达 `val_frequency` 或 `test_last=false`。
 
 **C. 文档标 ✅ 把关**（A800 出口数据回填）：
-8. **A800 任务（T*.a / T*.b 出口 / Stage X 出口）的 ✅ 必须以 metrics.json 实测数据 + commit hash 双重证据为前提**。Mac 本地完成的任务可以标 ✅ + 备注"(Mac)"，但 A800 出口任务 ✅ 必须含实测数字（PSNR / SSIM / it/s）写入 v2_plan.md § 5 Done Log。
+8. **A800 任务（P*.* 出口 / Phase X 出口）的 ✅ 必须以 metrics.json 实测数据 + commit hash 双重证据为前提**。Mac 本地完成的任务可以标 ✅ + 备注"(Mac)"，但 A800 出口任务 ✅ 必须含实测数字（per-class PSNR / LPIPS / SSIM / it/s）写入 [`v3_plan_revised.md`](v3_plan_revised.md) § 6 Done Log。
 9. 把"伪完成"识别为"未完成"：训练 exit 0 + ckpt 写出 ≠ task ✅。必须 metric 数字达标 + 写进 Done Log + commit hash 入看板。
 10. 跑挂了（exit ≠ 0 / 早期 RuntimeError）回头改代码时，**先写一个回归测试 pin 住这个 case**（如 4D vs 3D mask broadcast），再修代码 + Mac pytest，最后再 rsync + 重跑 A800。不要"改了就直接重跑 A800"，单测便宜，A800 贵。
 
 ## Vast.ai 远程执行环境（A800 占用时备用）
 
-A800 被其他任务占用时，**Claude 可以自行起 vast.ai RTX 4090 实例**跑 V3 smoke / KPI。整套流程已在 2026-05-27 V3-L5/L8/L9 任务中跑通（详见 v3_plan.md § 5 Done Log "V3-L5 + V3-L8 + V3-L9" 条目）。
+A800 被其他任务占用时，**Claude 可以自行起 vast.ai RTX 4090 实例**跑 V3 smoke / KPI。整套流程已在 2026-05-27 V3-L5/L8/L9 任务中跑通（详见 [`v3_plan.md`](v3_plan.md)（冻结历史，仅证据参考）§ 5 Done Log "V3-L5 + V3-L8 + V3-L9" 条目）。
 
 - vastai CLI: `/Users/etendue/repo/ncore/.venv/bin/vastai`（v1.0.3）
 - API key: 写死在 `scripts/t8_12_fix_vast_create.sh` 里（也接受 `--api-key $VAST_API_KEY`）
@@ -239,38 +239,42 @@ python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_poseopt \
 
 高级参数（lr / freeze_until_iter / pose-prior 占位）仍在 `trainer.learnable_pose.*` 内部 key，CLI 直接 override 即可（旧脚本也保留 backward-compat）。
 
-## v2 开发工作流（分层高斯）
+## v3 开发工作流（actor-centric per-class）
 
-v2 分层高斯（LayeredGaussians）工作以两份活文档驱动：
-- `v2_plan.md` —— Kanban 看板 + 任务级状态 + Done Log
-- `v2_architecture.md` —— 模块/流程差异图（v1 vs v2）+ 文件清单
+v3 工作以 [`v3_plan_revised.md`](v3_plan_revised.md) 为**唯一执行依据**（actor-centric 重编号 plan，Phase 0–3 + asset-harvester，P*.* 任务编号）；架构差异图 / 文件清单 / 关键不变量仍维护在 [`v2_architecture.md`](v2_architecture.md)。
 
-### 任务完成后必须同步更新这两份文档
+> **文档层级（按权威性，从高到低）**：
+> - [`v3_plan_revised.md`](v3_plan_revised.md) —— **当前主线 plan**（Kanban + P*.* 任务级状态 + Done Log）。今后所有 v3 工作以本文档为准执行。
+> - [`v2_architecture.md`](v2_architecture.md) —— 架构差异图（v1 vs v2/v3）+ 文件清单 + § 7 关键不变量。**v3 新模块继续在此登记**（如 V3-R1/R2 已登记 § 6 文件清单 + § 7 不变量）。
+> - [`v3_plan.md`](v3_plan.md) —— **冻结的旧版 v3 阶梯**（错轴：novel-view PSNR≥30 全局主 KPI）。仅作历史 experience / Done Log 证据参考，**不再作为执行依据**。
+> - [`v2_plan.md`](v2_plan.md) + 旧 7 层 yaml —— v2 分层高斯历史，仅供 commit 复现，不起新工作。
 
-**每个 task（按 v2_plan.md 中 T*.* 编号）执行完成并 commit 后，必须在同一个或紧随的 commit 中更新：**
+### 任务完成后必须同步更新文档
 
-1. **`v2_plan.md`**：
-   - 把对应任务在 `1.1 顶层看板` 中从 Backlog/In Progress 移到 Done，标 ✅
-   - 在 `1.2 任务级看板` 表格中把状态列从 ⬜/🟡 改为 ✅，"改动 / 新增"列填实际 commit 短 hash
-   - 在 `1.3 当前 Stage 状态汇总` 更新完成数
-   - 在 `5. Done Log` 追加一条：日期 + commit hash + 实际改动摘要 + 关键验收数据（PSNR / 测试数 / 耗时等）
+**每个 task（按 [`v3_plan_revised.md`](v3_plan_revised.md) 中 P*.* 编号）执行完成并 commit 后，必须在同一个或紧随的 commit 中更新：**
 
-2. **`v2_architecture.md`**：
-   - 如果 task 新增/修改了模块或文件：在对应 mermaid 图中把该节点的 classDef 从 `:::todo` 改为 `:::done`，并在节点 label 中追加 commit 短 hash
-   - 在 `1.3 模块级 diff 摘要` 或 `6.1/6.2 文件清单` 表格中把该任务从 ⬜ 标为 ✅
-   - 不影响架构的纯测试任务（如 T1.4）可以只在 `7. 关键不变量` 表格中加一行验证锚点，无需改图
+1. **`v3_plan_revised.md`**：
+   - `§ 1.1 顶层看板（Mermaid Kanban）`：把任务从 Backlog/In Progress 移到对应列（Review/Done），标 ✅
+   - `§ 1.2 任务级看板（P*.* 表格）`：状态列从 ⬜/🟡/🔵 改为 ✅，"改动/新增"列填实际 commit 短 hash
+   - `§ 1.3 Phase 状态汇总 + per-class gap 表`：更新「任务数 (Done/Total)」；**Phase 0 实测后回填 per-class gap 三行真实数字**
+   - `§ 6 Done Log`：追加一条 —— 日期 + commit hash + 实际改动摘要 + 关键验收数据（**per-class PSNR / LPIPS** / 测试数 / 耗时等）
+
+2. **`v2_architecture.md`**（仅当 task 新增/修改模块或文件时）：
+   - 在对应 mermaid 图中把该节点的 classDef 从 `:::todo` 改为 `:::done`，并在节点 label 中追加 commit 短 hash
+   - 在 `§ 6.1/6.2 文件清单` 表格中把该任务从 ⬜ 标为 ✅
+   - 不影响架构的纯测试任务可以只在 `§ 7 关键不变量` 表格中加一行验证锚点，无需改图
 
 ### 不更新文档 = 任务未完成
 
-代码 commit 通过但文档未同步会让看板与实际状态脱节，导致后续任务依赖判断错误。把"更新 plan/architecture"视为 task 的 Step N+1（在跑测试和 commit 代码之后），与代码改动写在同一个 commit message 中：
+代码 commit 通过但文档未同步会让看板与实际状态脱节，导致后续任务依赖判断错误。把"更新 plan/architecture"视为 task 的 Step N+1（在跑测试和 commit 代码之后），与代码改动写在同一个 commit message 中（沿用项目 `docs(plan):` / `docs(arch):` 约定 + PR 号后缀 + Co-Authored-By Claude）：
 
 ```
-feat(T1.2): <一句话改动>
+feat(P1.2): <一句话改动>
 
 <代码改动说明>
 
-docs(plan): mark T1.2 done in v2_plan.md kanban + Done Log
-docs(arch): flip T1.2 nodes to :::done in v2_architecture.md
+docs(plan): mark P1.2 done in v3_plan_revised.md kanban + Done Log
+docs(arch): flip P1.2 nodes to :::done in v2_architecture.md
 ```
 
 或拆成两个相邻的 commit 也可，但必须在 push/合并前完成。
