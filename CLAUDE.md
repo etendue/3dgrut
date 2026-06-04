@@ -278,3 +278,24 @@ docs(arch): flip P1.2 nodes to :::done in v2_architecture.md
 ```
 
 或拆成两个相邻的 commit 也可，但必须在 push/合并前完成。
+
+## Mermaid 图表约定（防 `()` 解析报错 —— 已反复踩坑）
+
+**铁律：mermaid 图（kanban / flowchart / 任何 diagram）的「节点 / 卡片标签」里，括号一律用全角 `（）`，绝不用半角 `()`。**
+
+**原因**：mermaid 把半角 `(` 当作圆角节点语法 `id(text)` 的起始符，于是用 `()` 去「聚集 / 包住一段字符串」时解析器会把它误读成节点形状声明而报错（`Parse error` / `got 'PS'` 之类）。本仓库的 `v3_plan_revised.md`（看板 + 依赖图）、`v2_architecture.md`（架构图）反复因此渲染失败。
+
+会炸 / 不会炸的边界：
+- ❌ **kanban 卡片** `[文字]`（不带引号）—— `[P1.2 ...(stageA 已合)]` 里的 `(` 必炸。
+- ❌ **flowchart 不带引号的标签** `A[文字]` / `A(文字)` —— 同理。
+- ⚠️ **带引号的 flowchart 标签** `A["...(...)..."]` —— 新版 mermaid 多半能渲染，但 GitHub 等渲染器版本不一、`<br/>` + 中文混排时仍可能挑剔。**不要逐场景赌，一律全角 `（）` 最稳。**
+- ✅ 例外：**sequenceDiagram 的消息 / Note 文本** `A->>B: batch (RGB+mask)`、`Note over X: ...(...)` 走的是另一套语法，半角 `()` 合法，**不用动**（避免对 `v2_architecture.md` 的时序图做无谓 churn）。
+
+**正例**：`P0["Phase 0 ★ 测量（门）<br/>..."]`、kanban `[P1.2 track-pose 完整版（stageA 已合 main）]`
+**反例**：`P0["Phase 0 ★ 测量(门)..."]`、kanban `[P1.2 ...(stageA 已合 main)]`
+
+**提交前自查**（改完 `v3_plan_revised.md` 的 mermaid 看板/依赖图后跑一次，**应零输出**；该 doc 无时序图，所有 mermaid 块内半角 `(` 都是违规）：
+```bash
+awk '/```mermaid/{i=1;next} /```/&&i{i=0;next} i&&/\(/{print FILENAME":"NR": "$0}' v3_plan_revised.md
+```
+（`v2_architecture.md` 同样可跑，但需人工排除 sequenceDiagram 消息行的合法 `()`，不能简单要求零输出。）

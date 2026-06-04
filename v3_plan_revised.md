@@ -154,16 +154,16 @@ flowchart TD
   classDef wip fill:#fff7e6,stroke:#f5a623,color:#333
   classDef drop fill:#fbe9e7,stroke:#d33,color:#900
 
-  base["v3 baseline (2026-06-03 重生)<br/>cc 25.79 / novel LPIPS 0.5987 / 车 class_psnr 18.96"]:::gate
-  P0["Phase 0 ★ 测量(门)<br/>P0.1 车 / P0.2 行人 / P0.3 车道线 / P0.4 整合<br/>含糊30dB → 每类真实数字+缺口"]:::gate
+  base["v3 baseline（2026-06-03 重生）<br/>cc 25.79 / novel LPIPS 0.5987 / 车 class_psnr 18.96"]:::gate
+  P0["Phase 0 ★ 测量（门）<br/>P0.1 车 / P0.2 行人 / P0.3 车道线 / P0.4 整合<br/>含糊30dB → 每类真实数字+缺口"]:::gate
 
   P1["Phase 1 车辆<br/>P1.1 sseg边界 → P1.2 track-pose完整 → P1.3 per-track外观<br/>+ P1.4 asset-harvester warm-start"]:::todo
-  AH["AH-0 spike(并行探针)<br/>1-2 track→5k→class PSNR<br/>过了才投 AH-1/AH-2/P1.4"]:::wip
+  AH["AH-0 spike（并行探针）<br/>1-2 track→5k→class PSNR<br/>过了才投 AH-1/AH-2/P1.4"]:::wip
   P2["Phase 2 行人<br/>P2.1 rigid垫脚石 → P2.3 SMPL输入链路 → P2.2 DriveStudio SMPL-LBS"]:::todo
-  P3["Phase 3 道路/车道线<br/>P3.1 定向加密/平面grid (+P3.2 遮挡式bg 可选)"]:::todo
+  P3["Phase 3 道路/车道线<br/>P3.1 定向加密/平面grid（+P3.2 遮挡式bg 可选）"]:::todo
   CAP["P-CAP 容量重分配<br/>bg 1M ↓ → actor ↑"]:::todo
 
-  DROP["⏸ 降级(保留供历史)<br/>Stage10 sky / Stage12 MCMC移植 / 13b Fourier+DINOv2<br/>/ Stage14 大部分 mask / DiFix救世主 / 深度监督 / Stage17 secondary ray"]:::drop
+  DROP["⏸ 降级（保留供历史）<br/>Stage10 sky / Stage12 MCMC移植 / 13b Fourier+DINOv2<br/>/ Stage14 大部分 mask / DiFix救世主 / 深度监督 / Stage17 secondary ray"]:::drop
   V4["v4 backlog<br/>frozen drop-in / inpaint / 软分割 / 编辑仿真"]:::drop
 
   base --> P0
