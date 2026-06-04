@@ -29,6 +29,11 @@ from threedgrut.model.class_psnr import (
     collect_active_tracks_for_frame,
     compute_class_psnr,
 )
+from threedgrut.model.per_class_eval import (
+    DEFAULT_ACTOR_CLASS_SPECS,
+    ROAD_CLASS_IDS,
+    compute_per_class_metrics,
+)
 from threedgrut.correction.difix import DifixPostProcessor
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.color_correct import color_correct_affine
@@ -412,6 +417,16 @@ class Renderer:
         # with populated tracks_poses AND the batch carries FTheta intrinsics.
         class_psnr_records: list = []
 
+        # P0.2 / P0.3 — sseg-based per-class PSNR/LPIPS accumulators. Keys are
+        # class names (person/rider/bicycle + road_crop); each maps to a list of
+        # per-frame values. Populated only when the eval batch carries
+        # semantic_sseg (NCore load_aux_masks=true) → absent on NeRF/Colmap so
+        # metrics.json stays byte-identical for those datasets.
+        per_class_eval_specs = {**DEFAULT_ACTOR_CLASS_SPECS, "road_crop": ROAD_CLASS_IDS}
+        per_class_psnr: dict[str, list] = {}
+        per_class_lpips: dict[str, list] = {}
+        per_class_npix: dict[str, list] = {}
+
         # T8.5.3 / V3-E3 — novel-view perturbation accumulator. Per-mode
         # LPIPS list (vs anchor GT). PSNR at these magnitudes is dominated
         # by parallax shift so we report LPIPS only (perceptual robust to
@@ -719,6 +734,26 @@ class Renderer:
                         r["frame"] = int(iteration)
                         class_psnr_records.append(r)
 
+            # P0.2 / P0.3 — sseg-based per-class PSNR/LPIPS. Reads the raw sseg
+            # id map passed through image_infos (load_aux_masks=true) and derives
+            # person/rider/bicycle (P0.2) + road_crop (P0.3) masks per frame.
+            # Uses raw pred (matching class_psnr above); LPIPS is GT-filled
+            # inside the helper. Skipped when semantic_sseg absent → no keys →
+            # byte-identical for NeRF/Colmap.
+            _sseg = (getattr(gpu_batch, "image_infos", None) or {}).get("semantic_sseg")
+            if _sseg is not None:
+                sseg_one = _sseg[0] if _sseg.dim() == 3 else _sseg  # [H, W]
+                pcm = compute_per_class_metrics(
+                    pred_rgb_full[0], rgb_gt_full[0], sseg_one,
+                    per_class_eval_specs, lpips_fn=criterions.get("lpips"),
+                )
+                for _name, _d in pcm.items():
+                    if _d["psnr"] is not None:
+                        per_class_psnr.setdefault(_name, []).append(_d["psnr"])
+                    if _d["lpips"] is not None:
+                        per_class_lpips.setdefault(_name, []).append(_d["lpips"])
+                    per_class_npix.setdefault(_name, []).append(_d["n_pixels"])
+
             # T8.5.7 / V3-E4: mirror the 12 metric lists into the per-camera
             # dict using the last appended value of each. Skipped when the
             # dataset doesn't set Batch.camera_id (NeRF/Colmap) so old
@@ -897,6 +932,21 @@ class Renderer:
                 sum(1 for v in cp_values if v < 15.0)
             )
             table["mean_class_psnr"] = float(np.mean(cp_values))
+
+        # P0.2 / P0.3 — per-class (sseg-based) PSNR/LPIPS aggregates. Every
+        # spec'd class is written even when absent from all frames
+        # (n_records=0, mean=None) so "measured, not present" (the pedestrian
+        # floor) is distinguishable from "not measured". Whole block absent on
+        # NeRF/Colmap (no semantic_sseg) → metrics.json byte-identical there.
+        if per_class_npix:
+            for _name in per_class_eval_specs:
+                _pv = per_class_psnr.get(_name, [])
+                _lv = per_class_lpips.get(_name, [])
+                _nv = per_class_npix.get(_name, [])
+                metrics_json[f"mean_{_name}_psnr"] = float(np.mean(_pv)) if _pv else None
+                metrics_json[f"mean_{_name}_lpips"] = float(np.mean(_lv)) if _lv else None
+                metrics_json[f"{_name}_n_records"] = int(len(_pv))
+                metrics_json[f"{_name}_total_pixels"] = int(np.sum(_nv)) if _nv else 0
 
         # T11.F1: mean LiDAR-domain depth PSNR. Only written when at least one
         # frame had valid LiDAR coverage (lidar_psnrs non-empty); absent on
