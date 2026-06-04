@@ -68,36 +68,37 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [P0.1 车辆 class_psnr 实测(跑现成工具)]
-        [P0.2 行人 sseg-based per-class 评测(新建)]
+        [P0.1 车辆 class_psnr 实测（跑现成工具）]
+        [P0.2 行人 sseg-based per-class 评测（新建）]
         [P0.3 车道线 lane-mask/BEV-crop LPIPS]
         [P0.4 per-class evaluator 整合 + metrics 字段 + 4档novel拆解]
-        [P1.1 sseg 精修动静边界(cuboid×sseg 求交)]
+        [P1.1 sseg 精修动静边界（cuboid×sseg 求交）]
         [P1.3 per-track albedo/scale + per-track cap]
-        [P1.4 asset-harvester warm-start(车)]
+        [P1.3b Fourier albedo feature（4D-SH 时变颜色，gate=P1.3）]
+        [P1.4 asset-harvester warm-start（车）]
         [P2.1 行人 rigid track 垫脚石]
         [P2.2 DriveStudio SMPL-LBS 移植进 dynamic_deformables]
-        [P2.3 行人 SMPL 输入链路(HMR2@NCore + 全局运动 + 对齐)]
+        [P2.3 行人 SMPL 输入链路（HMR2@NCore + 全局运动 + 对齐）]
         [P3.1 road 当2D纹理: 定向加密 / 平面 feature grid]
-        [P3.2 遮挡式 bg(mask-loss 不杀粒子) v3可选]
+        [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选]
         [PCAP MCMC per-layer cap bg→actor 重分配]
-        [AH-0 warm-start 最小验证 spike(1-2 track→5k smoke)]
-        [AH-1 per-track 坐标/尺度对齐(cuboids_dims 米制还原)]
-        [AH-2 变长粒子注入 plumbing(optimizer/MCMC/ckpt)]
+        [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
+        [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
+        [AH-2 变长粒子注入 plumbing（optimizer/MCMC/ckpt）]
 
-    In Progress
-        [P1.2 track-pose 完整版(stageA 已合 main, 补 reg 修 −0.61 cc)]
+    "In Progress"
+        [P1.2 track-pose 完整版（stageA 已合 main, 补 reg 修 −0.61 cc）]
 
-    Review
+    "Review"
 
-    Blocked
+    "Blocked"
 
-    Done
-        [继承: v3 baseline 重生(2026-06-03)]
+    "Done"
+        [继承: v3 baseline 重生（2026-06-03）]
         [继承: V3-R2 bg-in-road penalty +0.65]
         [继承: Phase 2A road 豁免 opacity]
-        [继承: track-pose stageA 合 main(class_psnr +1.68)]
-        [继承: asset-harvester-verify 端到端跑通(3车+3人)]
+        [继承: track-pose stageA 合 main（class_psnr +1.68）]
+        [继承: asset-harvester-verify 端到端跑通（3车+3人）]
 ```
 
 ### 1.2 任务级看板（按 P*.* 编号）
@@ -112,7 +113,8 @@ kanban
 | **P0.4** | 0 | per-class evaluator 整合 + `metrics.json` 字段规范 + 4 档 novel pose 拆解（车/人/路/bg） | T17.2 V3-E2 | 1 | ⬜ | — |
 | **P1.1** ★ | 1 | **sseg 精修动静边界** — cuboid 定 track × sseg 定像素求交；动态 loss 只路由 sseg-actor 像素，AABB 内非 actor（影子/车底）还给 bg | 部分 T14.1 V3-D3 + T14.2 V3-D4 | 2.5 | ⬜ | ROI/工程比最佳 |
 | **P1.2** ★ | 1 | **track-pose 完整版** — 补 fix_first/last + temporal smooth + pose prior，**修 −0.61 cc 退化** + novel eval | T13a.4 V3-L7 | 2 | 🟡 stageA 已合 main | `6b84d54`+`bb49bc5`+`e902bf6`+`47fefa7`（class_psnr +1.68 / raw +2.06） |
-| **P1.3** | 1 | per-track albedo（SH bias）+ per-track scale + per-track 粒子上限 | T13b.4 L8 + T13b.5 L9 + T13a.3 L6 | 2 | ⬜ | — |
+| **P1.3** | 1 | per-track albedo（SH bias，DC only）+ per-track scale + per-track 粒子上限 | T13b.4 L8 + T13b.5 L9 + T13a.3 L6 | 2 | ⬜ | — |
+| **P1.3b** | 1 | **Fourier albedo feature**（4D-SH 时变颜色）：把 P1.3 DC-only albedo 扩展为 Fourier 级数，捕获车辆时变外观（阴影穿越/曝光变化）。gate = P1.3 验证有效后再投 | T13b.4 L8b（旧命名） | 1.5 | ⬜ | — |
 | **P1.4** ★ | 1 | **asset-harvester warm-start（车）** — 扩散补全的完整几何当初始化注入，继续多帧 photometric+pose 训练（详见 § 3） | 新（PR #14 spec） | 见 § 3 | ⬜ | gate=AH-0 |
 | **P2.1** | 2 | 行人 rigid track 垫脚石 — 从「完全没有」到「有粗 blob」验证抬升（asset-harvester 静态人可当 init） | 新 | 2 | ⬜ | — |
 | **P2.2** ★ | 2 | **DriveStudio SMPL-LBS 移植** 进空壳 `dynamic_deformables` 层 — canonical 高斯长在 SMPL mesh，per-frame 24 关节 LBS 蒙皮 | Stage 16 **改机制**（原 hash-grid+MLP→SMPL） | 6 | ⬜ | — |
@@ -204,13 +206,48 @@ flowchart TD
 |---|---|---|
 | P1.1 ★ | sseg 精修动静边界：cuboid 定 track × sseg car/person mask 定像素求交；动态 loss 只路由 sseg-actor 像素，AABB 内非 actor 还给 bg。修「1/4 辆车其实是 background」的 bleed | `layered_loss.py`, sseg mask 管线 |
 | P1.2 ★ | track-pose 完整版：现 opt-in `trainer.pose_adjustment.*` 已合 main（[base_gs.yaml](configs/base_gs.yaml) + [multilayer_poseopt.yaml](configs/apps/ncore_3dgut_mcmc_multilayer_poseopt.yaml)）；补 fix_first/last + temporal smooth + pose prior，**重点修 −0.61 cc 退化** + novel eval | `trainer.py` |
-| P1.3 | per-track albedo SH bias（L8）+ per-track scale offset（L9）+ per-track 粒子 cap 5000（L6） | `model.py`, `layered_model.py` |
+| P1.3 | per-track albedo SH bias（DC only，L8）+ per-track scale offset（L9）+ per-track 粒子 cap 5000（L6） | `model.py`, `layered_model.py` |
+| P1.3b | **Fourier albedo feature**（gate = P1.3）—— 见下方专项描述 | `model.py`, `layered_model.py` |
 | P1.4 ★ | asset-harvester warm-start（车）—— 见 § 3 专项 | 见 § 3 |
 
 **验收**：
 - 车辆 class_psnr 相对 P0.1 锚点 **gap 闭合**（track-pose 单项已证 +1.68，sseg 边界 + warm-start 叠加预期更高）。
 - cc_psnr_masked ≥ 24.7（守护）；P1.2 的 −0.61 cc 退化经 reg 修复后回到守护线之上。
 - **优先选「能产出干净动静分解」的实现**（sseg-actor 像素分解、track-pose 干净运动）—— 为 v4 编辑打底，不返工。
+
+#### P1.3b — Fourier albedo feature 专项
+
+> **gate**：P1.3 DC-only 版 A800 验证有正增益后再投此任务。
+
+**动机**：驾驶日志里同一辆车外观随时间变化（穿越树荫→明暗变化、迎面车灯→高光、曝光变化），单个固定 DC SH bias（P1.3）无法拟合这种低频时变信号。V3-L8 当前实现（`_track_albedo_table[K,3]`）本质是 k=1 退化版。
+
+**方法来源**：StreetGaussian (Yan et al., ECCV 2024) § 3.2 — **4D Spherical Harmonics**
+
+- 论文：[Street Gaussians: Modeling Dynamic Urban Scenes with Gaussian Splatting](https://arxiv.org/abs/2401.01339)
+- 核心思路：将每个 SH 系数（包括 DC albedo 项）替换为 k 阶 Fourier 系数组：
+
+```
+z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
+```
+
+其中 `f_i` 为可学习参数，`t` 为帧时间步，`N_t` 为总帧数，`k` 为 Fourier 阶数（超参，k=1 即退化为 P1.3 DC-only）。
+
+**与 P1.3 的关系**：
+
+| | P1.3（DC-only） | P1.3b（Fourier） |
+|---|---|---|
+| 参数形状 | `_track_albedo_table[K, 3]` | `_track_albedo_fourier[K, 3, k]` |
+| 表达力 | 固定颜色偏置 | 时变颜色，k 阶 |
+| 计算开销 | O(1) | O(k)，k 通常 4–8 |
+| 激活建议 | warmup=500，lr=1e-4（P1.3 已修） | 同 P1.3，k 从小到大消融 |
+
+**已知风险（来自 V3-L8 历史，obs #1831）**：
+- warmup=500 + lr=1e-5 时 DC 项都未充分激活（5k smoke 虚高、30k 反转），P1.3 先修 lr → 1e-4 再投 Fourier 扩展
+- 高阶 Fourier 参数量增 k 倍，MCMC 稀疏化时需同步 track-level gather；ckpt 序列化需兼容
+
+**改动文件**：`threedgrut/layers/dynamic_rigid_init.py`、`threedgrut/model/model.py`（`_track_albedo_table` 扩维）、`threedgrut/trainer.py`（warmup gate 沿用）
+
+**验收**：车辆 class_psnr 相对 P1.3 DC-only 基线进一步提升（A800 30k A/B，与 P1.3 对照）。
 
 ### 2.2 Phase 2 — 行人（最大缺口 / 工程重）
 
