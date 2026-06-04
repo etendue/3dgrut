@@ -17,6 +17,10 @@
 **v3 主目标重新定位**：把 **novel view generation 质量提升到 ~30 dB**，作为 v3 主 KPI。
 Reconstructed cc_psnr_masked 退为辅指标——只要不显著退化（≥ v2 24.70）即可，**不再追求训练视角 30/34 dB**。
 
+> ⚠️ **2026-06-04 重大目标修正（用户澄清）** —— 见 § 5 Done Log「2026-06-04 战略复盘」+ 归档诊断 [`docs/superpowers/specs/2026-06-04-v3-actor-centric-perf-diagnosis.md`](docs/superpowers/specs/2026-06-04-v3-actor-centric-perf-diagnosis.md)。
+> 真实成功指标修正为 **「前景 actor 的 per-class 重建质量：车辆 + 行人/骑行 + 道路/车道线；背景模糊可接受」**。
+> 原「novel-view PSNR ≥ 30 全局」与此**几乎正交**且 **无 GT 测不准**（只能报 LPIPS）。诊断结论：当前计划阶梯是 **「优化错了轴」的 local minimum**（算力投在背景/全局，目标却是前景 actor）。Stage 10/12/13b/14 大部分降级、深度监督/DiFix-救世主停投；优先级转向 ① sseg 精修动静边界 ② track-pose 收尾 ③ 行人重建（Stage 16 提到主线）+ 先把 per-class 指标测出来。编辑/仿真明确为 **v4 目标**。
+
 ### 0.2 KPI 双档（主 KPI 切换为 novel-view PSNR）
 
 | 档位 | 触发 Stage | **★ Novel-view PSNR ★** | Novel Sky PSNR | Novel Dynamic PSNR | Reconstructed cc_psnr_masked (辅) | LPIPS 改善 |
@@ -204,7 +208,7 @@ kanban
 | **T13a.1** | 13a | V3-L4 background ignore_classes_from_layers=[road] — layered loss 加层级排他 mask | V3-L4 | 0.5 | ⬜ | — |
 | **T13a.2** | 13a | V3-L5 DynamicRigid symmetric_axis='Y' — 镜像粒子对称先验 + 镜像约束 reg | V3-L5 | 1.5 | ⬜ | — |
 | **T13a.3** | 13a | V3-L6 DynamicRigid 5000 pts/track + 全层 300K cap | V3-L6 | 0.5 | ⬜ | — |
-| **T13a.4** | 13a | V3-L7 track-pose 联合优化 — fix_first/last + warm start ≥ 500 + 可学习 Δpose | V3-L7 | 3 | ⬜ | — |
+| **T13a.4** | 13a | V3-L7 track-pose 联合优化 — fix_first/last + warm start ≥ 500 + 可学习 Δpose | V3-L7 | 3 | 🟡 **stageA 已合 main** | `6b84d54`+`bb49bc5`+`e902bf6`+`47fefa7`（opt-in `trainer.pose_adjustment.*` + multilayer_poseopt.yaml + render reload 已修）；实测 class_psnr **+1.68** / raw **+2.06**，但 cc **−0.61** 待完整版修。**完整版剩**：fix_first/last + warm start + temporal smooth + pose prior + novel eval。见 § Done Log「V3-L7」|
 | **T13a.5** | 13a | V3-D6 cuboid LiDAR padding [0.5, 0.5, 0.25] m — T4.4 dynamic_mask 加膨胀 | V3-D6 | 0.5 | ⬜ | — |
 | **T13a.6** | 13a | V3-D7 cuboid camera padding [1.0, 1.0, 0.25] m | V3-D7 | 0.5 | ⬜ | — |
 | **T13a.7** | 13a | A800 Stage 13a 出口 — cc_psnr_masked ≥ 29.2 + dynamic region PSNR ≥ 26 | — | 1.5 | ⬜ | — |
@@ -791,6 +795,33 @@ Stage 8.5 不再仅是健康检查 — 增加 **novel-view pose 生成器 + v2 b
 
 > 按 Stage 顺序追加。每条包含：日期 + commit hash + Stage / Task ID + 实际改动摘要 + 关键验收数据（实测 PSNR / it/s / 耗时）。
 > v3 启动后填充。初始为空。
+
+### 2026-06-04 战略复盘 — 目标修正为「前景 actor class 质量」+ 路线重排（local minimum 确诊）
+
+**类型**：战略诊断 + 优先级决策（无代码改动）。完整归档：[`docs/superpowers/specs/2026-06-04-v3-actor-centric-perf-diagnosis.md`](docs/superpowers/specs/2026-06-04-v3-actor-centric-perf-diagnosis.md)。
+
+**触发**：用户两问——v3 提升性能还有哪些代办；是否陷入 local minimum、有无其它路径。
+
+**结论 1 — 目标修正**：v3 真实成功指标 = **前景 actor 的 per-class 重建质量（车辆 + 行人/骑行 + 道路/车道线）**，背景模糊可接受。与原「novel-view PSNR ≥ 30 全局」**几乎正交**，且原指标 **无 GT 测不准**（只能报 LPIPS、Δ≈0.004 在噪声地板）。
+
+**结论 2 — local minimum 确诊**（非「调参到顶」，而是「优化错了轴」）：
+- 计划最大预算项已废：Stage 11 深度监督预算 +3.0，三实验实测 ≈0（dense −0.0045 / sparse −0.004 反向）；机理＝深度绑训练相机、只约束几何不约束外观。
+- 元教训三复：超参调优史上最大 +0.04；唯二真跃迁（V3-R2 +0.65、Phase 2A）均来自重构物理问题。剩余 Stage 12/13b/14 多为 NuRec 超参移植（历史回报≈0）。
+- DiFix 低于预期（repro +0.30 vs 估 +0.8~1.5）且 novel Δ 未测。
+- 计划主线（Stage 10/12/13b/14）服务背景/全局 = 用户说不重要的轴。
+
+**结论 3 — 动静分割问题（用户提）**：① 无速度分类，静态车/人被强行进 dynamic_rigids；② bg-in-cuboid penalty「杀死」bg → 删 actor 黑洞；③ cuboid AABB 硬框 → 「1/4 辆车其实是 background」既漏又溢。代码证据见诊断文档 §4/§7。
+
+**路线重排（决策 of record）**：
+- **Phase 0（前置/便宜）**：测出 per-class actor 指标——车辆用现有 `class_psnr.py`；行人/骑行**新建 sseg-based per-class 评测**（class_psnr 是 cuboid-based 测不了行人）；车道线用 lane-mask/BEV-crop LPIPS（全 road PSNR 被沥青主导测不出线条）。
+- **Phase 1（高 ROI/已验证）**：① **sseg 精修动静边界**（cuboid 定 track + sseg 定像素求交，修 bleed 直接涨 class PSNR）→ ② track-pose 完整版 T13a.4（补 reg 修 −0.61 cc）→ per-track albedo/scale + cap（13b L8/L9 / 13a L6）。
+- **Phase 2（最大缺口/工程重）**：行人重建——先 rigid track 垫脚石，再上 **deformable（Stage 16 从 V4 stretch 提到主线）**。
+- **Phase 3**：道路/车道线高频锐度（road 当 2D 纹理：定向加密 / 平面 feature grid，非堆 Fourier）。
+- **停 / 降级（别再烧 A800 30k）**：Stage 10 sky / Stage 12 MCMC 移植 / 13b Fourier+DINOv2 / Stage 14 大部分 mask / DiFix 当救世主 / 深度监督。
+- **战略容量重分配**：背景不重要但占 1M 粒子（actor 仅 200K）→ MCMC per-layer cap / 粒子预算向 actor 倾斜。
+- **v4 衔接**：编辑/仿真（删/插 actor 不留痕）= **v4 目标**；想法 ③ 遮挡式 bg / ④ inpaint 遮挡地面 / ⑤ 学习式软分割 → **v4 backlog**。v3 做 ①② 时优先选「能产出干净动静分解」的实现，为 v4 打底。
+
+**看板影响**：T13a.4 由 ⬜ 改 🟡（stageA 已合 main）。Stage 16 由 stretch 提到主线、Stage 10/12/13b/14 降级——本条为决策 of record，各卡片 status flip 待实际开工时同步。
 
 ### v3 baseline 重生（2026-06-03）— ✅ 定稿（对照 A：从头 30k λ0.1）+ resume 退化根因诊断
 
