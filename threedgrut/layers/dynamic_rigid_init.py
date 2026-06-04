@@ -146,3 +146,112 @@ def init_dynamic_rigid_layer(
     track_ids = (torch.cat(all_ids, dim=0) if all_ids
                  else torch.zeros(0, dtype=torch.long, device=device))
     return positions, track_ids, track_keys
+
+
+# ---------------------------------------------------------------- P1.4 warm-start
+_MERGE_KEYS = ("positions", "rotations", "scales", "densities", "colors", "track_ids")
+
+
+def merge_warmstart_with_lidar(
+    lidar_positions: torch.Tensor,
+    lidar_track_ids: torch.Tensor,
+    warm: Dict[str, torch.Tensor],
+    *,
+    max_pts_per_track: int,
+    scale_prior,
+    density_init: float,
+    mode: str = "replace",
+    generator: Optional[torch.Generator] = None,
+) -> Dict[str, torch.Tensor]:
+    """P1.4: combine LiDAR-init particles with warm-start (asset-harvester) ones.
+
+    Both are object-local. LiDAR particles carry only positions+track_ids; their
+    appearance/shape defaults (identity rot, ``log(scale_prior)``, ``density_init``,
+    neutral 0.5 color) are materialized here so the merged set is a single
+    ``init_layer_from_points`` call.
+
+    Args:
+        lidar_positions: ``[M, 3]`` object-local LiDAR particles.
+        lidar_track_ids: ``[M]`` int track id per LiDAR particle.
+        warm: ``assets_to_layer_inputs`` output (full per-particle attrs).
+        max_pts_per_track: per-track combined budget (randperm cap).
+        scale_prior: dynamic_rigids ``LayerSpec.scale_prior`` (3-tuple, metric).
+        density_init: dynamic_rigids ``LayerSpec.density_init`` (pre-sigmoid).
+        mode: ``"replace"`` (warm asset replaces a track's LiDAR) or ``"augment"``
+            (concat LiDAR + warm under one budget). Tracks without a warm asset
+            always keep their LiDAR particles.
+        generator: optional seeded RNG for the subsample.
+
+    Returns:
+        kwargs dict for ``init_layer_from_points`` (``positions`` + colors /
+        rotations / scales / densities / track_ids).
+    """
+    if mode not in ("replace", "augment"):
+        raise ValueError(f"mode must be 'replace' or 'augment', got {mode!r}")
+
+    device = lidar_positions.device
+    dtype = torch.float32
+    scale_default = torch.log(
+        torch.tensor(list(scale_prior), dtype=dtype, device=device)
+    )
+
+    def _lidar_part(tid: int) -> Optional[Dict[str, torch.Tensor]]:
+        mask = lidar_track_ids == tid
+        k = int(mask.sum().item())
+        if k == 0:
+            return None
+        rot = torch.zeros(k, 4, dtype=dtype, device=device)
+        rot[:, 0] = 1.0
+        return {
+            "positions": lidar_positions[mask].to(dtype),
+            "rotations": rot,
+            "scales": scale_default.expand(k, 3).clone(),
+            "densities": torch.full((k, 1), float(density_init), dtype=dtype, device=device),
+            "colors": torch.full((k, 3), 0.5, dtype=dtype, device=device),
+            "track_ids": torch.full((k,), tid, dtype=torch.int64, device=device),
+        }
+
+    def _warm_part(tid: int) -> Dict[str, torch.Tensor]:
+        mask = warm["track_ids"] == tid
+        return {
+            "positions": warm["positions"][mask].to(dtype),
+            "rotations": warm["rotations"][mask].to(dtype),
+            "scales": warm["scales"][mask].to(dtype),
+            "densities": warm["densities"][mask].to(dtype),
+            "colors": warm["colors"][mask].to(dtype),
+            "track_ids": warm["track_ids"][mask].to(torch.int64),
+        }
+
+    warm_ids = {int(t) for t in warm["track_ids"].unique().tolist()}
+    lidar_ids = ({int(t) for t in lidar_track_ids.unique().tolist()}
+                 if lidar_track_ids.numel() else set())
+
+    out: Dict[str, List[torch.Tensor]] = {k: [] for k in _MERGE_KEYS}
+    for tid in sorted(warm_ids | lidar_ids):
+        has_warm = tid in warm_ids
+        parts: List[Dict[str, torch.Tensor]] = []
+        # Tracks without an asset keep LiDAR; augment keeps LiDAR even when warm.
+        if (not has_warm) or mode == "augment":
+            lp = _lidar_part(tid)
+            if lp is not None:
+                parts.append(lp)
+        if has_warm:
+            parts.append(_warm_part(tid))
+        if not parts:
+            continue
+
+        merged = {k: torch.cat([p[k] for p in parts], dim=0) for k in _MERGE_KEYS}
+        n_track = merged["positions"].shape[0]
+        if n_track > max_pts_per_track:
+            sel = torch.randperm(n_track, generator=generator, device=device)[:max_pts_per_track]
+            merged = {k: v[sel] for k, v in merged.items()}
+        for k in _MERGE_KEYS:
+            out[k].append(merged[k])
+
+    def _empty(key: str) -> torch.Tensor:
+        if key == "track_ids":
+            return torch.zeros(0, dtype=torch.int64, device=device)
+        cols = {"positions": 3, "rotations": 4, "scales": 3, "densities": 1, "colors": 3}[key]
+        return torch.zeros(0, cols, dtype=dtype, device=device)
+
+    return {k: (torch.cat(v, dim=0) if v else _empty(k)) for k, v in out.items()}

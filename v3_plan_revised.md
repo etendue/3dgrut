@@ -78,18 +78,18 @@ kanban
         [P3.1 road 当2D纹理: 定向加密 / 平面 feature grid]
         [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选]
         [PCAP MCMC per-layer cap bg→actor 重分配]
-        [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
-        [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
-        [AH-2 变长粒子注入 plumbing（optimizer/MCMC/ckpt）]
 
     "In Progress"
         [P1.2 track-pose 完整版（stageA 已合 main, 补 reg 修 −0.61 cc）]
+        [AH-0 warm-start spike: 代码 gate 达成(Mac 33 passed), 待 A800 5k class_psnr]
 
     "Review"
 
     "Blocked"
 
     "Done"
+        [✅ AH-1 坐标对齐(Mac): 6 asset rank-match perm=(0,2,1)+containment 不变量]
+        [✅ AH-2 注入 plumbing(Mac): merge replace/augment+inject 编排器+ckpt roundtrip]
         [✅ P0.1-P0.4 per-class evaluator 落地+实测（2026-06-04）: 车24.04/人15.68/road LPIPS0.154]
         [继承: v3 baseline 重生（2026-06-03）]
         [继承: V3-R2 bg-in-road penalty +0.65]
@@ -119,9 +119,9 @@ kanban
 | **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜ | — |
 | **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜ | v3 可选 |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
-| **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
-| **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
-| **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ⬜ | — |
+| **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | 🟡 代码 gate 达成 | 注入引擎 + ckpt roundtrip Mac pytest 33 passed；GPU 感知 gate（5k class_psnr）待 A800 + 训练 clip 重 harvest |
+| **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ✅ (Mac) | `warmstart_ply.py` 对齐数学（6 demo asset rank-match 一致 perm=(0,2,1)）+ containment/fill/det/quat 不变量单测固化 |
+| **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ✅ (Mac) | `merge_warmstart_with_lidar`(replace默认/augment) + `warmstart_inject.py` 编排器 + `registry` 5 warmstart key + `trainer.py:483` seam（无 bundle 字节等价） |
 
 ### 1.3 Phase 状态汇总 + per-class gap 表（Phase 0 回填）
 
@@ -366,6 +366,12 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **A800 实测**（baseline ckpt，GPU0，~3min）：车 class_psnr **24.04** / person **15.68**(301帧/3.97Mpx) / rider 17.76(2帧) / bicycle 29.97(94帧) / road_crop PSNR 29.20·LPIPS **0.154**。
   - **守护线零回归**：cc_psnr_masked **25.789**(=25.79) / novel_lpips_avg **0.5987**(=0.5987) / lidar_psnr **22.69**(=22.69)——改动纯增量。
   - **结论**：① 行人**确实无专属模型**（by_class 仅车）——15.68 是 **bg 在行人像素的误差地板**（before-anchor，**非行人重建质量**），混静/动行人；Phase 2 框定维持「从无到有」，最大缺口确认（车 24 vs 人 15.68，~−8dB）；② 小 actor LPIPS GT-fill 受面积主导，per-class PSNR 为准；③ P0.4 的「4 档 novel pose per-class 拆解」标 🟡 stretch 暂缓（novel 无真 GT），全图 novel 监控不退化。
+- **2026-06-04 P1.4 warm-start 注入引擎（AH-0 代码 gate / AH-1 / AH-2-code）** —— 纯 Mac，TDD，零 GPU：
+  - 新建 [`warmstart_metadata.py`](threedgrut/layers/warmstart_metadata.py)（bundle `metadata.yaml` 解析 + 嵌套/扁平 PLY 路径 resolve + `map_assets_to_tracks` 显式映射）、[`warmstart_ply.py`](threedgrut/layers/warmstart_ply.py)（包装现成 `PLYImporter` + Objaverse Y-up canonical→object-local **AH-1 对齐**：去中心/轴置换+符号(det=+1)/per-axis 米制还原，作用于 positions/quat/log-scale + subsample）、[`warmstart_inject.py`](threedgrut/layers/warmstart_inject.py)（trainer-seam 编排器 `build_warmstart_layer_inputs`，米制默认取活体 `track["size"]`）。
+  - 扩 [`dynamic_rigid_init.py`](threedgrut/layers/dynamic_rigid_init.py) `merge_warmstart_with_lidar`（**replace 默认** / augment，per-track 预算 randperm）；[`registry.py`](threedgrut/layers/registry.py) `_EXTRA_OVERRIDE_KEYS` 增 5 个 `warmstart_*` key；[`trainer.py:483`](threedgrut/trainer.py) seam 接入（**无 `warmstart_ply_bundle` 时 LiDAR-only 字节等价**）。
+  - **AH-1 头号风险化解**：6 个 demo asset（3车3人）独立 rank-match（half-span↔cuboids_dims）**一致得 perm=(0,2,1)**（Objaverse Y-up→Z-up），把 D1「viser 目视」降级为确定性可单测；containment/fill/det=+1/quat 单位范数不变量全部固化。
+  - **Mac pytest 33 passed**（[`test_warmstart_ply_engine.py`](threedgrut/tests/test_warmstart_ply_engine.py)，含真实 bundle 对齐 containment + up-axis per-class + 注入 `init_layer_from_points`→`get_model_parameters`→torch.save/load **ckpt roundtrip**）；回归 `test_track_ids_ckpt_roundtrip` 11 passed，受影响模块子集 268 passed，零回归。
+  - **未做（GPU 阻塞，AH-2-GPU）**：真实 class_psnr gate 需 ① 从训练 clip 重新 harvest 对应 track PLY（demo bundle 来自 asset-harvester 自带 benchmark，与训练 clip 70 track 无对应）② A800 5k smoke。本轮按用户决策不开 A800。
 
 ---
 

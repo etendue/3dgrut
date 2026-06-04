@@ -427,6 +427,9 @@ class Trainer3DGRUT:
                             from threedgrut.layers.dynamic_rigid_init import (
                                 init_dynamic_rigid_layer,
                             )
+                            from threedgrut.layers.warmstart_inject import (
+                                build_warmstart_layer_inputs,
+                            )
                             loader = train_dataset.sequence_loaders[
                                 train_dataset.sequence_id
                             ]
@@ -475,11 +478,11 @@ class Trainer3DGRUT:
                                      if s.name == "dynamic_rigids"),
                                     None,
                                 )
-                                _sym_axis = (
+                                _extra = (
                                     (getattr(_dyn_spec, "extra", {}) or {})
-                                    .get("symmetric_axis")
-                                    if _dyn_spec is not None else None
+                                    if _dyn_spec is not None else {}
                                 )
+                                _sym_axis = _extra.get("symmetric_axis")
                                 d_pos, d_track_ids, _track_names = (
                                     init_dynamic_rigid_layer(
                                         tracks, dyn_pts,
@@ -488,20 +491,61 @@ class Trainer3DGRUT:
                                     )
                                 )
                                 device = model.layers["dynamic_rigids"].device
-                                model.init_layer_from_points(
-                                    "dynamic_rigids",
-                                    d_pos.to(device),
-                                    track_ids=d_track_ids.to(device),
-                                    setup_optimizer=True,
+                                # P1.4: asset-harvester warm-start. When a PLY
+                                # bundle is configured, replace/augment each
+                                # mapped track's LiDAR init with diffusion-
+                                # completed 360° geometry, then keep training it
+                                # (warm-start, not frozen drop-in). Unset bundle
+                                # → byte-identical LiDAR-only path below.
+                                _warm_bundle = _extra.get("warmstart_ply_bundle")
+                                _warm_merged = (
+                                    build_warmstart_layer_inputs(
+                                        bundle_path=_warm_bundle,
+                                        mapping=_extra.get("warmstart_ply_mapping"),
+                                        tracks=tracks, track_names=_track_names,
+                                        lidar_positions=d_pos,
+                                        lidar_track_ids=d_track_ids,
+                                        scale_prior=_dyn_spec.scale_prior,
+                                        density_init=_dyn_spec.density_init,
+                                        mode=_extra.get("warmstart_mode", "replace"),
+                                        max_pts_per_track=int(_extra.get(
+                                            "warmstart_max_pts_per_track", 5_000)),
+                                        seed=int(_extra.get("warmstart_seed", 0)),
+                                    )
+                                    if _warm_bundle else None
                                 )
-                                logger.info(
-                                    f"🔆 dynamic_rigids layer initialized: "
-                                    f"{d_pos.shape[0]} particles "
-                                    f"(from {dyn_pts.shape[0]} dyn LiDAR pts × "
-                                    f"{len(tracks)} cuboids)"
-                                    + (f" [V3-L5 symmetric_axis={_sym_axis!r}]"
-                                       if _sym_axis else "")
-                                )
+                                if _warm_merged is not None:
+                                    model.init_layer_from_points(
+                                        "dynamic_rigids",
+                                        _warm_merged["positions"].to(device),
+                                        colors=_warm_merged["colors"].to(device),
+                                        rotations=_warm_merged["rotations"].to(device),
+                                        scales=_warm_merged["scales"].to(device),
+                                        densities=_warm_merged["densities"].to(device),
+                                        track_ids=_warm_merged["track_ids"].to(device),
+                                        setup_optimizer=True,
+                                    )
+                                    logger.info(
+                                        f"🚗 dynamic_rigids WARM-START injected: "
+                                        f"{_warm_merged['positions'].shape[0]} particles "
+                                        f"(mode={_extra.get('warmstart_mode', 'replace')}, "
+                                        f"bundle={_warm_bundle})"
+                                    )
+                                else:
+                                    model.init_layer_from_points(
+                                        "dynamic_rigids",
+                                        d_pos.to(device),
+                                        track_ids=d_track_ids.to(device),
+                                        setup_optimizer=True,
+                                    )
+                                    logger.info(
+                                        f"🔆 dynamic_rigids layer initialized: "
+                                        f"{d_pos.shape[0]} particles "
+                                        f"(from {dyn_pts.shape[0]} dyn LiDAR pts × "
+                                        f"{len(tracks)} cuboids)"
+                                        + (f" [V3-L5 symmetric_axis={_sym_axis!r}]"
+                                           if _sym_axis else "")
+                                    )
                     else:
                         # single-bg or v1: original byte-identical path
                         model.init_from_lidar(pc, observer_points)
