@@ -81,13 +81,13 @@ kanban
 
     "In Progress"
         [P1.2 track-pose 完整版（stageA 已合 main, 补 reg 修 −0.61 cc）]
-        [AH-0 warm-start spike: 代码 gate 达成(Mac 33 passed), 待 A800 5k class_psnr]
 
     "Review"
 
     "Blocked"
 
     "Done"
+        [✅ AH-0 感知gate正向: 真实harvest 5车注入 5k A/B automobile +0.730dB, cc不退]
         [✅ AH-1 坐标对齐(Mac): 6 asset rank-match perm=(0,2,1)+containment 不变量]
         [✅ AH-2 注入 plumbing(Mac): merge replace/augment+inject 编排器+ckpt roundtrip]
         [✅ P0.1-P0.4 per-class evaluator 落地+实测（2026-06-04）: 车24.04/人15.68/road LPIPS0.154]
@@ -119,7 +119,7 @@ kanban
 | **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜ | — |
 | **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜ | v3 可选 |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
-| **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | 🟡 代码 gate 达成 | 注入引擎 + ckpt roundtrip Mac pytest 33 passed；GPU 感知 gate（5k class_psnr）待 A800 + 训练 clip 重 harvest |
+| **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ✅ 感知 gate 正向 | 真实 harvest 5 车注入 5k A/B：**automobile +0.730**（vs 未注入 truck +0.348，差分 +0.38）/ cc_masked +0.446 不退；Mac 34 测试全绿 |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ✅ (Mac) | `warmstart_ply.py` 对齐数学（6 demo asset rank-match 一致 perm=(0,2,1)）+ containment/fill/det/quat 不变量单测固化 |
 | **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ✅ (Mac) | `merge_warmstart_with_lidar`(replace默认/augment) + `warmstart_inject.py` 编排器 + `registry` 5 warmstart key + `trainer.py:483` seam（无 bundle 字节等价） |
 
@@ -371,7 +371,13 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - 扩 [`dynamic_rigid_init.py`](threedgrut/layers/dynamic_rigid_init.py) `merge_warmstart_with_lidar`（**replace 默认** / augment，per-track 预算 randperm）；[`registry.py`](threedgrut/layers/registry.py) `_EXTRA_OVERRIDE_KEYS` 增 5 个 `warmstart_*` key；[`trainer.py:483`](threedgrut/trainer.py) seam 接入（**无 `warmstart_ply_bundle` 时 LiDAR-only 字节等价**）。
   - **AH-1 头号风险化解**：6 个 demo asset（3车3人）独立 rank-match（half-span↔cuboids_dims）**一致得 perm=(0,2,1)**（Objaverse Y-up→Z-up），把 D1「viser 目视」降级为确定性可单测；containment/fill/det=+1/quat 单位范数不变量全部固化。
   - **Mac pytest 33 passed**（[`test_warmstart_ply_engine.py`](threedgrut/tests/test_warmstart_ply_engine.py)，含真实 bundle 对齐 containment + up-axis per-class + 注入 `init_layer_from_points`→`get_model_parameters`→torch.save/load **ckpt roundtrip**）；回归 `test_track_ids_ckpt_roundtrip` 11 passed，受影响模块子集 268 passed，零回归。
-  - **未做（GPU 阻塞，AH-2-GPU）**：真实 class_psnr gate 需 ① 从训练 clip 重新 harvest 对应 track PLY（demo bundle 来自 asset-harvester 自带 benchmark，与训练 clip 70 track 无对应）② A800 5k smoke。本轮按用户决策不开 A800。
+  - 引擎补强（commit 后）：`map_assets_to_tracks` 加 `@scene:...` 后缀清洗匹配（3dgrut raw track key vs ncore_parser cleaned id）；`_CANONICAL_AXIS_MAP` 加 automobile/bus/heavy_truck/person（同 Y-up perm 0,2,1）。Mac 34 测试全绿。
+- **2026-06-04 P1.4 AH-2-GPU 感知 gate 达成（A800 端到端，正向）** —— 从训练 clip 真实 harvest → 注入 → 5k A/B：
+  - **完整管线在 A800 跑通**：`asset_harvester.ncore_parser`（自带，吃 clip manifest，内置裁图）从 baseline clip `9ae151dc…` 抽 5 个 automobile track（24/244/259/316/7）→ `run_inference.py`（SparseViewDiT 扩散 360° 补全 + TokenGS lifting）→ 5 个 PLY（各 ~100k 高斯）→ orient + metadata bundle。env 踩坑已记：A800 无外网（HF 走 hf-mirror 镜像直连）、driver 535 用 torch 2.4.1+cu121、tokengs 的 gsplat 惰性 import（只需 PLY 不需 orbit）、xformers 0.0.28 `BlockDiagonalMask` 在 `fmha.attn_bias`、run_inference orbit→save_ply 顺序防御补丁。
+  - 引擎注入实测：`🚗 dynamic_rigids WARM-START injected: 150077 particles (mode=replace)`，harvested 车经引擎 perm=(0,2,1)+containment 验证一致。
+  - **5k A/B（同 clip 从头，双卡并行 GPU0/GPU1，inline eval）**：**automobile class_psnr A(LiDAR)=21.328 → B(warm-start)=22.059，Δ=+0.730**；mean_class +0.703；**cc_psnr_masked 23.660→24.106 (+0.446，背景守护不退反升)**；mean_psnr +0.318。
+  - **归因（诚实）**：未注入的 heavy_truck 也 +0.348（从头训 run-to-run 方差），故 automobile-vs-truck 差分 **≈+0.38 dB** 才是更干净的 warm-start 专属信号；warm-start 类增益最大 + 背景不退 = **首次感知 gate 明确正向**。单 seed，坐实需 30k 或多 seed。
+  - 产物：bundle `a800:/root/work/yusun/ah_harvest/out_nurec/`；A/B ckpt+metrics `output/p14_{A_lidar,B_warmstart}_5k/`。
 
 ---
 

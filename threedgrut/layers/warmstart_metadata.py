@@ -96,17 +96,27 @@ def map_assets_to_tracks(
     if isinstance(mapping, (str, Path)):
         with open(mapping) as f:
             mapping = json.load(f)
+    # 3dgrut keeps the raw '<id>@scene:...' NCore track id; harvested assets use
+    # the cleaned '<id>'. Build a cleaned→raw lookup so a mapping keyed by either
+    # form resolves to the raw track key (needed for name_to_id indexing).
+    clean_to_raw: dict[str, str] = {}
+    for raw_key in tracks:
+        clean_to_raw.setdefault(str(raw_key).split("@", 1)[0], raw_key)
     out: dict[str, AssetSpec] = {}
     for track_id, asset_hash in dict(mapping).items():
-        if track_id not in tracks:
+        if track_id in tracks:
+            resolved = track_id
+        elif str(track_id).split("@", 1)[0] in clean_to_raw:
+            resolved = clean_to_raw[str(track_id).split("@", 1)[0]]
+        else:
             raise KeyError(
                 f"warm-start mapping track {track_id!r} not among "
-                f"{len(tracks)} loaded tracks"
+                f"{len(tracks)} loaded tracks (cleaned ids: {sorted(clean_to_raw)})"
             )
         if asset_hash not in bundle:
             raise KeyError(
                 f"warm-start mapping asset {asset_hash!r} not in bundle "
                 f"(have {sorted(bundle)})"
             )
-        out[track_id] = bundle[asset_hash]
+        out[resolved] = bundle[asset_hash]
     return out

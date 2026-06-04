@@ -476,6 +476,19 @@ def test_map_assets_to_tracks_unknown_asset_raises():
                              {"trk7": "deadbeef"})
 
 
+def test_map_assets_to_tracks_strips_at_suffix():
+    """3dgrut track keys keep the raw '<id>@scene:...' suffix while harvested
+    asset ids are cleaned ('24'); mapping by cleaned id must resolve to the raw
+    track key (so downstream name_to_id indexing matches)."""
+    from threedgrut.layers.warmstart_metadata import map_assets_to_tracks
+    bundle = _fake_bundle()
+    raw = "24@scene:obstacles:autolabels:v2"
+    tracks = {raw: {"size": [4.4, 1.8, 1.4]}}
+    m = map_assets_to_tracks(bundle, tracks, {"24": "382fee4aea8819ce"})
+    assert raw in m
+    assert m[raw].asset_hash == "382fee4aea8819ce"
+
+
 def test_map_assets_to_tracks_json_path(tmp_path):
     import json
     from threedgrut.layers.warmstart_metadata import map_assets_to_tracks

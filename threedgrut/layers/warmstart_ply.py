@@ -54,9 +54,16 @@ class AxisMap:
 # demo asset (3 cars + 3 peds) rank-matches half-spans↔cuboids_dims to this same
 # perm (0,2,1): local-X←ply-x (length), local-Z←ply-y (up), local-Y←ply-z (width,
 # sign-flipped to keep det(R)=+1). Both classes share the canonical orientation.
+_VEHICLE_AXIS_MAP = AxisMap(perm=(0, 2, 1), sign=(1.0, -1.0, 1.0))
 _CANONICAL_AXIS_MAP: dict[str, AxisMap] = {
-    "consumer_vehicles": AxisMap(perm=(0, 2, 1), sign=(1.0, -1.0, 1.0)),
-    "VRU_pedestrians": AxisMap(perm=(0, 2, 1), sign=(1.0, -1.0, 1.0)),
+    # NuRec demo benchmark class names
+    "consumer_vehicles": _VEHICLE_AXIS_MAP,
+    "VRU_pedestrians": _VEHICLE_AXIS_MAP,
+    # NCore ncore_parser class names (same Objaverse Y-up canonical)
+    "automobile": _VEHICLE_AXIS_MAP,
+    "bus": _VEHICLE_AXIS_MAP,
+    "heavy_truck": _VEHICLE_AXIS_MAP,
+    "person": _VEHICLE_AXIS_MAP,
 }
 
 
