@@ -160,6 +160,15 @@ class MCMCStrategy(BaseStrategy):
         # Find the dead indices
         dead_idxs = torch.where(densities <= self.conf.strategy.opacity_threshold)[0]
         alive_idxs = torch.where(densities > self.conf.strategy.opacity_threshold)[0]
+        # Protected warm-start (C2): never relocate asset-injected particles —
+        # their unobserved faces get no photometric gradient, so MCMC would
+        # erode them onto high-error observed regions. No-op for layers with no
+        # protected buffer (byte-identical v1).
+        dead_idxs = _filter_protected_indices(
+            dead_idxs,
+            getattr(self.model, "track_ids", None),
+            getattr(self.model, "_warmstart_protected_track_ids", None),
+        )
         n_dead_gaussians = len(dead_idxs)
 
         # Cap relocation to avoid super-dense clusters when a layer collapses
