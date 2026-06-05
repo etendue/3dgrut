@@ -91,8 +91,15 @@ def build_warmstart_layer_inputs(
         aligned_list.append((name_to_id[track_key], aligned))
 
     warm = assets_to_layer_inputs(aligned_list)
-    return merge_warmstart_with_lidar(
+    merged = merge_warmstart_with_lidar(
         lidar_positions, lidar_track_ids, warm,
         max_pts_per_track=max_pts_per_track, scale_prior=scale_prior,
         density_init=density_init, mode=mode, generator=gen,
     )
+    if merged is not None:
+        # Protected warm-start (C2): the integer ids of the asset-mapped tracks.
+        # Consumed by the trainer → init_layer_from_points(protected_track_ids=)
+        # so MCMC leaves these tracks' injected geometry alone.
+        warm_ids = sorted({tid for tid, _ in aligned_list})
+        merged["warm_track_ids"] = torch.tensor(warm_ids, dtype=torch.long)
+    return merged

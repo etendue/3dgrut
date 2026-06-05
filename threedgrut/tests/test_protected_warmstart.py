@@ -221,3 +221,56 @@ def test_init_layer_no_protected_buffer_when_omitted(dyn_conf):
     )
     layer = model.layers["dynamic_rigids"]
     assert not hasattr(layer, "_warmstart_protected_track_ids")
+
+
+# --- Task 5: build_warmstart_layer_inputs surfaces the warm (protected) ids ---
+
+from pathlib import Path
+
+from threedgrut.layers.warmstart_inject import build_warmstart_layer_inputs
+from threedgrut.layers.warmstart_metadata import load_bundle_metadata
+
+# Same bundle convention as test_warmstart_ply_engine.py (absent on Mac → skip).
+_BUNDLE = Path(
+    os.environ.get(
+        "WARMSTART_BUNDLE",
+        "/Users/etendue/repo/asset-harvester-verify/verify_assets/bundle",
+    )
+)
+_needs_bundle = pytest.mark.skipif(
+    not (_BUNDLE / "metadata.yaml").is_file(),
+    reason=f"warm-start bundle not present at {_BUNDLE}",
+)
+
+
+@_needs_bundle
+def test_build_warmstart_returns_warm_track_ids():
+    """warm_track_ids == the integer ids of the asset-mapped tracks, derived
+    from track_names order (name_to_id)."""
+    bundle = load_bundle_metadata(_BUNDLE / "metadata.yaml")
+    asset_hash = next(iter(bundle.keys()))
+    track_key = "carA"
+    track_names = ["bg_ignore", track_key]  # name_to_id[track_key] == 1
+    tracks = {track_key: {"size": torch.tensor([4.0, 2.0, 1.6])}}
+    mapping = {track_key: asset_hash}
+
+    out = build_warmstart_layer_inputs(
+        bundle_path=_BUNDLE,
+        mapping=mapping,
+        tracks=tracks,
+        track_names=track_names,
+        lidar_positions=torch.zeros(0, 3),
+        lidar_track_ids=torch.zeros(0, dtype=torch.long),
+        scale_prior=(0.1, 0.1, 0.1),
+        density_init=0.1,
+        mode="replace",
+        max_pts_per_track=500,
+        seed=0,
+    )
+    assert out is not None
+    assert "warm_track_ids" in out
+    assert out["warm_track_ids"].tolist() == [1]   # name_to_id["carA"]
+    assert out["warm_track_ids"].dtype == torch.long
+    # Every protected id must actually appear among the merged particles.
+    merged_ids = set(out["track_ids"].unique().tolist())
+    assert set(out["warm_track_ids"].tolist()) <= merged_ids
