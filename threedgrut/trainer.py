@@ -509,12 +509,13 @@ class Trainer3DGRUT:
                                         density_init=_dyn_spec.density_init,
                                         mode=_extra.get("warmstart_mode", "replace"),
                                         max_pts_per_track=int(_extra.get(
-                                            "warmstart_max_pts_per_track", 5_000)),
+                                            "warmstart_max_pts_per_track", 50_000)),
                                         seed=int(_extra.get("warmstart_seed", 0)),
                                     )
                                     if _warm_bundle else None
                                 )
                                 if _warm_merged is not None:
+                                    _warm_ids = _warm_merged.get("warm_track_ids")
                                     model.init_layer_from_points(
                                         "dynamic_rigids",
                                         _warm_merged["positions"].to(device),
@@ -523,6 +524,10 @@ class Trainer3DGRUT:
                                         scales=_warm_merged["scales"].to(device),
                                         densities=_warm_merged["densities"].to(device),
                                         track_ids=_warm_merged["track_ids"].to(device),
+                                        protected_track_ids=(
+                                            _warm_ids.to(device)
+                                            if _warm_ids is not None else None
+                                        ),
                                         setup_optimizer=True,
                                     )
                                     logger.info(
