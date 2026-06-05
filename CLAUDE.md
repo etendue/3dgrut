@@ -58,6 +58,63 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work
 9. 把"伪完成"识别为"未完成"：训练 exit 0 + ckpt 写出 ≠ task ✅。必须 metric 数字达标 + 写进 Done Log + commit hash 入看板。
 10. 跑挂了（exit ≠ 0 / 早期 RuntimeError）回头改代码时，**先写一个回归测试 pin 住这个 case**（如 4D vs 3D mask broadcast），再修代码 + Mac pytest，最后再 rsync + 重跑 A800。不要"改了就直接重跑 A800"，单测便宜，A800 贵。
 
+## inceptio 本地 GPU 执行环境（RTX 4090，首选备用机）
+
+A800 占用时，**Claude 可直接 `ssh inceptio` 使用本地 RTX 4090**（24GB VRAM）跑训练 / smoke / KPI。
+
+- 主机别名：`inceptio`（~/.ssh/config 已配置，IP 10.8.31.113）
+- 用户：`inceptio`
+- 仓库路径：`~/repo/3dgrut2/`
+- 数据路径：`~/work/data/<clip>/`、`~/ncore_data/`
+- 输出路径：`~/work/output/`
+- GPU：RTX 4090 24GB，Driver 590，CUDA 13.1（conda env 内用 cu128）
+
+### ⚠️ conda env 激活（每次 ssh 必须）
+
+```bash
+ssh inceptio 'source ~/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut2 && cd ~/repo/3dgrut2 && python ...'
+```
+
+或导 PATH：
+
+```bash
+ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd ~/repo/3dgrut2 && python train.py ...'
+```
+
+### ⚠️ 首次运行注意（已完成，记录备查）
+
+1. **系统无 g++**：inceptio 未装 `build-essential`，通过 conda 安装并建软链接解决（已完成）：
+   ```bash
+   # 已执行，无需重复
+   conda install -n 3dgrut2 -y -c conda-forge gxx_linux-64 gcc_linux-64
+   ln -sf x86_64-conda-linux-gnu-c++ ~/miniforge3/envs/3dgrut2/bin/c++
+   ln -sf x86_64-conda-linux-gnu-g++ ~/miniforge3/envs/3dgrut2/bin/g++
+   ```
+2. **VGG16 感知损失模型**：位于 `~/data/torch_cache/hub/checkpoints/vgg16-397923af.pth`，已复制到 `~/.cache/torch/hub/checkpoints/`（已完成）。
+3. **JIT 编译**：首次已编译缓存至 `~/.cache/torch_extensions/py311_cu128/{lib3dgut_cc,lib_mcmc_cc}`，后续启动秒过。
+
+### 代码同步（Mac → inceptio）
+
+```bash
+rsync -az --exclude='.claude/worktrees' --exclude='.venv' --exclude='__pycache__' \
+  /Users/etendue/repo/3dgrut2/ inceptio:~/repo/3dgrut2/
+```
+
+### 训练启动示例
+
+```bash
+ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
+  && export CUDA_VISIBLE_DEVICES=0 \
+  && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  && cd ~/repo/3dgrut2 \
+  && python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+    n_iterations=5000 \
+    path=~/work/data/9ae151dc/pai_9ae151dc-e87b-41a7-8e85-71772f9603d7.json \
+    trainer.sky_backend=mlp \
+    out_dir=~/work/output \
+    experiment_name=smoke_test'
+```
+
 ## Vast.ai 远程执行环境（A800 占用时备用）
 
 A800 被其他任务占用时，**Claude 可以自行起 vast.ai RTX 4090 实例**跑 V3 smoke / KPI。整套流程已在 2026-05-27 V3-L5/L8/L9 任务中跑通（详见 [`v3_plan.md`](v3_plan.md)（冻结历史，仅证据参考）§ 5 Done Log "V3-L5 + V3-L8 + V3-L9" 条目）。
