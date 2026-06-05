@@ -1267,6 +1267,7 @@ class LayeredGaussians(nn.Module):
         scales: Optional[torch.Tensor] = None,
         densities: Optional[torch.Tensor] = None,
         track_ids: Optional[torch.Tensor] = None,
+        protected_track_ids: Optional[torch.Tensor] = None,
         observer_pts: Optional[torch.Tensor] = None,
         setup_optimizer: bool = True,
     ) -> None:
@@ -1335,6 +1336,16 @@ class LayeredGaussians(nn.Module):
 
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
+
+        if protected_track_ids is not None:
+            # Protected warm-start (C2): the set of asset-injected track ids
+            # whose particles MCMC must not relocate/perturb. Persistent so it
+            # round-trips through the training checkpoint.
+            layer.register_buffer(
+                "_warmstart_protected_track_ids",
+                protected_track_ids.long(),
+                persistent=True,
+            )
 
     # ------------------------------------------------------------------ T4.5: populate tracks post-construct
     def populate_tracks(self, tracks: dict) -> None:

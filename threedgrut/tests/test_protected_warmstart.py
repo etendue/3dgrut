@@ -136,3 +136,88 @@ def test_perturb_byte_identical_without_protected():
     strat.perturb_gaussians()
     # every particle moved (no freezing path taken)
     assert not torch.allclose(model.positions.detach(), before)
+
+
+# --- Task 4: init_layer_from_points writes a persistent protected buffer ---
+
+import os
+
+import pytest
+from hydra import compose, initialize_config_dir
+
+from threedgrut.layers.layer_spec import LayerSpec
+
+_CONFIG_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
+)
+
+
+@pytest.fixture(scope="module")
+def dyn_conf():
+    with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
+        return compose(config_name="apps/ncore_3dgut_mcmc")
+
+
+def _dyn_model(conf):
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=100),
+        LayerSpec(name="dynamic_rigids", layer_id=1, max_n_particles=100),
+    ]
+    return LayeredGaussians(conf, specs=specs, scene_extent=1.0)
+
+
+def _inject_dyn(model, n_per_track):
+    """Inject n_per_track particles for tracks 0,1,2 into dynamic_rigids."""
+    positions, track_ids = [], []
+    for tid in (0, 1, 2):
+        positions.append(torch.zeros(n_per_track, 3))
+        track_ids.append(torch.full((n_per_track,), tid, dtype=torch.long))
+    positions = torch.cat(positions)
+    track_ids = torch.cat(track_ids)
+    model.init_layer_from_points(
+        "dynamic_rigids",
+        positions,
+        scales=torch.full((positions.shape[0], 3), -3.0),
+        densities=torch.zeros(positions.shape[0], 1),
+        colors=torch.full((positions.shape[0], 3), 0.5),
+        rotations=torch.tensor([1.0, 0, 0, 0]).expand(positions.shape[0], 4).clone(),
+        track_ids=track_ids,
+        protected_track_ids=torch.tensor([0, 2], dtype=torch.long),
+        setup_optimizer=False,
+    )
+    return model
+
+
+def test_init_layer_writes_protected_buffer(dyn_conf):
+    model = _inject_dyn(_dyn_model(dyn_conf), n_per_track=4)
+    layer = model.layers["dynamic_rigids"]
+    assert hasattr(layer, "_warmstart_protected_track_ids")
+    assert layer._warmstart_protected_track_ids.tolist() == [0, 2]
+    assert layer._warmstart_protected_track_ids.dtype == torch.long
+
+
+def test_protected_buffer_persists_in_state_dict(dyn_conf):
+    model = _inject_dyn(_dyn_model(dyn_conf), n_per_track=4)
+    sd = model.state_dict()
+    key = "layers.dynamic_rigids._warmstart_protected_track_ids"
+    assert key in sd, f"{key} missing from state_dict (not persistent?)"
+    assert sd[key].tolist() == [0, 2]
+
+
+def test_init_layer_no_protected_buffer_when_omitted(dyn_conf):
+    """Backward-compat: omitting protected_track_ids registers no buffer."""
+    model = _dyn_model(dyn_conf)
+    model.init_layer_from_points(
+        "dynamic_rigids",
+        torch.zeros(6, 3),
+        scales=torch.full((6, 3), -3.0),
+        densities=torch.zeros(6, 1),
+        colors=torch.full((6, 3), 0.5),
+        rotations=torch.tensor([1.0, 0, 0, 0]).expand(6, 4).clone(),
+        track_ids=torch.tensor([0, 0, 1, 1, 2, 2]),
+        setup_optimizer=False,
+    )
+    layer = model.layers["dynamic_rigids"]
+    assert not hasattr(layer, "_warmstart_protected_track_ids")
