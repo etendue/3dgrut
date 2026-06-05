@@ -385,7 +385,8 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **根因（修正 spec 前提）**：spec 假设「MCMC 在侵蚀 asset」是**反的**——diffusion 补全的 asset 本身 spiky，MCMC+opacity 正则其实在**清理**它；而 C2 冻结 perturb/relocate + C3 关 opacity 衰减恰好**锁死 spiky 瑕疵并挡住清理**，未观测面又无 photometric 约束 → 比 baseline 更烂。**真瓶颈 = asset 质量 + 未观测面缺约束，不是 MCMC 侵蚀。**
   - **结论**：freeze 式 protected warm-start **否定**，不标 ✅，代码保留（默认关闭）。后续若再试应走「约束式」（scale clamp + anisotropy 上限 + opacity floor，有界而非冻结）或先提 asset 质量（re-harvest / L4 协方差对齐）。
   - **顺带踩坑记**：① viser `--replaced_track_ids` 收**整数 name_to_id 索引**（warm 车真实 id = `14,16,17,27,67`），**不是** NCore track 名（`24,244,259,316,7`，= mapping.json key）；② trainer ckpt 用自定义 `gaussians_nodes` 格式存，`register_buffer(persistent=True)` 只走 `state_dict()` 不走这里——protected buffer 一度漏存（resume 丢保护），已由 `9f50547` 在 `get_model_parameters`+`init_from_checkpoint` 对称补回 + 回归测试 pin 住（教训：测 ckpt 持久化要测**真实保存路径**，非 `state_dict()`）。
-  - 产物：A/B ckpt+metrics `output/protected_{A_lidar,B_warm}_10k/`。
+  - **frozen drop-in 隔离实验（2026-06-05，无训练，离线 ckpt 手术 `/tmp/frozen_dropin.py`）**：把 A 的 ckpt 里 dynamic_rigids 整层换成 5 个 AH-1 对齐后的**原始 asset**（502695 粒子，未训练）→ viser 渲染。**原始 asset 几何连贯、不 spiky**，但**悬浮于地面 + 光照/环境不匹配、显假**。→ **结论闭环**：① B 的 spiky **不是 asset 原料**带来的，而是**训练+freeze 保护引入**（C2 冻 perturb 去平滑 + C3 关 opacity 衰减堆杂点）；② frozen drop-in 的悬浮+光照失配正是「为何必须训练而非 frozen」（warm-start 训观测面学场景光照、pose 修位姿）；③ 悬浮疑似 cuboid 竖直锚点（中心 vs 触地）对齐偏移，warm-start 注入路径可能同存，待查。**可行路径应是：warm-start + 完整训练（pose+外观）+ 未观测面用约束（scale/anisotropy/opacity floor）而非冻结**——非本 spec。
+  - 产物：A/B ckpt+metrics `output/protected_{A_lidar,B_warm}_10k/`；frozen drop-in ckpt `a800:/root/work/yusun/ah_harvest/frozen_dropin_raw_asset.pt`。
 
 ---
 
