@@ -68,6 +68,7 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
+        [BUG-1 active cuboid wireframe 与 gaussian 实物错位（仅 viser overlay 投影；不碰 metric/init）]
         [P1.1 sseg 精修动静边界（cuboid×sseg 求交）]
         [P1.3 per-track albedo/scale + per-track cap]
         [P1.3b Fourier albedo feature（4D-SH 时变颜色，gate=P1.3）]
@@ -122,6 +123,7 @@ kanban
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
 | **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ⬜ | — |
+| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ⬜ | — |
 
 ### 1.3 Phase 状态汇总 + per-class gap 表（Phase 0 回填）
 
@@ -132,7 +134,8 @@ kanban
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
 | **3** | 道路/车道线 | 0/2 | 车道线锐度（lane LPIPS↓） | ≥ 24.7 | ⬜ |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
-| **总计** | — | **4/17** | — | — | — |
+| bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 0/1 | viser cuboid wireframe 与 gaussian 实物目视重合 | 不影响 metric | ⬜ |
+| **总计** | — | **4/18** | — | — | — |
 
 > **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
@@ -293,6 +296,25 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | Stage 17（T17.1 V3-R1） | 3DGRUT secondary ray | ⏸ 降级 | 全局 novel 轴 |
 | **Stage 17（T17.2 V3-E2）** | **per-class cPSNR evaluator** | ⬆ **提前到 P0.4** | 测量本就该前置 |
 
+### 2.5 BUG 修复任务卡 — active cuboid overlay 对齐（BUG-1，仅可视化）
+
+**现象（用户报告 2026-06-05）**：playground 4D 可视化里 active cuboid 的 wireframe 包围盒与它框住的 dynamic gaussian 实物（动态车辆等）在渲染图上**没有对齐**——盒子相对实物有平移/旋转/尺度偏差，没有套住对应的高斯车。
+
+**根因已定位 = 纯可视化（viser overlay 投影），不碰 metric / init（用户 2026-06-05 判定）**：
+- cuboid 的 **3D pose 是对的**——dynamic rigid gaussian 的初始化（[dynamic_rigid_init.py](threedgrut/layers/dynamic_rigid_init.py)）正是用**同一套** `pose_inv` 把 LiDAR 点滤进 object-local frame；若 pose / 坐标系约定错，gaussian 根本长不出正常车（init 就崩）。现 gaussian 实物渲染正常 ⇒ **3D pose 正确**。
+- 因此错位只发生在 **viser 的 overlay 投影路径**（[viser_gui_4d.py](threedgrut_playground/viser_gui_4d.py) 把 world-frame cuboid edges 投到屏幕用的相机模型/内外参 ≠ 实际 3dgrut renderer 的相机），是**纯可视化 bug**。
+- **明确不受影响**：[`class_psnr.py`](threedgrut/model/class_psnr.py) / [`dynamic_mask.py`](threedgrut/layers/dynamic_mask.py) 的 per-track mask（车辆 **class_psnr 24.04 / P0.1**）走另一条投影，且其正确性由 gaussian init 同 pose 背书 → **P0.1 不需重测**。
+
+**改动文件 / 锚点（只动 playground overlay，⛔ 勿碰 3D pose 链路）**：
+- cuboid wireframe 构建：`threedgrut_playground/viser_gui_4d.py`（`_build_cuboid_edges` / `_update_active_cuboids` ~894-958）、`threedgrut_playground/utils/cuboid.py`（`cuboid_world_edges`）
+- overlay 投影（核查点）：`threedgrut_playground/utils/{ftheta_projector,pinhole_projector,overlay_renderer}.py` —— overlay 用的相机模型/内外参须与实际 render 相机一致（ftheta vs pinhole、viser line_segments 路径 vs ftheta overlay 路径不一致 ~917）
+- ⛔ **不改**：[`tracks_loader.py`](threedgrut/datasets/tracks_loader.py)（Euler 解码）、[`dynamic_rigid_init.py`](threedgrut/layers/dynamic_rigid_init.py)、[`layered_model.py`](threedgrut/layers/layered_model.py)（`_transform_means`）、[`dynamic_mask.py`](threedgrut/layers/dynamic_mask.py) / [`class_psnr.py`](threedgrut/model/class_psnr.py) —— 已被 gaussian 实物正常渲染背书，动它们反而会碰坏 init/metric。
+
+**验收**：
+1. playground 多帧 / 多 track（含纯 yaw 直行 + 转弯）目视：cuboid wireframe 套住对应 gaussian 实物（中心 / 朝向 / 尺寸重合）。
+2.（可选）轻量回归测试 pin 住「overlay projector 与 renderer 相机一致」：构造已知相机 + 已知 world 点，断言 overlay 投影像素 == renderer 投影像素。
+3. **纯可视化修复，不需 A800 重训 / 重 eval**；§ 1.3 per-class gap 表与 P0.1 锚点不变。
+
 ---
 
 ## 3. asset-harvester 注入专项（车辆 warm-start）
@@ -334,6 +356,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | R5 | DriveStudio SMPL 链路重 | HMR2@NCore 跑不通 / 移植量大 | Phase 2 拖期 | P2.1 rigid 垫脚石先证价值；P2.2 可单开 spec | P2.2/2.3 |
 | R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控 | P1.4 |
 | R7 | resume 续训退化（已坐实） | MCMC+多层 resume | cc −1.92 | **所有 baseline 对照从头训** | §0.4 |
+| R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | BUG-1 只修 playground overlay，⛔ 勿碰 3D pose/metric 链路 | BUG-1 |
 
 ---
 
