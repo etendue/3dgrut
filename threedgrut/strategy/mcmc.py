@@ -31,6 +31,53 @@ from threedgrut.strategy.base import BaseStrategy
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import _multinomial_sample, check_step_condition
 
+
+def _filter_protected_indices(
+    indices: torch.Tensor,
+    track_ids: Optional[torch.Tensor],
+    protected_track_ids: Optional[torch.Tensor],
+) -> torch.Tensor:
+    """Drop entries of ``indices`` whose per-particle track id is protected.
+
+    Protected = asset-harvester warm-start tracks whose unobserved-face geometry
+    must not be relocated by MCMC. No-op (returns ``indices`` unchanged) when
+    there is no protected set or no ``track_ids`` — keeps every non-warm layer
+    and every baseline run byte-identical with v1.
+    """
+    if (
+        protected_track_ids is None
+        or protected_track_ids.numel() == 0
+        or track_ids is None
+        or indices.numel() == 0
+    ):
+        return indices
+    prot = protected_track_ids.to(track_ids.device)
+    keep = ~torch.isin(track_ids[indices], prot)
+    return indices[keep]
+
+
+def _protected_particle_mask(
+    track_ids: Optional[torch.Tensor],
+    protected_track_ids: Optional[torch.Tensor],
+    n: int,
+    device,
+) -> Optional[torch.Tensor]:
+    """Bool ``[n]`` mask, True where the particle's track id is protected.
+
+    Returns ``None`` when nothing is protected so callers skip masking entirely
+    (byte-identical default). ``n`` is the current particle count (asserted
+    against ``track_ids`` length by the caller's own indexing).
+    """
+    if (
+        protected_track_ids is None
+        or protected_track_ids.numel() == 0
+        or track_ids is None
+    ):
+        return None
+    prot = protected_track_ids.to(track_ids.device)
+    return torch.isin(track_ids, prot).to(device)
+
+
 _mcmc_plugin = None
 
 
