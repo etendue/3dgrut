@@ -58,3 +58,81 @@ def test_protected_particle_mask_none_when_unprotected():
     empty = torch.tensor([], dtype=torch.long)
     assert _protected_particle_mask(track_ids, empty, 3, torch.device("cpu")) is None
     assert _protected_particle_mask(None, torch.tensor([20]), 3, torch.device("cpu")) is None
+
+
+# --- Task 3: perturb_gaussians freezes protected particles (CPU integration) ---
+
+from types import SimpleNamespace
+
+import torch.nn as nn
+
+from threedgrut.strategy.mcmc import MCMCStrategy
+
+
+class _StubMoG:
+    """Minimal duck-typed model exposing exactly what perturb_gaussians reads."""
+
+    def __init__(self, positions, densities, track_ids, protected):
+        self.positions = nn.Parameter(positions.clone())
+        self._density = densities
+        self.track_ids = track_ids
+        self._warmstart_protected_track_ids = protected
+        n = positions.shape[0]
+        # identity covariance per particle → bmm leaves the noise vector intact
+        self._cov = torch.eye(3).unsqueeze(0).expand(n, 3, 3).contiguous()
+        self.optimizer = SimpleNamespace(
+            param_groups=[{"name": "positions", "lr": 1.0}]
+        )
+
+    def get_covariance(self):
+        return self._cov
+
+    def get_positions(self):
+        return self.positions.detach()
+
+    def get_density(self):
+        return self._density
+
+
+def test_perturb_freezes_protected_particles():
+    torch.manual_seed(0)
+    n = 6
+    positions = torch.zeros(n, 3)
+    # low density everywhere → op_sigmoid(1-d) is non-trivial → real noise
+    densities = torch.full((n, 1), 0.02)
+    track_ids = torch.tensor([10, 20, 10, 30, 20, 10])
+    protected = torch.tensor([20])  # particles 1 and 4 must not move
+    model = _StubMoG(positions, densities, track_ids, protected)
+
+    strat = MCMCStrategy.__new__(MCMCStrategy)  # bypass CUDA __init__
+    strat.model = model
+    strat.conf = SimpleNamespace(
+        strategy=SimpleNamespace(perturb=SimpleNamespace(noise_lr=1.0))
+    )
+
+    before = model.positions.detach().clone()
+    strat.perturb_gaussians()
+    after = model.positions.detach()
+
+    protected_rows = torch.tensor([1, 4])
+    moved_rows = torch.tensor([0, 2, 3, 5])
+    assert torch.equal(after[protected_rows], before[protected_rows])  # frozen
+    assert not torch.allclose(after[moved_rows], before[moved_rows])   # perturbed
+
+
+def test_perturb_byte_identical_without_protected():
+    torch.manual_seed(0)
+    n = 4
+    model = _StubMoG(
+        torch.zeros(n, 3), torch.full((n, 1), 0.02),
+        torch.tensor([10, 20, 10, 30]), None,  # no protected buffer
+    )
+    strat = MCMCStrategy.__new__(MCMCStrategy)
+    strat.model = model
+    strat.conf = SimpleNamespace(
+        strategy=SimpleNamespace(perturb=SimpleNamespace(noise_lr=1.0))
+    )
+    before = model.positions.detach().clone()
+    strat.perturb_gaussians()
+    # every particle moved (no freezing path taken)
+    assert not torch.allclose(model.positions.detach(), before)

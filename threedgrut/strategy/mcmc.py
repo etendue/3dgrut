@@ -284,6 +284,18 @@ class MCMCStrategy(BaseStrategy):
         # byte-identical); LayeredMCMC road sub overrides to (1, 1, 0).
         noise = noise * self._get_perturb_mask().to(noise.device).to(noise.dtype)
 
+        # Protected warm-start (C2): zero the perturb noise for asset-injected
+        # particles so their diffusion-completed geometry doesn't drift. None
+        # (no protected buffer) → byte-identical v1.
+        _prot_mask = _protected_particle_mask(
+            getattr(self.model, "track_ids", None),
+            getattr(self.model, "_warmstart_protected_track_ids", None),
+            noise.shape[0],
+            noise.device,
+        )
+        if _prot_mask is not None:
+            noise[_prot_mask] = 0.0
+
         self.model.positions.add_(noise)
 
     def sample_new_gaussians(
