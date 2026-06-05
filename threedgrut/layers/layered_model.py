@@ -549,6 +549,17 @@ class LayeredGaussians(nn.Module):
                 out["gaussians_nodes"][spec.name]["track_ids"] = (
                     track_ids.detach().cpu().to(torch.int64)
                 )
+            # P1.4 protected warm-start (C2): persist the protected-track-id
+            # buffer alongside track_ids. ``get_model_parameters`` (not
+            # nn.Module.state_dict) is the trainer's real ckpt format, so the
+            # register_buffer(persistent=True) alone does NOT round-trip here —
+            # without this a RESUMED warm-start run loses MCMC protection and
+            # the warm tracks go spiky again. No-op for unprotected layers.
+            protected = getattr(layer, "_warmstart_protected_track_ids", None)
+            if protected is not None:
+                out["gaussians_nodes"][spec.name]["_warmstart_protected_track_ids"] = (
+                    protected.detach().cpu().to(torch.int64)
+                )
         # T5.4: sky envmap state — saved as raw state_dict so SkyEnvmapMLP /
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
@@ -641,6 +652,18 @@ class LayeredGaussians(nn.Module):
                         delattr(layer, "track_ids")
                     layer.register_buffer(
                         "track_ids", ckpt_track_ids.long(), persistent=True,
+                    )
+                # P1.4 protected warm-start (C2): restore the protected-track-id
+                # buffer so a resumed warm-start run keeps MCMC protection.
+                ckpt_protected = nodes_dict[name].get("_warmstart_protected_track_ids")
+                if ckpt_protected is not None:
+                    if not torch.is_tensor(ckpt_protected):
+                        ckpt_protected = torch.as_tensor(ckpt_protected)
+                    if hasattr(layer, "_warmstart_protected_track_ids"):
+                        delattr(layer, "_warmstart_protected_track_ids")
+                    layer.register_buffer(
+                        "_warmstart_protected_track_ids",
+                        ckpt_protected.long(), persistent=True,
                     )
             # T5.4: sky envmap state restore — under either NRE-wrapped key
             # "model.sky_envmap_state" or unwrapped "sky_envmap_state".

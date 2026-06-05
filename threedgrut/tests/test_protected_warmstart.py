@@ -285,3 +285,50 @@ def test_multilayer_exempts_dynamic_rigids_from_opacity_reg():
     exempt = list(conf.loss.exempt_layers_opacity_reg)
     assert "road" in exempt
     assert "dynamic_rigids" in exempt
+
+
+# --- Resume-bug regression: protected buffer must round-trip the CUSTOM ckpt path ---
+# The trainer saves via LayeredGaussians.get_model_parameters() ('gaussians_nodes'
+# format), NOT torch state_dict(). If the protected buffer is dropped there, a
+# RESUMED run silently loses MCMC protection (warm tracks go spiky again). The
+# 10k A/B run only escaped this because it trained from scratch. This pins both
+# directions of the custom path.
+
+
+def test_protected_buffer_roundtrips_custom_ckpt(dyn_conf):
+    src = _inject_dyn(_dyn_model(dyn_conf), n_per_track=4)
+    src.setup_optimizer_for_test()  # get_model_parameters() asserts optimizer != None
+    state = src.get_model_parameters()
+
+    # (a) saved into gaussians_nodes (the trainer's actual ckpt format)
+    dr = state["gaussians_nodes"]["dynamic_rigids"]
+    assert "_warmstart_protected_track_ids" in dr, (
+        "protected buffer dropped by get_model_parameters → resume loses protection"
+    )
+    assert sorted(dr["_warmstart_protected_track_ids"].tolist()) == [0, 2]
+
+    # (b) restored on load into a fresh model
+    dst = _dyn_model(dyn_conf)
+    dst.init_from_checkpoint(state, setup_optimizer=False)
+    layer = dst.layers["dynamic_rigids"]
+    assert hasattr(layer, "_warmstart_protected_track_ids")
+    assert sorted(layer._warmstart_protected_track_ids.tolist()) == [0, 2]
+    assert layer._warmstart_protected_track_ids.dtype == torch.long
+
+
+def test_no_protected_key_in_ckpt_when_layer_unprotected(dyn_conf):
+    """A layer without the buffer must not emit the key (byte-identical ckpt)."""
+    model = _dyn_model(dyn_conf)
+    model.init_layer_from_points(
+        "dynamic_rigids",
+        torch.zeros(6, 3),
+        scales=torch.full((6, 3), -3.0),
+        densities=torch.zeros(6, 1),
+        colors=torch.full((6, 3), 0.5),
+        rotations=torch.tensor([1.0, 0, 0, 0]).expand(6, 4).clone(),
+        track_ids=torch.tensor([0, 0, 1, 1, 2, 2]),
+        setup_optimizer=False,
+    )
+    model.setup_optimizer_for_test()
+    dr = model.get_model_parameters()["gaussians_nodes"]["dynamic_rigids"]
+    assert "_warmstart_protected_track_ids" not in dr
