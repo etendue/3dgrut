@@ -979,6 +979,16 @@ class LayeredGaussians(nn.Module):
                         rotations_local=layer.rotation,
                         timestamp_us=timestamp_us, frame_id=frame_id,
                     )
+                # P1.4 viser dynamic_replaced/other toggle: hide selected
+                # track_ids by folding them into the inactive (density→-50)
+                # mask. ``_dyn_hidden_track_ids`` is unset by default → no
+                # effect on training / other callers.
+                _hide = getattr(self, "_dyn_hidden_track_ids", None)
+                if _hide is not None and _hide.numel() > 0:
+                    _tvis = ~torch.isin(
+                        layer.track_ids, _hide.to(layer.track_ids.device))
+                    active_mask = (active_mask & _tvis
+                                   if active_mask is not None else _tvis)
             # V3-L8/L9 per-track bias tables apply only to dynamic_rigids.
             # Looked up once outside the param loop to avoid repeated hasattr.
             apply_dyn_bias = (
