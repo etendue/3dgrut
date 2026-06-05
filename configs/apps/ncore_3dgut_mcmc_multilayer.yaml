@@ -129,7 +129,7 @@ loss:
   # coverage @0.1 82→93% / @0.3 71→88%, combined BEV hole 6%→2%, at −0.18 dB
   # cc_psnr (≈ run-to-run noise). User-accepted 2026-06-02.
   # Set to [] to disable (revert to byte-identical baseline).
-  exempt_layers_opacity_reg: [road]
+  exempt_layers_opacity_reg: [road, dynamic_rigids]   # P1.4 protected warm-start (C3): don't decay injected unobserved-face opacity
 
 # ─── trainer (汇总所有上游 v2 yaml) ────────────────────────────────────
 trainer:

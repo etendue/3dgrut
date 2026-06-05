@@ -274,3 +274,14 @@ def test_build_warmstart_returns_warm_track_ids():
     # Every protected id must actually appear among the merged particles.
     merged_ids = set(out["track_ids"].unique().tolist())
     assert set(out["warm_track_ids"].tolist()) <= merged_ids
+
+
+# --- Task 7: opacity-reg exemption includes dynamic_rigids ---
+
+
+def test_multilayer_exempts_dynamic_rigids_from_opacity_reg():
+    with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
+        conf = compose(config_name="apps/ncore_3dgut_mcmc_multilayer")
+    exempt = list(conf.loss.exempt_layers_opacity_reg)
+    assert "road" in exempt
+    assert "dynamic_rigids" in exempt
