@@ -88,8 +88,8 @@ kanban
 
     "Done"
         [✅ AH-0 感知gate正向: 真实harvest 5车注入 5k A/B automobile +0.730dB, cc不退]
-        [✅ AH-1 坐标对齐(Mac): 6 asset rank-match perm=(0,2,1)+containment 不变量]
-        [✅ AH-2 注入 plumbing(Mac): merge replace/augment+inject 编排器+ckpt roundtrip]
+        [✅ AH-1 坐标对齐（Mac）: 6 asset rank-match perm=（0,2,1）+containment 不变量]
+        [✅ AH-2 注入 plumbing（Mac）: merge replace/augment+inject 编排器+ckpt roundtrip]
         [✅ P0.1-P0.4 per-class evaluator 落地+实测（2026-06-04）: 车24.04/人15.68/road LPIPS0.154]
         [继承: v3 baseline 重生（2026-06-03）]
         [继承: V3-R2 bg-in-road penalty +0.65]
