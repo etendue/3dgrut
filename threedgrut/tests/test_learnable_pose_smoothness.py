@@ -317,7 +317,7 @@ def _maybe_trainer():
         "threedgrut.trainer",
         reason="Trainer-method tests need full training stack; helper-level "
                "tests above already cover the math.",
-    ).Trainer
+    ).Trainer3DGRUT
 
 
 def test_trainer_method_freeze_window_returns_zero():

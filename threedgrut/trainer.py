@@ -41,6 +41,10 @@ from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 from threedgrut.model.road_reg import compute_effective_rank_loss
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
+from threedgrut.model.pose_anchor import (
+    compute_pose_boundary_loss,
+    compute_pose_prior_loss,
+)
 from threedgrut.model.losses import ssim
 from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
 from threedgrut.model.model import MixtureOfGaussians
@@ -1212,6 +1216,13 @@ class Trainer3DGRUT:
         # baseline byte-identical when poseopt off.
         loss_pose_smooth = self._compute_pose_smoothness_term(trainer_conf)
 
+        # P1.2 — pose boundary anchor (fix_first/last) + pose prior. Both pull
+        # the learned per-track pose back toward GT to repair the −0.61 cc
+        # drift from Stage A. Same gating as smoothness; zeros(1) when off →
+        # Stage-A / poseopt-off paths stay byte-identical.
+        loss_pose_boundary = self._compute_pose_boundary_term(trainer_conf)
+        loss_pose_prior = self._compute_pose_prior_term(trainer_conf)
+
         # T11.A2: image-space LiDAR sparse + bg-sky + DepthV2 dense depth
         # supervision. All three heads are no-ops when the corresponding
         # use_* flags are off (default false → byte-identical to pre-stage-11).
@@ -1290,6 +1301,8 @@ class Trainer3DGRUT:
             + loss_bg_cuboid
             + loss_bg_road
             + loss_pose_smooth
+            + loss_pose_boundary
+            + loss_pose_prior
             + lambda_lidar_eff * loss_lidar_depth
             + self.lambda_bg_lidar * loss_bg_lidar
             + self.lambda_depth_prior * loss_depth_prior
@@ -1306,6 +1319,8 @@ class Trainer3DGRUT:
             bg_cuboid_loss=loss_bg_cuboid,
             bg_road_loss=loss_bg_road,
             pose_smooth_loss=loss_pose_smooth,
+            pose_boundary_loss=loss_pose_boundary,
+            pose_prior_loss=loss_pose_prior,
             lidar_depth_loss=lambda_lidar_eff * loss_lidar_depth,
             bg_lidar_loss=self.lambda_bg_lidar * loss_bg_lidar,
             depth_prior_loss=self.lambda_depth_prior * loss_depth_prior,
@@ -1545,6 +1560,69 @@ class Trainer3DGRUT:
         if lam_t <= 0.0 and lam_r <= 0.0:
             return zero
         return compute_pose_smoothness_loss(
+            self.model, lam_t, lam_r, device=self.device,
+        )
+
+    def _compute_pose_boundary_term(self, trainer_conf) -> torch.Tensor:
+        """P1.2 fix_first/last — anchor each track's first + last active frame
+        to GT, killing the global drift that the affine cc can't undo (the
+        −0.61 cc regression). Same triple gate as the smoothness term
+        (pose_optimizer exists + past freeze window + λ>0), plus a
+        ``fix_first_last`` master toggle. Returns ``torch.zeros(1)`` on any
+        gate so the poseopt-off / Stage-A-default path stays byte-identical.
+        """
+        zero = torch.zeros(1, device=self.device)
+        if self.pose_optimizer is None:
+            return zero
+        if self.global_step < self.pose_freeze_until_iter:
+            return zero
+        lp_conf = getattr(trainer_conf, "learnable_pose", None)
+        if lp_conf is None:
+            return zero
+        fix = bool(
+            lp_conf.get("fix_first_last", False) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "fix_first_last", False)
+        )
+        if not fix:
+            return zero
+        lam_t = float(
+            lp_conf.get("lambda_pose_boundary_trans", 0.0) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_pose_boundary_trans", 0.0)
+        )
+        lam_r = float(
+            lp_conf.get("lambda_pose_boundary_rot", 0.0) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_pose_boundary_rot", 0.0)
+        )
+        if lam_t <= 0.0 and lam_r <= 0.0:
+            return zero
+        return compute_pose_boundary_loss(
+            self.model, lam_t, lam_r, device=self.device,
+        )
+
+    def _compute_pose_prior_term(self, trainer_conf) -> torch.Tensor:
+        """P1.2 pose prior — soft L2 of all active frames toward GT (wires the
+        previously-placeholder ``lambda_pose_prior_*`` keys). Same gate as the
+        boundary/smoothness terms; default λ=0 → byte-identical no-op.
+        """
+        zero = torch.zeros(1, device=self.device)
+        if self.pose_optimizer is None:
+            return zero
+        if self.global_step < self.pose_freeze_until_iter:
+            return zero
+        lp_conf = getattr(trainer_conf, "learnable_pose", None)
+        if lp_conf is None:
+            return zero
+        lam_t = float(
+            lp_conf.get("lambda_pose_prior_trans", 0.0) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_pose_prior_trans", 0.0)
+        )
+        lam_r = float(
+            lp_conf.get("lambda_pose_prior_rot", 0.0) if hasattr(lp_conf, "get")
+            else getattr(lp_conf, "lambda_pose_prior_rot", 0.0)
+        )
+        if lam_t <= 0.0 and lam_r <= 0.0:
+            return zero
+        return compute_pose_prior_loss(
             self.model, lam_t, lam_r, device=self.device,
         )
 
