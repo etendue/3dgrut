@@ -93,6 +93,30 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd
 2. **VGG16 感知损失模型**：位于 `~/data/torch_cache/hub/checkpoints/vgg16-397923af.pth`，已复制到 `~/.cache/torch/hub/checkpoints/`（已完成）。
 3. **JIT 编译**：首次已编译缓存至 `~/.cache/torch_extensions/py311_cu128/{lib3dgut_cc,lib_mcmc_cc}`，后续启动秒过。
 
+### ⚠️⚠️ num_workers 必须按机器「系统内存」调（OOM 头号坑，2026-06-05 实测定位）
+
+**`configs/base_gs.yaml` 默认 `num_workers: 24` 是为 A800（128 核 / 2TB 内存）调的。在小内存机器上直接用会 OOM**——被系统 OOM killer 杀掉（`dmesg`/`journalctl -k` 见 `Out of memory: Killed process python`），表现为训练跑到 ~iter 5000（约 40 min）后**静默退出无 Traceback**（SIGKILL 不留 Python 栈）。
+
+**根因（实测 PSS 分解坐实，不是泄漏）**：
+- 内存 ≈ **主进程堆（~13GB）+ num_workers × ~2-3GB**。每个 DataLoader worker 是 fork 出的数据集副本，Python 引用计数写对象头 → copy-on-write 被打破 → 每 worker 私有化 ~2GB。
+- **2026-06-03 起 v3 baseline 配方打开了 LiDAR 深度监督**（`ncore_3dgut_mcmc_multilayer.yaml`: `load_lidar_depth_map=true` / `use_lidar_depth=true`），每帧多加载/解码一张深度图（1920×1080 float32 ≈ 8MB，按 256/worker 缓存）→ **per-worker 内存比旧配方重**（这就是为什么 5/27 旧 ThinkPad run 在 31GB 跑得下、而现在 62GB 反而 OOM 的差异）。
+- 内存会**预热 ~13 min 后平台**（如 nw=10 稳定 39GB），**不是线性泄漏**；`RSS` 会因共享页被重复计数而虚高（11 进程 sum RSS 165GB 是假象），**以 `PSS`（`/proc/<pid>/smaps_rollup`）或 `free -g` used 为准**。
+
+**经验值（深度监督 ON 时）**：
+| 机器 | 系统内存 | 安全 num_workers | 实测 |
+|---|---|---|---|
+| A800 | 2TB | 24（默认） | OK |
+| inceptio / 62GB | 62GB | **≤ 10**（→ ~39GB） | nw=24 OOM，nw=10 稳 |
+| 32GB 机 | 32GB | ≤ 4-6 | — |
+
+**用法**：小内存机一律 CLI 覆盖 `num_workers=10`（顶层 key，直接覆盖不带 `+`）。**不要为省内存关掉 `use_lidar_depth`**——baseline（cc 25.79）就用它，关了 A/B 不可比。
+
+**附带现象（同一根因）**：RTX 4090 上 GPU 利用率只有 ~30-50%（不是 100%），因为深度图 + sseg 的**数据管线喂不满快卡**（数据加载瓶颈，非 GPU 慢）。降 num_workers 省内存的代价就是数据并行度更低、GPU 更饿；这是内存 vs 速度的权衡，**不影响训练正确性 / 最终 metric**。本地 NVMe 已排除慢盘因素。
+
+**OOM 防线**：跑长训练前可挂一个 RAM guard（每 30s 采 `free -g`，超阈值 `pkill` + 记日志），避免静默 OOM 浪费 40 min（2026-06-05 用过 `/tmp/p1_2_ramguard.sh`）。
+
+**长任务启动用「proven inline nohup」模式**（`ssh inceptio "... && nohup python train.py ... > log 2>&1 & echo PID \$!"`），inceptio ssh 偶发抖动（exit 255）；`setsid bash 脚本 & disown` 这种复杂形式在抖动下容易半路夭折，inline nohup + 末尾 `echo PID` 最稳。
+
 ### 代码同步（Mac → inceptio）
 
 ```bash

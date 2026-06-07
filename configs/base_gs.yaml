@@ -117,8 +117,17 @@ trainer:
     freeze_until_iter: 5000            # warmup: gaussians converge under GT pose first
     lambda_temporal_smooth_trans: ${trainer.pose_adjustment.lambda_t}  # ⇐ user-facing alias
     lambda_temporal_smooth_rot:   ${trainer.pose_adjustment.lambda_r}  # ⇐ user-facing alias
-    lambda_pose_prior_trans:      0.0  # Stage C placeholder (not yet read)
-    lambda_pose_prior_rot:        0.0  # Stage C placeholder (not yet read)
+    # P1.2 fix_first/last — anchor each track's first + last *active* frame to
+    # GT to kill the global-drift DOF behind the −0.61 cc regression. Master
+    # toggle + per-component λ. Default OFF → reproduces Stage A exactly when
+    # pose_adjustment.enabled=true; the poseopt app yaml turns it on.
+    fix_first_last:               false
+    lambda_pose_boundary_trans:   0.0
+    lambda_pose_boundary_rot:     0.0
+    # P1.2 pose prior — soft L2 of *all* active frames toward GT (now wired;
+    # was a Stage C placeholder). Keep small relative to the boundary term.
+    lambda_pose_prior_trans:      0.0
+    lambda_pose_prior_rot:        0.0
 
 enable_writer: true
 writer:

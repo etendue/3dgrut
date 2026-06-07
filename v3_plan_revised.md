@@ -71,7 +71,6 @@ kanban
         [BUG-1 active cuboid wireframe 与 gaussian 实物错位（仅 viser overlay 投影；不碰 metric/init）]
         [P1.1 sseg 精修动静边界（cuboid×sseg 求交）]
         [P1.3 per-track albedo/scale + per-track cap]
-        [P1.3b Fourier albedo feature（4D-SH 时变颜色，gate=P1.3）]
         [P1.4 asset-harvester warm-start（车）]
         [P2.1 行人 rigid track 垫脚石]
         [P2.2 DriveStudio SMPL-LBS 移植进 dynamic_deformables]
@@ -84,7 +83,6 @@ kanban
         [AH-2 变长粒子注入 plumbing（optimizer/MCMC/ckpt）]
 
     "In Progress"
-        [P1.2 track-pose 完整版（stageA 已合 main, 补 reg 修 −0.61 cc）]
 
     "Review"
 
@@ -97,6 +95,8 @@ kanban
         [继承: Phase 2A road 豁免 opacity]
         [继承: track-pose stageA 合 main（class_psnr +1.68）]
         [继承: asset-harvester-verify 端到端跑通（3车+3人）]
+        [✅ P1.2 track-pose（boundary+prior+smooth）: fix 三者最优 class25.07/cc26.06，−0.61 退化未在本配方复现（2026-06-06）]
+        [✅ P1.3b Fourier albedo 实现+A/B（k4 vs DC k1）: 无增益 24.13 vs 24.20，default k1 关、留未来（2026-06-06）]
 ```
 
 ### 1.2 任务级看板（按 P*.* 编号）
@@ -110,9 +110,9 @@ kanban
 | **P0.3** ★ | 0 | **车道线指标** — lane/marking mask PSNR/LPIPS 或道路 BEV-crop LPIPS（绕开沥青主导） | 新 | 1.5 | ✅ | road-crop LPIPS 0.154 |
 | **P0.4** | 0 | per-class evaluator 整合 + `metrics.json` 字段规范 + 4 档 novel pose 拆解（车/人/路/bg） | T17.2 V3-E2 | 1 | ✅ | render.py+dataset 双路径；novel 拆解 🟡缓 |
 | **P1.1** ★ | 1 | **sseg 精修动静边界** — cuboid 定 track × sseg 定像素求交；动态 loss 只路由 sseg-actor 像素，AABB 内非 actor（影子/车底）还给 bg | 部分 T14.1 V3-D3 + T14.2 V3-D4 | 2.5 | ⬜ | ROI/工程比最佳 |
-| **P1.2** ★ | 1 | **track-pose 完整版** — 补 fix_first/last + temporal smooth + pose prior，**修 −0.61 cc 退化** + novel eval | T13a.4 V3-L7 | 2 | 🟡 stageA 已合 main | `6b84d54`+`bb49bc5`+`e902bf6`+`47fefa7`（class_psnr +1.68 / raw +2.06） |
+| **P1.2** ★ | 1 | **track-pose 完整版** — boundary anchor（fix_first/last）+ pose prior + temporal smooth（复用 stageA） | T13a.4 V3-L7 | 2 | ✅ | `pose_anchor.py`+trainer+configs；fix 三者最优 class25.07/cc26.06，−0.61 未在本配方复现，相对 stageA +0.22 class（含跨机噪声）|
 | **P1.3** | 1 | per-track albedo（SH bias，DC only）+ per-track scale + per-track 粒子上限 | T13b.4 L8 + T13b.5 L9 + T13a.3 L6 | 2 | ⬜ | — |
-| **P1.3b** | 1 | **Fourier albedo feature**（4D-SH 时变颜色）：把 P1.3 DC-only albedo 扩展为 Fourier 级数，捕获车辆时变外观（阴影穿越/曝光变化）。gate = P1.3 验证有效后再投 | T13b.4 L8b（旧命名） | 1.5 | ⬜ | — |
+| **P1.3b** | 1 | **Fourier albedo feature**（4D-SH 时变颜色）：把 P1.3 DC-only albedo 扩展为 Fourier 级数，捕获车辆时变外观（阴影穿越/曝光变化）。gate = P1.3 验证有效后再投 | T13b.4 L8b（旧命名） | 1.5 | ✅ 实现+验证（无增益） | `track_albedo_fourier.py`+layered_model+registry；A/B k4 24.13 vs DC k1 24.20（−0.07 噪声内），default k1 关、留未来 clip |
 | **P1.4** ★ | 1 | **asset-harvester warm-start（车）** — 扩散补全的完整几何当初始化注入，继续多帧 photometric+pose 训练（详见 § 3） | 新（PR #14 spec） | 见 § 3 | ⬜ | gate=AH-0 |
 | **P2.1** | 2 | 行人 rigid track 垫脚石 — 从「完全没有」到「有粗 blob」验证抬升（asset-harvester 静态人可当 init） | 新 | 2 | ⬜ | — |
 | **P2.2** ★ | 2 | **DriveStudio SMPL-LBS 移植** 进空壳 `dynamic_deformables` 层 — canonical 高斯长在 SMPL mesh，per-frame 24 关节 LBS 蒙皮 | Stage 16 **改机制**（原 hash-grid+MLP→SMPL） | 6 | ⬜ | — |
@@ -389,6 +389,17 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **A800 实测**（baseline ckpt，GPU0，~3min）：车 class_psnr **24.04** / person **15.68**(301帧/3.97Mpx) / rider 17.76(2帧) / bicycle 29.97(94帧) / road_crop PSNR 29.20·LPIPS **0.154**。
   - **守护线零回归**：cc_psnr_masked **25.789**(=25.79) / novel_lpips_avg **0.5987**(=0.5987) / lidar_psnr **22.69**(=22.69)——改动纯增量。
   - **结论**：① 行人**确实无专属模型**（by_class 仅车）——15.68 是 **bg 在行人像素的误差地板**（before-anchor，**非行人重建质量**），混静/动行人；Phase 2 框定维持「从无到有」，最大缺口确认（车 24 vs 人 15.68，~−8dB）；② 小 actor LPIPS GT-fill 受面积主导，per-class PSNR 为准；③ P0.4 的「4 档 novel pose per-class 拆解」标 🟡 stretch 暂缓（novel 无真 GT），全图 novel 监控不退化。
+- **2026-06-06 P1.2 track-pose 完整版（boundary anchor + pose prior）**：
+  - 新建 [`pose_anchor.py`](threedgrut/model/pose_anchor.py)（`compute_pose_boundary_loss` 首/末活跃帧锚定 GT + `compute_pose_prior_loss` 全帧软 L2，旋转用矩阵 Frobenius² 绕开 quat 双覆盖，纯函数 Mac 可单测）+ 接入 [`trainer.py`](threedgrut/trainer.py)（`_compute_pose_boundary_term` / `_compute_pose_prior_term`，三层 gate）+ [`base_gs.yaml`](configs/base_gs.yaml)（`fix_first_last` / `lambda_pose_boundary_*` / 接通占位的 `lambda_pose_prior_*`，默认全 0=stageA 复现）+ [`poseopt.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer_poseopt.yaml)（修复版默认）+ [`test_pose_anchor.py`](threedgrut/tests/test_pose_anchor.py)。temporal smooth 是 stageA 既有、本任务复用。
+  - **测试**：Mac 纯函数全绿；inceptio GPU 74 passed（顺手修 `_maybe_trainer` 用错的类名 `Trainer`→`Trainer3DGRUT`，含 `test_learnable_pose_smoothness.py` 同款预存 bug）。default `pose_adjustment.enabled=false` → baseline byte-identical。
+  - **30k A/B 三方对照（全 lidar-on）**：baseline（无 poseopt, A800）class **24.04** / cc **25.79**；stageA（poseopt 无 fix, A800）class **24.85** / cc **26.02**；fix（poseopt+boundary+prior, inceptio）class **25.07** / cc **26.06**。
+  - **诚实结论（修正预期）**：① 原计划要修的 **−0.61 cc 退化在本 multilayer 5-cam ring 配方未复现**（那是 V3-L7 sym5cam 特有）——poseopt 本体在本配方就是小赢（+0.81 class / +0.23 cc，无退化）；② boundary+prior fix 是三者最优（+1.03 class / +0.27 cc vs baseline）但相对 stageA 仅 **+0.22 class**，且含跨机噪声（fix 在 inceptio、baseline/stageA 在 A800）；③ 视觉（viser_gui_4d）：动态车更清晰、不跳；实测 poseopt 把车逐帧抖动 ‖Δ²t‖ 压了 5–8 倍。
+  - **已知限制**：停车原地抖动根因是 **GT cuboid 标注逐帧噪声**（静止车 ‖Δ²t‖ 中位 73mm/帧），poseopt 已压到 ~18mm 但未清零（prior 往噪声 GT 拉 + 停车光度约束弱）→ 后续改进：近静止 track 位姿塌缩。
+- **2026-06-06 P1.3b Fourier albedo feature（4D-SH 时变颜色）**：
+  - 新建 [`track_albedo_fourier.py`](threedgrut/model/track_albedo_fourier.py)（`fourier_albedo_bias` = Σ f_i·cos(iπt/N_t)，matmul 收缩时间轴 + track_ids gather；`upgrade_albedo_table` ckpt 升/降维；纯函数 Mac 可单测）+ [`layered_model.py`](threedgrut/layers/layered_model.py)（albedo 表 `[K,3]`→`[K,3,k]`，fused_view 复用 `_resolve_pose_idx` 拿帧 t、`_get_track_pose_F` 拿 N_t；2 条加载路径用 `upgrade_albedo_table` back-compat）+ [`registry.py`](threedgrut/layers/registry.py)（`n_fourier_albedo_terms`，默认 1）。**k=1 严格退化 = P1.3 DC、OFF 不注册表 = v2 baseline byte-identical**。
+  - **测试**：Mac 13 Fourier 纯函数 + 16 registry；inceptio GPU 全套 passed。ckpt 端到端 `[70,3,4]`、一次谐波非零（warmup 后真在优化）。**viser_gui_4d 实测能正确加载渲染 k=4 ckpt**（共享 `timestamp_us→_resolve_pose_idx` 时间链路，与动态 pose 同源）。
+  - **30k A/B（k=1 DC vs k=4 Fourier，lidar off，nw=24，inceptio ~8.8 it/s）**：class_psnr **k1 DC 24.20** vs **k4 Fourier 24.13**（−0.07，噪声内）→ **Fourier 在本 clip 无增益**。
+  - **结论**：实现正确（k=1 退化验证）、不是过/欠拟合（额外参数仅 +630 个 float，可忽略）——**是本 20s clip 车辆 albedo 时变信号不足**（全局曝光已被 BilateralGrid 吃掉，无强阴影穿越/隧道/夜灯）。**default k=1 关闭、保留能力 gated 留未来强光照变化 clip**。旁注：lidar off 实测 ~8.8 it/s（vs lidar on ~4），坐实「lidar depth 是数据管线速度+内存大头」。
 
 ---
 

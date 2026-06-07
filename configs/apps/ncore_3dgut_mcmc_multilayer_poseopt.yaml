@@ -72,3 +72,19 @@ trainer:
     enabled: true
     lambda_t: 1.0e-2
     lambda_r: 1.0e-1
+  # ──────────────────────────────────────────────────────────────────────
+  # P1.2 — repair the −0.61 cc regression from Stage A pose drift.
+  #   fix_first/last: hard-ish anchor of each track's first + last *active*
+  #     frame to GT, removing the global-drift DOF the affine cc can't undo.
+  #   pose prior: soft L2 of all active frames toward GT (small λ).
+  # These are the A/B "Run B" starting values — sweep via CLI override, e.g.
+  #   trainer.learnable_pose.lambda_pose_boundary_trans=0.5
+  #   trainer.learnable_pose.freeze_until_iter=10000
+  # Set fix_first_last=false (or both boundary λ=0) to reproduce Stage A.
+  # ──────────────────────────────────────────────────────────────────────
+  learnable_pose:
+    fix_first_last: true
+    lambda_pose_boundary_trans: 1.0
+    lambda_pose_boundary_rot: 1.0
+    lambda_pose_prior_trans: 1.0e-2
+    lambda_pose_prior_rot: 1.0e-2

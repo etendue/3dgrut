@@ -230,7 +230,10 @@ def test_v3_tables_present_in_get_model_parameters(real_conf):
     params = model.get_model_parameters()
     assert "track_optim_state" in params
     tables = params["track_optim_state"]["tables"]
-    assert tables["albedo"].shape == (2, 3)
+    # P1.3b: albedo table is [K, 3, k] Fourier coefficients; default
+    # n_fourier_albedo_terms=1 → [K, 3, 1] (DC-only, byte-identical behaviour
+    # to the old [K, 3] gather since cos(0)=1).
+    assert tables["albedo"].shape == (2, 3, 1)
     assert tables["log_scale"].shape == (2, 1)
 
 
@@ -251,8 +254,9 @@ def test_v3_tables_roundtrip_via_torch_save_load(real_conf, tmp_path):
     _seed_dyn_v3_layer(model_a, n=12)
     # Write non-zero values so the assertion catches identity-init false positives.
     with torch.no_grad():
+        # P1.3b: albedo table is [K, 3, k]; default k=1 → unsqueeze the DC term.
         model_a._track_albedo_table.copy_(torch.tensor([[0.1, 0.2, 0.3],
-                                                        [-0.1, -0.2, -0.3]]))
+                                                        [-0.1, -0.2, -0.3]]).unsqueeze(-1))
         model_a._track_log_scale_table.copy_(torch.tensor([[0.4], [-0.4]]))
     expected_albedo = model_a._track_albedo_table.detach().clone()
     expected_log_scale = model_a._track_log_scale_table.detach().clone()
