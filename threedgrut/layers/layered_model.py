@@ -32,6 +32,10 @@ import torch.nn as nn
 
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.model.model import MixtureOfGaussians
+from threedgrut.model.track_albedo_fourier import (
+    fourier_albedo_bias,
+    upgrade_albedo_table,
+)
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import sh_degree_to_specular_dim
 
@@ -672,10 +676,18 @@ class LayeredGaussians(nn.Module):
             if track_optim_state is not None:
                 tables = track_optim_state.get("tables", {}) or {}
                 if "albedo" in tables and hasattr(self, "_track_albedo_table"):
+                    # P1.3b back-compat: a saved albedo table may be the old
+                    # P1.3 [K, 3] (DC-only) shape or a [K, 3, k'] Fourier
+                    # tensor with a different k'. ``upgrade_albedo_table``
+                    # reshapes it to the current model's [K, 3, k] (DC kept,
+                    # higher harmonics zero-padded / truncated) so loading an
+                    # old DC-only ckpt into a Fourier model is lossless on the
+                    # constant term and identity on the harmonics.
+                    saved = tables["albedo"].to(self._track_albedo_table.device)
+                    k = self._track_albedo_table.shape[-1]
+                    saved = upgrade_albedo_table(saved, k)
                     with torch.no_grad():
-                        self._track_albedo_table.copy_(
-                            tables["albedo"].to(self._track_albedo_table.device)
-                        )
+                        self._track_albedo_table.copy_(saved)
                 if "log_scale" in tables and hasattr(self, "_track_log_scale_table"):
                     with torch.no_grad():
                         self._track_log_scale_table.copy_(
@@ -715,6 +727,26 @@ class LayeredGaussians(nn.Module):
             elif "layered_track_state" in checkpoint:
                 layered_track_state = checkpoint["layered_track_state"]
             if layered_track_state is not None and len(layered_track_state) > 0:
+                # P1.3b back-compat: ``_track_albedo_table`` also rides in
+                # ``layered_track_state`` (safety-net duplicate of the
+                # track_optim_state copy). load_state_dict raises on a shape
+                # mismatch even with strict=False, so reshape an old [K, 3]
+                # (or differently-sized [K, 3, k']) saved table to the
+                # current model's [K, 3, k] before loading.
+                if (
+                    "_track_albedo_table" in layered_track_state
+                    and hasattr(self, "_track_albedo_table")
+                ):
+                    saved_alb = layered_track_state["_track_albedo_table"]
+                    if tuple(saved_alb.shape) != tuple(
+                        self._track_albedo_table.shape
+                    ):
+                        layered_track_state = dict(layered_track_state)
+                        layered_track_state["_track_albedo_table"] = (
+                            upgrade_albedo_table(
+                                saved_alb, self._track_albedo_table.shape[-1]
+                            )
+                        )
                 missing_keys, unexpected_keys = self.load_state_dict(
                     layered_track_state, strict=False,
                 )
@@ -993,6 +1025,20 @@ class LayeredGaussians(nn.Module):
                 getattr(self, "_track_log_scale_table", None)
                 if apply_dyn_bias else None
             )
+            # P1.3b: resolve the current camera-frame index ``t`` and total
+            # frame count ``N_t`` once, for the Fourier albedo evaluation.
+            # Reuses the same pose-index resolution as the dynamic transform
+            # so the time-varying colour is aligned with the cuboid pose at
+            # this frame. Only needed when the albedo table is a 3D Fourier
+            # tensor; the legacy [K, 3] (k=1) path skips the cos basis.
+            albedo_frame_idx = 0
+            albedo_n_frames = 1
+            if albedo_table is not None and albedo_table.dim() == 3 \
+                    and albedo_table.shape[-1] > 1:
+                albedo_frame_idx = self._resolve_pose_idx(timestamp_us, frame_id)
+                tids_for_F = self._iter_track_tids()
+                if tids_for_F:
+                    albedo_n_frames = self._get_track_pose_F(tids_for_F[0])
             for n in _FORWARD_PARAM_NAMES:
                 v = getattr(layer, n)
                 if n == "positions" and transformed_positions is not None:
@@ -1020,10 +1066,25 @@ class LayeredGaussians(nn.Module):
                     and albedo_table is not None
                     and v.shape[0] > 0
                 ):
-                    # V3-L8: per-track RGB bias on DC SH (features_albedo
-                    # is the [N, 3] DC band). Tables zero-init → identity
-                    # until the trainer flips requires_grad at warmup.
-                    bias = albedo_table[layer.track_ids.to(albedo_table.device)]
+                    # V3-L8 / P1.3b: per-track RGB bias on DC SH
+                    # (features_albedo is the [N, 3] DC band). Tables
+                    # zero-init → identity until the trainer flips
+                    # requires_grad at warmup. P1.3b: the table is [K, 3, k]
+                    # Fourier coefficients; the bias is the cosine series
+                    # Σ_i f_i·cos(i·π·t/N_t) evaluated at this frame. k==1
+                    # collapses to the DC-only gather (cos(0)=1).
+                    if albedo_table.dim() == 3:
+                        bias = fourier_albedo_bias(
+                            albedo_table,
+                            layer.track_ids,
+                            frame_id=albedo_frame_idx,
+                            n_frames=albedo_n_frames,
+                        )
+                    else:
+                        # Legacy [K, 3] table (pre-P1.3b in-memory shape).
+                        bias = albedo_table[
+                            layer.track_ids.to(albedo_table.device)
+                        ]
                     v = v + bias.to(v.device, v.dtype)
                 elif (
                     n == "scale"
@@ -1506,7 +1567,14 @@ class LayeredGaussians(nn.Module):
         if extra.get("optimize_track_albedo"):
             if hasattr(self, "_track_albedo_table"):
                 delattr(self, "_track_albedo_table")
-            albedo = nn.Parameter(torch.zeros(K, 3, dtype=torch.float32,
+            # P1.3b: per-track albedo bias is a truncated cosine Fourier
+            # series over the camera-frame time axis (4D-SH). The table grows
+            # from [K, 3] to [K, 3, k] where k = n_fourier_albedo_terms.
+            # k == 1 (default) is byte-identical to the P1.3 DC-only path
+            # (cos(0)=1 → frame-independent f_0). Zero-init keeps it identity
+            # until the warmup gate flips requires_grad.
+            k = self._n_fourier_albedo_terms()
+            albedo = nn.Parameter(torch.zeros(K, 3, k, dtype=torch.float32,
                                               device=device))
             albedo.requires_grad_(False)
             self.register_parameter("_track_albedo_table", albedo)
@@ -1646,6 +1714,18 @@ class LayeredGaussians(nn.Module):
         extra = getattr(spec, "extra", {}) or {}
         key = "track_albedo_lr" if which == "albedo" else "track_scale_lr"
         return float(extra.get(key, 1.0e-5))
+
+    def _n_fourier_albedo_terms(self) -> int:
+        """P1.3b: number of Fourier terms ``k`` for the time-varying albedo.
+
+        Read from ``dynamic_rigids`` LayerSpec.extra; defaults to 1 (DC-only,
+        byte-identical to P1.3). Clamped to ``>= 1``.
+        """
+        spec = self._dyn_spec()
+        if spec is None:
+            return 1
+        extra = getattr(spec, "extra", {}) or {}
+        return max(1, int(extra.get("n_fourier_albedo_terms", 1)))
 
     def maybe_activate_track_params(self, global_step: int) -> bool:
         """Warmup gate for V3-L8/L9. Flip ``requires_grad`` on the per-track

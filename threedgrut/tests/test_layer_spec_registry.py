@@ -157,6 +157,7 @@ def test_v3_extra_keys_routed_to_extra_dict():
                     "track_warmup_steps": 500,
                     "track_albedo_lr": 1.0e-5,
                     "track_scale_lr": 1.0e-5,
+                    "n_fourier_albedo_terms": 4,  # P1.3b
                 },
             },
         }
@@ -170,6 +171,7 @@ def test_v3_extra_keys_routed_to_extra_dict():
     assert s.extra.get("track_warmup_steps") == 500
     assert s.extra.get("track_albedo_lr") == 1.0e-5
     assert s.extra.get("track_scale_lr") == 1.0e-5
+    assert s.extra.get("n_fourier_albedo_terms") == 4  # P1.3b
 
 
 def test_v3_extra_keys_default_off_when_absent():
