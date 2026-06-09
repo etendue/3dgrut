@@ -354,7 +354,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | R3 | asset-harvester 坐标/尺度对齐错 | canonical 朝向 / 米制还原 bug | 车浮空/错位 | AH-0 先 1-2 track 目视验证；cuboids_dims 已证可用 | AH-1 |
 | R4 | 变长粒子注入破坏 ckpt/MCMC | optimizer/strategy resync 漏 | 训练崩/不收敛 | 先写注入 roundtrip 单测再上 A800（CLAUDE.md 纪律 C.10） | AH-2 |
 | R5 | DriveStudio SMPL 链路重 | HMR2@NCore 跑不通 / 移植量大 | Phase 2 拖期 | P2.1 rigid 垫脚石先证价值；P2.2 可单开 spec | P2.2/2.3 |
-| R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控 | P1.4 |
+| R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控。**2026-06-05 实测：freeze 式 protected warm-start 否定**（10k 追平、未观测面 spiky，见 § 6）；真瓶颈=asset 质量+未观测面缺约束 → 走约束式/re-harvest，**勿再冻结** | P1.4 |
 | R7 | resume 续训退化（已坐实） | MCMC+多层 resume | cc −1.92 | **所有 baseline 对照从头训** | §0.4 |
 | R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | BUG-1 只修 playground overlay，⛔ 勿碰 3D pose/metric 链路 | BUG-1 |
 
@@ -400,6 +400,12 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **测试**：Mac 13 Fourier 纯函数 + 16 registry；inceptio GPU 全套 passed。ckpt 端到端 `[70,3,4]`、一次谐波非零（warmup 后真在优化）。**viser_gui_4d 实测能正确加载渲染 k=4 ckpt**（共享 `timestamp_us→_resolve_pose_idx` 时间链路，与动态 pose 同源）。
   - **30k A/B（k=1 DC vs k=4 Fourier，lidar off，nw=24，inceptio ~8.8 it/s）**：class_psnr **k1 DC 24.20** vs **k4 Fourier 24.13**（−0.07，噪声内）→ **Fourier 在本 clip 无增益**。
   - **结论**：实现正确（k=1 退化验证）、不是过/欠拟合（额外参数仅 +630 个 float，可忽略）——**是本 20s clip 车辆 albedo 时变信号不足**（全局曝光已被 BilateralGrid 吃掉，无强阴影穿越/隧道/夜灯）。**default k=1 关闭、保留能力 gated 留未来强光照变化 clip**。旁注：lidar off 实测 ~8.8 it/s（vs lidar on ~4），坐实「lidar depth 是数据管线速度+内存大头」。
+- **2026-06-05 P1.4 protected warm-start — 🔴 负面结论备案（防重跑冻结实验）**：完整实现 + AH-0/1/2 引擎在 **PR #18（`claude/interesting-mccarthy-03c6be`，未合 main，改动大）**，此处只把否定结论落 main 以免他人重蹈。
+  - **背景**：asset-harvester warm-start 注入引擎已跑通，**AH-0 5k 感知 gate 正向**（automobile class_psnr +0.730，cc 不退；vs 未注入 truck +0.348 → 净增 ~+0.38）。
+  - **提质实验（protected，C1–C5）**：warmstart 点 5k→50k + 把 warm track 排除出 MCMC relocate dead set + 冻结其 perturb noise + `dynamic_rigids` 整层豁免 opacity 正则 + 观测面留 Adam 精修，10k iters。
+  - **A800 10k A/B 结果**：**automobile class_psnr Δ=+0.023（持平）**，heavy_truck −0.968（C3 整层豁免误伤），mean_class −0.036。**5k 的 +0.730 warm 优势在 10k 被 LiDAR-only 追平消失**；viser 看**未观测面严重 spiky / 白玻璃碴**。
+  - **根因（修正 spec 前提）**：spec 假设「MCMC 侵蚀 asset」是**反的**——diffusion 补全的 asset 本身 spiky，MCMC+opacity 正则其实在**清理**它；C2 冻 perturb/relocate + C3 关 opacity 衰减恰好**锁死 spiky 并挡住清理**。frozen drop-in 离线手术佐证：原始 asset 几何连贯但**悬浮+光照失配**（→ 必须训练而非冻结）。**真瓶颈 = asset 质量 + 未观测面缺约束，不是 MCMC 侵蚀。**
+  - **结论**：**freeze 式 protected warm-start 否定，勿再冻结**。后续若再试 P1.4 走「**约束式**」（scale clamp + anisotropy 上限 + opacity floor，有界非冻结）或先提 asset 质量（re-harvest / 协方差对齐）。代码默认关闭、baseline 字节等价。
 
 ---
 
