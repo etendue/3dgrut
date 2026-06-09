@@ -309,5 +309,6 @@ def test_lane_restrict_mask_limits_region():
 
 
 def test_lane_class_ids_guard():
-    """钉死 lane 类 id（Mapillary palette 对账后改这里 + 本断言，同 commit）。"""
-    assert LANE_CLASS_IDS == (24,)
+    """钉死 lane 类 id：Mapillary Vistas v1.2 的 23=Lane Marking-Crosswalk /
+    24=Lane Marking-General（2026-06-09 inceptio 对账 id2label 实测）。"""
+    assert LANE_CLASS_IDS == (23, 24)

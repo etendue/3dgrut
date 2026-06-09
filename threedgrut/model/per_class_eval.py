@@ -54,9 +54,11 @@ ROAD_CLASS_IDS: Tuple[int, ...] = (0, 1)
 # render.py 调用点可经 conf.render.lane_band_px 覆盖。
 DEFAULT_LANE_BAND_PX: int = 8
 
-# Mapillary "Lane Marking" 类 id。占位 (24,)，待 GPU 上读一帧 unique() 对
-# reader.class_palette 对账后定值；guard test 同 commit 更新。
-LANE_CLASS_IDS: Tuple[int, ...] = (24,)
+# Mapillary Vistas v1.2 road-marking 类 id（对账自 facebook/mask2former-swin-
+# large-mapillary-vistas-semantic 的 id2label，2026-06-09 inceptio 实测）：
+#   23 = "Lane Marking - Crosswalk", 24 = "Lane Marking - General"。
+# 两类都是路面油漆标线（sharp edge），一并纳入 lane 锐度门以最大化覆盖。
+LANE_CLASS_IDS: Tuple[int, ...] = (23, 24)
 
 # (a, b) are [1, 3, H, W] in [0, 1]; returns a scalar (tensor or float).
 LpipsFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
