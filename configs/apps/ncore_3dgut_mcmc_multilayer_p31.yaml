@@ -1,0 +1,36 @@
+# @package _global_
+# ===========================================================================
+#  Phase 3 P3.1 preset — multilayer + lane 监督 + 放宽 road 几何
+# ===========================================================================
+# 继承 multilayer (v3 baseline 字节等价扁平版)，叠加 P3.1-A 第一刀：
+#   * dataset.load_lane_masks = true   → train+eval 加载前视 lane mask
+#   * trainer.lambda_lane = 0.05       → lane-band 锐度 loss（Sobel 梯度幅值 L1）
+#   * trainer.lambda_road_eff_rank = 0 → 放开 V3-R1.3 eff-rank 抑制（D2，本就 0）
+#   * layers.overrides.road.{anisotropy_ratio_max, scale_xy_max} 放宽
+#       8→30 / 0.3→0.6：允许 road 高斯拉成沿车道线细长条
+#       （**与 V3-R1.2/R1.3 抑制细长高斯反向**，A/B 权衡，T5 须同时看 novel_lpips）
+#
+# ⚠️ lane loss 与放宽几何是两个独立变量 → A/B 建议分别消融定位增益来源：
+#     lambda_lane only / 放宽几何 only / 两者叠加。
+# ⚠️ depth 配方随机器（CLAUDE.md 2026-06-09）：
+#     - A800 跑：保持 lidar-on（对照 P3.0 锚 grad_corr 0.693）。
+#     - inceptio 跑：CLI 加 depth-off 三 override + num_workers=10，须先重立 depth-off baseline 锚。
+#       trainer.use_lidar_depth=false trainer.use_depth_prior=false dataset.load_lidar_depth_map=false
+# ===========================================================================
+
+defaults:
+  - ncore_3dgut_mcmc_multilayer
+  - _self_
+
+dataset:
+  load_lane_masks: true        # train(前视 gate)+eval 加载 lane mask
+
+trainer:
+  lambda_lane: 0.05            # A/B sweep {0.02, 0.05, 0.1}
+  lambda_road_eff_rank: 0.0    # 放开 eff-rank 抑制（D2；baseline 本就 0）
+
+layers:
+  overrides:
+    road:
+      anisotropy_ratio_max: 30.0   # 8 → 30（允许细长车道线条）
+      scale_xy_max: 0.6            # 0.3 → 0.6（更长的条）
