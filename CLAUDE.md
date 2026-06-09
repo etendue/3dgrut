@@ -109,13 +109,35 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd
 | inceptio / 62GB | 62GB | **≤ 10**（→ ~39GB） | nw=24 OOM，nw=10 稳 |
 | 32GB 机 | 32GB | ≤ 4-6 | — |
 
-**用法**：小内存机一律 CLI 覆盖 `num_workers=10`（顶层 key，直接覆盖不带 `+`）。**不要为省内存关掉 `use_lidar_depth`**——baseline（cc 25.79）就用它，关了 A/B 不可比。
+**用法**：小内存机一律 CLI 覆盖 `num_workers=10`（顶层 key，直接覆盖不带 `+`）。
+
+> ⚠️ **2026-06-09 大g 决策（覆盖旧「不要关 use_lidar_depth」指令）**：**inceptio 上训练默认关 LiDAR depth + DepthAnythingV2 深度监督**（`use_lidar_depth=false` / `use_depth_prior=false` / `load_lidar_depth_map=false`），因为 inceptio 62GB 内存装不下深度图缓存——既是 num_workers OOM 的内存大头，深度图加载也是数据管线瓶颈、加了 depth 训练明显变慢。
+>
+> **原则（大g）**：**A800 内存多 → 加 depth 约束（lidar-on）；inceptio 内存不够、加 depth 又拖慢 → depth-off，并同步调小 `num_workers`。** 两台机各自统一配方，A/B 不跨机混搭。
+> - **baseline 与实验一律统一 depth-off** → inceptio **内部** A/B 仍单变量可比。
+> - 但与 A800 lidar-on 立锚的数字（如 cc_psnr_masked 25.79 / lane grad_corr 0.693 / 车 class_psnr 24.04）**不可直接跨机比** → 在 inceptio 上要先重立一条 **depth-off baseline 锚点**，A/B 以它为对照。
+> - 旧「不要为省内存关 `use_lidar_depth`，否则 A/B 不可比」那句**仅在 A800（2TB 内存）成立**，inceptio 不适用。
 
 **附带现象（同一根因）**：RTX 4090 上 GPU 利用率只有 ~30-50%（不是 100%），因为深度图 + sseg 的**数据管线喂不满快卡**（数据加载瓶颈，非 GPU 慢）。降 num_workers 省内存的代价就是数据并行度更低、GPU 更饿；这是内存 vs 速度的权衡，**不影响训练正确性 / 最终 metric**。本地 NVMe 已排除慢盘因素。
 
 **OOM 防线**：跑长训练前可挂一个 RAM guard（每 30s 采 `free -g`，超阈值 `pkill` + 记日志），避免静默 OOM 浪费 40 min（2026-06-05 用过 `/tmp/p1_2_ramguard.sh`）。
 
 **长任务启动用「proven inline nohup」模式**（`ssh inceptio "... && nohup python train.py ... > log 2>&1 & echo PID \$!"`），inceptio ssh 偶发抖动（exit 255）；`setsid bash 脚本 & disown` 这种复杂形式在抖动下容易半路夭折，inline nohup + 末尾 `echo PID` 最稳。
+
+### 🌐 访问外网（mihomo 代理）
+
+inceptio 直连外网受限；要拉 HF 模型 / pip / git clone 等联网操作需先起 mihomo 代理：
+
+```bash
+# 1. 启动代理（后台），监听 127.0.0.1:7890
+ssh inceptio 'cd /home/inceptio/repo/mihomo_p && nohup ./mihomo -f mihomo.yaml > /tmp/mihomo.log 2>&1 & echo PID $!'
+
+# 2. 联网命令前在同一条 ssh 内导出代理 env（纯本地训练不需要）
+ssh inceptio 'export http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890 && <要联网的命令>'
+```
+
+- 代理路径：`/home/inceptio/repo/mihomo_p/`，配置文件 `mihomo.yaml`。
+- **只在需要联网的命令前导出 `http_proxy`/`https_proxy`**；数据/权重已在本地的训练不要带代理（避免本地回环也走代理）。
 
 ### 代码同步（Mac → inceptio）
 
