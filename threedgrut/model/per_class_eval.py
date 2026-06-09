@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Iterable, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from threedgrut.model.class_psnr import compute_psnr_in_mask
 
@@ -48,6 +49,11 @@ DEFAULT_ACTOR_CLASS_SPECS: Dict[str, Tuple[int, ...]] = {
 # Road + sidewalk — the road-crop region for P0.3 (mirror ROAD_CLASS_IDS).
 ROAD_CLASS_IDS: Tuple[int, ...] = (0, 1)
 
+# Phase 3 lane band 半宽（px）。lane 条纹亚像素~几像素；N=8 → band ~17px 宽，
+# 让 LPIPS 有足够空间上下文判断"条纹锐不锐 / 位置对不对"，又不被背景淹没。
+# render.py 调用点可经 conf.render.lane_band_px 覆盖。
+DEFAULT_LANE_BAND_PX: int = 8
+
 # (a, b) are [1, 3, H, W] in [0, 1]; returns a scalar (tensor or float).
 LpipsFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
@@ -59,6 +65,22 @@ def class_mask_from_sseg(sseg: torch.Tensor, ids: Iterable[int]) -> torch.Tensor
     for i in ids:
         mask |= sseg_long == int(i)
     return mask
+
+
+def dilate_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
+    """``[H, W]`` bool/float mask → 方形结构元（边长 2*radius+1）膨胀后的 bool mask。
+
+    纯 torch（``F.max_pool2d``）→ 本模块保持 scipy-free / Mac 可测。
+    ``radius <= 0`` 原样返回（转 bool）。形状不变（padding=radius, stride=1）。
+    """
+    if radius <= 0:
+        return mask.to(torch.bool)
+    m = mask.to(torch.float32).unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+    k = 2 * radius + 1
+    # max_pool2d 用 0 填充边缘（非 -inf），但 mask 是 {0,1}，0 不会超过真实
+    # True 像素 → 边界不会凭空产生 True（角点膨胀只长界内邻域）。
+    dil = F.max_pool2d(m, kernel_size=k, stride=1, padding=radius)
+    return dil[0, 0] > 0.5
 
 
 def compute_lpips_in_mask(

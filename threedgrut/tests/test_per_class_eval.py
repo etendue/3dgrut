@@ -160,3 +160,33 @@ def test_default_actor_specs_match_ncore_semantic_table():
     assert DEFAULT_ACTOR_CLASS_SPECS["rider"] == (12,)
     assert DEFAULT_ACTOR_CLASS_SPECS["bicycle"] == (18,)
     assert tuple(sorted(ROAD_CLASS_IDS)) == (0, 1)
+
+
+# -----------------------------------------------------------------------------
+# dilate_mask — torch-pure 膨胀（细 lane mask → dilated band）
+# -----------------------------------------------------------------------------
+from threedgrut.model.per_class_eval import dilate_mask  # noqa: E402
+
+
+def test_dilate_mask_grows_by_radius():
+    m = torch.zeros(11, 11, dtype=torch.bool)
+    m[5, 5] = True
+    d = dilate_mask(m, 2)  # 5x5 方形结构元
+    assert d.dtype == torch.bool
+    assert d.shape == (11, 11)
+    assert int(d.sum().item()) == 25
+
+
+def test_dilate_mask_radius_zero_is_identity():
+    m = torch.zeros(8, 8, dtype=torch.bool)
+    m[3, 4] = True
+    d = dilate_mask(m, 0)
+    assert d.dtype == torch.bool
+    assert torch.equal(d, m)
+
+
+def test_dilate_mask_clamps_at_border():
+    m = torch.zeros(6, 6, dtype=torch.bool)
+    m[0, 0] = True  # 角点，radius=2 只有界内 3x3=9 存活
+    d = dilate_mask(m, 2)
+    assert int(d.sum().item()) == 9
