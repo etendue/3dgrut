@@ -75,8 +75,8 @@ kanban
         [P2.1 行人 rigid track 垫脚石]
         [P2.2 DriveStudio SMPL-LBS 移植进 dynamic_deformables]
         [P2.3 行人 SMPL 输入链路（HMR2@NCore + 全局运动 + 对齐）]
-        [P3.1 road 当2D纹理: 定向加密 / 平面 feature grid]
-        [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选]
+        [P3.1 road 当2D纹理: 定向加密 / 平面 feature grid（plan 就绪 阶梯 loss→加密）]
+        [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选（plan 就绪 gate P3.1）]
         [PCAP MCMC per-layer cap bg→actor 重分配]
         [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
         [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
@@ -119,8 +119,8 @@ kanban
 | **P2.2** ★ | 2 | **DriveStudio SMPL-LBS 移植** 进空壳 `dynamic_deformables` 层 — canonical 高斯长在 SMPL mesh，per-frame 24 关节 LBS 蒙皮 | Stage 16 **改机制**（原 hash-grid+MLP→SMPL） | 6 | ⬜ | — |
 | **P2.3** | 2 | 行人 SMPL 输入链路 — HMR2 在 NCore 相机跑通 + 全局运动估计 + 坐标系对齐 | 新 | 3 | ⬜ | — |
 | **P3.0** ★ | 3 | **车道线测量门（方案 A，对标 Phase 0）** — 自跑 Mapillary lane sseg（[`gen_lane_sseg.py`](scripts/gen_lane_sseg.py)）+ `compute_lane_metrics`（dilated-band + 梯度锐度）接通 render/dataset；baseline 立锚（纯 eval 无训练） | 新（spec 2026-06-09） | 1 | ✅ | `per_class_eval.py`(+lane) / `datasetNcore.py` / `render.py` / scripts；**grad_corr 0.693**，守护线零回归 |
-| **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜ | — |
-| **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜ | v3 可选 |
+| **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜（plan 就绪） | [plan↗](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md) 阶梯 loss→加密 |
+| **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜（plan 就绪） | v3 可选·见同 plan（gate=P3.1） |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
@@ -279,6 +279,10 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 |---|---|---|
 | P3.1 | road 当 2D 纹理：沿车道线定向加密 / 平面 feature grid（**非 Fourier 时间维**）；可复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | `road_region.py`, 致密化策略 |
 | P3.2 | 遮挡式 bg（v3 可选）：现 `bg_road_penalty` / `bg_cuboid_loss` 的「杀死」机制改「只 mask loss 不杀粒子」+ 深度合成 → 保 actor 移开帧路面连续（同时为 v4 打底） | `bg_cuboid_loss.py`, `road_region.py` |
+
+> **执行 plan（2026-06-09 展开为可执行阶梯）**：[`p31-p32-road-lane plan`](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md)（11 task，TDD，沿用 P3.0 plan 格式）。
+> - **P3.1 阶梯**：① lane-band 监督 loss（band 内 Sobel 梯度幅值 L1，复用 P3.0 `_grad_mag`/`dilate_mask`；KPI `grad_corr` 只读、loss 不复用 Pearson 防 Goodhart）+ 放宽 road 各向异性/scale（**与 V3-R1.2/R1.3 抑制细长高斯反向**，A/B 权衡，须看 novel_lpips）→ 便宜先证 grad_corr 可被推过 0.693；② MCMC 定向加密（near-lane `valid_indices` 偏置，仅 road 层，gate=①见效）。平面 feature grid 留 stretch/v4。
+> - **P3.2**（v3 可选，gate=P3.1 见效）：penalty kill→mask-only（保留 bg 粒子不杀）+ 深度合成（Task9 先 Explore 渲染合成路径再动手）。
 
 **验收**：车道线 `mean_lane_grad_corr`（+ band_psnr / band_lpips 辅证）相对 2026-06-09 门锚（grad_corr 0.693）改善；road 区不再被 background 偷渲（延续 V3-R2 成果）。
 
