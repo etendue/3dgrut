@@ -171,7 +171,7 @@ def discover_aux_path(clip_dir: Union[str, Path], aux_type: str) -> Optional[Pat
 
     Args:
         clip_dir: clip directory (containing ``pai_<clip>.json``).
-        aux_type: one of ``"sseg" / "lidar-sseg" / "lidar-camvis" / "egomask" / "depth"``.
+        aux_type: one of ``"sseg" / "lane" / "lidar-sseg" / "lidar-camvis" / "egomask" / "depth"``.
 
     Returns:
         Path object if exactly one match; None if no match. Raises ValueError
