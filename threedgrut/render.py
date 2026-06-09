@@ -176,8 +176,12 @@ class Renderer:
             conf["render"]["use_difix"] = True
         # Phase 3 lane: inject dataset.load_lane_masks so a pre-trained baseline
         # ckpt (whose embedded conf predates lane) loads *.aux.lane.zarr.itar at
-        # eval → render_all() emits mean_lane_*. Same dict-style injection as
-        # eval_cameras / use_difix above (old ckpts lack the key).
+        # eval → render_all() emits mean_lane_*. Unlike conf.render (where
+        # eval_cameras already exists), conf.dataset is struct-locked, so adding
+        # a brand-new key raises ConfigKeyError — open the struct first.
+        if load_lane_masks or lane_band_px is not None:
+            from omegaconf import OmegaConf
+            OmegaConf.set_struct(conf, False)
         if load_lane_masks:
             conf["dataset"]["load_lane_masks"] = True
         if lane_band_px is not None:
