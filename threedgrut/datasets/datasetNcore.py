@@ -970,6 +970,23 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 # derive any class mask from one passthrough — person/rider/
                 # bicycle (P0.2) + road (P0.3). Eval-only; training never reads it.
                 batch_dict["semantic_sseg"] = to_torch(sseg, device="cpu")
+                # Phase 3 P3.1: lane 监督在 train 分支也加载（P3.0 只在 val/test）。
+                # lane 是前视-only 产物：非前视相机/帧不在 lane itar → read() 抛
+                # KeyError → 软失败跳过（镜像 val 分支）。复用 sseg 的 END-ts +
+                # downsample NEAREST resize；下游 lane loss 条件式「有才算」。
+                if self.load_lane_masks and self._lane_reader is not None:
+                    try:
+                        lane = self._lane_reader.read(sampled_camera_id, ts_us)  # [H_full, W_full] uint8
+                    except KeyError:
+                        lane = None
+                    if lane is not None:
+                        if self.downsample < 1.0:
+                            _lw = int(round(lane.shape[1] * self.downsample))
+                            _lh = int(round(lane.shape[0] * self.downsample))
+                            lane = cv2.resize(
+                                lane, (_lw, _lh), interpolation=cv2.INTER_NEAREST
+                            )
+                        batch_dict["semantic_lane_sseg"] = to_torch(lane, device="cpu")
 
             # T11.C1: per-frame LiDAR depth map → batch["lidar_depth_map"].
             # Keyed by the same END timestamp the dump script wrote (matches

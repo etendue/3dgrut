@@ -38,6 +38,7 @@ from threedgrut.model.bg_cuboid_loss import (
     lambda_schedule,
 )
 from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
+from threedgrut.model.lane_loss import compute_lane_sharpness_loss
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 from threedgrut.model.road_reg import compute_effective_rank_loss
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
@@ -1291,6 +1292,22 @@ class Trainer3DGRUT:
                     self.model.layers["road"].scale
                 )
 
+        # ---- Phase 3 P3.1 lane-band sharpness（前视-only，有 lane 才算，仿 lidar 条件式）----
+        # lambda_lane=0（默认）→ 整块跳过 → baseline 字节等价。lane 仅前视帧加载
+        # （datasetNcore train 分支软失败），多数帧无 semantic_lane_sseg → 不贡献。
+        loss_lane = torch.zeros((), device=self.device)
+        lambda_lane = float(
+            trainer_conf.get("lambda_lane", 0.0) if hasattr(trainer_conf, "get")
+            else getattr(trainer_conf, "lambda_lane", 0.0)
+        )
+        if lambda_lane > 0.0 and image_infos is not None and "semantic_lane_sseg" in image_infos:
+            with torch.cuda.nvtx.range("loss-lane"):
+                _lane = image_infos["semantic_lane_sseg"]
+                lane2d = _lane[0] if _lane.dim() == 3 else _lane            # [H,W]
+                pred_img = rgb_pred[0] if rgb_pred.dim() == 4 else rgb_pred  # [H,W,3]
+                gt_img = rgb_gt[0] if rgb_gt.dim() == 4 else rgb_gt
+                loss_lane = compute_lane_sharpness_loss(pred_img, gt_img, lane2d)
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -1307,6 +1324,7 @@ class Trainer3DGRUT:
             + self.lambda_bg_lidar * loss_bg_lidar
             + self.lambda_depth_prior * loss_depth_prior
             + lambda_road_eff_rank * loss_road_eff_rank
+            + lambda_lane * loss_lane
         )
         return dict(
             total_loss=loss,
@@ -1325,6 +1343,7 @@ class Trainer3DGRUT:
             bg_lidar_loss=self.lambda_bg_lidar * loss_bg_lidar,
             depth_prior_loss=self.lambda_depth_prior * loss_depth_prior,
             road_eff_rank_loss=lambda_road_eff_rank * loss_road_eff_rank,
+            lane_loss=lambda_lane * loss_lane,
         )
 
     # ---------------------------------------------------------------- T8/B3
