@@ -141,6 +141,7 @@ def make(name: str, config, ray_jitter):
                 simplejpeg_fastupsample=config.dataset.get("simplejpeg_fastupsample", False),
                 lidar_color_generic_data_name=config.dataset.get("lidar_color_generic_data_name", "rgb"),
                 load_aux_masks=config.dataset.get("load_aux_masks", False),  # T3.1.b
+                load_lane_masks=config.dataset.get("load_lane_masks", False),  # Phase 3 lane
                 load_lidar_depth_map=config.dataset.get("load_lidar_depth_map", False),  # T11.C1
                 lidar_depth_aux_root=config.dataset.get("lidar_depth_aux_root", None),  # T11.C1
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1
@@ -181,6 +182,7 @@ def make(name: str, config, ray_jitter):
                 simplejpeg_fastupsample=config.dataset.get("simplejpeg_fastupsample", False),
                 lidar_color_generic_data_name=config.dataset.get("lidar_color_generic_data_name", "rgb"),
                 load_aux_masks=config.dataset.get("load_aux_masks", False),  # T3.1.b (val)
+                load_lane_masks=config.dataset.get("load_lane_masks", False),  # Phase 3 lane
                 load_lidar_depth_map=config.dataset.get("load_lidar_depth_map", False),  # T11.C1 (val)
                 lidar_depth_aux_root=config.dataset.get("lidar_depth_aux_root", None),  # T11.C1 (val)
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1 (val)
@@ -262,6 +264,7 @@ def make_test(name: str, config):
                 simplejpeg_fastupsample=config.dataset.get("simplejpeg_fastupsample", False),
                 lidar_color_generic_data_name=config.dataset.get("lidar_color_generic_data_name", "rgb"),
                 load_aux_masks=config.dataset.get("load_aux_masks", False),  # T11.F1 (test) — mirror make_train/val
+                load_lane_masks=config.dataset.get("load_lane_masks", False),  # Phase 3 lane
                 load_lidar_depth_map=config.dataset.get("load_lidar_depth_map", False),  # T11.F1 (test): feeds mean_lidar_psnr
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.F1 (test)
             )

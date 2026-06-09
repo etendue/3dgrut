@@ -91,6 +91,7 @@ layers:
 # ─── 数据集 (T8.5.7 / V3-E4 切到对称 5-cam ring) ────────────────────────
 dataset:
   load_aux_masks: true   # T3.1.b: sseg + lidar-sseg readers (v2_road)
+  load_lane_masks: false   # Phase 3 lane GT：eval 时 CLI 覆盖 dataset.load_lane_masks=true
 
   # ── Stage 11 (T11): image-space depth supervision inputs (默认 OFF, opt-in) ──
   # 读 scripts/dump_lidar_depth_map.py / dump_depth_priors.py 预 dump 的

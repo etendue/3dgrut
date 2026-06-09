@@ -33,6 +33,9 @@ from threedgrut.model.per_class_eval import (
     DEFAULT_ACTOR_CLASS_SPECS,
     ROAD_CLASS_IDS,
     compute_per_class_metrics,
+    compute_lane_metrics,
+    LANE_CLASS_IDS,
+    DEFAULT_LANE_BAND_PX,
 )
 from threedgrut.correction.difix import DifixPostProcessor
 from threedgrut.model.model import MixtureOfGaussians
@@ -427,6 +430,18 @@ class Renderer:
         per_class_lpips: dict[str, list] = {}
         per_class_npix: dict[str, list] = {}
 
+        # Phase 3 lane — 独立 lane 产物（semantic_lane_sseg）的候选指标累加器。
+        # 限前视相机（risk L2：lane 最清处）。无 lane 产物 → 累加器空 →
+        # metrics.json 字节等价（与 per_class 同样的"缺即不写"语义）。
+        # 前视相机白名单（risk L2，lane 最清处）。可经 conf.render.lane_eval_cameras
+        # override；默认仅前视宽角。
+        lane_eval_cameras = list(self.conf.render.get("lane_eval_cameras", ["camera_front_wide_120fov"]))
+        lane_band_px = int(self.conf.render.get("lane_band_px", DEFAULT_LANE_BAND_PX))
+        lane_metric_keys = ("lane_band_lpips", "lane_band_psnr", "lane_raw_psnr", "lane_grad_corr")
+        lane_acc: dict[str, list] = {}
+        lane_npix_acc: list = []
+        lane_band_npix_acc: list = []
+
         # T8.5.3 / V3-E3 — novel-view perturbation accumulator. Per-mode
         # LPIPS list (vs anchor GT). PSNR at these magnitudes is dominated
         # by parallax shift so we report LPIPS only (perceptual robust to
@@ -754,6 +769,21 @@ class Renderer:
                         per_class_lpips.setdefault(_name, []).append(_d["lpips"])
                     per_class_npix.setdefault(_name, []).append(_d["n_pixels"])
 
+            # Phase 3 lane：独立 lane 产物 + 膨胀 band 指标。限前视相机。
+            # 缺 semantic_lane_sseg（未开 load_lane_masks / 非前视）→ 跳过 → 无新字段。
+            _lane = (getattr(gpu_batch, "image_infos", None) or {}).get("semantic_lane_sseg")
+            if _lane is not None and _cam_id in lane_eval_cameras:
+                lane_one = _lane[0] if _lane.dim() == 3 else _lane  # [H, W]
+                lm = compute_lane_metrics(
+                    pred_rgb_full[0], rgb_gt_full[0], lane_one, LANE_CLASS_IDS,
+                    band_px=lane_band_px, lpips_fn=criterions.get("lpips"),
+                )
+                for _k in lane_metric_keys:
+                    if lm[_k] is not None:
+                        lane_acc.setdefault(_k, []).append(lm[_k])
+                lane_npix_acc.append(lm["lane_n_pixels"])
+                lane_band_npix_acc.append(lm["lane_band_n_pixels"])
+
             # T8.5.7 / V3-E4: mirror the 12 metric lists into the per-camera
             # dict using the last appended value of each. Skipped when the
             # dataset doesn't set Batch.camera_id (NeRF/Colmap) so old
@@ -947,6 +977,19 @@ class Renderer:
                 metrics_json[f"mean_{_name}_lpips"] = float(np.mean(_lv)) if _lv else None
                 metrics_json[f"{_name}_n_records"] = int(len(_pv))
                 metrics_json[f"{_name}_total_pixels"] = int(np.sum(_nv)) if _nv else 0
+
+        # Phase 3 lane 指标聚合。仅当 lane 产物被加载（lane_npix_acc 非空）→
+        # 否则整块缺省，metrics.json 字节等价（守护线零回归）。
+        if lane_npix_acc:
+            for _k in lane_metric_keys:
+                _v = lane_acc.get(_k, [])
+                metrics_json[f"mean_{_k}"] = float(np.mean(_v)) if _v else None
+            # 注：lane_n_records = 评测的前视帧数（含 lane 像素=0 的帧）；与各
+            # mean_lane_* 的分母（仅该指标非 None 的帧）可能不同——前者是"测了多少
+            # 前视帧"，后者是"其中多少帧该指标有效"。下游 A/B 脚本勿混淆二者。
+            metrics_json["lane_n_records"] = int(len(lane_npix_acc))
+            metrics_json["lane_total_pixels"] = int(np.sum(lane_npix_acc))
+            metrics_json["lane_band_total_pixels"] = int(np.sum(lane_band_npix_acc))
 
         # T11.F1: mean LiDAR-domain depth PSNR. Only written when at least one
         # frame had valid LiDAR coverage (lidar_psnrs non-empty); absent on
