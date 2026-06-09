@@ -190,3 +190,49 @@ def test_dilate_mask_clamps_at_border():
     m[0, 0] = True  # 角点，radius=2 只有界内 3x3=9 存活
     d = dilate_mask(m, 2)
     assert int(d.sum().item()) == 9
+
+
+# -----------------------------------------------------------------------------
+# _grad_mag_corr_in_mask — 梯度锐度标量
+# -----------------------------------------------------------------------------
+from threedgrut.model.per_class_eval import _grad_mag_corr_in_mask  # noqa: E402
+
+
+def test_grad_corr_identical_is_one():
+    H = W = 32
+    gt = torch.rand(H, W, 3)
+    mask = torch.ones(H, W, dtype=torch.bool)
+    c = _grad_mag_corr_in_mask(gt.clone(), gt, mask)
+    assert c is not None
+    assert math.isclose(c, 1.0, abs_tol=1e-4)
+
+
+def test_grad_corr_flat_pred_returns_none():
+    """pred 无边缘（常数）→ 梯度方差 0 → 相关无定义 → None。"""
+    H = W = 32
+    gt = torch.rand(H, W, 3)
+    pred = torch.full((H, W, 3), 0.5)
+    mask = torch.ones(H, W, dtype=torch.bool)
+    assert _grad_mag_corr_in_mask(pred, gt, mask) is None
+
+
+def test_grad_corr_too_few_pixels_returns_none():
+    H = W = 32
+    gt = torch.rand(H, W, 3)
+    mask = torch.zeros(H, W, dtype=torch.bool)
+    mask[0, :3] = True  # 3 < min_pixels(50)
+    assert _grad_mag_corr_in_mask(gt.clone(), gt, mask) is None
+
+
+def test_grad_corr_orthogonal_edges_below_one():
+    """正交边缘（gt 竖边 vs pred 横边）→ 梯度幅值不同位 → 相关明显 < 1
+    （非退化，证明不是恒返回 1.0 / None）。"""
+    H = W = 32
+    gt = torch.zeros(H, W, 3)
+    gt[:, 16:] = 1.0   # 竖直边缘
+    pred = torch.zeros(H, W, 3)
+    pred[16:, :] = 1.0  # 水平边缘
+    mask = torch.ones(H, W, dtype=torch.bool)
+    c = _grad_mag_corr_in_mask(pred, gt, mask)
+    assert c is not None
+    assert c < 0.95

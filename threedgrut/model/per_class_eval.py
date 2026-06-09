@@ -111,6 +111,52 @@ def compute_lpips_in_mask(
     return float(val.item() if torch.is_tensor(val) else val)
 
 
+def _luma(rgb: torch.Tensor) -> torch.Tensor:
+    """``[H, W, 3]`` → ``[H, W]`` 亮度（Rec.601）。"""
+    w = torch.tensor([0.299, 0.587, 0.114], dtype=rgb.dtype, device=rgb.device)
+    return (rgb * w).sum(-1)
+
+
+def _grad_mag(img2d: torch.Tensor) -> torch.Tensor:
+    """``[H, W]`` → ``[H, W]`` Sobel 梯度幅值。
+
+    使用 replicate padding，确保常数图梯度为全 0（边界不产生伪边缘）。
+    """
+    x = img2d.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+    kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
+                      dtype=img2d.dtype, device=img2d.device)
+    ky = kx.t().contiguous()  # 转置即垂直 Sobel 核 [[-1,-2,-1],[0,0,0],[1,2,1]]
+    x_pad = F.pad(x, (1, 1, 1, 1), mode="replicate")
+    gx = F.conv2d(x_pad, kx.view(1, 1, 3, 3), padding=0)
+    gy = F.conv2d(x_pad, ky.view(1, 1, 3, 3), padding=0)
+    return torch.sqrt(gx * gx + gy * gy)[0, 0]
+
+
+def _grad_mag_corr_in_mask(
+    rgb_pred: torch.Tensor,   # [H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,     # [H, W, 3]
+    mask: torch.Tensor,       # [H, W] bool/float
+    min_pixels: int = 50,
+) -> Optional[float]:
+    """mask 内 Sobel 梯度幅值（亮度）的 Pearson 相关。
+
+    直指"线是否锐且在对位置"：阈值无关。像素 < min_pixels 或任一侧梯度无方差
+    → None。
+    """
+    m = mask.to(torch.bool)
+    if int(m.sum().item()) < min_pixels:
+        return None
+    gp = _grad_mag(_luma(rgb_pred.clip(0, 1)))[m]
+    gg = _grad_mag(_luma(rgb_gt))[m]
+    gp = gp - gp.mean()
+    gg = gg - gg.mean()
+    norm_p = gp.norm()
+    norm_g = gg.norm()
+    if float(norm_p.item()) <= 0.0 or float(norm_g.item()) <= 0.0:
+        return None
+    return float((gp @ gg / (norm_p * norm_g)).item())
+
+
 def compute_per_class_metrics(
     rgb_pred: torch.Tensor,   # [H, W, 3] in [0, 1]
     rgb_gt: torch.Tensor,     # [H, W, 3]
