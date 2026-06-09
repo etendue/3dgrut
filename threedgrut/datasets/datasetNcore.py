@@ -1148,13 +1148,20 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     val_batch["semantic_sseg"] = to_torch(sseg, device="cpu")
                     # Phase 3: lane 产物（独立 itar）。复用 sseg 的 END-ts + 渲染分辨率
                     # NEAREST resize（类 id 不可插值）。软失败：reader None → 跳过。
+                    # lane 产物可只覆盖前视相机（risk L2：lane 最清处；metric 也只在
+                    # 前视算）→ 该相机/帧不在 lane itar 里时 read() 抛 KeyError，
+                    # 跳过即可（render.py 的 lane 评测本就只取前视相机）。
                     if self.load_lane_masks and self._lane_reader is not None:
-                        lane = self._lane_reader.read(camera_id, val_ts_us)  # [H_full,W_full] uint8
-                        if lane.shape[0] != h_render or lane.shape[1] != w_render:
-                            lane = cv2.resize(
-                                lane, (w_render, h_render), interpolation=cv2.INTER_NEAREST
-                            )
-                        val_batch["semantic_lane_sseg"] = to_torch(lane, device="cpu")
+                        try:
+                            lane = self._lane_reader.read(camera_id, val_ts_us)  # [H_full,W_full] uint8
+                        except KeyError:
+                            lane = None
+                        if lane is not None:
+                            if lane.shape[0] != h_render or lane.shape[1] != w_render:
+                                lane = cv2.resize(
+                                    lane, (w_render, h_render), interpolation=cv2.INTER_NEAREST
+                                )
+                            val_batch["semantic_lane_sseg"] = to_torch(lane, device="cpu")
 
                 return val_batch
 
