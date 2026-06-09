@@ -67,7 +67,8 @@ def main() -> int:
     ap.add_argument("--model", default="facebook/mask2former-swin-large-mapillary-vistas-semantic")
     ap.add_argument("--out", default=None, type=Path, help="override output itar path")
     ap.add_argument("--limit", type=int, default=0, help="debug: only first N frames (0=all)")
-    ap.add_argument("--fp16", action="store_true", default=True)
+    ap.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=True,
+                    help="fp16 推理（默认开；--no-fp16 关，用于 fp16/fp32 精度对比）")
     args = ap.parse_args()
 
     clip_dir = args.clip.expanduser()
@@ -128,47 +129,50 @@ def main() -> int:
     t0 = time.time()
     H_ref = W_ref = None
     written = 0
-    for fi in range(n_frames):
-        ts_end = int(cam.frames_timestamps_us[fi, ncore.data.FrameTimepoint.END])
-        rgb = cam.get_frame_image_array(fi)  # [H,W,3] uint8 (raw/distorted, matches GT)
-        if rgb.ndim != 3 or rgb.shape[2] != 3:
-            print(f"[gen_lane][WARN] frame {fi} unexpected rgb shape {rgb.shape}; skip")
-            continue
-        H, W = rgb.shape[:2]
-        if H_ref is None:
-            H_ref, W_ref = H, W
-            # write camera-group attrs ONCE, after first frame gives resolution
-            cam_grp.attrs.put({
-                "stuff_classes": stuff_classes,
-                "resolution": [int(W), int(H)],
-                "method": "mask2former-mapillary-vistas (self-run, gen_lane_sseg.py)",
-                "pretrained_checkpoint": args.model,
-                "dataset_name": "mapillary-vistas-v1.2",
-                "lane_marking_ids": lane_ids,
-            })
-        inputs = processor(images=Image.fromarray(rgb), return_tensors="pt")
-        pix = inputs["pixel_values"].to(device)
-        if args.fp16 and device == "cuda":
-            pix = pix.half()
-        with torch.no_grad():
-            out = model(pixel_values=pix)
-        seg = processor.post_process_semantic_segmentation(
-            out, target_sizes=[(H, W)]
-        )[0]  # [H,W] long
-        seg_np = seg.to(torch.uint8).cpu().numpy()
-        buf = io.BytesIO()
-        Image.fromarray(seg_np).save(buf, format="png")
-        pb = buf.getvalue()
-        ds = cam_grp.create_dataset(str(ts_end), shape=(), dtype=f"|S{len(pb)}", compressor=None)
-        ds[()] = np.bytes_(pb)
-        ds.attrs.put({"format": "png"})
-        written += 1
-        if written % 50 == 0 or written == n_frames:
-            dt = time.time() - t0
-            print(f"[gen_lane] {written}/{n_frames}  ({dt:.1f}s, {dt/written:.2f}s/frame)")
-
-    if hasattr(st, "close"):
-        st.close()
+    try:
+        for fi in range(n_frames):
+            ts_end = int(cam.frames_timestamps_us[fi, ncore.data.FrameTimepoint.END])
+            rgb = cam.get_frame_image_array(fi)  # [H,W,3] uint8 (raw/distorted, matches GT)
+            if rgb.ndim != 3 or rgb.shape[2] != 3:
+                print(f"[gen_lane][WARN] frame {fi} unexpected rgb shape {rgb.shape}; skip")
+                continue
+            H, W = rgb.shape[:2]
+            if H_ref is None:
+                H_ref, W_ref = H, W
+                # write camera-group attrs ONCE, after first frame gives resolution
+                cam_grp.attrs.put({
+                    "stuff_classes": stuff_classes,
+                    "resolution": [int(W), int(H)],
+                    "method": "mask2former-mapillary-vistas (self-run, gen_lane_sseg.py)",
+                    "pretrained_checkpoint": args.model,
+                    "dataset_name": "mapillary-vistas-v1.2",
+                    "lane_marking_ids": lane_ids,
+                })
+            inputs = processor(images=Image.fromarray(rgb), return_tensors="pt")
+            pix = inputs["pixel_values"].to(device)
+            if args.fp16 and device == "cuda":
+                pix = pix.half()
+            with torch.no_grad():
+                out = model(pixel_values=pix)
+            seg = processor.post_process_semantic_segmentation(
+                out, target_sizes=[(H, W)]
+            )[0]  # [H,W] long
+            seg_np = seg.to(torch.uint8).cpu().numpy()
+            buf = io.BytesIO()
+            Image.fromarray(seg_np).save(buf, format="png")
+            pb = buf.getvalue()
+            ds = cam_grp.create_dataset(str(ts_end), shape=(), dtype=f"|S{len(pb)}", compressor=None)
+            ds[()] = np.bytes_(pb)
+            ds.attrs.put({"format": "png"})
+            written += 1
+            if written % 50 == 0 or fi == n_frames - 1:
+                dt = time.time() - t0
+                print(f"[gen_lane] {written}/{n_frames}  ({dt:.1f}s, {dt/max(written,1):.2f}s/frame)")
+    finally:
+        # IndexedTarStore(mode="w") write-once：异常中途也要 flush 已写帧
+        # （下次 run 会 unlink 重来，但避免半写 itar 留坑）。
+        if hasattr(st, "close"):
+            st.close()
     print(f"[gen_lane] DONE: wrote {written} frames -> {out_path} "
           f"({out_path.stat().st_size/1e6:.1f} MB)")
     print(f"[gen_lane] RECONCILE: set LANE_CLASS_IDS = {tuple(lane_ids)} "
