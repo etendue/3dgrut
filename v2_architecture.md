@@ -427,6 +427,8 @@ flowchart TB
 | `threedgrut/model/layered_loss.py` | T3.4 ✅ (9077fd6, region-weighted L1 纯函数) |
 | `threedgrut/model/road_reg.py` | **V3-R1.2/1.3 ✅ (75ab6f9, clamp_layer_scales + compute_effective_rank_loss + compute_depth_tv_loss 纯函数)** —— road scale clamp（实测生效但 novel-view null）|
 | `threedgrut/model/road_region.py` | **V3-R2 ✅ (7bf4992, build_road_height_field + query_ground_z + compute_bg_road_opacity_penalty)** —— bg-in-road opacity penalty，**首个真正有效改动**：5k A/B 路面 bg 粒子 −86%、road opacity +28% 反超主导、cc_psnr_masked +0.65 dB；镜像 bg_cuboid_loss.py |
+| `threedgrut/model/pose_anchor.py` | **P1.2 ✅ (2026-06-06, compute_pose_boundary_loss 首/末活跃帧锚 GT + compute_pose_prior_loss 全帧软 L2，旋转矩阵 Frobenius²，纯函数)** —— 修 track-pose 漂移；30k A/B fix 三者最优 class25.07/cc26.06（−0.61 未在本配方复现）|
+| `threedgrut/model/track_albedo_fourier.py` | **P1.3b ✅ (2026-06-06, fourier_albedo_bias Σ f_i·cos(iπt/N_t) + upgrade_albedo_table ckpt 升降维，纯函数)** —— 4D-SH 时变 albedo；A/B k4 24.13 vs DC k1 24.20 **无增益**，default k1 关、gated 留未来 |
 | `threedgrut/datasets/ncore_semantic.py` | T3.1.a ✅ (e8cb490, Cityscapes palette 常量) |
 | `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) |
 | `threedgrut/datasets/tracks_loader.py` | T4.1.b ✅ (b22a506) + T4.5 ✅ (4807951, load_tracks_from_ncore_cuboids) |

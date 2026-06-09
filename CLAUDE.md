@@ -58,6 +58,87 @@ ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work
 9. 把"伪完成"识别为"未完成"：训练 exit 0 + ckpt 写出 ≠ task ✅。必须 metric 数字达标 + 写进 Done Log + commit hash 入看板。
 10. 跑挂了（exit ≠ 0 / 早期 RuntimeError）回头改代码时，**先写一个回归测试 pin 住这个 case**（如 4D vs 3D mask broadcast），再修代码 + Mac pytest，最后再 rsync + 重跑 A800。不要"改了就直接重跑 A800"，单测便宜，A800 贵。
 
+## inceptio 本地 GPU 执行环境（RTX 4090，首选备用机）
+
+A800 占用时，**Claude 可直接 `ssh inceptio` 使用本地 RTX 4090**（24GB VRAM）跑训练 / smoke / KPI。
+
+- 主机别名：`inceptio`（~/.ssh/config 已配置，IP 10.8.31.113）
+- 用户：`inceptio`
+- 仓库路径：`~/repo/3dgrut2/`
+- 数据路径：`~/work/data/<clip>/`、`~/ncore_data/`
+- 输出路径：`~/work/output/`
+- GPU：RTX 4090 24GB，Driver 590，CUDA 13.1（conda env 内用 cu128）
+
+### ⚠️ conda env 激活（每次 ssh 必须）
+
+```bash
+ssh inceptio 'source ~/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut2 && cd ~/repo/3dgrut2 && python ...'
+```
+
+或导 PATH：
+
+```bash
+ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd ~/repo/3dgrut2 && python train.py ...'
+```
+
+### ⚠️ 首次运行注意（已完成，记录备查）
+
+1. **系统无 g++**：inceptio 未装 `build-essential`，通过 conda 安装并建软链接解决（已完成）：
+   ```bash
+   # 已执行，无需重复
+   conda install -n 3dgrut2 -y -c conda-forge gxx_linux-64 gcc_linux-64
+   ln -sf x86_64-conda-linux-gnu-c++ ~/miniforge3/envs/3dgrut2/bin/c++
+   ln -sf x86_64-conda-linux-gnu-g++ ~/miniforge3/envs/3dgrut2/bin/g++
+   ```
+2. **VGG16 感知损失模型**：位于 `~/data/torch_cache/hub/checkpoints/vgg16-397923af.pth`，已复制到 `~/.cache/torch/hub/checkpoints/`（已完成）。
+3. **JIT 编译**：首次已编译缓存至 `~/.cache/torch_extensions/py311_cu128/{lib3dgut_cc,lib_mcmc_cc}`，后续启动秒过。
+
+### ⚠️⚠️ num_workers 必须按机器「系统内存」调（OOM 头号坑，2026-06-05 实测定位）
+
+**`configs/base_gs.yaml` 默认 `num_workers: 24` 是为 A800（128 核 / 2TB 内存）调的。在小内存机器上直接用会 OOM**——被系统 OOM killer 杀掉（`dmesg`/`journalctl -k` 见 `Out of memory: Killed process python`），表现为训练跑到 ~iter 5000（约 40 min）后**静默退出无 Traceback**（SIGKILL 不留 Python 栈）。
+
+**根因（实测 PSS 分解坐实，不是泄漏）**：
+- 内存 ≈ **主进程堆（~13GB）+ num_workers × ~2-3GB**。每个 DataLoader worker 是 fork 出的数据集副本，Python 引用计数写对象头 → copy-on-write 被打破 → 每 worker 私有化 ~2GB。
+- **2026-06-03 起 v3 baseline 配方打开了 LiDAR 深度监督**（`ncore_3dgut_mcmc_multilayer.yaml`: `load_lidar_depth_map=true` / `use_lidar_depth=true`），每帧多加载/解码一张深度图（1920×1080 float32 ≈ 8MB，按 256/worker 缓存）→ **per-worker 内存比旧配方重**（这就是为什么 5/27 旧 ThinkPad run 在 31GB 跑得下、而现在 62GB 反而 OOM 的差异）。
+- 内存会**预热 ~13 min 后平台**（如 nw=10 稳定 39GB），**不是线性泄漏**；`RSS` 会因共享页被重复计数而虚高（11 进程 sum RSS 165GB 是假象），**以 `PSS`（`/proc/<pid>/smaps_rollup`）或 `free -g` used 为准**。
+
+**经验值（深度监督 ON 时）**：
+| 机器 | 系统内存 | 安全 num_workers | 实测 |
+|---|---|---|---|
+| A800 | 2TB | 24（默认） | OK |
+| inceptio / 62GB | 62GB | **≤ 10**（→ ~39GB） | nw=24 OOM，nw=10 稳 |
+| 32GB 机 | 32GB | ≤ 4-6 | — |
+
+**用法**：小内存机一律 CLI 覆盖 `num_workers=10`（顶层 key，直接覆盖不带 `+`）。**不要为省内存关掉 `use_lidar_depth`**——baseline（cc 25.79）就用它，关了 A/B 不可比。
+
+**附带现象（同一根因）**：RTX 4090 上 GPU 利用率只有 ~30-50%（不是 100%），因为深度图 + sseg 的**数据管线喂不满快卡**（数据加载瓶颈，非 GPU 慢）。降 num_workers 省内存的代价就是数据并行度更低、GPU 更饿；这是内存 vs 速度的权衡，**不影响训练正确性 / 最终 metric**。本地 NVMe 已排除慢盘因素。
+
+**OOM 防线**：跑长训练前可挂一个 RAM guard（每 30s 采 `free -g`，超阈值 `pkill` + 记日志），避免静默 OOM 浪费 40 min（2026-06-05 用过 `/tmp/p1_2_ramguard.sh`）。
+
+**长任务启动用「proven inline nohup」模式**（`ssh inceptio "... && nohup python train.py ... > log 2>&1 & echo PID \$!"`），inceptio ssh 偶发抖动（exit 255）；`setsid bash 脚本 & disown` 这种复杂形式在抖动下容易半路夭折，inline nohup + 末尾 `echo PID` 最稳。
+
+### 代码同步（Mac → inceptio）
+
+```bash
+rsync -az --exclude='.claude/worktrees' --exclude='.venv' --exclude='__pycache__' \
+  /Users/etendue/repo/3dgrut2/ inceptio:~/repo/3dgrut2/
+```
+
+### 训练启动示例
+
+```bash
+ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
+  && export CUDA_VISIBLE_DEVICES=0 \
+  && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  && cd ~/repo/3dgrut2 \
+  && python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+    n_iterations=5000 \
+    path=~/work/data/9ae151dc/pai_9ae151dc-e87b-41a7-8e85-71772f9603d7.json \
+    trainer.sky_backend=mlp \
+    out_dir=~/work/output \
+    experiment_name=smoke_test'
+```
+
 ## Vast.ai 远程执行环境（A800 占用时备用）
 
 A800 被其他任务占用时，**Claude 可以自行起 vast.ai RTX 4090 实例**跑 V3 smoke / KPI。整套流程已在 2026-05-27 V3-L5/L8/L9 任务中跑通（详见 [`v3_plan.md`](v3_plan.md)（冻结历史，仅证据参考）§ 5 Done Log "V3-L5 + V3-L8 + V3-L9" 条目）。

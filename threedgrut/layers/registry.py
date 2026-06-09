@@ -31,6 +31,7 @@ _EXTRA_OVERRIDE_KEYS: frozenset[str] = frozenset({
     "track_warmup_steps",      # V3-L5/L8/L9 shared warmup (int)
     "track_albedo_lr",         # V3-L8 optimizer LR
     "track_scale_lr",          # V3-L9 optimizer LR
+    "n_fourier_albedo_terms",  # P1.3b 4D-SH time-varying albedo terms (int, default 1 = DC-only)
     # P1.4 asset-harvester warm-start (car) — inject diffusion-completed geometry
     # as dynamic_rigids init, then keep training (warm-start, not frozen drop-in).
     "warmstart_ply_bundle",        # str: metadata.yaml / bundle root path
