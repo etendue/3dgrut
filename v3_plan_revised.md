@@ -97,6 +97,7 @@ kanban
         [继承: asset-harvester-verify 端到端跑通（3车+3人）]
         [✅ P1.2 track-pose（boundary+prior+smooth）: fix 三者最优 class25.07/cc26.06，−0.61 退化未在本配方复现（2026-06-06）]
         [✅ P1.3b Fourier albedo 实现+A/B（k4 vs DC k1）: 无增益 24.13 vs 24.20，default k1 关、留未来（2026-06-06）]
+        [✅ P3.0 车道线测量门（方案A）: 自跑 Mapillary lane sseg + compute_lane_metrics 接通，baseline 立锚 grad_corr 0.693，守护线零回归（2026-06-09）]
 ```
 
 ### 1.2 任务级看板（按 P*.* 编号）
@@ -117,6 +118,7 @@ kanban
 | **P2.1** | 2 | 行人 rigid track 垫脚石 — 从「完全没有」到「有粗 blob」验证抬升（asset-harvester 静态人可当 init） | 新 | 2 | ⬜ | — |
 | **P2.2** ★ | 2 | **DriveStudio SMPL-LBS 移植** 进空壳 `dynamic_deformables` 层 — canonical 高斯长在 SMPL mesh，per-frame 24 关节 LBS 蒙皮 | Stage 16 **改机制**（原 hash-grid+MLP→SMPL） | 6 | ⬜ | — |
 | **P2.3** | 2 | 行人 SMPL 输入链路 — HMR2 在 NCore 相机跑通 + 全局运动估计 + 坐标系对齐 | 新 | 3 | ⬜ | — |
+| **P3.0** ★ | 3 | **车道线测量门（方案 A，对标 Phase 0）** — 自跑 Mapillary lane sseg（[`gen_lane_sseg.py`](scripts/gen_lane_sseg.py)）+ `compute_lane_metrics`（dilated-band + 梯度锐度）接通 render/dataset；baseline 立锚（纯 eval 无训练） | 新（spec 2026-06-09） | 1 | ✅ | `per_class_eval.py`(+lane) / `datasetNcore.py` / `render.py` / scripts；**grad_corr 0.693**，守护线零回归 |
 | **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜ | — |
 | **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜ | v3 可选 |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
@@ -132,10 +134,10 @@ kanban
 | **0** ★ | 把目标测出来（前置/便宜/无新训练） | 4/4 | **per-class 真实数字+缺口入档** ✅ | cc 25.79 守住 | ✅ 门(过) |
 | **1** ★ | 车辆（高 ROI/已验证） | 0/7（含 AH-0/1/2） | 车辆 class_psnr 闭合 gap | ≥ 24.7 | ⬜ |
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
-| **3** | 道路/车道线 | 0/2 | 车道线锐度（lane LPIPS↓） | ≥ 24.7 | ⬜ |
+| **3** | 道路/车道线 | 1/3（**测量门 P3.0 已立** ✅） | 车道线锐度（lane **grad_corr↑**，门锚 0.693） | ≥ 24.7 | 🟡 门(过) |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
 | bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 0/1 | viser cuboid wireframe 与 gaussian 实物目视重合 | 不影响 metric | ⬜ |
-| **总计** | — | **4/18** | — | — | — |
+| **总计** | — | **5/19** | — | — | — |
 
 > **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
@@ -143,7 +145,7 @@ kanban
 > | 车辆 class_psnr | **24.04**（auto 23.79 / truck 27.32 / bus 24.74，3420 rec） | 闭合至 ≥ 25.5 | 中等 ~+1.5 |
 > | 行人 person PSNR | **15.68**（301 帧 / 3.97M px；**bg 在行人像素的误差地板，非行人重建——行人无专属高斯**） | 加模型后从 15.68 升至 ≥ 22 | **最大缺口 ~−8 dB（modeled 车 vs unmodeled 人）** |
 > | rider / bicycle PSNR | rider 17.76（仅 2 帧·过稀不可信）/ bicycle 29.97（94 帧·已可） | — | rider 样本不足 |
-> | 车道线 road-crop | PSNR 29.20（沥青主导虚高）/ **LPIPS 0.154**（375 帧 / 250M px） | LPIPS↓（锐度↑） | 待 P3 对照基线 |
+> | 车道线 lane-marking | **grad_corr 0.693**（前视 75 帧）/ band_psnr 21.77 / band_lpips 0.0233（Mapillary lane 类 23+24，2026-06-09 inceptio 立锚，门已立）；〔旧 P0.3 road-crop 代理：PSNR 29.20 沥青虚高 / LPIPS 0.154〕 | grad_corr↑（P3.1/P3.2 改善以此为对照基线） | 待 P3 改善 |
 >
 > ⚠️ **方法论修正**：per-class LPIPS 用全图 GT-fill，对**小目标**（person/rider/bicycle）受区域面积主导（lpips≈0 是面积假象非质量）→ 小 actor **以 per-class PSNR 为准**；LPIPS 仅对**大区域 road_crop（0.154）**有意义（正是 P0.3 车道线锐度信号）。
 > ⚠️ **行人 15.68 的正确读法**：dynamic 层仅含车（by_class 仅 auto/truck/bus，无 person/rider/bicycle）→ **行人确实无专属模型（原假设「完全未建模」成立，未被推翻）**。15.68 = bg/静态场景在行人像素处的 PSNR = **未建模行人（尤指移动行人）的误差地板**，**不是行人重建质量**；它混合了静态行人（被 bg 烤进、偏高）与移动行人（bg 跟不上、偏低），绝对值仅作 Phase 2 的 **before-anchor**（加模型后应上升）。Phase 2 框定仍是「**从无到有**」，仍是最大单一缺口（modeled 车 24 vs unmodeled 人 15.68）。
@@ -271,14 +273,14 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 
 ### 2.3 Phase 3 — 道路/车道线
 
-**触发**：Phase 0 车道线锚点入档。
+**触发**：Phase 0 车道线锚点入档。✅ **测量门已立（2026-06-09，§6 Done Log）**：自跑 Mapillary lane sseg + `compute_lane_metrics` 接通，baseline 立锚 **grad_corr 0.693**（前视 75 帧）= P3.1/P3.2 改善的对照基线，主 KPI = `mean_lane_grad_corr`。下方 P3.1/P3.2 为门要测量的**实际改善**（尚未做）。
 
 | Task | 描述 | 改动文件 |
 |---|---|---|
 | P3.1 | road 当 2D 纹理：沿车道线定向加密 / 平面 feature grid（**非 Fourier 时间维**）；可复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | `road_region.py`, 致密化策略 |
 | P3.2 | 遮挡式 bg（v3 可选）：现 `bg_road_penalty` / `bg_cuboid_loss` 的「杀死」机制改「只 mask loss 不杀粒子」+ 深度合成 → 保 actor 移开帧路面连续（同时为 v4 打底） | `bg_cuboid_loss.py`, `road_region.py` |
 
-**验收**：车道线 lane-mask/BEV LPIPS 相对 P0.3 锚点改善；road 区不再被 background 偷渲（延续 V3-R2 成果）。
+**验收**：车道线 `mean_lane_grad_corr`（+ band_psnr / band_lpips 辅证）相对 2026-06-09 门锚（grad_corr 0.693）改善；road 区不再被 background 偷渲（延续 V3-R2 成果）。
 
 ### 2.4 停 / 降级清单（保留供历史，不在新主线）
 
@@ -406,6 +408,13 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **A800 10k A/B 结果**：**automobile class_psnr Δ=+0.023（持平）**，heavy_truck −0.968（C3 整层豁免误伤），mean_class −0.036。**5k 的 +0.730 warm 优势在 10k 被 LiDAR-only 追平消失**；viser 看**未观测面严重 spiky / 白玻璃碴**。
   - **根因（修正 spec 前提）**：spec 假设「MCMC 侵蚀 asset」是**反的**——diffusion 补全的 asset 本身 spiky，MCMC+opacity 正则其实在**清理**它；C2 冻 perturb/relocate + C3 关 opacity 衰减恰好**锁死 spiky 并挡住清理**。frozen drop-in 离线手术佐证：原始 asset 几何连贯但**悬浮+光照失配**（→ 必须训练而非冻结）。**真瓶颈 = asset 质量 + 未观测面缺约束，不是 MCMC 侵蚀。**
   - **结论**：**freeze 式 protected warm-start 否定，勿再冻结**。后续若再试 P1.4 走「**约束式**」（scale clamp + anisotropy 上限 + opacity floor，有界非冻结）或先提 asset 质量（re-harvest / 协方差对齐）。代码默认关闭、baseline 字节等价。
+- **2026-06-09 Phase 3 车道线测量门（方案 A：lane sseg → per-class lane 指标）落地 + baseline 立锚**（对标 Phase 0，纯 eval 无训练；commits 247ce9c→98bd9b3，inceptio RTX 4090）：
+  - **指标层**（Mac TDD，纯张量、cv2/NCore-free）：[`per_class_eval.py`](threedgrut/model/per_class_eval.py) 加 `dilate_mask`（`F.max_pool2d` 方形膨胀，细 lane mask→dilated band）+ `_grad_mag_corr_in_mask`（Sobel 梯度幅值 Pearson 相关，**阈值无关、替代 edge-IoU**）+ `compute_lane_metrics`（band-LPIPS + band/raw-PSNR + grad-corr **四候选一次全报**，baseline 后挑主指标）；`LANE_CLASS_IDS=(23,24)`。23 测试 Mac 全绿。
+  - **数据链路**：[`datasetNcore.py`](threedgrut/datasets/datasetNcore.py) **val/test-only** 加载独立 lane 产物 `*.aux.lane.zarr.itar`→`semantic_lane_sseg`（软失败 + **缺相机/帧跳过**，因 lane 产物前视-only）；[`render.py`](threedgrut/render.py) 前视相机 gate + metrics.json `mean_lane_{band_lpips,band_psnr,raw_psnr,grad_corr}` / `lane_{n_records,total_pixels,band_total_pixels}`（缺产物时**字节等价**）；eval 入口 [`render.py`](render.py) 加 `--load-lane-masks`/`--lane-band-px`（OmegaConf struct 解锁注入，旧 baseline ckpt 也能 eval）。
+  - **lane GT 来源**（自跑，**不依赖 nre-tools**）：新建 [`scripts/gen_lane_sseg.py`](scripts/gen_lane_sseg.py)，inceptio 用 `facebook/mask2former-swin-large-mapillary-vistas-semantic`（hf-mirror）逐帧前视推理 → 599 帧 Mapillary 65 类 itar（13.9 MB，与 sseg 字节同构复用 `SsegAuxReader`）；对账 id2label：**23=Lane Marking-Crosswalk / 24=Lane Marking-General**。
+  - **inceptio 立锚**（baseline ckpt `v3_base_scratch30k_lam01`，前视 75 帧，~3 min）：**grad_corr 0.693** / band_psnr 21.77 / raw_psnr 22.78 / band_lpips 0.0233 / lane_n_records 75（全覆盖，raw 4.68M px / band 7.75M px）。
+  - **守护线零回归**：前视 mean_psnr 18.624 / psnr_masked 26.113 / cc_psnr_masked 21.578 / ssim_masked 0.906 / lpips_masked 0.231 全部 = baseline `per_camera[front]`（差 <1e-3）——改动纯增量。
+  - **A.3 红旗自检（信号/方差）通过**：grad_corr 0.69 非退化（非 1/None）、阈值无关、有提升空间 → **荐为 Phase 3 主 KPI**（P3.1/P3.2 改善以此对照）；band_lpips 0.023 小但非零（band 沥青主导，次要）。**本条是「门」，不含 P3.1/P3.2 实际改动。**
 
 ---
 
