@@ -91,11 +91,18 @@ class Viser4DViewer:
                  target_fps: float = 20.0,
                  initial_fov_rad: Optional[float] = None,
                  multi_cam_poses: Optional[dict] = None,
-                 difix_server: Optional[str] = None):
+                 difix_server: Optional[str] = None,
+                 replaced_track_ids: Optional[str] = None):
         self.engine = engine
         self.meta = metadata
         self.port = port
         self.target_fps = target_fps
+        # P1.4: integer track_ids of warm-start replaced cars (for the
+        # dynamic_replaced / dynamic_other Gaussian-Layers sub-toggles).
+        self.replaced_track_ids = (
+            {int(x) for x in replaced_track_ids.split(",") if x.strip()}
+            if replaced_track_ids else set()
+        )
         # V3-VIZ.3: per-camera per-frame c2w lookup, used by Camera dropdown +
         # Follow Camera. Shape: {cam_id: {"c2w": (F, 4, 4) float32,
         # "timestamps_us": (F,) int64}}. None when launched without
@@ -352,6 +359,41 @@ class Viser4DViewer:
                         print(f"[BUG3-DIAG] toggle layer='{_name}' "
                               f"value={bool(_cb.value)} → enabled_layer_names="
                               f"{sorted(new_set)}", flush=True)
+
+                # P1.4: dynamic_replaced / dynamic_other sub-toggles. Isolate the
+                # warm-start replaced cars (track_ids via --replaced_track_ids)
+                # from the rest of dynamic_rigids by folding hidden track_ids
+                # into the model's _dyn_hidden_track_ids (density→-50 in
+                # fused_view, same path as inactive-track suppression).
+                if self.replaced_track_ids and "dynamic_rigids" in scene_mog.layers:
+                    self._cb_dyn_replaced = self.server.gui.add_checkbox(
+                        "dynamic_replaced", True)
+                    self._cb_dyn_other = self.server.gui.add_checkbox(
+                        "dynamic_other", True)
+
+                    def _apply_dyn_filter(_=None, _self=self):
+                        mog = _self.engine.scene_mog
+                        tids = mog.layers["dynamic_rigids"].track_ids
+                        all_ids = {int(x) for x in torch.unique(tids).tolist()}
+                        replaced = set(_self.replaced_track_ids) & all_ids
+                        other = all_ids - replaced
+                        hide: set = set()
+                        if not _self._cb_dyn_replaced.value:
+                            hide |= replaced
+                        if not _self._cb_dyn_other.value:
+                            hide |= other
+                        mog._dyn_hidden_track_ids = (
+                            torch.tensor(sorted(hide), dtype=tids.dtype,
+                                         device=tids.device)
+                            if hide else None
+                        )
+                        _self.need_update = True
+                        print(f"[P1.4] dyn filter: hide {len(hide)} tracks "
+                              f"(replaced_on={_self._cb_dyn_replaced.value}, "
+                              f"other_on={_self._cb_dyn_other.value})", flush=True)
+
+                    self._cb_dyn_replaced.on_update(_apply_dyn_filter)
+                    self._cb_dyn_other.on_update(_apply_dyn_filter)
 
         if self.engine is not None:
             with folder:
@@ -1511,6 +1553,10 @@ def main() -> None:
     parser.add_argument("--dataset_path", type=str, default=None,
                         help="Optional NCore dataset path for 4D fallback when ckpt has no viz_4d.")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--replaced_track_ids", type=str, default="",
+                        help="P1.4: comma-separated integer track_ids of warm-start "
+                             "replaced cars; adds dynamic_replaced/dynamic_other "
+                             "toggles to the Gaussian Layers panel.")
     parser.add_argument("--target_fps", type=float, default=20.0)
     parser.add_argument("--difix_server", type=str, default=None,
                         help="host:port of an out-of-process DiFix server "
@@ -1615,6 +1661,7 @@ def main() -> None:
         initial_fov_rad=math.radians(args.initial_fov_deg),
         multi_cam_poses=multi_cam_poses,
         difix_server=args.difix_server,
+        replaced_track_ids=args.replaced_track_ids,
     )
     # Phase A diagnostic block — one-shot startup print, no GUI/render side
     # effects. See plan v2-t8-13-t8-14-bug-happy-starfish.md for the 4-bug

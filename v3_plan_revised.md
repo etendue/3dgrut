@@ -78,9 +78,6 @@ kanban
         [P3.1 road 当2D纹理: 定向加密 / 平面 feature grid]
         [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选]
         [PCAP MCMC per-layer cap bg→actor 重分配]
-        [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
-        [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
-        [AH-2 变长粒子注入 plumbing（optimizer/MCMC/ckpt）]
 
     "In Progress"
 
@@ -89,6 +86,10 @@ kanban
     "Blocked"
 
     "Done"
+        [✅ AH-0 感知gate正向: 真实harvest 5车注入 5k A/B automobile +0.730dB, cc不退]
+        [✅ AH-1 坐标对齐（Mac）: 6 asset rank-match perm=（0,2,1）+containment 不变量]
+        [✅ AH-2 注入 plumbing（Mac）: merge replace/augment+inject 编排器+ckpt roundtrip]
+        [🔴 P1.4 protected warm-start 提质否定: 10k +0.02持平, freeze 锁死 spiky, 走约束式]
         [✅ P0.1-P0.4 per-class evaluator 落地+实测（2026-06-04）: 车24.04/人15.68/road LPIPS0.154]
         [继承: v3 baseline 重生（2026-06-03）]
         [继承: V3-R2 bg-in-road penalty +0.65]
@@ -113,16 +114,16 @@ kanban
 | **P1.2** ★ | 1 | **track-pose 完整版** — boundary anchor（fix_first/last）+ pose prior + temporal smooth（复用 stageA） | T13a.4 V3-L7 | 2 | ✅ | `pose_anchor.py`+trainer+configs；fix 三者最优 class25.07/cc26.06，−0.61 未在本配方复现，相对 stageA +0.22 class（含跨机噪声）|
 | **P1.3** | 1 | per-track albedo（SH bias，DC only）+ per-track scale + per-track 粒子上限 | T13b.4 L8 + T13b.5 L9 + T13a.3 L6 | 2 | ⬜ | — |
 | **P1.3b** | 1 | **Fourier albedo feature**（4D-SH 时变颜色）：把 P1.3 DC-only albedo 扩展为 Fourier 级数，捕获车辆时变外观（阴影穿越/曝光变化）。gate = P1.3 验证有效后再投 | T13b.4 L8b（旧命名） | 1.5 | ✅ 实现+验证（无增益） | `track_albedo_fourier.py`+layered_model+registry；A/B k4 24.13 vs DC k1 24.20（−0.07 噪声内），default k1 关、留未来 clip |
-| **P1.4** ★ | 1 | **asset-harvester warm-start（车）** — 扩散补全的完整几何当初始化注入，继续多帧 photometric+pose 训练（详见 § 3） | 新（PR #14 spec） | 见 § 3 | ⬜ | gate=AH-0 |
+| **P1.4** ★ | 1 | **asset-harvester warm-start（车）** — 扩散补全的完整几何当初始化注入，继续多帧 photometric+pose 训练（详见 § 3） | 新（PR #14 spec） | 见 § 3 | 🟡 gate正向·提质未达 | AH-0 5k +0.730 正向；**freeze 式 protected 提质 10k 否定**（+0.02 持平，见 § 6）；持久增益待「约束式 warm-start + re-harvest」，代码在 PR #18（默认关，未合 main） |
 | **P2.1** | 2 | 行人 rigid track 垫脚石 — 从「完全没有」到「有粗 blob」验证抬升（asset-harvester 静态人可当 init） | 新 | 2 | ⬜ | — |
 | **P2.2** ★ | 2 | **DriveStudio SMPL-LBS 移植** 进空壳 `dynamic_deformables` 层 — canonical 高斯长在 SMPL mesh，per-frame 24 关节 LBS 蒙皮 | Stage 16 **改机制**（原 hash-grid+MLP→SMPL） | 6 | ⬜ | — |
 | **P2.3** | 2 | 行人 SMPL 输入链路 — HMR2 在 NCore 相机跑通 + 全局运动估计 + 坐标系对齐 | 新 | 3 | ⬜ | — |
 | **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜ | — |
 | **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜ | v3 可选 |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
-| **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
-| **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
-| **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ⬜ | — |
+| **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ✅ 感知 gate 正向 | 真实 harvest 5 车注入 5k A/B：**automobile +0.730**（vs 未注入 truck +0.348，差分 +0.38）/ cc_masked +0.446 不退；Mac 34 测试全绿（PR #18 未合，默认关） |
+| **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ✅ (Mac) | `warmstart_ply.py` 对齐数学（6 demo asset rank-match 一致 perm=(0,2,1)）+ containment/fill/det/quat 不变量单测固化 |
+| **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ✅ (Mac) | `merge_warmstart_with_lidar`(replace默认/augment) + `warmstart_inject.py` 编排器 + `registry` 5 warmstart key + `trainer.py:483` seam（无 bundle 字节等价） |
 | **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ⬜ | — |
 
 ### 1.3 Phase 状态汇总 + per-class gap 表（Phase 0 回填）
@@ -130,12 +131,12 @@ kanban
 | Phase | 主题 | 任务数 (Done/Total) | 主验收（per-class actor） | 背景守护 | 状态 |
 |---:|---|---:|---|:---:|:---:|
 | **0** ★ | 把目标测出来（前置/便宜/无新训练） | 4/4 | **per-class 真实数字+缺口入档** ✅ | cc 25.79 守住 | ✅ 门(过) |
-| **1** ★ | 车辆（高 ROI/已验证） | 0/7（含 AH-0/1/2） | 车辆 class_psnr 闭合 gap | ≥ 24.7 | ⬜ |
+| **1** ★ | 车辆（高 ROI/已验证） | 5/8（P1.2✅+P1.3b✅+AH-0/1/2✅；P1.1/P1.3⬜·P1.4🟡） | 车辆 class_psnr 闭合 gap | ≥ 24.7 | 🟡 |
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
 | **3** | 道路/车道线 | 0/2 | 车道线锐度（lane LPIPS↓） | ≥ 24.7 | ⬜ |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
 | bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 0/1 | viser cuboid wireframe 与 gaussian 实物目视重合 | 不影响 metric | ⬜ |
-| **总计** | — | **4/18** | — | — | — |
+| **总计** | — | **9/19** | — | — | — |
 
 > **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
@@ -354,7 +355,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | R3 | asset-harvester 坐标/尺度对齐错 | canonical 朝向 / 米制还原 bug | 车浮空/错位 | AH-0 先 1-2 track 目视验证；cuboids_dims 已证可用 | AH-1 |
 | R4 | 变长粒子注入破坏 ckpt/MCMC | optimizer/strategy resync 漏 | 训练崩/不收敛 | 先写注入 roundtrip 单测再上 A800（CLAUDE.md 纪律 C.10） | AH-2 |
 | R5 | DriveStudio SMPL 链路重 | HMR2@NCore 跑不通 / 移植量大 | Phase 2 拖期 | P2.1 rigid 垫脚石先证价值；P2.2 可单开 spec | P2.2/2.3 |
-| R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控 | P1.4 |
+| R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控。**2026-06-05 实测：freeze 式 protected warm-start 否定**（未观测面 spiky，见 § 6 Done Log），真瓶颈=asset 质量+未观测面缺约束 → 走约束式 / re-harvest，勿冻结 | P1.4 |
 | R7 | resume 续训退化（已坐实） | MCMC+多层 resume | cc −1.92 | **所有 baseline 对照从头训** | §0.4 |
 | R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | BUG-1 只修 playground overlay，⛔ 勿碰 3D pose/metric 链路 | BUG-1 |
 
@@ -389,6 +390,23 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **A800 实测**（baseline ckpt，GPU0，~3min）：车 class_psnr **24.04** / person **15.68**(301帧/3.97Mpx) / rider 17.76(2帧) / bicycle 29.97(94帧) / road_crop PSNR 29.20·LPIPS **0.154**。
   - **守护线零回归**：cc_psnr_masked **25.789**(=25.79) / novel_lpips_avg **0.5987**(=0.5987) / lidar_psnr **22.69**(=22.69)——改动纯增量。
   - **结论**：① 行人**确实无专属模型**（by_class 仅车）——15.68 是 **bg 在行人像素的误差地板**（before-anchor，**非行人重建质量**），混静/动行人；Phase 2 框定维持「从无到有」，最大缺口确认（车 24 vs 人 15.68，~−8dB）；② 小 actor LPIPS GT-fill 受面积主导，per-class PSNR 为准；③ P0.4 的「4 档 novel pose per-class 拆解」标 🟡 stretch 暂缓（novel 无真 GT），全图 novel 监控不退化。
+- **2026-06-04 P1.4 warm-start 注入引擎（AH-0 代码 gate / AH-1 / AH-2-code）** —— 纯 Mac，TDD，零 GPU（**代码在 PR #18，未合 main**）：
+  - 新建 [`warmstart_metadata.py`](threedgrut/layers/warmstart_metadata.py)（bundle `metadata.yaml` 解析 + 嵌套/扁平 PLY 路径 resolve + `map_assets_to_tracks` 显式映射）、[`warmstart_ply.py`](threedgrut/layers/warmstart_ply.py)（包装现成 `PLYImporter` + Objaverse Y-up canonical→object-local **AH-1 对齐**：去中心/轴置换+符号(det=+1)/per-axis 米制还原，作用于 positions/quat/log-scale + subsample）、[`warmstart_inject.py`](threedgrut/layers/warmstart_inject.py)（trainer-seam 编排器 `build_warmstart_layer_inputs`，米制默认取活体 `track["size"]`）。
+  - 扩 [`dynamic_rigid_init.py`](threedgrut/layers/dynamic_rigid_init.py) `merge_warmstart_with_lidar`（**replace 默认** / augment，per-track 预算 randperm）；[`registry.py`](threedgrut/layers/registry.py) `_EXTRA_OVERRIDE_KEYS` 增 5 个 `warmstart_*` key；[`trainer.py:483`](threedgrut/trainer.py) seam 接入（**无 `warmstart_ply_bundle` 时 LiDAR-only 字节等价**）。
+  - **AH-1 头号风险化解**：6 个 demo asset（3车3人）独立 rank-match（half-span↔cuboids_dims）**一致得 perm=(0,2,1)**（Objaverse Y-up→Z-up），把 D1「viser 目视」降级为确定性可单测；containment/fill/det=+1/quat 单位范数不变量全部固化。
+  - **Mac pytest 33 passed**（[`test_warmstart_ply_engine.py`](threedgrut/tests/test_warmstart_ply_engine.py)，含真实 bundle 对齐 containment + up-axis per-class + 注入 `init_layer_from_points`→`get_model_parameters`→torch.save/load **ckpt roundtrip**）；回归 `test_track_ids_ckpt_roundtrip` 11 passed，受影响模块子集 268 passed，零回归。
+- **2026-06-04 P1.4 AH-2-GPU 感知 gate 达成（A800 端到端，正向）** —— 从训练 clip 真实 harvest → 注入 → 5k A/B：
+  - **完整管线在 A800 跑通**：`asset_harvester.ncore_parser`（吃 clip manifest，内置裁图）从 baseline clip `9ae151dc…` 抽 5 个 automobile track（24/244/259/316/7）→ `run_inference.py`（SparseViewDiT 扩散 360° 补全 + TokenGS lifting）→ 5 个 PLY（各 ~100k 高斯）→ orient + metadata bundle。
+  - **5k A/B（同 clip 从头，双卡并行 GPU0/GPU1，inline eval）**：**automobile class_psnr A(LiDAR)=21.328 → B(warm-start)=22.059，Δ=+0.730**；mean_class +0.703；**cc_psnr_masked 23.660→24.106 (+0.446，背景守护不退反升)**；mean_psnr +0.318。
+  - **归因（诚实）**：未注入的 heavy_truck 也 +0.348（从头训 run-to-run 方差），故 automobile-vs-truck 差分 **≈+0.38 dB** 才是更干净的 warm-start 专属信号；warm-start 类增益最大 + 背景不退 = **首次感知 gate 明确正向**。单 seed，坐实需 30k 或多 seed。
+  - 产物：bundle `a800:/root/work/yusun/ah_harvest/out_nurec/`；A/B ckpt+metrics `output/p14_{A_lidar,B_warmstart}_5k/`。
+- **2026-06-05 P1.4 protected warm-start（提质实验，结论：🔴 负面，方法否定）** —— spec [`2026-06-05-protected-warmstart-design.md`](docs/superpowers/specs/2026-06-05-protected-warmstart-design.md)；plan [`2026-06-05-protected-warmstart-plan.md`](docs/superpowers/plans/2026-06-05-protected-warmstart-plan.md)。代码 8 commit（PR #18，Mac 81 测试全绿，**默认关闭字节等价无害**）。
+  - **配方（C1–C5）**：warmstart 点 5k→50k；per-track 把 warm track 排除出 MCMC relocate dead set + 冻结其 perturb noise；`exempt_layers_opacity_reg` 加 `dynamic_rigids`；观测面留 Adam 梯度精修；10k iters。
+  - **A800 双卡 10k A/B（同 clip 9ae151dc，B=protected 50k / A=LiDAR-only）**：注入 `375077` 粒子（5 车各 ~50,900，C1 生效），protected GPU 路径全程零崩。**automobile class_psnr A=22.813 → B=22.836（Δ=+0.023，持平）**；heavy_truck **−0.968**（C3 整层豁免误伤非 warm 车）；mean_class −0.036；cc_psnr_masked 24.878→24.903（+0.025）。**5k 时的 warm 优势（+0.730）在 10k 被 LiDAR-only 追平消失。**
+  - **viser 视觉（决定性）**：观测面 B 尚可（有 photometric 约束）；**未观测面 B 严重 spiky/白色玻璃碴**，A(LiDAR) 则稀疏但平。
+  - **根因（修正 spec 前提）**：spec 假设「MCMC 在侵蚀 asset」是**反的**——diffusion 补全的 asset 本身 spiky，MCMC+opacity 正则其实在**清理**它；而 C2 冻结 perturb/relocate + C3 关 opacity 衰减恰好**锁死 spiky 瑕疵并挡住清理**，未观测面又无 photometric 约束 → 比 baseline 更烂。**真瓶颈 = asset 质量 + 未观测面缺约束，不是 MCMC 侵蚀。**
+  - **结论**：freeze 式 protected warm-start **否定**，不标 ✅，代码保留（默认关闭）。后续若再试应走「约束式」（scale clamp + anisotropy 上限 + opacity floor，有界而非冻结）或先提 asset 质量（re-harvest / L4 协方差对齐）。
+  - **frozen drop-in 隔离实验（无训练，离线 ckpt 手术）**：把 A 的 ckpt 里 dynamic_rigids 整层换成 5 个 AH-1 对齐后的**原始 asset**（502695 粒子，未训练）→ viser 渲染。**原始 asset 几何连贯、不 spiky**，但**悬浮于地面 + 光照/环境不匹配、显假**。→ **结论闭环**：① B 的 spiky **不是 asset 原料**带来的，而是**训练+freeze 保护引入**；② frozen drop-in 的悬浮+光照失配正是「为何必须训练而非 frozen」；③ 悬浮疑似 cuboid 竖直锚点（中心 vs 触地）对齐偏移，warm-start 注入路径可能同存，待查。**可行路径 = warm-start + 完整训练（pose+外观）+ 未观测面用约束（scale/anisotropy/opacity floor）而非冻结**。
 - **2026-06-06 P1.2 track-pose 完整版（boundary anchor + pose prior）**：
   - 新建 [`pose_anchor.py`](threedgrut/model/pose_anchor.py)（`compute_pose_boundary_loss` 首/末活跃帧锚定 GT + `compute_pose_prior_loss` 全帧软 L2，旋转用矩阵 Frobenius² 绕开 quat 双覆盖，纯函数 Mac 可单测）+ 接入 [`trainer.py`](threedgrut/trainer.py)（`_compute_pose_boundary_term` / `_compute_pose_prior_term`，三层 gate）+ [`base_gs.yaml`](configs/base_gs.yaml)（`fix_first_last` / `lambda_pose_boundary_*` / 接通占位的 `lambda_pose_prior_*`，默认全 0=stageA 复现）+ [`poseopt.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer_poseopt.yaml)（修复版默认）+ [`test_pose_anchor.py`](threedgrut/tests/test_pose_anchor.py)。temporal smooth 是 stageA 既有、本任务复用。
   - **测试**：Mac 纯函数全绿；inceptio GPU 74 passed（顺手修 `_maybe_trainer` 用错的类名 `Trainer`→`Trainer3DGRUT`，含 `test_learnable_pose_smoothness.py` 同款预存 bug）。default `pose_adjustment.enabled=false` → baseline byte-identical。

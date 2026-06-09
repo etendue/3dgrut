@@ -553,6 +553,17 @@ class LayeredGaussians(nn.Module):
                 out["gaussians_nodes"][spec.name]["track_ids"] = (
                     track_ids.detach().cpu().to(torch.int64)
                 )
+            # P1.4 protected warm-start (C2): persist the protected-track-id
+            # buffer alongside track_ids. ``get_model_parameters`` (not
+            # nn.Module.state_dict) is the trainer's real ckpt format, so the
+            # register_buffer(persistent=True) alone does NOT round-trip here —
+            # without this a RESUMED warm-start run loses MCMC protection and
+            # the warm tracks go spiky again. No-op for unprotected layers.
+            protected = getattr(layer, "_warmstart_protected_track_ids", None)
+            if protected is not None:
+                out["gaussians_nodes"][spec.name]["_warmstart_protected_track_ids"] = (
+                    protected.detach().cpu().to(torch.int64)
+                )
         # T5.4: sky envmap state — saved as raw state_dict so SkyEnvmapMLP /
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
@@ -645,6 +656,18 @@ class LayeredGaussians(nn.Module):
                         delattr(layer, "track_ids")
                     layer.register_buffer(
                         "track_ids", ckpt_track_ids.long(), persistent=True,
+                    )
+                # P1.4 protected warm-start (C2): restore the protected-track-id
+                # buffer so a resumed warm-start run keeps MCMC protection.
+                ckpt_protected = nodes_dict[name].get("_warmstart_protected_track_ids")
+                if ckpt_protected is not None:
+                    if not torch.is_tensor(ckpt_protected):
+                        ckpt_protected = torch.as_tensor(ckpt_protected)
+                    if hasattr(layer, "_warmstart_protected_track_ids"):
+                        delattr(layer, "_warmstart_protected_track_ids")
+                    layer.register_buffer(
+                        "_warmstart_protected_track_ids",
+                        ckpt_protected.long(), persistent=True,
                     )
             # T5.4: sky envmap state restore — under either NRE-wrapped key
             # "model.sky_envmap_state" or unwrapped "sky_envmap_state".
@@ -1011,6 +1034,16 @@ class LayeredGaussians(nn.Module):
                         rotations_local=layer.rotation,
                         timestamp_us=timestamp_us, frame_id=frame_id,
                     )
+                # P1.4 viser dynamic_replaced/other toggle: hide selected
+                # track_ids by folding them into the inactive (density→-50)
+                # mask. ``_dyn_hidden_track_ids`` is unset by default → no
+                # effect on training / other callers.
+                _hide = getattr(self, "_dyn_hidden_track_ids", None)
+                if _hide is not None and _hide.numel() > 0:
+                    _tvis = ~torch.isin(
+                        layer.track_ids, _hide.to(layer.track_ids.device))
+                    active_mask = (active_mask & _tvis
+                                   if active_mask is not None else _tvis)
             # V3-L8/L9 per-track bias tables apply only to dynamic_rigids.
             # Looked up once outside the param loop to avoid repeated hasattr.
             apply_dyn_bias = (
@@ -1318,6 +1351,7 @@ class LayeredGaussians(nn.Module):
         scales: Optional[torch.Tensor] = None,
         densities: Optional[torch.Tensor] = None,
         track_ids: Optional[torch.Tensor] = None,
+        protected_track_ids: Optional[torch.Tensor] = None,
         observer_pts: Optional[torch.Tensor] = None,
         setup_optimizer: bool = True,
     ) -> None:
@@ -1386,6 +1420,16 @@ class LayeredGaussians(nn.Module):
 
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
+
+        if protected_track_ids is not None:
+            # Protected warm-start (C2): the set of asset-injected track ids
+            # whose particles MCMC must not relocate/perturb. Persistent so it
+            # round-trips through the training checkpoint.
+            layer.register_buffer(
+                "_warmstart_protected_track_ids",
+                protected_track_ids.long(),
+                persistent=True,
+            )
 
     # ------------------------------------------------------------------ T4.5: populate tracks post-construct
     def populate_tracks(self, tracks: dict) -> None:
