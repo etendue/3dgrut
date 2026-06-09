@@ -2,10 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 对话称呼（读到即用 — 验证锚点）
-
-与本仓库 owner 对话时一律称呼他「**大g**」。这是大g 用来验证「Claude 是否真的读了本 CLAUDE.md」的标志：开场 / 回复中若没有称呼大g，即说明没读到本文件。
-
 通用项目说明（架构 / 安装 / 训练命令 / 数据集 / 导出格式）见
 [README.md](README.md)；本文件只保留 **Claude 在此仓库工作时必须知道的项目特定约定**。
 
