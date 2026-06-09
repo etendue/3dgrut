@@ -136,6 +136,8 @@ class Renderer:
         eval_cameras=None,
         novel_view=False,
         use_difix=False,
+        load_lane_masks=False,
+        lane_band_px=None,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -172,6 +174,14 @@ class Renderer:
         # V3-T15.2 Stage A.4: CLI --use-difix injection (same dict-style pattern).
         if use_difix:
             conf["render"]["use_difix"] = True
+        # Phase 3 lane: inject dataset.load_lane_masks so a pre-trained baseline
+        # ckpt (whose embedded conf predates lane) loads *.aux.lane.zarr.itar at
+        # eval → render_all() emits mean_lane_*. Same dict-style injection as
+        # eval_cameras / use_difix above (old ckpts lack the key).
+        if load_lane_masks:
+            conf["dataset"]["load_lane_masks"] = True
+        if lane_band_px is not None:
+            conf["render"]["lane_band_px"] = int(lane_band_px)
 
         object_name = Path(conf.path).stem
         experiment_name = conf["experiment_name"]
