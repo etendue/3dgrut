@@ -64,6 +64,22 @@ if __name__ == "__main__":
             "third_party/Fixer/INSTALL.md."
         ),
     )
+    parser.add_argument(
+        "--load-lane-masks",
+        action="store_true",
+        help=(
+            "Phase 3 lane GT: load *.aux.lane.zarr.itar (Mapillary lane sseg) "
+            "and emit mean_lane_* metrics. Injects conf.dataset.load_lane_masks"
+            "=True so a pre-trained ckpt (whose embedded config predates lane) "
+            "still loads the lane product at eval."
+        ),
+    )
+    parser.add_argument(
+        "--lane-band-px",
+        type=int,
+        default=None,
+        help="Phase 3 lane dilated-band half-width (px). Default = DEFAULT_LANE_BAND_PX (8).",
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
@@ -77,6 +93,8 @@ if __name__ == "__main__":
         eval_cameras=eval_cameras_list,
         novel_view=args.novel_view,
         use_difix=args.use_difix,
+        load_lane_masks=args.load_lane_masks,
+        lane_band_px=args.lane_band_px,
     )
 
     renderer.render_all()
