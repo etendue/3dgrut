@@ -96,7 +96,7 @@ kanban
         [继承: asset-harvester-verify 端到端跑通（3车+3人）]
         [✅ P1.2 track-pose（boundary+prior+smooth）: fix 三者最优 class25.07/cc26.06，−0.61 退化未在本配方复现（2026-06-06）]
         [✅ P1.3b Fourier albedo 实现+A/B（k4 vs DC k1）: 无增益 24.13 vs 24.20，default k1 关、留未来（2026-06-06）]
-        [✅ BUG-1 cuboid overlay 对齐: 双根因 FLIP 180° 镜像投影 + line_segments pinhole 失配，flip=I 且 cuboid 回 overlay 路径（2026-06-10）]
+        [✅ BUG-1 viser overlay 对齐三连: cuboid 框 + label + ego/track 轨迹全部回 FTheta overlay 共投影，flip=I 修 180° 镜像，删 debug 开关（2026-06-10）]
 ```
 
 ### 1.2 任务级看板（按 P*.* 编号）
@@ -123,7 +123,7 @@ kanban
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
 | **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ⬜ | — |
-| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ✅ | `2a4657e`；双根因（FLIP 180° + pinhole 失配），inceptio 5 帧目视验收 |
+| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ✅ | `2a4657e` 框（双根因 FLIP 180° + pinhole 失配）+ `e6fccb1` label 共投影 + `fbb45cd` trajectories 共投影/删 debug 开关；inceptio 多轮目视验收 |
 
 ### 1.3 Phase 状态汇总 + per-class gap 表（Phase 0 回填）
 
