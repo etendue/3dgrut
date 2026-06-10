@@ -58,8 +58,26 @@ class Viser4DOverlayCompositor:
         height: int,
         width: int,
         subdivide_n: int = 20,
+        world_to_camera_flip: "np.ndarray | None" = None,
     ):
-        self.projector = FthetaForwardProjector(ftheta_dict)
+        """``world_to_camera_flip`` is forwarded to FthetaForwardProjector.
+
+        None keeps the projector's legacy default (FLIP_VISER_TO_OPENCV).
+        BUG-1 (2026-06-10): the viewer must pass ``np.eye(4)`` — the c2w it
+        feeds composite() is the SAME matrix the engine renders the backdrop
+        with, whose viewing direction is the +Z column (FTheta rays have
+        rz=cos(theta)>0, see ftheta_intrinsics.ftheta_pixels_to_camera_rays).
+        The legacy Z-flip pointed the overlay camera 180° away from the
+        backdrop camera, so wireframes were mirror-projections of the tracks
+        BEHIND the ego — plausibly placed on a fore-aft symmetric street,
+        which is how the original B2 probe mis-calibrated it. Verified on
+        inceptio: bus track 405 (12 m ahead, visible in the backdrop)
+        projects to its rendered position with flip=I and is fully invisible
+        (0/8 corners) with the legacy flip; GT raw-camera validation
+        (validate_cuboid_7cam, flip=I) hugs the real vehicles.
+        """
+        self.projector = FthetaForwardProjector(
+            ftheta_dict, world_to_camera_flip=world_to_camera_flip)
         self.renderer = OverlayRenderer(height=height, width=width)
         self.subdivide_n = int(subdivide_n)
         self.height = int(height)
