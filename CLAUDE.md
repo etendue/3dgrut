@@ -163,6 +163,11 @@ git push inceptio <branch>:<branch>
 # 2. inceptio：从该分支 checkout 独立 worktree（仓库外路径 ~/repo/3dgrut2-wt/<task>）
 ssh inceptio 'cd ~/repo/3dgrut2 && git worktree add ~/repo/3dgrut2-wt/<task> <branch>'
 
+# 2b. ⚠️ 必做：补 submodule —— git worktree add **不 checkout submodule**，但
+#     lib3dgut_cc JIT 编译需 thirdparty/tiny-cuda-nn（缺 → "Error building extension
+#     'lib3dgut_cc'"）。从主仓库 rsync 过来（不需联网，inceptio 主仓库已有 submodule）：
+ssh inceptio 'cd ~/repo/3dgrut2; WT=~/repo/3dgrut2-wt/<task>; for p in $(git config --file .gitmodules --get-regexp path | cut -d" " -f2); do rsync -a ~/repo/3dgrut2/$p/ $WT/$p/; done'
+
 # 3. inceptio worktree 里跑（cd 进 worktree → import 自动解析 worktree 代码、非主仓库）
 ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
   && cd ~/repo/3dgrut2-wt/<task> && python train.py ... '
