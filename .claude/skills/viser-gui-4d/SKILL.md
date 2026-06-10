@@ -44,6 +44,15 @@ inherit conda — always export the env PATH first (see CLAUDE.md):
 - **a800-x2**: `export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH`,
   data under `/root/work/yusun/ncore-nurec/...`.
 
+**Renderer backend by GPU (CRITICAL — wrong choice = segfault).** The viewer's
+`--renderer` defaults to `3dgrt` (OptiX ray tracing, **needs RT cores**). Pick by host GPU:
+- **A100 / A800** (datacenter, NO RT cores) → **MUST pass `--renderer 3dgut`** (tile
+  rasterization, no OptiX). The default `3dgrt` **segfaults** here (OptiX
+  `libplayground_cc` dlopen cores: log shows `Loading extension module libplayground_cc...`
+  then `dumped core`). 3dgut renders ego / cuboid / LiDAR + the 4D timeline fine.
+- **RTX (4090) / inceptio / Hopper (H100/H800)** (have RT cores) → default `3dgrt` is fine
+  (OptiX works); pass it explicitly or omit.
+
 VRAM: each viewer instance loads ~7.5 GB; two fit on a 24 GB card.
 
 ## 3. Launch (proven inline-nohup pattern)
@@ -59,8 +68,13 @@ ssh <host> "export PATH=<env-bin>:\$PATH && export CUDA_VISIBLE_DEVICES=0 \
   && cd <repo> && rm -f /tmp/viser_<tag>.log \
   && nohup timeout 3600 python threedgrut_playground/viser_gui_4d.py \
        --gs_object <ckpt.pt> --dataset_path <manifest.json> --port 8090 \
+       --renderer 3dgut \
        > /tmp/viser_<tag>.log 2>&1 & echo PID \$!"
 ```
+
+> `--renderer 3dgut` shown above is for **A100/A800** (no RT cores). On **RTX/4090/H100**
+> drop the flag or use `--renderer 3dgrt` (OptiX, the default). See §2 — getting this
+> wrong segfaults the viewer at OptiX dlopen.
 
 **Several ckpts at once** (visual A/B): launch one per **distinct port** (8090, 8091, …),
 each with its own `/tmp/viser_<tag>.log`. They share GPU0 fine (mind the ~7.5 GB each).
@@ -104,6 +118,13 @@ a live viewer. Trust the port + GPU numbers over pgrep counts.
 
 ## Gotchas (learned the hard way)
 
+- **`--renderer` backend must match the GPU (A800 segfault, 2026-06-10).** Default
+  `3dgrt` uses OptiX (needs RT cores). On **A100/A800** the OptiX extension dlopen
+  **segfaults** (`Loading extension module libplayground_cc...` → `dumped core`) — you
+  MUST pass **`--renderer 3dgut`** (tile rasterization). RTX/4090/H100 have RT cores so
+  the default is fine. The code documents this at `viser_gui_4d.py:1532` (`--renderer`
+  choices) + the `--no_gaussian_render` help, but it's easy to miss — always set it
+  explicitly per host.
 - **sky_backend must match the ckpt.** Ckpts trained with `trainer.sky_backend=mlp`
   (the A800/inceptio default, nvdiffrast unavailable) load a `SkyEnvmapMLP`; the viewer
   auto-detects from the ckpt. A mismatch → state_dict shape error on first render. If
