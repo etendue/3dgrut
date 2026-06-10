@@ -63,6 +63,9 @@ def _make_meta_with_track():
     """3 ego frames; one automobile track active at frames 0 and 1."""
     from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
     ego = np.tile(np.eye(4, dtype=np.float32)[None, ...], (3, 1, 1))
+    ego[0, :3, 3] = [0.0, 0.0, 0.0]
+    ego[1, :3, 3] = [10.0, 0.0, 0.0]
+    ego[2, :3, 3] = [20.0, 0.0, 0.0]
     ts = np.array([0, 1_000_000, 2_000_000], dtype=np.int64)
 
     track_poses = np.tile(np.eye(4, dtype=np.float32)[None, ...], (3, 1, 1))
@@ -97,10 +100,10 @@ def _fake_handle():
     return SimpleNamespace(visible=True, remove=mock.MagicMock())
 
 
-def _bypass_viewer(mod, *, ftheta: bool, overlay_on: bool = True,
-                   show_cuboids: bool = True):
+def _bypass_viewer(mod, *, ftheta: bool, show_cuboids: bool = True,
+                   show_ego_traj: bool = True, show_tracks: bool = True):
     """Viser4DViewer without __init__ side effects; only fields the cuboid
-    paths touch are populated."""
+    and trajectory paths touch are populated."""
     meta = _make_meta_with_track()
     cls = mod.Viser4DViewer
     with mock.patch.object(cls, "__init__", autospec=True) as init_mock:
@@ -109,13 +112,28 @@ def _bypass_viewer(mod, *, ftheta: bool, overlay_on: bool = True,
     viewer.meta = meta
     viewer._overlay_compositor = object() if ftheta else None
     viewer.show_cuboids = SimpleNamespace(value=show_cuboids)
-    viewer.show_ftheta_overlay = (SimpleNamespace(value=overlay_on)
-                                  if ftheta else None)
+    viewer.show_ego_traj = SimpleNamespace(value=show_ego_traj)
+    viewer.show_tracks = SimpleNamespace(value=show_tracks)
     viewer.h_cuboid_lines = None
+    viewer.h_ego_traj = None
+    viewer.h_ego_frustum = None
+    viewer.h_track_trajectories = None
     viewer._cuboid_label_handles = {}
+    # Static overlay caches normally built in __init__ (BUG-1c): ego polyline
+    # + per-track (class, centers) — only populated in FTheta mode.
+    if ftheta:
+        viewer._overlay_static_ego_polylines = [
+            meta.ego_poses_c2w[:, :3, 3].astype(np.float64)]
+        t = meta.tracks[TRACK_ID]
+        centers = t["poses"][t["frame_info"], :3, 3].astype(np.float64)
+        viewer._overlay_static_track_polylines = [("automobile", centers)]
+    else:
+        viewer._overlay_static_ego_polylines = []
+        viewer._overlay_static_track_polylines = []
     scene = SimpleNamespace(
         add_line_segments=mock.MagicMock(side_effect=lambda *a, **k: _fake_handle()),
         add_label=mock.MagicMock(side_effect=lambda *a, **k: _fake_handle()),
+        add_camera_frustum=mock.MagicMock(side_effect=lambda *a, **k: _fake_handle()),
     )
     viewer.server = SimpleNamespace(scene=scene)
     return viewer
@@ -193,10 +211,10 @@ def test_overlay_specs_include_track_labels(viser_gui_4d):
 
 
 def test_update_active_cuboids_removes_3d_labels_when_overlay_active(viser_gui_4d):
-    """Overlay ON → browser-side 3D labels must be REMOVED (the overlay text
+    """FTheta mode → browser-side 3D labels must be REMOVED (the overlay text
     path replaces them); otherwise the pinhole-projected 3D label drifts away
     from the FTheta-aligned wireframe it belongs to."""
-    viewer = _bypass_viewer(viser_gui_4d, ftheta=True, overlay_on=True)
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
     stale_label = _fake_handle()
     viewer._cuboid_label_handles[TRACK_ID] = stale_label
 
@@ -207,19 +225,85 @@ def test_update_active_cuboids_removes_3d_labels_when_overlay_active(viser_gui_4
     viewer.server.scene.add_label.assert_not_called()
 
 
-def test_update_active_cuboids_restores_3d_labels_when_overlay_off(viser_gui_4d):
-    """Overlay OFF (A/B fallback) → legacy 3D label path keeps working."""
-    viewer = _bypass_viewer(viser_gui_4d, ftheta=True, overlay_on=False)
+def test_pinhole_mode_keeps_3d_labels(viser_gui_4d):
+    """Pinhole ckpts (no compositor) → legacy 3D label path keeps working."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=False)
     viewer._update_active_cuboids(frame_idx=0)
     assert viewer.server.scene.add_label.called
 
 
+# ================================================ BUG-1c: trajectories
+def test_overlay_specs_include_ego_trajectory(viser_gui_4d):
+    """FTheta mode → ego trajectory rides the overlay (same FTheta projection
+    as the backdrop) instead of the pinhole line_segments primitive."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
+    specs = viewer._collect_overlay_layer_specs(t_us=0)
+    ego = [s for s in specs if s.name == "ego_trajectory"]
+    assert ego, "ego trajectory missing from overlay specs (BUG-1c)"
+    np.testing.assert_allclose(
+        np.asarray(ego[0].polylines_world[0]),
+        viewer.meta.ego_poses_c2w[:, :3, 3].astype(np.float64))
+    # Dense multi-vertex polyline → low subdivide (B2 perf rationale).
+    assert ego[0].subdivide_n <= 5
+
+
+def test_overlay_specs_include_track_trajectories(viser_gui_4d):
+    """FTheta mode → per-class track trajectory layers, colored like the 3D
+    path (class_color) so the visuals don't change, only the projection."""
+    from threedgrut_playground.utils.cuboid import class_color
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
+    specs = viewer._collect_overlay_layer_specs(t_us=0)
+    tr = [s for s in specs if s.name.startswith("track_trajectories")]
+    assert tr, "track trajectories missing from overlay specs (BUG-1c)"
+    expected_rgb = tuple(int(round(c * 255)) for c in class_color("automobile"))
+    assert tuple(tr[0].color[:3]) == expected_rgb
+
+
+def test_overlay_specs_respect_trajectory_toggles(viser_gui_4d):
+    """Unchecking Ego trajectory / Track trajectories hides their overlay
+    layers (content toggles keep working with the overlay path)."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True,
+                            show_ego_traj=False, show_tracks=False)
+    specs = viewer._collect_overlay_layer_specs(t_us=0)
+    assert not [s for s in specs if s.name == "ego_trajectory"]
+    assert not [s for s in specs if s.name.startswith("track_trajectories")]
+
+
+def test_add_ego_trajectory_skips_polyline_in_ftheta(viser_gui_4d):
+    """FTheta mode → the pinhole trajectory line_segments must NOT be created
+    (overlay draws it); the ego frustum (a 3D position widget, not a
+    backdrop annotation) is still created."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
+    viewer._add_ego_trajectory()
+    viewer.server.scene.add_line_segments.assert_not_called()
+    assert viewer.h_ego_traj is None
+    assert viewer.server.scene.add_camera_frustum.called
+
+
+def test_add_track_trajectories_skips_in_ftheta(viser_gui_4d):
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
+    viewer._add_track_trajectories()
+    viewer.server.scene.add_line_segments.assert_not_called()
+    assert viewer.h_track_trajectories is None
+
+
+def test_add_trajectories_pinhole_unchanged(viser_gui_4d):
+    """Pinhole ckpts keep the 3D primitive trajectories (zero regression)."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=False)
+    viewer._add_ego_trajectory()
+    viewer._add_track_trajectories()
+    assert viewer.h_ego_traj is not None
+    assert viewer.h_track_trajectories is not None
+
+
 # ===================================================== line_segments gating
 def test_update_active_cuboids_skips_line_segments_when_overlay_active(viser_gui_4d):
-    """FTheta + overlay ON → the pinhole-projected line_segments node must NOT
-    be (re)created, and any stale node must be removed, so the browser never
-    double-draws a drifting wireframe on top of the aligned overlay."""
-    viewer = _bypass_viewer(viser_gui_4d, ftheta=True, overlay_on=True)
+    """FTheta mode → the pinhole-projected line_segments node must NOT be
+    (re)created, and any stale node must be removed, so the browser never
+    double-draws a drifting wireframe on top of the aligned overlay. The
+    overlay is the ONLY cuboid path in FTheta mode (the legacy toggle that
+    re-enabled the misaligned pinhole path was removed)."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
     stale = _fake_handle()
     viewer.h_cuboid_lines = stale
 
@@ -230,14 +314,6 @@ def test_update_active_cuboids_skips_line_segments_when_overlay_active(viser_gui
     assert viewer.h_cuboid_lines is None
     # BUG-1b: labels ride the overlay text path now — no 3D labels created.
     viewer.server.scene.add_label.assert_not_called()
-
-
-def test_update_active_cuboids_falls_back_when_overlay_off(viser_gui_4d):
-    """FTheta + overlay OFF → legacy line_segments path (A/B comparison)."""
-    viewer = _bypass_viewer(viser_gui_4d, ftheta=True, overlay_on=False)
-    viewer._update_active_cuboids(frame_idx=0)
-    assert viewer.server.scene.add_line_segments.called
-    assert viewer.h_cuboid_lines is not None
 
 
 def test_update_active_cuboids_pinhole_mode_unchanged(viser_gui_4d):

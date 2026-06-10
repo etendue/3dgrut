@@ -321,7 +321,8 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 - **修复**（全部 playground viz，⛔ 红线文件零改动）：cuboid 回 FTheta overlay 路径（per-track instance 色 + subdivide 20 鱼眼曲线边）；overlay live 时跳过 line_segments（防双画），overlay checkbox OFF 回退 line_segments 留 A/B；两处 compositor 构造传 `world_to_camera_flip=np.eye(4)`（compositor 新增透传参数，默认 None=legacy 不破坏旧脚本）。
 - **测试**：[`test_viser_gui_4d_cuboid_overlay.py`](threedgrut/tests/test_viser_gui_4d_cuboid_overlay.py) 8 项，含「overlay/renderer 相机一致性合同」（+Z 视线点必须投到 principal point；legacy flip 必须看不见它 = 回归绊线）。Mac 192 related passed。
 - **inceptio 实测验收**（p13b_ab_k4_30k 30k ckpt，5 帧 × 14-26 tracks，直行 + 转弯帧 398）：bus 12 m 大目标框贴车身、box truck 框与 GT 对照同位同色、白 van 框头尾顶贴合、旧镜像框全消失。验证脚本 [`verify_bug1_cuboid_overlay.py`](scripts/verify_bug1_cuboid_overlay.py)（headless 复刻 update() 渲染体）留档可重跑。
-- **遗留小项（已闭环 2026-06-10 当日）**：labels 原为 3D text（浏览器 pinhole），wireframe 对齐后会漂离框 → **BUG-1b 跟进修复**：label 文字进 overlay 路径（PIL `draw.text` + 黑描边，锚点 = cuboid 顶角与 3D label 同款 `_cuboid_label_anchor`，经同一 FTheta projector 投影 + visibility 过滤）；overlay live 时移除浏览器端 3D labels 防双画，overlay OFF 回退 3D labels。inceptio 重跑 verify：`t405 | bus` 等文字同色贴框顶角，密集场景归属可辨。
+- **遗留小项（已闭环 2026-06-10 当日）**：labels 原为 3D text（浏览器 pinhole），wireframe 对齐后会漂离框 → **BUG-1b 跟进修复**：label 文字进 overlay 路径（PIL `draw.text` + 黑描边，锚点 = cuboid 顶角与 3D label 同款 `_cuboid_label_anchor`，经同一 FTheta projector 投影 + visibility 过滤）；overlay live 时移除浏览器端 3D labels 防双画。inceptio 重跑 verify：`t405 | bus` 等文字同色贴框顶角，密集场景归属可辨。
+- **BUG-1c（同日，用户追问 trajectory + 开关）**：① ego/track trajectories 同病（V3-VIZ.5 移到浏览器 pinhole 3D primitives）→ 回 overlay 共投影（ego 绿 subdivide 3、track per-class `class_color` 分层，静态缓存带 class）；FTheta 模式跳过 3D 轨迹创建（ego frustum 保留——位置 widget 非背景注释）。② V3-VIZ.5 当年移除 overlay 轨迹的理由「behind-camera 散射像素」实为 FLIP 180° 镜像症状（背后段被翻到前方），flip=I 后 z>0/max_angle 剪除正常。③ UI 收口：**删除 "FTheta overlay (debug)" checkbox**（overlay 是 FTheta 唯一正确路径，回退开关只制造困惑），三个内容开关（Active cuboids / Ego trajectory / Track trajectories）直接 gate overlay 层。④ 验收：路口车流轨迹贴路面弯曲（鱼眼曲线平滑）；ego 层数据正常（frame111 426/524 点可见但聚于消失点 105×8px——Follow 视角下自己看自己轨迹的几何简并，非 bug，自由视角完整展开）。
 
 ---
 
@@ -420,7 +421,8 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **修复**：cuboid 回 overlay 路径（per-track 色）+ overlay live 跳过 line_segments（OFF 回退留 A/B）+ 两处 compositor `world_to_camera_flip=np.eye(4)`。
   - **测试/验收**：新 `test_viser_gui_4d_cuboid_overlay.py` 8 项（含 +Z→principal point 相机一致性合同 + legacy flip 回归绊线）；Mac 192 related passed；inceptio 5 帧（直行+转弯）× 14-26 tracks 目视：bus/box-truck/白 van 框贴合、镜像框消失。验证脚本 `scripts/verify_bug1_cuboid_overlay.py` 留档。
   - **教训入风险表 R8**：目视校准会被街道前后对称骗过，投影类校准必须 GT 对照 + 不变量测试 pin 死。
-  - **BUG-1b 跟进（同日，用户验框后追问 label）**：label 文字进 overlay 路径与 wireframe 共投影——`OverlayLayer.texts` + `PolylineLayerSpec.labels_world`（锚点 = cuboid 顶角，共用 `_cuboid_label_anchor`），overlay live 时移除浏览器端 3D labels（防 pinhole 双画），OFF 回退。三层 TDD 测试 +8 项（renderer text ×3 / compositor 投影+背后剔除 ×2 / viewer specs+移除+回退 ×3），Mac 200 related passed；inceptio 重跑 verify：`t405 | bus` 同色文字贴框顶角。
+  - **BUG-1b 跟进（同日，用户验框后追问 label）**：label 文字进 overlay 路径与 wireframe 共投影——`OverlayLayer.texts` + `PolylineLayerSpec.labels_world`（锚点 = cuboid 顶角，共用 `_cuboid_label_anchor`），overlay live 时移除浏览器端 3D labels（防 pinhole 双画）。三层 TDD 测试 +8 项（renderer text ×3 / compositor 投影+背后剔除 ×2 / viewer specs+移除+回退 ×3），Mac 200 related passed；inceptio 重跑 verify：`t405 | bus` 同色文字贴框顶角。
+  - **BUG-1c 跟进（同日，用户追问 trajectory/开关）**：ego/track trajectories 回 overlay 共投影（V3-VIZ.5 的「behind-camera 散射」实为 FLIP 镜像症状，flip=I 已根治）；track per-class `class_color` 分层、ego frustum 留 3D；**删除 "FTheta overlay (debug)" checkbox**——overlay 为 FTheta 唯一路径，内容开关直接 gate overlay 层。+7 测试（specs ego/track/toggles ×3、FTheta 跳过 3D ×2、pinhole 回归 ×2），Mac 205 related passed；inceptio verify：路口车流轨迹贴路面弯曲；ego 层投影正常（Follow 视角几何简并致视觉不显眼，自由视角完整）。
 
 ---
 
