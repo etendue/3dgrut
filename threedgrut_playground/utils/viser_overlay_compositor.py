@@ -35,12 +35,19 @@ class PolylineLayerSpec:
     Use a low value (e.g. 2-3) for already-dense multi-vertex polylines
     (track trajectories, ego trajectory) where each segment is short and
     the per-frame subdivision cost dominates.
+
+    ``labels_world`` (BUG-1b) is a list of (anchor_xyz (3,), text) world-space
+    text labels. Anchors are projected through the SAME FTheta polynomial as
+    the polylines; invisible anchors (behind camera / outside FOV / out of
+    bounds) are dropped. Rendered in the layer color with a black stroke.
     """
     name: str
     polylines_world: list[np.ndarray] = field(default_factory=list)
     color: RGBAColor = (0, 255, 0, 255)
     width: int = 1
     subdivide_n: int = 20
+    labels_world: list[tuple[np.ndarray, str]] = field(default_factory=list)
+    font_size: int = 18
 
 
 class Viser4DOverlayCompositor:
@@ -58,8 +65,26 @@ class Viser4DOverlayCompositor:
         height: int,
         width: int,
         subdivide_n: int = 20,
+        world_to_camera_flip: "np.ndarray | None" = None,
     ):
-        self.projector = FthetaForwardProjector(ftheta_dict)
+        """``world_to_camera_flip`` is forwarded to FthetaForwardProjector.
+
+        None keeps the projector's legacy default (FLIP_VISER_TO_OPENCV).
+        BUG-1 (2026-06-10): the viewer must pass ``np.eye(4)`` — the c2w it
+        feeds composite() is the SAME matrix the engine renders the backdrop
+        with, whose viewing direction is the +Z column (FTheta rays have
+        rz=cos(theta)>0, see ftheta_intrinsics.ftheta_pixels_to_camera_rays).
+        The legacy Z-flip pointed the overlay camera 180° away from the
+        backdrop camera, so wireframes were mirror-projections of the tracks
+        BEHIND the ego — plausibly placed on a fore-aft symmetric street,
+        which is how the original B2 probe mis-calibrated it. Verified on
+        inceptio: bus track 405 (12 m ahead, visible in the backdrop)
+        projects to its rendered position with flip=I and is fully invisible
+        (0/8 corners) with the legacy flip; GT raw-camera validation
+        (validate_cuboid_7cam, flip=I) hugs the real vehicles.
+        """
+        self.projector = FthetaForwardProjector(
+            ftheta_dict, world_to_camera_flip=world_to_camera_flip)
         self.renderer = OverlayRenderer(height=height, width=width)
         self.subdivide_n = int(subdivide_n)
         self.height = int(height)
@@ -85,24 +110,38 @@ class Viser4DOverlayCompositor:
                 f"check ftheta_render_wh / engine output."
             )
 
-        total_pl = sum(len(L.polylines_world) for L in layers_world)
+        total_pl = sum(len(L.polylines_world) + len(L.labels_world)
+                       for L in layers_world)
         if total_pl == 0:
             return backdrop_rgb  # nothing to draw, skip projection + blend
 
         render_layers: list[OverlayLayer] = []
         for spec in layers_world:
-            if not spec.polylines_world:
+            if not spec.polylines_world and not spec.labels_world:
                 continue
             # Spec's per-layer subdivide_n overrides the compositor default
             # so callers can tune cuboid (high) vs trajectory (low) separately.
             n_sub = spec.subdivide_n if spec.subdivide_n else self.subdivide_n
-            projected = self.projector.project_polylines(
+            projected = (self.projector.project_polylines(
                 spec.polylines_world, c2w_viser, subdivide_n=n_sub)
+                if spec.polylines_world else [])
+            # BUG-1b: labels share the projector with the wireframe, so text
+            # and box can never separate again. Invisible anchors dropped.
+            texts: list[tuple[float, float, str]] = []
+            if spec.labels_world:
+                anchors = np.stack([np.asarray(a, dtype=np.float64)
+                                    for a, _ in spec.labels_world])
+                uv, vis = self.projector.project_points(anchors, c2w_viser)
+                for (_, text), (u, v), ok in zip(spec.labels_world, uv, vis):
+                    if bool(ok):
+                        texts.append((float(u), float(v), str(text)))
             render_layers.append(OverlayLayer(
                 name=spec.name,
                 polylines=projected,
                 color=spec.color,
                 width=spec.width,
+                texts=texts,
+                font_size=spec.font_size,
             ))
 
         overlay_rgba = self.renderer.render(render_layers)

@@ -118,3 +118,38 @@ def test_multilayer_ordering_top_layer_wins():
     # At pixel (15, 16) both layers drew; top (blue) should win.
     px = out[16, 15]
     assert px[2] > 200 and px[0] < 50, f"top blue should dominate; got {px.tolist()}"
+
+
+# ===================================================== BUG-1b: text labels
+def test_render_text_draws_pixels_near_anchor():
+    """OverlayLayer.texts → readable label pixels near the anchor point,
+    sharing the layer color (the wireframe's instance color)."""
+    r = OverlayRenderer(height=128, width=256)
+    layer = OverlayLayer(
+        name="labels", color=(0, 255, 0, 255),
+        texts=[(60.0, 80.0, "t7 | bus")],
+    )
+    out = r.render([layer])
+    # Some non-transparent pixels must appear in a window above/right of the
+    # anchor (text is drawn adjacent to the anchor, not centered on it).
+    win = out[80 - 40:80 + 8, 60 - 4:60 + 120]
+    assert (win[..., 3] > 0).sum() > 20, "expected text pixels near anchor"
+
+
+def test_render_text_out_of_bounds_anchor_no_crash():
+    """Anchors far outside the canvas must not crash PIL (clipping is fine)."""
+    r = OverlayRenderer(height=64, width=64)
+    layer = OverlayLayer(
+        name="labels", color=(255, 0, 0, 255),
+        texts=[(-500.0, -500.0, "offscreen"), (10_000.0, 10_000.0, "far")],
+    )
+    out = r.render([layer])
+    assert out.shape == (64, 64, 4)
+
+
+def test_render_text_empty_list_is_noop():
+    """texts=[] (default) keeps legacy polyline-only behavior byte-identical."""
+    r = OverlayRenderer(height=32, width=32)
+    layer = OverlayLayer(name="empty", color=(0, 255, 0, 255))
+    out = r.render([layer])
+    assert out[..., 3].max() == 0

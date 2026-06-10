@@ -8,14 +8,32 @@ blends into the engine's Gaussian backdrop image.
 """
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 
 RGBAColor = tuple[int, int, int, int]
+
+
+@functools.lru_cache(maxsize=8)
+def _label_font(size: int):
+    """Best-effort scalable font; cached per size.
+
+    DejaVuSans ships with most Linux distros (inceptio/a800/vast images);
+    Pillow >= 10.1 can scale the built-in font; final fallback is the legacy
+    fixed-size bitmap font (small but functional).
+    """
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size)
+    except Exception:
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
 
 
 @dataclass
@@ -27,11 +45,20 @@ class OverlayLayer:
     ``polylines`` is the projector output: list of (uv: (M, 2) float,
     visible: (M,) bool). Segments where either endpoint has visible=False
     are skipped.
+
+    ``texts`` (BUG-1b) is a list of (u, v, text) screen-space label anchors,
+    already projected AND visibility-filtered by the caller (the compositor
+    drops behind-camera / out-of-FOV anchors before they reach the renderer).
+    Text is drawn in the layer color with a black stroke, bottom-left-anchored
+    just above the anchor point — mirroring the viser 3D label that hugs the
+    cuboid's top corner.
     """
     name: str
     polylines: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
     color: RGBAColor = (0, 255, 0, 255)
     width: int = 1
+    texts: list[tuple[float, float, str]] = field(default_factory=list)
+    font_size: int = 18
 
 
 class OverlayRenderer:
@@ -76,6 +103,19 @@ class OverlayRenderer:
                         run_start = None
                 if run_start is not None and M - run_start >= 2:
                     _draw_run(draw, uv, run_start, M, color, width)
+            # BUG-1b: per-layer text labels (instance color + black stroke for
+            # readability on any backdrop). PIL clips out-of-canvas anchors.
+            if layer.texts:
+                font = _label_font(int(layer.font_size))
+                for u, v, text in layer.texts:
+                    draw.text(
+                        (float(u) + 2.0, float(v) - layer.font_size - 4.0),
+                        str(text),
+                        fill=color,
+                        font=font,
+                        stroke_width=2,
+                        stroke_fill=(0, 0, 0, 255),
+                    )
         return np.asarray(img, dtype=np.uint8)
 
 

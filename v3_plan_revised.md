@@ -68,7 +68,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [BUG-1 active cuboid wireframe 与 gaussian 实物错位（仅 viser overlay 投影；不碰 metric/init）]
         [P1.1 sseg 精修动静边界（cuboid×sseg 求交）]
         [P1.3 per-track albedo/scale + per-track cap]
         [P1.4 asset-harvester warm-start（车）]
@@ -97,6 +96,7 @@ kanban
         [继承: asset-harvester-verify 端到端跑通（3车+3人）]
         [✅ P1.2 track-pose（boundary+prior+smooth）: fix 三者最优 class25.07/cc26.06，−0.61 退化未在本配方复现（2026-06-06）]
         [✅ P1.3b Fourier albedo 实现+A/B（k4 vs DC k1）: 无增益 24.13 vs 24.20，default k1 关、留未来（2026-06-06）]
+        [✅ BUG-1 viser overlay 对齐三连: cuboid 框 + label + ego/track 轨迹全部回 FTheta overlay 共投影，flip=I 修 180° 镜像，删 debug 开关（2026-06-10）]
 ```
 
 ### 1.2 任务级看板（按 P*.* 编号）
@@ -123,7 +123,7 @@ kanban
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
 | **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ⬜ | — |
-| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ⬜ | — |
+| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ✅ | `2a4657e` 框（双根因 FLIP 180° + pinhole 失配）+ `e6fccb1` label 共投影 + `fbb45cd` trajectories 共投影/删 debug 开关；inceptio 多轮目视验收 |
 
 ### 1.3 Phase 状态汇总 + per-class gap 表（Phase 0 回填）
 
@@ -134,8 +134,8 @@ kanban
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
 | **3** | 道路/车道线 | 0/2 | 车道线锐度（lane LPIPS↓） | ≥ 24.7 | ⬜ |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
-| bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 0/1 | viser cuboid wireframe 与 gaussian 实物目视重合 | 不影响 metric | ⬜ |
-| **总计** | — | **4/18** | — | — | — |
+| bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 1/1 | viser cuboid wireframe 与 gaussian 实物目视重合 ✅（bus/box-truck/van 多帧贴合） | 不影响 metric | ✅ |
+| **总计** | — | **5/18** | — | — | — |
 
 > **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
@@ -315,6 +315,15 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 2.（可选）轻量回归测试 pin 住「overlay projector 与 renderer 相机一致」：构造已知相机 + 已知 world 点，断言 overlay 投影像素 == renderer 投影像素。
 3. **纯可视化修复，不需 A800 重训 / 重 eval**；§ 1.3 per-class gap 表与 P0.1 锚点不变。
 
+**✅ 修复记录（2026-06-10，commit `2a4657e`）— 实际根因比任务卡预判深一层（双层）**：
+- **根因 #1（用户报告时的现象主体）**：V3-VIZ.2（`bea5508`）把 cuboid 从 overlay 移到 `add_line_segments` 3D primitive —— 浏览器 pinhole 投影 vs FTheta 鱼眼 backdrop 除光轴外处处偏差（front_wide 140° FoV 下几十~上百 px），当时低估为「边缘几 px」。
+- **根因 #2（更早的 B2 overlay 路径本身也错，本次新发现）**：`FthetaForwardProjector` 默认 `FLIP_VISER_TO_OPENCV=diag(1,1,-1)` 把 overlay 相机翻转 **180°**——backdrop 视线 = c2w 的 **+Z**（FTheta rays `rz=cos>0`，`ftheta_pixels_to_camera_rays`），FLIP 后 overlay 视线 = −Z → 画的是 **ego 背后 tracks 的镜像投影**，街道前后对称骗过了当年 B2 校准探针（`B2_blended_clean.png` 的"对齐"即镜像巧合）。实锤证据：bus track 405（前方 12 m、backdrop 清晰可见）flip=I 时 8/8 角可见且 uv 落在渲染公交车处，默认 FLIP 0/8 全不可见；GT raw-camera 对照（`validate_cuboid_7cam`，flip=I）框套住 GT 真车（box truck）。
+- **修复**（全部 playground viz，⛔ 红线文件零改动）：cuboid 回 FTheta overlay 路径（per-track instance 色 + subdivide 20 鱼眼曲线边）；overlay live 时跳过 line_segments（防双画），overlay checkbox OFF 回退 line_segments 留 A/B；两处 compositor 构造传 `world_to_camera_flip=np.eye(4)`（compositor 新增透传参数，默认 None=legacy 不破坏旧脚本）。
+- **测试**：[`test_viser_gui_4d_cuboid_overlay.py`](threedgrut/tests/test_viser_gui_4d_cuboid_overlay.py) 8 项，含「overlay/renderer 相机一致性合同」（+Z 视线点必须投到 principal point；legacy flip 必须看不见它 = 回归绊线）。Mac 192 related passed。
+- **inceptio 实测验收**（p13b_ab_k4_30k 30k ckpt，5 帧 × 14-26 tracks，直行 + 转弯帧 398）：bus 12 m 大目标框贴车身、box truck 框与 GT 对照同位同色、白 van 框头尾顶贴合、旧镜像框全消失。验证脚本 [`verify_bug1_cuboid_overlay.py`](scripts/verify_bug1_cuboid_overlay.py)（headless 复刻 update() 渲染体）留档可重跑。
+- **遗留小项（已闭环 2026-06-10 当日）**：labels 原为 3D text（浏览器 pinhole），wireframe 对齐后会漂离框 → **BUG-1b 跟进修复**：label 文字进 overlay 路径（PIL `draw.text` + 黑描边，锚点 = cuboid 顶角与 3D label 同款 `_cuboid_label_anchor`，经同一 FTheta projector 投影 + visibility 过滤）；overlay live 时移除浏览器端 3D labels 防双画。inceptio 重跑 verify：`t405 | bus` 等文字同色贴框顶角，密集场景归属可辨。
+- **BUG-1c（同日，用户追问 trajectory + 开关）**：① ego/track trajectories 同病（V3-VIZ.5 移到浏览器 pinhole 3D primitives）→ 回 overlay 共投影（ego 绿 subdivide 3、track per-class `class_color` 分层，静态缓存带 class）；FTheta 模式跳过 3D 轨迹创建（ego frustum 保留——位置 widget 非背景注释）。② V3-VIZ.5 当年移除 overlay 轨迹的理由「behind-camera 散射像素」实为 FLIP 180° 镜像症状（背后段被翻到前方），flip=I 后 z>0/max_angle 剪除正常。③ UI 收口：**删除 "FTheta overlay (debug)" checkbox**（overlay 是 FTheta 唯一正确路径，回退开关只制造困惑），三个内容开关（Active cuboids / Ego trajectory / Track trajectories）直接 gate overlay 层。④ 验收：路口车流轨迹贴路面弯曲（鱼眼曲线平滑）；ego 层数据正常（frame111 426/524 点可见但聚于消失点 105×8px——Follow 视角下自己看自己轨迹的几何简并，非 bug，自由视角完整展开）。
+
 ---
 
 ## 3. asset-harvester 注入专项（车辆 warm-start）
@@ -356,7 +365,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | R5 | DriveStudio SMPL 链路重 | HMR2@NCore 跑不通 / 移植量大 | Phase 2 拖期 | P2.1 rigid 垫脚石先证价值；P2.2 可单开 spec | P2.2/2.3 |
 | R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控。**2026-06-05 实测：freeze 式 protected warm-start 否定**（10k 追平、未观测面 spiky，见 § 6）；真瓶颈=asset 质量+未观测面缺约束 → 走约束式/re-harvest，**勿再冻结** | P1.4 |
 | R7 | resume 续训退化（已坐实） | MCMC+多层 resume | cc −1.92 | **所有 baseline 对照从头训** | §0.4 |
-| R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | BUG-1 只修 playground overlay，⛔ 勿碰 3D pose/metric 链路 | BUG-1 |
+| R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | ✅ 已修复（`2a4657e`：flip=I + cuboid 回 overlay 路径；相机一致性合同测试为永久绊线）。教训：**目视校准会被街道前后对称骗过，必须 GT 对照** | BUG-1 |
 
 ---
 
@@ -406,6 +415,14 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **A800 10k A/B 结果**：**automobile class_psnr Δ=+0.023（持平）**，heavy_truck −0.968（C3 整层豁免误伤），mean_class −0.036。**5k 的 +0.730 warm 优势在 10k 被 LiDAR-only 追平消失**；viser 看**未观测面严重 spiky / 白玻璃碴**。
   - **根因（修正 spec 前提）**：spec 假设「MCMC 侵蚀 asset」是**反的**——diffusion 补全的 asset 本身 spiky，MCMC+opacity 正则其实在**清理**它；C2 冻 perturb/relocate + C3 关 opacity 衰减恰好**锁死 spiky 并挡住清理**。frozen drop-in 离线手术佐证：原始 asset 几何连贯但**悬浮+光照失配**（→ 必须训练而非冻结）。**真瓶颈 = asset 质量 + 未观测面缺约束，不是 MCMC 侵蚀。**
   - **结论**：**freeze 式 protected warm-start 否定，勿再冻结**。后续若再试 P1.4 走「**约束式**」（scale clamp + anisotropy 上限 + opacity floor，有界非冻结）或先提 asset 质量（re-harvest / 协方差对齐）。代码默认关闭、baseline 字节等价。
+- **2026-06-10 BUG-1 viser cuboid overlay 对齐修复**（commit `2a4657e`，纯 viz，零 metric/init 改动）：
+  - **双层根因**（比任务卡预判深一层）：① V3-VIZ.2 把 cuboid 移到 `add_line_segments`（浏览器 pinhole vs FTheta backdrop，140° FoV 下偏几十~上百 px）；② **B2 overlay 路径从一开始就 180° 镜像**——`FLIP_VISER_TO_OPENCV` 把 overlay 相机视线翻成 −Z 而 backdrop 视线是 c2w +Z（FTheta rays rz=cos>0），画的是 ego 背后 tracks 的镜像，街道前后对称骗过 B2 校准（`B2_blended_clean.png` 即镜像巧合）。
+  - **判定实验**：bus 405（前方 12 m）flip=I → 8/8 角可见、uv 正落渲染公交车处；legacy FLIP → 0/8。GT raw-camera 对照框套住真车（box truck 同位同色）。
+  - **修复**：cuboid 回 overlay 路径（per-track 色）+ overlay live 跳过 line_segments（OFF 回退留 A/B）+ 两处 compositor `world_to_camera_flip=np.eye(4)`。
+  - **测试/验收**：新 `test_viser_gui_4d_cuboid_overlay.py` 8 项（含 +Z→principal point 相机一致性合同 + legacy flip 回归绊线）；Mac 192 related passed；inceptio 5 帧（直行+转弯）× 14-26 tracks 目视：bus/box-truck/白 van 框贴合、镜像框消失。验证脚本 `scripts/verify_bug1_cuboid_overlay.py` 留档。
+  - **教训入风险表 R8**：目视校准会被街道前后对称骗过，投影类校准必须 GT 对照 + 不变量测试 pin 死。
+  - **BUG-1b 跟进（同日，用户验框后追问 label）**：label 文字进 overlay 路径与 wireframe 共投影——`OverlayLayer.texts` + `PolylineLayerSpec.labels_world`（锚点 = cuboid 顶角，共用 `_cuboid_label_anchor`），overlay live 时移除浏览器端 3D labels（防 pinhole 双画）。三层 TDD 测试 +8 项（renderer text ×3 / compositor 投影+背后剔除 ×2 / viewer specs+移除+回退 ×3），Mac 200 related passed；inceptio 重跑 verify：`t405 | bus` 同色文字贴框顶角。
+  - **BUG-1c 跟进（同日，用户追问 trajectory/开关）**：ego/track trajectories 回 overlay 共投影（V3-VIZ.5 的「behind-camera 散射」实为 FLIP 镜像症状，flip=I 已根治）；track per-class `class_color` 分层、ego frustum 留 3D；**删除 "FTheta overlay (debug)" checkbox**——overlay 为 FTheta 唯一路径，内容开关直接 gate overlay 层。+7 测试（specs ego/track/toggles ×3、FTheta 跳过 3D ×2、pinhole 回归 ×2），Mac 205 related passed；inceptio verify：路口车流轨迹贴路面弯曲；ego 层投影正常（Follow 视角几何简并致视觉不显眼，自由视角完整）。
 
 ---
 

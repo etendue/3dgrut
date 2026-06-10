@@ -131,15 +131,25 @@ class Viser4DViewer:
         # only on meta, not on t_us or c2w), so we build their world-space
         # polyline lists exactly once and reuse them across every frame.
         # Active cuboids still need per-frame rebuild (active set + poses
-        # depend on t_us).
+        # depend on t_us). BUG-1c: track entries carry the class name so the
+        # overlay can keep the per-class colors of the 3D primitive path.
         self._overlay_static_ego_polylines: list[np.ndarray] = []
-        self._overlay_static_track_polylines: list[np.ndarray] = []
+        self._overlay_static_track_polylines: list[tuple[str, np.ndarray]] = []
         if (self.ftheta_intrinsics is not None
                 and self.ftheta_render_wh is not None):
             W_ft, H_ft = self.ftheta_render_wh
+            # BUG-1 (2026-06-10): flip=identity, NOT the legacy
+            # FLIP_VISER_TO_OPENCV. The c2w fed to composite() is the same
+            # matrix the backdrop is rendered with, and the backdrop's
+            # viewing direction is that matrix's +Z column (FTheta rays have
+            # +Z forward). The legacy Z-flip aimed the overlay 180° away —
+            # wireframes were mirror-images of the tracks BEHIND the ego,
+            # which only looked plausible because streets are fore-aft
+            # symmetric. See Viser4DOverlayCompositor.__init__ docstring.
             self._overlay_compositor = Viser4DOverlayCompositor(
                 ftheta_dict=self.ftheta_intrinsics,
                 height=H_ft, width=W_ft, subdivide_n=20,
+                world_to_camera_flip=np.eye(4),
             )
             if metadata is not None:
                 if metadata.ego_poses_c2w.size > 0:
@@ -153,7 +163,8 @@ class Viser4DViewer:
                         continue
                     centers = poses[mask, :3, 3].astype(np.float64)
                     if centers.shape[0] >= 2:
-                        self._overlay_static_track_polylines.append(centers)
+                        self._overlay_static_track_polylines.append(
+                            (str(t.get("class", "unknown")), centers))
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -487,20 +498,20 @@ class Viser4DViewer:
             self._show_follow_cam = self.server.gui.add_checkbox(
                 "Follow Camera", False,
             )
-            # B2: FTheta overlay toggle. Only added in FTheta mode; lets the
-            # user A/B-compare overlay (correct FTheta projection) against the
-            # legacy add_line_segments path (pinhole, drifts toward image
-            # edges). Off → backdrop only, no wireframes drawn by overlay.
-            self.show_ftheta_overlay = None
-            if self._overlay_compositor is not None:
-                self.show_ftheta_overlay = self.server.gui.add_checkbox(
-                    "FTheta overlay (debug)", True
-                )
+            # BUG-1c (2026-06-10): the "FTheta overlay (debug)" toggle is
+            # GONE. In FTheta mode the overlay is the ONLY correct projection
+            # path (BUG-1/1b/1c verified); the legacy pinhole line_segments
+            # path it used to re-enable is misaligned by construction, so
+            # exposing it only confused users (user feedback 2026-06-10).
+            # The content checkboxes above (Ego trajectory / Track
+            # trajectories / Active cuboids) gate the overlay layers instead.
 
         @self.show_ego_traj.on_update
         def _(_):
             if self.h_ego_traj is not None:
                 self.h_ego_traj.visible = bool(self.show_ego_traj.value)
+            # BUG-1c: overlay-path trajectory is baked into the backdrop.
+            self.need_update = True
 
         @self.show_ego_frust.on_update
         def _(_):
@@ -511,6 +522,8 @@ class Viser4DViewer:
         def _(_):
             if self.h_track_trajectories is not None:
                 self.h_track_trajectories.visible = bool(self.show_tracks.value)
+            # BUG-1c: overlay-path trajectories are baked into the backdrop.
+            self.need_update = True
 
         @self.show_cuboids.on_update
         def _(_):
@@ -523,6 +536,9 @@ class Viser4DViewer:
                     h.visible = v
                 except Exception:
                     pass
+            # BUG-1: overlay-path cuboids are baked into the backdrop image,
+            # so a visibility change only shows up after a re-render.
+            self.need_update = True
 
         @self.show_road.on_update
         def _(_):
@@ -571,11 +587,6 @@ class Viser4DViewer:
                     self._current_dropdown_cam, self._t_us_current)
                 self.need_update = True
 
-        # B2: toggling overlay flips backdrop appearance → force redraw.
-        if self.show_ftheta_overlay is not None:
-            @self.show_ftheta_overlay.on_update
-            def _(_):
-                self.need_update = True
 
     # ---------------------------------------------------------------- scene
     def _populate_static_scene(self) -> None:
@@ -597,16 +608,16 @@ class Viser4DViewer:
         if self.meta.ego_poses_c2w.size == 0:
             return
         pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float32)
-        # V3-VIZ.5 (2026-05-26): always render as straight-chord line_segments
-        # in BOTH FTheta and pinhole modes.
-        #   - Was: FTheta path skipped viser primitive (drawn by overlay
-        #     compositor in image space); pinhole path used spline_catmull_rom.
-        #   - Now: viser projects 3D primitives consistently with cuboid/label
-        #     fix (2026-05-26). Avoids:
-        #       (a) overlay's behind-camera segment-clipping bug
-        #       (b) spline_catmull_rom overshoot at the trajectory's bimodal
-        #           dt cadence (33ms/66ms gaps inflate control-point spacing).
-        if pts.shape[0] >= 2:
+        # BUG-1c (2026-06-10): in FTheta mode the trajectory polyline rides
+        # the overlay path (_collect_overlay_layer_specs) so it shares the
+        # backdrop's fisheye projection — the 3D line_segments primitive was
+        # pinhole-projected and drifted off the backdrop like the pre-fix
+        # cuboids. The ego frustum below is still a 3D primitive: it's a
+        # position widget in space, not a backdrop annotation.
+        # Pinhole ckpts keep the straight-chord line_segments (V3-VIZ.5
+        # replaced spline_catmull_rom whose control-point spacing overshot at
+        # the trajectory's bimodal 33/66 ms dt cadence).
+        if pts.shape[0] >= 2 and self._overlay_compositor is None:
             segs = np.stack([pts[:-1], pts[1:]], axis=1)
             cols = np.broadcast_to(
                 np.array([0.2, 1.0, 0.2], dtype=np.float32),
@@ -743,8 +754,18 @@ class Viser4DViewer:
         self.h_dyn_pts.visible = prev_visible
 
     def _add_track_trajectories(self) -> None:
-        """All tracks' active-frame polylines as one batched line_segments."""
+        """All tracks' active-frame polylines as one batched line_segments.
+
+        BUG-1c (2026-06-10): FTheta mode skips the 3D primitive entirely —
+        trajectories are drawn by the overlay path with the same per-class
+        colors (see _collect_overlay_layer_specs). The "scattered pixels
+        across the image" that V3-VIZ.5 blamed on the overlay's behind-camera
+        clipping was actually the legacy 180° FLIP projecting behind-ego
+        segments forward; fixed by flip=identity.
+        """
         assert self.meta is not None
+        if self._overlay_compositor is not None:
+            return
         seg_list: list[np.ndarray] = []
         col_list: list[np.ndarray] = []
         for tid, t in self.meta.tracks.items():
@@ -762,11 +783,6 @@ class Viser4DViewer:
             col_list.append(col)
         if not seg_list:
             return
-        # V3-VIZ.5 (2026-05-26): unified — also render via 3D scene primitive
-        # in FTheta mode (matches cuboid/label/ego_traj unification). Avoids
-        # the overlay compositor's behind-camera segment-clipping bug that
-        # made long track trajectories scatter pixels across the image when
-        # they cross the camera's Z=0 plane.
         all_segs = np.concatenate(seg_list, axis=0)
         all_cols = np.concatenate(col_list, axis=0)
         self.h_track_trajectories = self.server.scene.add_line_segments(
@@ -856,9 +872,12 @@ class Viser4DViewer:
                 from threedgrut_playground.utils.viser_overlay_compositor import (
                     Viser4DOverlayCompositor,
                 )
+                # BUG-1: flip=identity to stay co-aligned with the backdrop
+                # camera (+Z forward) — see __init__ compositor comment.
                 self._overlay_compositor = Viser4DOverlayCompositor(
                     ftheta_dict=new_ftheta,
                     height=new_res[1], width=new_res[0], subdivide_n=20,
+                    world_to_camera_flip=np.eye(4),
                 )
         for client in self.server.get_clients().values():
             client.camera.wxyz = mat_to_wxyz(pose)
@@ -891,26 +910,49 @@ class Viser4DViewer:
             client.camera.look_at = pose[:3, 3] + 10.0 * forward_world
             client.camera.up_direction = up_world
 
-    def _build_cuboid_edges(self, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
+    @staticmethod
+    def _cuboid_label_anchor(pose: np.ndarray, size) -> np.ndarray:
+        """World-space label anchor: cuboid top-back-right corner (vertex 7 =
+        (+sx/2, +sy/2, +sz/2)). Single source of truth shared by the 3D-label
+        path (_update_cuboid_labels) and the overlay text path
+        (_collect_overlay_layer_specs) — BUG-1b keeps both anchored alike.
+        """
+        sx = float(size[0]) if size is not None and size.size >= 1 else 1.0
+        sy = float(size[1]) if size is not None and size.size >= 2 else 1.0
+        sz = float(size[2]) if size is not None and size.size >= 3 else 1.0
+        local = np.array([sx * 0.5, sy * 0.5, sz * 0.5], dtype=np.float32)
+        return (pose[:3, :3] @ local + pose[:3, 3]).astype(np.float64)
+
+    def _iter_active_cuboid_edges(self, frame_idx: int):
+        """Yield ``(track_id, (12, 2, 3) world edges)`` per active track.
+
+        Single source of truth for the active-set / pose-bounds / size
+        fallback logic shared by the line_segments path
+        (_build_cuboid_edges) and the FTheta overlay path
+        (_collect_overlay_layer_specs) — BUG-1 fix keeps both paths from
+        drifting apart again.
+        """
         assert self.meta is not None
-        active = self.meta.active_tracks_at(frame_idx)
-        if not active:
-            return (np.zeros((0, 2, 3), dtype=np.float32),
-                    np.zeros((0, 2, 3), dtype=np.float32))
-        pts_list, col_list = [], []
-        for tid in active:
+        for tid in self.meta.active_tracks_at(frame_idx):
             t = self.meta.tracks[tid]
             poses = t["poses"]
             if poses is None or frame_idx >= poses.shape[0]:
                 continue
-            pose = poses[frame_idx]
-            size = t["size"] if t["size"] is not None else np.array(
-                [1.0, 1.0, 1.0], dtype=np.float32)
-            world = cuboid_world_edges(pose, size)
+            size = (t["size"] if t["size"] is not None
+                    else np.array([1.0, 1.0, 1.0], dtype=np.float32))
+            yield tid, cuboid_world_edges(poses[frame_idx], size)
+
+    def _build_cuboid_edges(self, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        assert self.meta is not None
+        pts_list, col_list = [], []
+        for tid, world in self._iter_active_cuboid_edges(frame_idx):
             color = np.array(instance_color(tid), dtype=np.float32)
             col = np.broadcast_to(color, (12, 2, 3)).astype(np.float32).copy()
             pts_list.append(world)
             col_list.append(col)
+        if not pts_list:
+            return (np.zeros((0, 2, 3), dtype=np.float32),
+                    np.zeros((0, 2, 3), dtype=np.float32))
         return (np.concatenate(pts_list, axis=0),
                 np.concatenate(col_list, axis=0))
 
@@ -927,16 +969,37 @@ class Viser4DViewer:
         fall back to the checkbox value on the first frame) and re-apply it.
         Mirrors _update_dynamic_lidar's preserve-prev-visible pattern.
         """
-        # V3-VIZ.2 (2026-05-26): unified architecture — cuboid wireframes AND
-        # labels are both 3D scene primitives in BOTH pinhole and FTheta modes.
-        # The B2 image-space overlay path for cuboids previously diverged from
-        # the 3D-scene label projection (overlay = FTheta polynomial, labels =
-        # viser pinhole), so labels and cuboid edges visibly separated at the
-        # image edges. Letting viser project both as 3D primitives keeps them
-        # mutually consistent. Trade-off: cuboid wireframes use viser's pinhole
-        # projection so they may drift a few pixels from the FTheta-rendered
-        # Gaussian backdrop near the periphery — acceptable for diagnostic use,
-        # and the cuboid+label still hug each other.
+        # BUG-1 fix (2026-06-10, reverts the V3-VIZ.2 trade-off): when the
+        # FTheta overlay is live, cuboid edges are alpha-blended into the
+        # backdrop through the SAME fisheye polynomial as the Gaussians
+        # (_collect_overlay_layer_specs → Viser4DOverlayCompositor), so we
+        # must NOT also add a browser-side line_segments node — its pinhole
+        # projection visibly detaches from the FTheta backdrop away from the
+        # image center (NCore wide-FoV: tens of pixels, not "a few"), which
+        # was exactly the user-reported misalignment. Labels stay as 3D text
+        # (annotations, not alignment targets; viser has no image-space text
+        # path) and may drift near the periphery — acceptable.
+        # With the overlay checkbox OFF the legacy line_segments path below
+        # remains available for A/B comparison.
+        # BUG-1c: the overlay is unconditionally live in FTheta mode (the
+        # legacy "FTheta overlay (debug)" escape hatch back to the misaligned
+        # pinhole path was removed).
+        overlay_live = self._overlay_compositor is not None
+        if overlay_live:
+            if self.h_cuboid_lines is not None:
+                self.h_cuboid_lines.remove()
+                self.h_cuboid_lines = None
+            # BUG-1b: labels are baked into the backdrop by the overlay text
+            # path (_collect_overlay_layer_specs labels_world), pixel-aligned
+            # with the wireframe. Remove the browser-side 3D labels so a
+            # pinhole-projected duplicate doesn't drift off the aligned box.
+            for tid in list(self._cuboid_label_handles.keys()):
+                try:
+                    self._cuboid_label_handles[tid].remove()
+                except Exception:
+                    pass
+                self._cuboid_label_handles.pop(tid, None)
+            return
         prev_visible = (self.h_cuboid_lines.visible
                         if self.h_cuboid_lines is not None
                         else bool(getattr(self, "show_cuboids", None)
@@ -987,14 +1050,10 @@ class Viser4DViewer:
                 continue
             pose = poses[frame_idx]
             # V3-VIZ.2 follow-up: anchor label on the cuboid top-back-right
-            # corner (vertex 7 = (+sx/2, +sy/2, +sz/2)) so the text touches the
-            # wireframe instead of floating above. User feedback 2026-05-26:
-            # previous +0.3 m vertical offset made labels drift off the box.
-            sx = float(size[0]) if size is not None and size.size >= 1 else 1.0
-            sy = float(size[1]) if size is not None and size.size >= 2 else 1.0
-            sz_z = float(size[2]) if size is not None and size.size >= 3 else 1.0
-            local = np.array([sx * 0.5, sy * 0.5, sz_z * 0.5], dtype=np.float32)
-            top = (pose[:3, :3] @ local + pose[:3, 3]).astype(np.float32)
+            # corner (vertex 7) so the text touches the wireframe instead of
+            # floating above (user feedback 2026-05-26). Anchor math shared
+            # with the overlay text path via _cuboid_label_anchor (BUG-1b).
+            top = self._cuboid_label_anchor(pose, size).astype(np.float32)
             text = f"t{tid} | {t.get('class', 'unknown')}"
             old = self._cuboid_label_handles.get(tid)
             if old is not None:
@@ -1031,19 +1090,75 @@ class Viser4DViewer:
             return []
         specs: list[PolylineLayerSpec] = []
 
-        # V3-VIZ.5 (2026-05-26): ego_trajectory + track_trajectories removed
-        # from overlay path — now rendered as 3D scene primitives by
-        # _add_ego_trajectory and _add_track_trajectories (consistent with
-        # cuboid/label unification). The overlay path is now empty of static
-        # polylines; keeping the layer-spec scaffold for future re-additions
-        # of FTheta-projected overlays if needed.
+        # BUG-1c (2026-06-10, reverts V3-VIZ.5): ego + track trajectories are
+        # BACK on the overlay path — as 3D primitives they were pinhole-
+        # projected and drifted off the FTheta backdrop exactly like the
+        # pre-fix cuboids. V3-VIZ.5's removal rationale ("behind-camera
+        # segment-clipping bug scattered pixels") was a symptom of the legacy
+        # 180° FLIP: real-forward segments got flipped behind the camera and
+        # vice versa; with flip=identity the projector's z>0 / max_angle
+        # culling clips them correctly. Static world-space polylines are
+        # cached in __init__ (B2 perf); low subdivide_n=3 because the
+        # polylines are already dense (per-frame vertices).
+        if (getattr(self, "show_ego_traj", None) is not None
+                and bool(self.show_ego_traj.value)
+                and self._overlay_static_ego_polylines):
+            specs.append(PolylineLayerSpec(
+                name="ego_trajectory",
+                polylines_world=self._overlay_static_ego_polylines,
+                color=(51, 255, 51, 220),
+                width=2,
+                subdivide_n=3,
+            ))
 
-        # Cuboids removed from overlay path (2026-05-26): cuboid wireframes are
-        # now 3D scene primitives via _update_active_cuboids → add_line_segments,
-        # matching the label rendering path so the two stay co-projected by
-        # viser. Ego/track trajectories are kept in the overlay because they're
-        # static polylines and benefit from the FTheta sub-pixel accuracy at
-        # image edges.
+        if (getattr(self, "show_tracks", None) is not None
+                and bool(self.show_tracks.value)
+                and self._overlay_static_track_polylines):
+            # One layer per class so the overlay keeps the 3D path's
+            # class_color coding (automobile blue / heavy_truck orange / ...).
+            by_class: dict[str, list[np.ndarray]] = {}
+            for cls_name, centers in self._overlay_static_track_polylines:
+                by_class.setdefault(cls_name, []).append(centers)
+            for cls_name, polylines in by_class.items():
+                rgb = tuple(int(round(c * 255)) for c in class_color(cls_name))
+                specs.append(PolylineLayerSpec(
+                    name=f"track_trajectories_{cls_name}",
+                    polylines_world=polylines,
+                    color=(rgb[0], rgb[1], rgb[2], 180),
+                    width=1,
+                    subdivide_n=3,
+                ))
+
+        # BUG-1 fix (2026-06-10): active cuboids are BACK on the overlay path
+        # (reverting that part of V3-VIZ.2). The wireframe's whole job is to
+        # hug the dynamic Gaussian actor rendered through the FTheta
+        # polynomial; browser-side pinhole line_segments visibly detach from
+        # it away from the image center. One layer per track keeps the
+        # per-instance color the 3D path used. subdivide_n=20 because a
+        # straight 3D edge projects to a curve under fisheye.
+        if (getattr(self, "show_cuboids", None) is not None
+                and bool(self.show_cuboids.value)):
+            frame_idx = self.meta.lookup_frame_idx(t_us)
+            for tid, edges in self._iter_active_cuboid_edges(frame_idx):
+                rgb = tuple(int(round(c * 255)) for c in instance_color(tid))
+                # BUG-1b: the "t<tid> | <class>" label rides the overlay too
+                # (same anchor as the legacy 3D label = cuboid top corner) so
+                # text and wireframe share the FTheta projection and can
+                # never separate — the browser-side pinhole 3D label drifted
+                # off the now-aligned box exactly like the old line_segments.
+                t = self.meta.tracks[tid]
+                anchor = self._cuboid_label_anchor(
+                    t["poses"][frame_idx], t["size"])
+                label = f"t{tid} | {t.get('class', 'unknown')}"
+                specs.append(PolylineLayerSpec(
+                    name=f"active_cuboids_t{tid}",
+                    polylines_world=[edges[i].astype(np.float64)
+                                     for i in range(12)],
+                    color=(rgb[0], rgb[1], rgb[2], 255),
+                    width=2,
+                    subdivide_n=20,
+                    labels_world=[(anchor, label)],
+                ))
 
         return specs
 
@@ -1159,9 +1274,7 @@ class Viser4DViewer:
             # (cuboid wireframes drawn via add_line_segments use pinhole
             # projection in the browser and drift toward image edges).
             img_pre_overlay = None
-            if (self._overlay_compositor is not None
-                    and self.show_ftheta_overlay is not None
-                    and bool(self.show_ftheta_overlay.value)):
+            if self._overlay_compositor is not None:
                 try:
                     layer_specs = self._collect_overlay_layer_specs(
                         self._t_us_current)
