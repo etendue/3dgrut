@@ -109,3 +109,39 @@ def test_compositor_layer_ordering_preserved():
         f"blue (top) should dominate red (bottom); "
         f"blue_px={int(blue_mask.sum())} red_px={int(red_mask.sum())}"
     )
+
+
+# ===================================================== BUG-1b: text labels
+def test_compositor_draws_label_at_projected_anchor():
+    """labels_world anchors must ride the SAME FTheta projection as the
+    wireframe (viewer config: flip=identity, +Z forward)."""
+    cmp = Viser4DOverlayCompositor(_ftheta_dict(), height=1080, width=1920,
+                                   world_to_camera_flip=np.eye(4))
+    backdrop = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+    anchor = np.array([0.0, 0.0, 10.0])     # on-axis, 10 m ahead (+Z)
+    layer = PolylineLayerSpec(
+        name="active_cuboids_t7",
+        labels_world=[(anchor, "t7 | automobile")],
+        color=(0, 255, 0, 255),
+    )
+    out = cmp.composite(backdrop, [layer], np.eye(4, dtype=np.float64))
+    # On-axis anchor projects to the principal point (960, 540); text is
+    # drawn adjacent to it. Some pixels in that neighborhood must differ
+    # from the gray backdrop.
+    win = out[540 - 40:540 + 10, 960 - 6:960 + 200]
+    assert (win != 128).any(), "expected label pixels near principal point"
+
+
+def test_compositor_skips_behind_camera_label():
+    """Anchors behind the camera (-Z with identity flip) must be dropped by
+    the compositor's visibility filter — output identical to no-label run."""
+    cmp = Viser4DOverlayCompositor(_ftheta_dict(), height=1080, width=1920,
+                                   world_to_camera_flip=np.eye(4))
+    backdrop = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+    behind = np.array([0.0, 0.0, -10.0])
+    layer = PolylineLayerSpec(
+        name="labels",
+        labels_world=[(behind, "should_not_render")],
+    )
+    out = cmp.composite(backdrop, [layer], np.eye(4, dtype=np.float64))
+    np.testing.assert_array_equal(out, backdrop)

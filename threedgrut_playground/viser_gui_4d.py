@@ -914,6 +914,19 @@ class Viser4DViewer:
             client.camera.look_at = pose[:3, 3] + 10.0 * forward_world
             client.camera.up_direction = up_world
 
+    @staticmethod
+    def _cuboid_label_anchor(pose: np.ndarray, size) -> np.ndarray:
+        """World-space label anchor: cuboid top-back-right corner (vertex 7 =
+        (+sx/2, +sy/2, +sz/2)). Single source of truth shared by the 3D-label
+        path (_update_cuboid_labels) and the overlay text path
+        (_collect_overlay_layer_specs) — BUG-1b keeps both anchored alike.
+        """
+        sx = float(size[0]) if size is not None and size.size >= 1 else 1.0
+        sy = float(size[1]) if size is not None and size.size >= 2 else 1.0
+        sz = float(size[2]) if size is not None and size.size >= 3 else 1.0
+        local = np.array([sx * 0.5, sy * 0.5, sz * 0.5], dtype=np.float32)
+        return (pose[:3, :3] @ local + pose[:3, 3]).astype(np.float64)
+
     def _iter_active_cuboid_edges(self, frame_idx: int):
         """Yield ``(track_id, (12, 2, 3) world edges)`` per active track.
 
@@ -978,12 +991,19 @@ class Viser4DViewer:
             and bool(self.show_ftheta_overlay.value)
         )
         if overlay_live:
-            vis = bool(getattr(self, "show_cuboids", None) is not None
-                       and self.show_cuboids.value)
             if self.h_cuboid_lines is not None:
                 self.h_cuboid_lines.remove()
                 self.h_cuboid_lines = None
-            self._update_cuboid_labels(frame_idx, visible=vis)
+            # BUG-1b: labels are baked into the backdrop by the overlay text
+            # path (_collect_overlay_layer_specs labels_world), pixel-aligned
+            # with the wireframe. Remove the browser-side 3D labels so a
+            # pinhole-projected duplicate doesn't drift off the aligned box.
+            for tid in list(self._cuboid_label_handles.keys()):
+                try:
+                    self._cuboid_label_handles[tid].remove()
+                except Exception:
+                    pass
+                self._cuboid_label_handles.pop(tid, None)
             return
         prev_visible = (self.h_cuboid_lines.visible
                         if self.h_cuboid_lines is not None
@@ -1035,14 +1055,10 @@ class Viser4DViewer:
                 continue
             pose = poses[frame_idx]
             # V3-VIZ.2 follow-up: anchor label on the cuboid top-back-right
-            # corner (vertex 7 = (+sx/2, +sy/2, +sz/2)) so the text touches the
-            # wireframe instead of floating above. User feedback 2026-05-26:
-            # previous +0.3 m vertical offset made labels drift off the box.
-            sx = float(size[0]) if size is not None and size.size >= 1 else 1.0
-            sy = float(size[1]) if size is not None and size.size >= 2 else 1.0
-            sz_z = float(size[2]) if size is not None and size.size >= 3 else 1.0
-            local = np.array([sx * 0.5, sy * 0.5, sz_z * 0.5], dtype=np.float32)
-            top = (pose[:3, :3] @ local + pose[:3, 3]).astype(np.float32)
+            # corner (vertex 7) so the text touches the wireframe instead of
+            # floating above (user feedback 2026-05-26). Anchor math shared
+            # with the overlay text path via _cuboid_label_anchor (BUG-1b).
+            top = self._cuboid_label_anchor(pose, size).astype(np.float32)
             text = f"t{tid} | {t.get('class', 'unknown')}"
             old = self._cuboid_label_handles.get(tid)
             if old is not None:
@@ -1097,6 +1113,15 @@ class Viser4DViewer:
             frame_idx = self.meta.lookup_frame_idx(t_us)
             for tid, edges in self._iter_active_cuboid_edges(frame_idx):
                 rgb = tuple(int(round(c * 255)) for c in instance_color(tid))
+                # BUG-1b: the "t<tid> | <class>" label rides the overlay too
+                # (same anchor as the legacy 3D label = cuboid top corner) so
+                # text and wireframe share the FTheta projection and can
+                # never separate — the browser-side pinhole 3D label drifted
+                # off the now-aligned box exactly like the old line_segments.
+                t = self.meta.tracks[tid]
+                anchor = self._cuboid_label_anchor(
+                    t["poses"][frame_idx], t["size"])
+                label = f"t{tid} | {t.get('class', 'unknown')}"
                 specs.append(PolylineLayerSpec(
                     name=f"active_cuboids_t{tid}",
                     polylines_world=[edges[i].astype(np.float64)
@@ -1104,6 +1129,7 @@ class Viser4DViewer:
                     color=(rgb[0], rgb[1], rgb[2], 255),
                     width=2,
                     subdivide_n=20,
+                    labels_world=[(anchor, label)],
                 ))
 
         return specs

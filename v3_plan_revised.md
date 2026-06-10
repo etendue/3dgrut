@@ -321,7 +321,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 - **修复**（全部 playground viz，⛔ 红线文件零改动）：cuboid 回 FTheta overlay 路径（per-track instance 色 + subdivide 20 鱼眼曲线边）；overlay live 时跳过 line_segments（防双画），overlay checkbox OFF 回退 line_segments 留 A/B；两处 compositor 构造传 `world_to_camera_flip=np.eye(4)`（compositor 新增透传参数，默认 None=legacy 不破坏旧脚本）。
 - **测试**：[`test_viser_gui_4d_cuboid_overlay.py`](threedgrut/tests/test_viser_gui_4d_cuboid_overlay.py) 8 项，含「overlay/renderer 相机一致性合同」（+Z 视线点必须投到 principal point；legacy flip 必须看不见它 = 回归绊线）。Mac 192 related passed。
 - **inceptio 实测验收**（p13b_ab_k4_30k 30k ckpt，5 帧 × 14-26 tracks，直行 + 转弯帧 398）：bus 12 m 大目标框贴车身、box truck 框与 GT 对照同位同色、白 van 框头尾顶贴合、旧镜像框全消失。验证脚本 [`verify_bug1_cuboid_overlay.py`](scripts/verify_bug1_cuboid_overlay.py)（headless 复刻 update() 渲染体）留档可重跑。
-- **遗留小项**：labels 仍为 3D text（viser 无 image-space 文字路径），与 overlay wireframe 在画面边缘有小漂移——注释已记录，不影响对齐验收。
+- **遗留小项（已闭环 2026-06-10 当日）**：labels 原为 3D text（浏览器 pinhole），wireframe 对齐后会漂离框 → **BUG-1b 跟进修复**：label 文字进 overlay 路径（PIL `draw.text` + 黑描边，锚点 = cuboid 顶角与 3D label 同款 `_cuboid_label_anchor`，经同一 FTheta projector 投影 + visibility 过滤）；overlay live 时移除浏览器端 3D labels 防双画，overlay OFF 回退 3D labels。inceptio 重跑 verify：`t405 | bus` 等文字同色贴框顶角，密集场景归属可辨。
 
 ---
 
@@ -420,6 +420,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **修复**：cuboid 回 overlay 路径（per-track 色）+ overlay live 跳过 line_segments（OFF 回退留 A/B）+ 两处 compositor `world_to_camera_flip=np.eye(4)`。
   - **测试/验收**：新 `test_viser_gui_4d_cuboid_overlay.py` 8 项（含 +Z→principal point 相机一致性合同 + legacy flip 回归绊线）；Mac 192 related passed；inceptio 5 帧（直行+转弯）× 14-26 tracks 目视：bus/box-truck/白 van 框贴合、镜像框消失。验证脚本 `scripts/verify_bug1_cuboid_overlay.py` 留档。
   - **教训入风险表 R8**：目视校准会被街道前后对称骗过，投影类校准必须 GT 对照 + 不变量测试 pin 死。
+  - **BUG-1b 跟进（同日，用户验框后追问 label）**：label 文字进 overlay 路径与 wireframe 共投影——`OverlayLayer.texts` + `PolylineLayerSpec.labels_world`（锚点 = cuboid 顶角，共用 `_cuboid_label_anchor`），overlay live 时移除浏览器端 3D labels（防 pinhole 双画），OFF 回退。三层 TDD 测试 +8 项（renderer text ×3 / compositor 投影+背后剔除 ×2 / viewer specs+移除+回退 ×3），Mac 200 related passed；inceptio 重跑 verify：`t405 | bus` 同色文字贴框顶角。
 
 ---
 

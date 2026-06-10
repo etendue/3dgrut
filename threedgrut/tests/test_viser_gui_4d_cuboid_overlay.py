@@ -173,6 +173,47 @@ def test_overlay_specs_empty_when_no_active_tracks(viser_gui_4d):
     assert not [s for s in specs if "active_cuboids" in s.name]
 
 
+# ======================================================= BUG-1b: labels
+def test_overlay_specs_include_track_labels(viser_gui_4d):
+    """Each cuboid overlay layer must carry its 't<tid> | <class>' label,
+    anchored at the cuboid's top-back-right corner (vertex 7) — the same
+    anchor the 3D label path used — so the compositor projects text through
+    the SAME FTheta polynomial as the wireframe (BUG-1b)."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True)
+    specs = viewer._collect_overlay_layer_specs(t_us=0)
+    cuboid_specs = [s for s in specs if "active_cuboids" in s.name]
+    assert cuboid_specs
+    labels = [lab for s in cuboid_specs for lab in s.labels_world]
+    assert len(labels) == 1
+    anchor, text = labels[0]
+    assert text == f"t{TRACK_ID} | automobile"
+    pose = viewer.meta.tracks[TRACK_ID]["poses"][0]
+    expected = pose[:3, :3] @ (TRACK_SIZE * 0.5) + pose[:3, 3]
+    np.testing.assert_allclose(np.asarray(anchor), expected, atol=1e-5)
+
+
+def test_update_active_cuboids_removes_3d_labels_when_overlay_active(viser_gui_4d):
+    """Overlay ON → browser-side 3D labels must be REMOVED (the overlay text
+    path replaces them); otherwise the pinhole-projected 3D label drifts away
+    from the FTheta-aligned wireframe it belongs to."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True, overlay_on=True)
+    stale_label = _fake_handle()
+    viewer._cuboid_label_handles[TRACK_ID] = stale_label
+
+    viewer._update_active_cuboids(frame_idx=0)
+
+    stale_label.remove.assert_called_once()
+    assert viewer._cuboid_label_handles == {}
+    viewer.server.scene.add_label.assert_not_called()
+
+
+def test_update_active_cuboids_restores_3d_labels_when_overlay_off(viser_gui_4d):
+    """Overlay OFF (A/B fallback) → legacy 3D label path keeps working."""
+    viewer = _bypass_viewer(viser_gui_4d, ftheta=True, overlay_on=False)
+    viewer._update_active_cuboids(frame_idx=0)
+    assert viewer.server.scene.add_label.called
+
+
 # ===================================================== line_segments gating
 def test_update_active_cuboids_skips_line_segments_when_overlay_active(viser_gui_4d):
     """FTheta + overlay ON → the pinhole-projected line_segments node must NOT
@@ -187,8 +228,8 @@ def test_update_active_cuboids_skips_line_segments_when_overlay_active(viser_gui
     viewer.server.scene.add_line_segments.assert_not_called()
     stale.remove.assert_called_once()
     assert viewer.h_cuboid_lines is None
-    # Labels are 3D text (no overlay text path) and must stay visible.
-    assert viewer.server.scene.add_label.called
+    # BUG-1b: labels ride the overlay text path now — no 3D labels created.
+    viewer.server.scene.add_label.assert_not_called()
 
 
 def test_update_active_cuboids_falls_back_when_overlay_off(viser_gui_4d):
