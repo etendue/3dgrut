@@ -427,6 +427,12 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **D2 novel 安全**：B3 `mean_novel_lpips_avg` **0.5962** vs baseline 0.5987（**−0.0025 略好**，4 档 lateral/yaw 0.576~0.614）→ 放宽 road 各向异性 8→30 **未产生 hair-thin novel artifact**（V3-R1.2/R1.3 反向担忧解除，本 clip 安全）。
   - **视觉 A/B（viser 三方，2026-06-10 大g 肉眼，A800 `--renderer 3dgut`）**：**选 B3**。B3 斑马线/crossroad 车道线明显更锐、更连续（放宽几何给 road 高斯「拉成细长条」的表达力 + lane loss 推锐边缘，二者协同）；B1（lane-only，几何 8）虽无副作用但斑马线**比 baseline 还模糊**（lane loss 有监督、但 road 几何 8 表达不了高频密条纹）。**B3 已知限制**：局部车道线消失（放宽 `anisotropy` 让高斯沿行驶方向拉长 → 横向覆盖不足 + MCMC relocate 往 lane-mask 区重分布 → Mapillary 漏检区 / 横向标线变稀）——**grad_corr 均值掩盖的局部退化**（viser 肉眼抓到、指标没抓到，典型 Goodhart）。后续可经 P3.1-B 定向加密 / `anisotropy` 调幅(30→适中) / lane-mask 补全 / P-CAP 给 road 加粒子改善。
   - **结论**：主 KPI grad_corr **0.693→0.744（+7.3%）**——继 V3-R2 bg-in-road +0.65 之后又一「重构物理问题」真跃迁（road 当 2D 高频纹理来监督+表达，非堆参数）。**P3.1-B 定向加密（二阶）大g 决策暂不投**（边际 vs 工程量），收 P3.1-A → 转 P3.2。A800 三档 ckpt_30000 + eval metrics 保留、中间 ckpt_7000 已清理。
+- **2026-06-10 P3.1-A 后续：anisotropy 调幅消失改善尝试 + depth on/off 验证（inceptio worktree, depth-off）— 维持 B3**：
+  - **背景**：viser 发现 B3（anisotropy 30）局部车道线消失；试 anisotropy 30→20 看能否换回消失。**A800 被系统清理（ckpt + conda env 全失）后 GPU 任务转 inceptio git worktree**（每任务隔离，工作流入 CLAUDE.md；踩坑 worktree 缺 submodule → rsync 主仓库 `thirdparty/tiny-cuda-nn` 补齐）。
+  - **depth on/off 验证（坐实大g 判断）**：B3 depth-off grad_corr **0.7386** vs depth-on 0.7441（差 **−0.0055**，噪声级）→ **depth on/off 对 grad_corr 影响极小**（呼应 Stage 11 深度监督≈0），inceptio depth-off 为有效、内部可比平台。
+  - **anisotropy 调幅 A/B（depth-off，inceptio 内部可比）**：aniso20 grad_corr **0.7325** vs B3 0.7386（差 **−0.0061**，噪声级）/ band_psnr 21.91 vs 21.96 / cc 25.95 vs 25.90 → **anisotropy 30→20 锐度几乎不损**（仍 +0.039 vs baseline）。
+  - **viser 三方目视（大g）**：aniso20 的「消失」与 B3 **肉眼看不出区别** → **anisotropy 调幅不解决消失**（坐实诊断：消失根因主要是 **Mapillary lane mask 漏检**，非 anisotropy 横向窄）。
+  - **结论**：**维持 B3 为 P3.1-A 最终配方**（aniso20 不优——锐度同、消失同）。消失改善若要做须走 **lane mask 补全**（诊断根因①，重，留 v4 / 后续）。inceptio worktree 工作流 + submodule 补齐 + viser `--renderer 3dgut`(A800)/`3dgrt`(4090) 均入 CLAUDE.md/skill。
 
 ---
 
