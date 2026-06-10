@@ -146,6 +146,37 @@ rsync -az --exclude='.claude/worktrees' --exclude='.venv' --exclude='__pycache__
   /Users/etendue/repo/3dgrut2/ inceptio:~/repo/3dgrut2/
 ```
 
+### ⭐ inceptio git worktree 工作流（推荐 — 每任务隔离，2026-06-10 大g 决策）
+
+**A800 不稳（系统管理员清理 / conda env 丢 / 数据没上盘，已多次）→ 后续 GPU 任务一律转 inceptio。** 每个任务在 inceptio 的 git 仓库下 checkout 一个独立 git worktree 跑，完成即删——代码版本明确、多任务互不污染、不怕被清。inceptio `~/repo/3dgrut2` 是**真 git 仓库**（非 rsync mirror），`git worktree` 可用。
+
+**一次性建 Mac→inceptio 的 git remote（本地 ssh，不走 GitHub/代理）**：
+```bash
+cd /Users/etendue/repo/3dgrut2 && git remote add inceptio inceptio:/home/inceptio/repo/3dgrut2
+```
+
+**每个任务的流程**：
+```bash
+# 1. Mac：push 任务分支到 inceptio（inceptio 在 main，push 非当前分支不冲突）
+git push inceptio <branch>:<branch>
+
+# 2. inceptio：从该分支 checkout 独立 worktree（仓库外路径 ~/repo/3dgrut2-wt/<task>）
+ssh inceptio 'cd ~/repo/3dgrut2 && git worktree add ~/repo/3dgrut2-wt/<task> <branch>'
+
+# 3. inceptio worktree 里跑（cd 进 worktree → import 自动解析 worktree 代码、非主仓库）
+ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
+  && cd ~/repo/3dgrut2-wt/<task> && python train.py ... '
+
+# 4. 完成：删 worktree
+ssh inceptio 'cd ~/repo/3dgrut2 && git worktree remove ~/repo/3dgrut2-wt/<task>'
+```
+
+**注意**：
+- 验证代码同步：`ssh inceptio 'cd ~/repo/3dgrut2-wt/<task> && git log --oneline -1'` 应 = Mac 分支 head。
+- inceptio .git 可能含 Mac rsync 带来的 prunable worktree 引用 → `git worktree prune` 清理。
+- inceptio 跑训练**一律 depth-off + `num_workers=10`**（内存铁律，见上）；与 A800 lidar-on 数字不可跨机比，须在 inceptio **重立 depth-off baseline 锚**再做 A/B。
+- 后续改动：Mac 在 worktree 分支 commit → `git push inceptio <branch>` → inceptio worktree `git pull`（或 `git reset --hard origin/<branch>`），保持同步。
+
 ### 训练启动示例
 
 ```bash
