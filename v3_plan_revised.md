@@ -68,14 +68,14 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
+        [BUG-1 active cuboid wireframe 与 gaussian 实物错位（仅 viser overlay 投影；不碰 metric/init）]
         [P1.1 sseg 精修动静边界（cuboid×sseg 求交）]
         [P1.3 per-track albedo/scale + per-track cap]
         [P1.4 asset-harvester warm-start（车）]
         [P2.1 行人 rigid track 垫脚石]
         [P2.2 DriveStudio SMPL-LBS 移植进 dynamic_deformables]
         [P2.3 行人 SMPL 输入链路（HMR2@NCore + 全局运动 + 对齐）]
-        [P3.1 road 当2D纹理: 定向加密 / 平面 feature grid]
-        [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选]
+        [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选（plan 就绪 gate P3.1 已满足）]
         [PCAP MCMC per-layer cap bg→actor 重分配]
         [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
         [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
@@ -96,7 +96,8 @@ kanban
         [继承: asset-harvester-verify 端到端跑通（3车+3人）]
         [✅ P1.2 track-pose（boundary+prior+smooth）: fix 三者最优 class25.07/cc26.06，−0.61 退化未在本配方复现（2026-06-06）]
         [✅ P1.3b Fourier albedo 实现+A/B（k4 vs DC k1）: 无增益 24.13 vs 24.20，default k1 关、留未来（2026-06-06）]
-        [✅ BUG-1 viser overlay 对齐三连: cuboid 框 + label + ego/track 轨迹全部回 FTheta overlay 共投影，flip=I 修 180° 镜像，删 debug 开关（2026-06-10）]
+        [✅ P3.0 车道线测量门（方案A）: 自跑 Mapillary lane sseg + compute_lane_metrics 接通，baseline 立锚 grad_corr 0.693，守护线零回归（2026-06-09）]
+        [✅ P3.1-A road 当2D纹理（lane-band 锐度 loss + 放宽 road 各向异性）: 三档消融 grad_corr 0.693→0.744（+0.051）, loss 主导+几何加成, 守护 cc25.87 + novel 0.596 略好（2026-06-10）]
 ```
 
 ### 1.2 任务级看板（按 P*.* 编号）
@@ -117,13 +118,14 @@ kanban
 | **P2.1** | 2 | 行人 rigid track 垫脚石 — 从「完全没有」到「有粗 blob」验证抬升（asset-harvester 静态人可当 init） | 新 | 2 | ⬜ | — |
 | **P2.2** ★ | 2 | **DriveStudio SMPL-LBS 移植** 进空壳 `dynamic_deformables` 层 — canonical 高斯长在 SMPL mesh，per-frame 24 关节 LBS 蒙皮 | Stage 16 **改机制**（原 hash-grid+MLP→SMPL） | 6 | ⬜ | — |
 | **P2.3** | 2 | 行人 SMPL 输入链路 — HMR2 在 NCore 相机跑通 + 全局运动估计 + 坐标系对齐 | 新 | 3 | ⬜ | — |
-| **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ⬜ | — |
-| **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜ | v3 可选 |
+| **P3.0** ★ | 3 | **车道线测量门（方案 A，对标 Phase 0）** — 自跑 Mapillary lane sseg（[`gen_lane_sseg.py`](scripts/gen_lane_sseg.py)）+ `compute_lane_metrics`（dilated-band + 梯度锐度）接通 render/dataset；baseline 立锚（纯 eval 无训练） | 新（spec 2026-06-09） | 1 | ✅ | `per_class_eval.py`(+lane) / `datasetNcore.py` / `render.py` / scripts；**grad_corr 0.693**，守护线零回归 |
+| **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ✅ P3.1-A（B 二阶未投） | `lane_loss.py`+trainer+datasetNcore+[p31preset](configs/apps/ncore_3dgut_mcmc_multilayer_p31.yaml)；**grad_corr 0.693→0.744（+0.051）** 拆变量 loss 主导(+0.035)+几何(+0.026)，守护 cc25.87/novel 0.596，[plan↗](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md) |
+| **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜（plan 就绪） | v3 可选·见同 plan（gate=P3.1） |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
 | **AH-2** | 1 | 变长粒子注入 plumbing — `setup_optimizer()` 重置 Adam + `LayeredMCMCStrategy` resync + ckpt `track_ids` 兼容 | 新 | 1.5 | ⬜ | — |
-| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ✅ | `2a4657e` 框（双根因 FLIP 180° + pinhole 失配）+ `e6fccb1` label 共投影 + `fbb45cd` trajectories 共投影/删 debug 开关；inceptio 多轮目视验收 |
+| **BUG-1** | bug | active cuboid wireframe 与 dynamic gaussian 实物渲染错位 — **仅 viser 可视化**（`viser_gui_4d.py` overlay 投影路径）；3D pose / gaussian init / class_psnr **均不受影响**（gaussian init 共享同一 pose，错则 init 就崩 → 现 init 正常即反证 pose 对）。详见 § 2.5 | 新 | 0.5 | ⬜ | — |
 
 ### 1.3 Phase 状态汇总 + per-class gap 表（Phase 0 回填）
 
@@ -132,10 +134,10 @@ kanban
 | **0** ★ | 把目标测出来（前置/便宜/无新训练） | 4/4 | **per-class 真实数字+缺口入档** ✅ | cc 25.79 守住 | ✅ 门(过) |
 | **1** ★ | 车辆（高 ROI/已验证） | 0/7（含 AH-0/1/2） | 车辆 class_psnr 闭合 gap | ≥ 24.7 | ⬜ |
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
-| **3** | 道路/车道线 | 0/2 | 车道线锐度（lane LPIPS↓） | ≥ 24.7 | ⬜ |
+| **3** | 道路/车道线 | 2/3（**P3.0 门 + P3.1-A 见效** ✅） | 车道线锐度 lane **grad_corr 0.693→0.744（+0.051）** ✅ | ≥ 24.7（实 25.87） | 🟢 P3.1-A 过 |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
-| bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 1/1 | viser cuboid wireframe 与 gaussian 实物目视重合 ✅（bus/box-truck/van 多帧贴合） | 不影响 metric | ✅ |
-| **总计** | — | **5/18** | — | — | — |
+| bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 0/1 | viser cuboid wireframe 与 gaussian 实物目视重合 | 不影响 metric | ⬜ |
+| **总计** | — | **6/19** | — | — | — |
 
 > **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
@@ -143,7 +145,7 @@ kanban
 > | 车辆 class_psnr | **24.04**（auto 23.79 / truck 27.32 / bus 24.74，3420 rec） | 闭合至 ≥ 25.5 | 中等 ~+1.5 |
 > | 行人 person PSNR | **15.68**（301 帧 / 3.97M px；**bg 在行人像素的误差地板，非行人重建——行人无专属高斯**） | 加模型后从 15.68 升至 ≥ 22 | **最大缺口 ~−8 dB（modeled 车 vs unmodeled 人）** |
 > | rider / bicycle PSNR | rider 17.76（仅 2 帧·过稀不可信）/ bicycle 29.97（94 帧·已可） | — | rider 样本不足 |
-> | 车道线 road-crop | PSNR 29.20（沥青主导虚高）/ **LPIPS 0.154**（375 帧 / 250M px） | LPIPS↓（锐度↑） | 待 P3 对照基线 |
+> | 车道线 lane-marking | 门锚 **grad_corr 0.693** → **P3.1-A 0.744（+0.051）**（前视 75 帧，A800 lidar-on 30k）/ band_psnr 21.77→22.01 / raw_psnr 22.78→23.36 / novel 0.5987→0.5962（Mapillary lane 类 23+24，2026-06-10）；〔旧 P0.3 road-crop 代理：PSNR 29.20 沥青虚高 / LPIPS 0.154〕 | grad_corr↑ ✅ 闭合 | P3.1-A 见效；P3.2 可继续 |
 >
 > ⚠️ **方法论修正**：per-class LPIPS 用全图 GT-fill，对**小目标**（person/rider/bicycle）受区域面积主导（lpips≈0 是面积假象非质量）→ 小 actor **以 per-class PSNR 为准**；LPIPS 仅对**大区域 road_crop（0.154）**有意义（正是 P0.3 车道线锐度信号）。
 > ⚠️ **行人 15.68 的正确读法**：dynamic 层仅含车（by_class 仅 auto/truck/bus，无 person/rider/bicycle）→ **行人确实无专属模型（原假设「完全未建模」成立，未被推翻）**。15.68 = bg/静态场景在行人像素处的 PSNR = **未建模行人（尤指移动行人）的误差地板**，**不是行人重建质量**；它混合了静态行人（被 bg 烤进、偏高）与移动行人（bg 跟不上、偏低），绝对值仅作 Phase 2 的 **before-anchor**（加模型后应上升）。Phase 2 框定仍是「**从无到有**」，仍是最大单一缺口（modeled 车 24 vs unmodeled 人 15.68）。
@@ -271,14 +273,18 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 
 ### 2.3 Phase 3 — 道路/车道线
 
-**触发**：Phase 0 车道线锚点入档。
+**触发**：Phase 0 车道线锚点入档。✅ **测量门已立（2026-06-09，§6 Done Log）**：自跑 Mapillary lane sseg + `compute_lane_metrics` 接通，baseline 立锚 **grad_corr 0.693**（前视 75 帧）= P3.1/P3.2 改善的对照基线，主 KPI = `mean_lane_grad_corr`。下方 P3.1/P3.2 为门要测量的**实际改善**（尚未做）。
 
 | Task | 描述 | 改动文件 |
 |---|---|---|
 | P3.1 | road 当 2D 纹理：沿车道线定向加密 / 平面 feature grid（**非 Fourier 时间维**）；可复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | `road_region.py`, 致密化策略 |
 | P3.2 | 遮挡式 bg（v3 可选）：现 `bg_road_penalty` / `bg_cuboid_loss` 的「杀死」机制改「只 mask loss 不杀粒子」+ 深度合成 → 保 actor 移开帧路面连续（同时为 v4 打底） | `bg_cuboid_loss.py`, `road_region.py` |
 
-**验收**：车道线 lane-mask/BEV LPIPS 相对 P0.3 锚点改善；road 区不再被 background 偷渲（延续 V3-R2 成果）。
+> **执行 plan（2026-06-09 展开为可执行阶梯）**：[`p31-p32-road-lane plan`](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md)（11 task，TDD，沿用 P3.0 plan 格式）。
+> - **P3.1 阶梯**：① lane-band 监督 loss（band 内 Sobel 梯度幅值 L1，复用 P3.0 `_grad_mag`/`dilate_mask`；KPI `grad_corr` 只读、loss 不复用 Pearson 防 Goodhart）+ 放宽 road 各向异性/scale（**与 V3-R1.2/R1.3 抑制细长高斯反向**，A/B 权衡，须看 novel_lpips）→ 便宜先证 grad_corr 可被推过 0.693；② MCMC 定向加密（near-lane `valid_indices` 偏置，仅 road 层，gate=①见效）。平面 feature grid 留 stretch/v4。
+> - **P3.2**（v3 可选，gate=P3.1 见效）：penalty kill→mask-only（保留 bg 粒子不杀）+ 深度合成（Task9 先 Explore 渲染合成路径再动手）。
+
+**验收**：车道线 `mean_lane_grad_corr`（+ band_psnr / band_lpips 辅证）相对 2026-06-09 门锚（grad_corr 0.693）改善；road 区不再被 background 偷渲（延续 V3-R2 成果）。
 
 ### 2.4 停 / 降级清单（保留供历史，不在新主线）
 
@@ -314,15 +320,6 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 1. playground 多帧 / 多 track（含纯 yaw 直行 + 转弯）目视：cuboid wireframe 套住对应 gaussian 实物（中心 / 朝向 / 尺寸重合）。
 2.（可选）轻量回归测试 pin 住「overlay projector 与 renderer 相机一致」：构造已知相机 + 已知 world 点，断言 overlay 投影像素 == renderer 投影像素。
 3. **纯可视化修复，不需 A800 重训 / 重 eval**；§ 1.3 per-class gap 表与 P0.1 锚点不变。
-
-**✅ 修复记录（2026-06-10，commit `2a4657e`）— 实际根因比任务卡预判深一层（双层）**：
-- **根因 #1（用户报告时的现象主体）**：V3-VIZ.2（`bea5508`）把 cuboid 从 overlay 移到 `add_line_segments` 3D primitive —— 浏览器 pinhole 投影 vs FTheta 鱼眼 backdrop 除光轴外处处偏差（front_wide 140° FoV 下几十~上百 px），当时低估为「边缘几 px」。
-- **根因 #2（更早的 B2 overlay 路径本身也错，本次新发现）**：`FthetaForwardProjector` 默认 `FLIP_VISER_TO_OPENCV=diag(1,1,-1)` 把 overlay 相机翻转 **180°**——backdrop 视线 = c2w 的 **+Z**（FTheta rays `rz=cos>0`，`ftheta_pixels_to_camera_rays`），FLIP 后 overlay 视线 = −Z → 画的是 **ego 背后 tracks 的镜像投影**，街道前后对称骗过了当年 B2 校准探针（`B2_blended_clean.png` 的"对齐"即镜像巧合）。实锤证据：bus track 405（前方 12 m、backdrop 清晰可见）flip=I 时 8/8 角可见且 uv 落在渲染公交车处，默认 FLIP 0/8 全不可见；GT raw-camera 对照（`validate_cuboid_7cam`，flip=I）框套住 GT 真车（box truck）。
-- **修复**（全部 playground viz，⛔ 红线文件零改动）：cuboid 回 FTheta overlay 路径（per-track instance 色 + subdivide 20 鱼眼曲线边）；overlay live 时跳过 line_segments（防双画），overlay checkbox OFF 回退 line_segments 留 A/B；两处 compositor 构造传 `world_to_camera_flip=np.eye(4)`（compositor 新增透传参数，默认 None=legacy 不破坏旧脚本）。
-- **测试**：[`test_viser_gui_4d_cuboid_overlay.py`](threedgrut/tests/test_viser_gui_4d_cuboid_overlay.py) 8 项，含「overlay/renderer 相机一致性合同」（+Z 视线点必须投到 principal point；legacy flip 必须看不见它 = 回归绊线）。Mac 192 related passed。
-- **inceptio 实测验收**（p13b_ab_k4_30k 30k ckpt，5 帧 × 14-26 tracks，直行 + 转弯帧 398）：bus 12 m 大目标框贴车身、box truck 框与 GT 对照同位同色、白 van 框头尾顶贴合、旧镜像框全消失。验证脚本 [`verify_bug1_cuboid_overlay.py`](scripts/verify_bug1_cuboid_overlay.py)（headless 复刻 update() 渲染体）留档可重跑。
-- **遗留小项（已闭环 2026-06-10 当日）**：labels 原为 3D text（浏览器 pinhole），wireframe 对齐后会漂离框 → **BUG-1b 跟进修复**：label 文字进 overlay 路径（PIL `draw.text` + 黑描边，锚点 = cuboid 顶角与 3D label 同款 `_cuboid_label_anchor`，经同一 FTheta projector 投影 + visibility 过滤）；overlay live 时移除浏览器端 3D labels 防双画。inceptio 重跑 verify：`t405 | bus` 等文字同色贴框顶角，密集场景归属可辨。
-- **BUG-1c（同日，用户追问 trajectory + 开关）**：① ego/track trajectories 同病（V3-VIZ.5 移到浏览器 pinhole 3D primitives）→ 回 overlay 共投影（ego 绿 subdivide 3、track per-class `class_color` 分层，静态缓存带 class）；FTheta 模式跳过 3D 轨迹创建（ego frustum 保留——位置 widget 非背景注释）。② V3-VIZ.5 当年移除 overlay 轨迹的理由「behind-camera 散射像素」实为 FLIP 180° 镜像症状（背后段被翻到前方），flip=I 后 z>0/max_angle 剪除正常。③ UI 收口：**删除 "FTheta overlay (debug)" checkbox**（overlay 是 FTheta 唯一正确路径，回退开关只制造困惑），三个内容开关（Active cuboids / Ego trajectory / Track trajectories）直接 gate overlay 层。④ 验收：路口车流轨迹贴路面弯曲（鱼眼曲线平滑）；ego 层数据正常（frame111 426/524 点可见但聚于消失点 105×8px——Follow 视角下自己看自己轨迹的几何简并，非 bug，自由视角完整展开）。
 
 ---
 
@@ -365,7 +362,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | R5 | DriveStudio SMPL 链路重 | HMR2@NCore 跑不通 / 移植量大 | Phase 2 拖期 | P2.1 rigid 垫脚石先证价值；P2.2 可单开 spec | P2.2/2.3 |
 | R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控。**2026-06-05 实测：freeze 式 protected warm-start 否定**（10k 追平、未观测面 spiky，见 § 6）；真瓶颈=asset 质量+未观测面缺约束 → 走约束式/re-harvest，**勿再冻结** | P1.4 |
 | R7 | resume 续训退化（已坐实） | MCMC+多层 resume | cc −1.92 | **所有 baseline 对照从头训** | §0.4 |
-| R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | ✅ 已修复（`2a4657e`：flip=I + cuboid 回 overlay 路径；相机一致性合同测试为永久绊线）。教训：**目视校准会被街道前后对称骗过，必须 GT 对照** | BUG-1 |
+| R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | BUG-1 只修 playground overlay，⛔ 勿碰 3D pose/metric 链路 | BUG-1 |
 
 ---
 
@@ -415,14 +412,27 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **A800 10k A/B 结果**：**automobile class_psnr Δ=+0.023（持平）**，heavy_truck −0.968（C3 整层豁免误伤），mean_class −0.036。**5k 的 +0.730 warm 优势在 10k 被 LiDAR-only 追平消失**；viser 看**未观测面严重 spiky / 白玻璃碴**。
   - **根因（修正 spec 前提）**：spec 假设「MCMC 侵蚀 asset」是**反的**——diffusion 补全的 asset 本身 spiky，MCMC+opacity 正则其实在**清理**它；C2 冻 perturb/relocate + C3 关 opacity 衰减恰好**锁死 spiky 并挡住清理**。frozen drop-in 离线手术佐证：原始 asset 几何连贯但**悬浮+光照失配**（→ 必须训练而非冻结）。**真瓶颈 = asset 质量 + 未观测面缺约束，不是 MCMC 侵蚀。**
   - **结论**：**freeze 式 protected warm-start 否定，勿再冻结**。后续若再试 P1.4 走「**约束式**」（scale clamp + anisotropy 上限 + opacity floor，有界非冻结）或先提 asset 质量（re-harvest / 协方差对齐）。代码默认关闭、baseline 字节等价。
-- **2026-06-10 BUG-1 viser cuboid overlay 对齐修复**（commit `2a4657e`，纯 viz，零 metric/init 改动）：
-  - **双层根因**（比任务卡预判深一层）：① V3-VIZ.2 把 cuboid 移到 `add_line_segments`（浏览器 pinhole vs FTheta backdrop，140° FoV 下偏几十~上百 px）；② **B2 overlay 路径从一开始就 180° 镜像**——`FLIP_VISER_TO_OPENCV` 把 overlay 相机视线翻成 −Z 而 backdrop 视线是 c2w +Z（FTheta rays rz=cos>0），画的是 ego 背后 tracks 的镜像，街道前后对称骗过 B2 校准（`B2_blended_clean.png` 即镜像巧合）。
-  - **判定实验**：bus 405（前方 12 m）flip=I → 8/8 角可见、uv 正落渲染公交车处；legacy FLIP → 0/8。GT raw-camera 对照框套住真车（box truck 同位同色）。
-  - **修复**：cuboid 回 overlay 路径（per-track 色）+ overlay live 跳过 line_segments（OFF 回退留 A/B）+ 两处 compositor `world_to_camera_flip=np.eye(4)`。
-  - **测试/验收**：新 `test_viser_gui_4d_cuboid_overlay.py` 8 项（含 +Z→principal point 相机一致性合同 + legacy flip 回归绊线）；Mac 192 related passed；inceptio 5 帧（直行+转弯）× 14-26 tracks 目视：bus/box-truck/白 van 框贴合、镜像框消失。验证脚本 `scripts/verify_bug1_cuboid_overlay.py` 留档。
-  - **教训入风险表 R8**：目视校准会被街道前后对称骗过，投影类校准必须 GT 对照 + 不变量测试 pin 死。
-  - **BUG-1b 跟进（同日，用户验框后追问 label）**：label 文字进 overlay 路径与 wireframe 共投影——`OverlayLayer.texts` + `PolylineLayerSpec.labels_world`（锚点 = cuboid 顶角，共用 `_cuboid_label_anchor`），overlay live 时移除浏览器端 3D labels（防 pinhole 双画）。三层 TDD 测试 +8 项（renderer text ×3 / compositor 投影+背后剔除 ×2 / viewer specs+移除+回退 ×3），Mac 200 related passed；inceptio 重跑 verify：`t405 | bus` 同色文字贴框顶角。
-  - **BUG-1c 跟进（同日，用户追问 trajectory/开关）**：ego/track trajectories 回 overlay 共投影（V3-VIZ.5 的「behind-camera 散射」实为 FLIP 镜像症状，flip=I 已根治）；track per-class `class_color` 分层、ego frustum 留 3D；**删除 "FTheta overlay (debug)" checkbox**——overlay 为 FTheta 唯一路径，内容开关直接 gate overlay 层。+7 测试（specs ego/track/toggles ×3、FTheta 跳过 3D ×2、pinhole 回归 ×2），Mac 205 related passed；inceptio verify：路口车流轨迹贴路面弯曲；ego 层投影正常（Follow 视角几何简并致视觉不显眼，自由视角完整）。
+- **2026-06-09 Phase 3 车道线测量门（方案 A：lane sseg → per-class lane 指标）落地 + baseline 立锚**（对标 Phase 0，纯 eval 无训练；commits 247ce9c→98bd9b3，inceptio RTX 4090）：
+  - **指标层**（Mac TDD，纯张量、cv2/NCore-free）：[`per_class_eval.py`](threedgrut/model/per_class_eval.py) 加 `dilate_mask`（`F.max_pool2d` 方形膨胀，细 lane mask→dilated band）+ `_grad_mag_corr_in_mask`（Sobel 梯度幅值 Pearson 相关，**阈值无关、替代 edge-IoU**）+ `compute_lane_metrics`（band-LPIPS + band/raw-PSNR + grad-corr **四候选一次全报**，baseline 后挑主指标）；`LANE_CLASS_IDS=(23,24)`。23 测试 Mac 全绿。
+  - **数据链路**：[`datasetNcore.py`](threedgrut/datasets/datasetNcore.py) **val/test-only** 加载独立 lane 产物 `*.aux.lane.zarr.itar`→`semantic_lane_sseg`（软失败 + **缺相机/帧跳过**，因 lane 产物前视-only）；[`render.py`](threedgrut/render.py) 前视相机 gate + metrics.json `mean_lane_{band_lpips,band_psnr,raw_psnr,grad_corr}` / `lane_{n_records,total_pixels,band_total_pixels}`（缺产物时**字节等价**）；eval 入口 [`render.py`](render.py) 加 `--load-lane-masks`/`--lane-band-px`（OmegaConf struct 解锁注入，旧 baseline ckpt 也能 eval）。
+  - **lane GT 来源**（自跑，**不依赖 nre-tools**）：新建 [`scripts/gen_lane_sseg.py`](scripts/gen_lane_sseg.py)，inceptio 用 `facebook/mask2former-swin-large-mapillary-vistas-semantic`（hf-mirror）逐帧前视推理 → 599 帧 Mapillary 65 类 itar（13.9 MB，与 sseg 字节同构复用 `SsegAuxReader`）；对账 id2label：**23=Lane Marking-Crosswalk / 24=Lane Marking-General**。
+  - **inceptio 立锚**（baseline ckpt `v3_base_scratch30k_lam01`，前视 75 帧，~3 min）：**grad_corr 0.693** / band_psnr 21.77 / raw_psnr 22.78 / band_lpips 0.0233 / lane_n_records 75（全覆盖，raw 4.68M px / band 7.75M px）。
+  - **守护线零回归**：前视 mean_psnr 18.624 / psnr_masked 26.113 / cc_psnr_masked 21.578 / ssim_masked 0.906 / lpips_masked 0.231 全部 = baseline `per_camera[front]`（差 <1e-3）——改动纯增量。
+  - **A.3 红旗自检（信号/方差）通过**：grad_corr 0.69 非退化（非 1/None）、阈值无关、有提升空间 → **荐为 Phase 3 主 KPI**（P3.1/P3.2 改善以此对照）；band_lpips 0.023 小但非零（band 沥青主导，次要）。**本条是「门」，不含 P3.1/P3.2 实际改动。**
+- **2026-06-10 P3.1-A 车道线锐度 loss + 放宽 road 几何（P3.1 阶梯第一刀，三档消融 A800 lidar-on 30k）— ✅ 全胜**（commits 0e9d7c1→35a1e54，Mac TDD 全门绿 + A800 三档 A/B）：
+  - **改动**：① 新建 [`lane_loss.py`](threedgrut/model/lane_loss.py) `compute_lane_sharpness_loss`（lane-band Sobel 梯度幅值 L1，**eps-safe 防 sqrt(0) 反向 NaN**——TDD `test_lane_loss_positive_and_differentiable` 抓到 pred.grad=NaN，内联 `_grad_mag_safe`、复用 P3.0 `_luma`/`dilate_mask`，eval KPI grad_corr/Pearson 只读防 Goodhart）；② [`datasetNcore.py`](threedgrut/datasets/datasetNcore.py) train 分支前视 try/except 软失败加载 lane mask（透传 P3.0 已 train/val 通用）；③ [`trainer.py`](threedgrut/trainer.py) `get_losses` 条件式 `loss_lane`（仿 lidar 范式「有才算」防 NaN，`lambda_lane=0` 默认字节等价）；④ [`multilayer_p31.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer_p31.yaml) preset（lane on + road `anisotropy_ratio_max` 8→30 / `scale_xy_max` 0.3→0.6）+ [`test_lane_loss.py`](threedgrut/tests/test_lane_loss.py) / [`test_road_scale_override.py`](threedgrut/tests/test_road_scale_override.py)。Mac 全门 30 测绿（lane_loss 4 + override 3 + per_class_eval 23 零回归）。
+  - **三档消融实测**（baseline 锚 = A800 同机 eval，与 inceptio 立锚**字节一致** grad_corr 0.6932 / band_psnr 21.77 / cc 25.79 / lidar 22.69）：**B1 lane-only**（lane·几何8）grad_corr **0.7278（+0.035）** / cc 25.89；**B2 放宽几何-only**（无lane·几何30）grad_corr **0.7191（+0.026）** / cc 25.84；**B3 叠加** grad_corr **0.7441（+0.051）** / band_psnr 22.01 / raw_psnr 23.36 / cc 25.87 / lidar 22.72。
+  - **拆变量**：lane loss 主导（+0.035, 68%）+ 放宽几何次要（+0.026, 51%）；B1+B2=+0.061 > B3 +0.051 → **sub-additive**（目标重叠 ~16%），叠加仍最优、二者都留。
+  - **守护线全过**：三档 cc 25.84~25.89（baseline 25.79，全 +0.05~0.10）、lidar 不退、band/raw lane-PSNR 全升（**非拿 PSNR 换锐度**）。
+  - **D2 novel 安全**：B3 `mean_novel_lpips_avg` **0.5962** vs baseline 0.5987（**−0.0025 略好**，4 档 lateral/yaw 0.576~0.614）→ 放宽 road 各向异性 8→30 **未产生 hair-thin novel artifact**（V3-R1.2/R1.3 反向担忧解除，本 clip 安全）。
+  - **视觉 A/B（viser 三方，2026-06-10 大g 肉眼，A800 `--renderer 3dgut`）**：**选 B3**。B3 斑马线/crossroad 车道线明显更锐、更连续（放宽几何给 road 高斯「拉成细长条」的表达力 + lane loss 推锐边缘，二者协同）；B1（lane-only，几何 8）虽无副作用但斑马线**比 baseline 还模糊**（lane loss 有监督、但 road 几何 8 表达不了高频密条纹）。**B3 已知限制**：局部车道线消失（放宽 `anisotropy` 让高斯沿行驶方向拉长 → 横向覆盖不足 + MCMC relocate 往 lane-mask 区重分布 → Mapillary 漏检区 / 横向标线变稀）——**grad_corr 均值掩盖的局部退化**（viser 肉眼抓到、指标没抓到，典型 Goodhart）。后续可经 P3.1-B 定向加密 / `anisotropy` 调幅(30→适中) / lane-mask 补全 / P-CAP 给 road 加粒子改善。
+  - **结论**：主 KPI grad_corr **0.693→0.744（+7.3%）**——继 V3-R2 bg-in-road +0.65 之后又一「重构物理问题」真跃迁（road 当 2D 高频纹理来监督+表达，非堆参数）。**P3.1-B 定向加密（二阶）大g 决策暂不投**（边际 vs 工程量），收 P3.1-A → 转 P3.2。A800 三档 ckpt_30000 + eval metrics 保留、中间 ckpt_7000 已清理。
+- **2026-06-10 P3.1-A 后续：anisotropy 调幅消失改善尝试 + depth on/off 验证（inceptio worktree, depth-off）— 维持 B3**：
+  - **背景**：viser 发现 B3（anisotropy 30）局部车道线消失；试 anisotropy 30→20 看能否换回消失。**A800 被系统清理（ckpt + conda env 全失）后 GPU 任务转 inceptio git worktree**（每任务隔离，工作流入 CLAUDE.md；踩坑 worktree 缺 submodule → rsync 主仓库 `thirdparty/tiny-cuda-nn` 补齐）。
+  - **depth on/off 验证（坐实大g 判断）**：B3 depth-off grad_corr **0.7386** vs depth-on 0.7441（差 **−0.0055**，噪声级）→ **depth on/off 对 grad_corr 影响极小**（呼应 Stage 11 深度监督≈0），inceptio depth-off 为有效、内部可比平台。
+  - **anisotropy 调幅 A/B（depth-off，inceptio 内部可比）**：aniso20 grad_corr **0.7325** vs B3 0.7386（差 **−0.0061**，噪声级）/ band_psnr 21.91 vs 21.96 / cc 25.95 vs 25.90 → **anisotropy 30→20 锐度几乎不损**（仍 +0.039 vs baseline）。
+  - **viser 三方目视（大g）**：aniso20 的「消失」与 B3 **肉眼看不出区别** → **anisotropy 调幅不解决消失**（坐实诊断：消失根因主要是 **Mapillary lane mask 漏检**，非 anisotropy 横向窄）。
+  - **结论**：**维持 B3 为 P3.1-A 最终配方**（aniso20 不优——锐度同、消失同）。消失改善若要做须走 **lane mask 补全**（诊断根因①，重，留 v4 / 后续）。inceptio worktree 工作流 + submodule 补齐 + viser `--renderer 3dgut`(A800)/`3dgrt`(4090) 均入 CLAUDE.md/skill。
 
 ---
 

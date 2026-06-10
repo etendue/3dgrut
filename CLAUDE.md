@@ -109,7 +109,14 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd
 | inceptio / 62GB | 62GB | **≤ 10**（→ ~39GB） | nw=24 OOM，nw=10 稳 |
 | 32GB 机 | 32GB | ≤ 4-6 | — |
 
-**用法**：小内存机一律 CLI 覆盖 `num_workers=10`（顶层 key，直接覆盖不带 `+`）。**不要为省内存关掉 `use_lidar_depth`**——baseline（cc 25.79）就用它，关了 A/B 不可比。
+**用法**：小内存机一律 CLI 覆盖 `num_workers=10`（顶层 key，直接覆盖不带 `+`）。
+
+> ⚠️ **2026-06-09 大g 决策（覆盖旧「不要关 use_lidar_depth」指令）**：**inceptio 上训练默认关 LiDAR depth + DepthAnythingV2 深度监督**（`use_lidar_depth=false` / `use_depth_prior=false` / `load_lidar_depth_map=false`），因为 inceptio 62GB 内存装不下深度图缓存——既是 num_workers OOM 的内存大头，深度图加载也是数据管线瓶颈、加了 depth 训练明显变慢。
+>
+> **原则（大g）**：**A800 内存多 → 加 depth 约束（lidar-on）；inceptio 内存不够、加 depth 又拖慢 → depth-off，并同步调小 `num_workers`。** 两台机各自统一配方，A/B 不跨机混搭。
+> - **baseline 与实验一律统一 depth-off** → inceptio **内部** A/B 仍单变量可比。
+> - 但与 A800 lidar-on 立锚的数字（如 cc_psnr_masked 25.79 / lane grad_corr 0.693 / 车 class_psnr 24.04）**不可直接跨机比** → 在 inceptio 上要先重立一条 **depth-off baseline 锚点**，A/B 以它为对照。
+> - 旧「不要为省内存关 `use_lidar_depth`，否则 A/B 不可比」那句**仅在 A800（2TB 内存）成立**，inceptio 不适用。
 
 **附带现象（同一根因）**：RTX 4090 上 GPU 利用率只有 ~30-50%（不是 100%），因为深度图 + sseg 的**数据管线喂不满快卡**（数据加载瓶颈，非 GPU 慢）。降 num_workers 省内存的代价就是数据并行度更低、GPU 更饿；这是内存 vs 速度的权衡，**不影响训练正确性 / 最终 metric**。本地 NVMe 已排除慢盘因素。
 
@@ -117,12 +124,63 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd
 
 **长任务启动用「proven inline nohup」模式**（`ssh inceptio "... && nohup python train.py ... > log 2>&1 & echo PID \$!"`），inceptio ssh 偶发抖动（exit 255）；`setsid bash 脚本 & disown` 这种复杂形式在抖动下容易半路夭折，inline nohup + 末尾 `echo PID` 最稳。
 
+### 🌐 访问外网（mihomo 代理）
+
+inceptio 直连外网受限；要拉 HF 模型 / pip / git clone 等联网操作需先起 mihomo 代理：
+
+```bash
+# 1. 启动代理（后台），监听 127.0.0.1:7890
+ssh inceptio 'cd /home/inceptio/repo/mihomo_p && nohup ./mihomo -f mihomo.yaml > /tmp/mihomo.log 2>&1 & echo PID $!'
+
+# 2. 联网命令前在同一条 ssh 内导出代理 env（纯本地训练不需要）
+ssh inceptio 'export http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890 && <要联网的命令>'
+```
+
+- 代理路径：`/home/inceptio/repo/mihomo_p/`，配置文件 `mihomo.yaml`。
+- **只在需要联网的命令前导出 `http_proxy`/`https_proxy`**；数据/权重已在本地的训练不要带代理（避免本地回环也走代理）。
+
 ### 代码同步（Mac → inceptio）
 
 ```bash
 rsync -az --exclude='.claude/worktrees' --exclude='.venv' --exclude='__pycache__' \
   /Users/etendue/repo/3dgrut2/ inceptio:~/repo/3dgrut2/
 ```
+
+### ⭐ inceptio git worktree 工作流（推荐 — 每任务隔离，2026-06-10 大g 决策）
+
+**A800 不稳（系统管理员清理 / conda env 丢 / 数据没上盘，已多次）→ 后续 GPU 任务一律转 inceptio。** 每个任务在 inceptio 的 git 仓库下 checkout 一个独立 git worktree 跑，完成即删——代码版本明确、多任务互不污染、不怕被清。inceptio `~/repo/3dgrut2` 是**真 git 仓库**（非 rsync mirror），`git worktree` 可用。
+
+**一次性建 Mac→inceptio 的 git remote（本地 ssh，不走 GitHub/代理）**：
+```bash
+cd /Users/etendue/repo/3dgrut2 && git remote add inceptio inceptio:/home/inceptio/repo/3dgrut2
+```
+
+**每个任务的流程**：
+```bash
+# 1. Mac：push 任务分支到 inceptio（inceptio 在 main，push 非当前分支不冲突）
+git push inceptio <branch>:<branch>
+
+# 2. inceptio：从该分支 checkout 独立 worktree（仓库外路径 ~/repo/3dgrut2-wt/<task>）
+ssh inceptio 'cd ~/repo/3dgrut2 && git worktree add ~/repo/3dgrut2-wt/<task> <branch>'
+
+# 2b. ⚠️ 必做：补 submodule —— git worktree add **不 checkout submodule**，但
+#     lib3dgut_cc JIT 编译需 thirdparty/tiny-cuda-nn（缺 → "Error building extension
+#     'lib3dgut_cc'"）。从主仓库 rsync 过来（不需联网，inceptio 主仓库已有 submodule）：
+ssh inceptio 'cd ~/repo/3dgrut2; WT=~/repo/3dgrut2-wt/<task>; for p in $(git config --file .gitmodules --get-regexp path | cut -d" " -f2); do rsync -a ~/repo/3dgrut2/$p/ $WT/$p/; done'
+
+# 3. inceptio worktree 里跑（cd 进 worktree → import 自动解析 worktree 代码、非主仓库）
+ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
+  && cd ~/repo/3dgrut2-wt/<task> && python train.py ... '
+
+# 4. 完成：删 worktree
+ssh inceptio 'cd ~/repo/3dgrut2 && git worktree remove ~/repo/3dgrut2-wt/<task>'
+```
+
+**注意**：
+- 验证代码同步：`ssh inceptio 'cd ~/repo/3dgrut2-wt/<task> && git log --oneline -1'` 应 = Mac 分支 head。
+- inceptio .git 可能含 Mac rsync 带来的 prunable worktree 引用 → `git worktree prune` 清理。
+- inceptio 跑训练**一律 depth-off + `num_workers=10`**（内存铁律，见上）；与 A800 lidar-on 数字不可跨机比，须在 inceptio **重立 depth-off baseline 锚**再做 A/B。
+- 后续改动：Mac 在 worktree 分支 commit → `git push inceptio <branch>` → inceptio worktree `git pull`（或 `git reset --hard origin/<branch>`），保持同步。
 
 ### 训练启动示例
 
