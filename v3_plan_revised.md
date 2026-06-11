@@ -76,9 +76,9 @@ kanban
         [P2.2 DriveStudio SMPL-LBS 移植进 dynamic_deformables]
         [P2.3 行人 SMPL 输入链路（HMR2@NCore + 全局运动 + 对齐）]
         [P3.2 遮挡式 bg（mask-loss 不杀粒子 + 绑 road 覆盖率补足）v3可选（plan 就绪 gate P3.1 已满足）]
-        [P3.3 ★ novel 外推测量门扩展（lateral 3m/6m 新档 + lane 区域 novel 指标 + 三方 ckpt 立锚）]
-        [P3.4 路面上空 bg 空气区 penalty（V3-R2 扩展打悬浮鬼影，gate P3.3）]
-        [P3.5 road 层 SH 降阶 DC-only（freeze 法，Lambertian 先验，gate P3.3）]
+        [P3.3 ★ novel 外推测量门扩展（lateral 3m/6m 新档 + lane 区域 novel 指标 + 三方 ckpt 立锚）→移交v4 E1.1]
+        [P3.4 路面上空 bg 空气区 penalty（V3-R2 扩展打悬浮鬼影，gate P3.3）→移交v4 E3.1]
+        [P3.5 road 层 SH 降阶 DC-only（freeze 法，Lambertian 先验，gate P3.3）→移交v4 E3.2]
         [PCAP MCMC per-layer cap bg→actor 重分配]
         [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
         [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
@@ -124,9 +124,9 @@ kanban
 | **P3.0** ★ | 3 | **车道线测量门（方案 A，对标 Phase 0）** — 自跑 Mapillary lane sseg（[`gen_lane_sseg.py`](scripts/gen_lane_sseg.py)）+ `compute_lane_metrics`（dilated-band + 梯度锐度）接通 render/dataset；baseline 立锚（纯 eval 无训练） | 新（spec 2026-06-09） | 1 | ✅ | `per_class_eval.py`(+lane) / `datasetNcore.py` / `render.py` / scripts；**grad_corr 0.693**，守护线零回归 |
 | **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ✅ P3.1-A（B 二阶未投） | `lane_loss.py`+trainer+datasetNcore+[p31preset](configs/apps/ncore_3dgut_mcmc_multilayer_p31.yaml)；**grad_corr 0.693→0.744（+0.051）** 拆变量 loss 主导(+0.035)+几何(+0.026)，守护 cc25.87/novel 0.596，[plan↗](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md) |
 | **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续；**绑 road 覆盖率补足**（Phase 2A 实测 road 仅盖 68%、bg 替补 24%——硬解耦先补洞：P-CAP road 粒子 / 定向加密） | 想法③ | 2 | ⬜（plan 就绪） | v3 可选·见同 plan（gate=P3.1 已过） |
-| **P3.3** ★ | 3 | **novel 外推测量门扩展（2026-06-11 诊断第 0 层）** — [`novel_view.py`](threedgrut/utils/novel_view.py) 加 lateral_3m/6m 档（**4 档 avg 字段口径不变**保历史可比，新档独立字段）+ lane 区域限定 novel 指标（路面平面诱导 warp：ray-plane 求交重投影 lane band/GT 到 novel 相机，FTheta 兼容）+ inceptio 现存 ckpt（baseline/B3/aniso20）三方立锚，顺带回答「B3 放宽几何是否放大 3m/6m 退化」 | 新（2026-06-11 诊断） | 1.5 | ⬜ | 纯 eval 无训练 |
-| **P3.4** | 3 | **路面上空 bg 空气区 penalty** — 现 z_band=0.4m 只罚贴地带，0.4m 以上悬浮 bg 零约束（novel 鬼影主要来源）；新增路面上方空气区（0.4m~上界 A/B 定，cuboid 内 actor 豁免）bg opacity penalty，复用 V3-R2 全套基建（height field / query_ground_z / cuboid mask） | 新（V3-R2 扩展） | 1.5 | ⬜ | gate=P3.3 锚；先定 PR #24 去留（R9） |
-| **P3.5** | 3 | **road 层 SH 降阶 DC-only（freeze 法）** — 砍 view-dependent 过拟合逃逸通道（路面/车道线近似 Lambertian，高阶 SH 只会被用来补偿几何错误）；保 45 维 zero+freeze 高阶系数（V3-R1.1 fused SH 宽度一致坑的已知解法）；V3-R2 后 road 已主导路面渲染，降阶才真正起作用 | 部分 V3-R1.1 复活 | 1 | ⬜ | gate=P3.3 锚；先定 PR #24 去留（R9） |
+| **P3.3** ★ | 3 | **novel 外推测量门扩展（2026-06-11 诊断第 0 层）** — [`novel_view.py`](threedgrut/utils/novel_view.py) 加 lateral_3m/6m 档（**4 档 avg 字段口径不变**保历史可比，新档独立字段）+ lane 区域限定 novel 指标（路面平面诱导 warp：ray-plane 求交重投影 lane band/GT 到 novel 相机，FTheta 兼容）+ inceptio 现存 ckpt（baseline/B3/aniso20）三方立锚，顺带回答「B3 放宽几何是否放大 3m/6m 退化」 | 新（2026-06-11 诊断） | 1.5 | ⬜ | 纯 eval 无训练；**→ 移交 [`v4_plan.md`](v4_plan.md) E1.1（执行/回填以 v4 为准）** |
+| **P3.4** | 3 | **路面上空 bg 空气区 penalty** — 现 z_band=0.4m 只罚贴地带，0.4m 以上悬浮 bg 零约束（novel 鬼影主要来源）；新增路面上方空气区（0.4m~上界 A/B 定，cuboid 内 actor 豁免）bg opacity penalty，复用 V3-R2 全套基建（height field / query_ground_z / cuboid mask） | 新（V3-R2 扩展） | 1.5 | ⬜ | gate=P3.3 锚；先定 PR #24 去留（R9）；**→ 移交 [`v4_plan.md`](v4_plan.md) E3.1** |
+| **P3.5** | 3 | **road 层 SH 降阶 DC-only（freeze 法）** — 砍 view-dependent 过拟合逃逸通道（路面/车道线近似 Lambertian，高阶 SH 只会被用来补偿几何错误）；保 45 维 zero+freeze 高阶系数（V3-R1.1 fused SH 宽度一致坑的已知解法）；V3-R2 后 road 已主导路面渲染，降阶才真正起作用 | 部分 V3-R1.1 复活 | 1 | ⬜ | gate=P3.3 锚；先定 PR #24 去留（R9）；**→ 移交 [`v4_plan.md`](v4_plan.md) E3.2** |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
