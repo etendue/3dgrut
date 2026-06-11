@@ -68,9 +68,7 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [E0.3 自有 clip 官方配方训练复现（nre 容器）]
         [E0.4 同 clip 双向对照锚（NuRec vs multilayer 全指标）]
-        [E0.5 官方配方 diff 清单（喂 E3）]
         [E0.6 官方链 actor 插入取代体验（nre 编辑 + asset-harvester + Harmonizer 协调）]
         [E1.2 NTA-IoU 接入（plan 已备）+ 外推档联动]
         [E1.3 held-out camera 真 GT 外推协议]
@@ -83,8 +81,6 @@ kanban
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
 
     "In Progress"
-        [E0.1 容器环境 gate：镜像已拉好✅→剩运行时冒烟 + key 需求验证（inceptio）]
-        [E0.2 官方 USDZ 场景渲染 + Harmonizer 链路体验]
 
     "Blocked"
         [E1.1 ＝v3 P3.3 移交：3m6m 档 + lane 区域 novel 指标 + 三方 ckpt 立锚]
@@ -92,6 +88,10 @@ kanban
         [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate E1.1 + R9 PR24）]
 
     "Done"
+        [E0.1 容器冒烟 ✅ 2026-06-11：nre 26.4.146，无 key 全链通]
+        [E0.2 USDZ 渲染+修复链 ✅：FID 锚 7.4/57/92，Harmonizer 两档跑通，目视显著]
+        [E0.3 自有 clip 官方训练 ✅：40k 步 2h07m，test psnr 30.30（官方口径）]
+        [E0.5 配方 diff 清单 ✅：docs/superpowers/specs/ 入档，Top-5 借鉴点]
         [继承: v3 P1.2 track-pose（class 25.07 cc 26.06）]
         [继承: v3 P3.0 lane 门 + P3.1-A lane loss（grad_corr 0.744，代码 PR #24）]
         [继承: 2026-06-11 外推诊断（aperture problem + 测量双盲区）]
@@ -105,11 +105,11 @@ kanban
 
 | ID | Phase | 主题 | 继承来源 | 估时(d) | 状态 | gate / 备注 |
 |---|---|---|---|---:|:---:|---|
-| **E0.1** ★ | E0 | **容器环境 gate**：镜像拉取 ✅ 已完成（inceptio 实测 `nre-ga:latest` 42.6GB + `nre-tools-ga:latest` 59.7GB，无需 key，2026-06-11）→ 剩：nre skill `scripts/validate_setup.py` + GPU 冒烟（容器内 `nvidia-smi` / `nre --help` / 小渲染）+ **验证运行时 NGC key 需求**（skill 把 `NGC_API_KEY` 列 required env var 且提示运行期间勿撤销——先不带 key 试，报 auth 错再补）+ `:latest` 实际版本号确认 | 新 | 0.5 | 🟡 | **首要任务入口**；fixer 线已确认无 NGC 依赖（见 R-v4.1） |
-| **E0.2** ★ | E0 | **官方 USDZ 场景渲染 + 修复链体验（不训练）**：`physical-ai-datasets` skill 下载 1–2 个 PhysicalAI-AV-NuRec USDZ → `nre render` 沿原轨迹 + 自定义横移 3m/6m 轨迹渲帧 → `nurec-fixer` skill 过 DiffusionHarmonizer → 目视 + FID 对比修复前后 | 新 | 1 | ⬜ | 先跑通链路、直观感受官方外推天花板；**Harmonizer 权重=HF `nvidia/Harmonizer`（HF_TOKEN 已有，确认无 NGC 依赖；老 NGC JIT `.pt` recipe 已被 skill 标注废弃）**，fixer 容器=`pytorch:25.10-py3`+`Dockerfile.cosmos` 自建（非 nre-ga） |
-| **E0.3** ★ | E0 | **自有 clip 官方配方训练复现**：clip 9ae151dc（NCore v4 本就是 NuRec 格式，`ncore` skill validate 后直喂）用 `nre` 官方 AV 配方（`3dgut_dynamic` 系）训练；显存不够→减配/`vast-train` 48GB | 新 | 1.5 | ⬜ | gate=E0.1 |
+| **E0.1** ★ | E0 | **容器环境 gate**：镜像拉取 ✅ + 运行时冒烟 ✅（2026-06-11 全部完成）。实测：`nre-ga:latest` = **26.4.146-c63f08a4**（2026-05-28 build）；validate_setup.py 仅 2 预期 FAIL（24GB 边界 + key 空）；容器内 nvidia-smi/CLI 全子命令面正常；**无 NGC key 跑通 train/render 全链**（R-v4.1 答案：key 仅 difix-distill 下载 `cosmos_3dgut.pt` 时需要） | 新 | 0.5 | ✅ | 无 key 训练+渲染实测通过；唯一例外＝官方 train-time difix 蒸馏权重在 NGC |
+| **E0.2** ★ | E0 | **官方 USDZ 场景渲染 + 修复链体验** ✅（2026-06-11）：场景 0fd06bc3（1.92GB 4K）+ 048b974e 已下；`nre render` 三档各 595 帧（gt / lat3m / lat6m，rig offset 法，17.8ms/帧 @4090 1080p）；Harmonizer 时间模式修复两档跑通。**FID（vs 真实参考帧分布）：原轨迹渲染 7.37（忠实度极高）/ lat3m 57.3→修复后 65.6（↑）/ lat6m 91.8→86.6（↓5.2）**；目视修复显著（锥桶修直 / 涂抹消除 / 黄线连续）但 FID 几乎不动——**判别产出：官方表示侧伪影轻，FID 大头＝视角内容差，修复链 FID 收益∝伪影占比**（论文 134→50 是重伪影场景；3dgrut2 伪影重于官方→E2 收益预期更大）；FID 单指标评修复会误判（E1.4 须配区域化指标，R-v4.5 实证） | 新 | 1 | ✅ | 帧档：inceptio `~/work/nurec_e0/renders/0fd06bc3/` + `~/repo/harmonizer/input_frames_cosmos_temporal_lat{3,6}m/`；真帧 `~/work/nurec_e0/real_frames/`；Harmonizer 权重全 HF 化（token 须开 gated 权限 + Cosmos-Predict2 模型页接受 license——两步均需 HF 网页手动操作，已留档） |
+| **E0.3** ★ | E0 | **自有 clip 官方配方训练复现** ✅（2026-06-11）：clip 9ae151dc 用 Hyperion-8.1 `car2sim_6cam`+pai overlay（PAI 配方，非 Waymo 3dgut_dynamic）40k 步一次训完——**4090 24GB 无降配**（峰值 16GB / 稳态 ~9GB，2.62M gaussians），2h07m（7.45 it/s）。**官方口径锚：test/psnr 30.30 / cpsnr road 38.27 · car 34.59 · person 32.65 / chamfer 0.295**；产物 `artifacts/last.usdz`（1.1GB）+ 20 类 cpsnr 全套。兼容性结论：官方分片全兼容 nre 26.4，唯一不兼容＝v3 自产 lane aux（缺 consolidated 元数据 + sequence 标识不符）→ 移出即过（R-v4.3 实际未命中） | 新 | 1.5 | ✅ | ⚠️ 官方 val 口径＝每 3 帧+1/4 分辨率+cpsnr，**不可直接对比 multilayer 数字**（E0.4 统一口径重算） |
 | **E0.4** ★ | E0 | **同 clip 双向对照锚**：NuRec ckpt 与 multilayer baseline 互渲 — interpolated（PSNR/LPIPS/per-class）+ 外推（lateral 3m/6m lane/NTA-IoU/FID，用 E1 工具）双向跑全指标 → **v4 gap 表首行**（量化"差距在哪一层"：表示/配方/修复器） | 新 | 1 | ⬜ | gate=E0.3 + E1.1/E1.2 工具就绪 |
-| **E0.5** | E0 | **配方 diff 清单**：官方 yaml（3dgut_dynamic 系）vs [`ncore_3dgut_mcmc_multilayer.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer.yaml) 逐项 diff（LiDAR intensity 监督 / densification / 正则 / 相机处理 / sky-road 处理）→ 喂 E3 借鉴清单 | 新 | 0.5 | ⬜ | gate=E0.3 |
+| **E0.5** | E0 | **配方 diff 清单** ✅（2026-06-11）：官方 resolved 全量（8438 行 parsed.yaml）vs [`ncore_3dgut_mcmc_multilayer.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer.yaml) 11 维度逐项 diff → [`2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md`](docs/superpowers/specs/2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md)。**Top-5**：① road 几何冻结五件套（ground-mesh init + lr 1e-6 冻结 + MCMC 豁免 + z-scale/平整正则，喂 E3.1-E3.3）② road/bg 所有权 init 切分（bg init 剔 road 类点）③ 官方 train-time difix 蒸馏钩子原生＝±3m lateral 增强（本 run 关，sqa_difix_distill 开，喂 E2.2）④ 对锚口径陷阱（官方 val 每 3 帧+1/4 res+cpsnr）⑤ LiDAR ray 级监督 2048 ray/step + 200m 远场 | 新 | 0.5 | ✅ | 顺手发现：`LayerSpec.scale_lr_mult` 死配置（已 spawn 后台任务）；官方 `noise_lr 5000` vs 本项目 5e5 待验证 |
 | **E0.6** | E0 | **官方链 actor 插入/取代体验**：在 E0.2 USDZ 场景或 E0.3 自有 clip 重建上走官方编辑工作流——nre actor 编辑（gRPC/CLI 删/移/替）+ `asset-harvester` 资产插入（项目已收割 3 车+3 人直接可用）+ Harmonizer 协调（训练管道③④正为此设）→ 渲染对照 + **官方编辑能力/限制清单**（删除后路面是否出洞 / 插入物阴影来源 / 协调前后 FID） | 新（大g 2026-06-11 提议纳入） | 1 | ⬜ | 直接回答「官方如何解决 P1.4 撞到的 spiky/光照失配/悬浮」；清单喂 E2.5 |
 | **E1.1** ★ | E1 | **外推测量门扩展** = **v3 P3.3 移交**：lateral_3m/6m 新档（4 档 avg 口径不变保历史可比）+ lane 区域 novel 指标（路面平面诱导 warp 重投影）+ 三方 ckpt（baseline/B3/aniso20）立锚，顺答 B3 细长高斯外推张力 | v3 P3.3（2026-06-11 立项原文 [`v3_plan_revised.md`](v3_plan_revised.md) §1.2） | 1.5 | ⬜ | 纯 eval 无训练；**E1 之门** |
 | **E1.2** ★ | E1 | **NTA-IoU 接入**：按 [`2026-06-10-nta-iou-eval-metric.md`](docs/superpowers/plans/2026-06-10-nta-iou-eval-metric.md) 执行（Task 0–5 全 TDD 已写好）+ **增量**：novel 外推档下也跑 NTA-IoU（渲 lateral_3m/6m 帧→检测→与投影 GT box IoU） | docs/superpowers plan（未执行） | 1.5 | ⬜ | 外推档增量是对原 plan 的小扩展 |
@@ -131,7 +131,7 @@ kanban
 
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
-| **E0** ★ | NuRec 工具链复现立锚（**首要**） | 0/6 | ≥2 场景跑通（1 USDZ 渲染+修复链、1 自有 clip 训练）+ NuRec 锚入档 + 配方 diff 清单 + 官方编辑能力清单 | — | ⬜ |
+| **E0** ★ | NuRec 工具链复现立锚（**首要**） | 4/6 | ≥2 场景跑通（1 USDZ 渲染+修复链 ✅、1 自有 clip 训练 ✅）+ NuRec 锚入档 ✅ + 配方 diff 清单 ✅ + 官方编辑能力清单（E0.6 待开） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | 0/5 | 3m/6m + NTA-IoU + held-out + FID/KID 全部立锚入 gap 表 | interpolated 全指标不退 | ⬜ |
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike | 0/5（含 1 备选） | E1 外推指标相对锚改善（量级参考 DiFix3D+：蒸馏+后处理 +1.8dB/FID −20%）；E2.5 插入协调立带指标基石 | cc ≥ 24.7 / grad_corr 0.744 不退 | ⬜ |
 | **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
@@ -144,8 +144,8 @@ kanban
 > | lane grad_corr @ 3m / 6m | 待测 | 待测 | — | — |
 > | NTA-IoU @ 原轨迹 / 3m / 6m | 待测 | 待测 | — | — |
 > | held-out cam per-class（车/lane） | 待测 | 待测 | — | — |
-> | FID/KID @ 3m / 6m | 待测 | 待测 | — | — |
-> | interpolated（守护线） | class 25.07 / cc 26.06 / grad_corr 0.744 | 待测 | — | 不退化 |
+> | FID/KID @ 3m / 6m | 待测 | 官方 USDZ 场景参考：FID 57.3 @3m / 93.0 @6m（vs 原轨迹分布，0fd06bc3，修复前） | — | — |
+> | interpolated（守护线） | class 25.07 / cc 26.06 / grad_corr 0.744 | **官方口径**：psnr 30.30 / cpsnr car 34.59 · road 38.27 · person 32.65 / chamfer 0.295（E0.3，**口径未统一不可直接比**，E0.4 重算） | 待 E0.4 | 不退化 |
 
 ### 1.4 任务依赖图
 
@@ -262,7 +262,7 @@ flowchart TD
 
 | ID | 风险 | 触发 | 影响 | 缓解 | 关联 |
 |---|---|---|---|---|---|
-| R-v4.1 | nre 容器**运行时** NGC key 需求未验证（镜像已无 key 拉好 ✅ 2026-06-11；但 nre skill 把 `NGC_API_KEY` 列为 required env var、并提示运行期间勿撤销——运行时是否真用（license 校验/附属资源下载）不好说，大g 已预警） | E0.1 冒烟 / E0.3 训练首跑 | nre 训练/渲染中途要 key | E0.1 先不带 key 跑 `validate_setup.py` + `nre --help` + 小渲染，报 auth 错再由大g提供 key；**fixer/Harmonizer 线已确认无 NGC 依赖**（HF_TOKEN 即可），E0.2 不受影响 | E0 |
+| R-v4.1 | ~~nre 容器运行时 NGC key 需求未验证~~ **已关闭（2026-06-11 实测）**：无 NGC key 跑通 validate→train（40k 步）→render→USDZ 导出全链；唯一确认需要 key 的点＝官方 train-time difix 蒸馏权重 `cosmos_3dgut.pt`（NGC API URL、HF 无副本，仅 `sqa_difix_distill` 配方用到——E2 用开源 Harmonizer 自研蒸馏绕开） | — | — | 若将来要跑官方 `sqa_difix_distill` 对照 run，再向大g 要 key | E0 ✅ |
 | R-v4.2 | inceptio 4090 24GB 低于官方推荐显存（24–48GB+） | E0.3 官方配方 OOM | 训练复现受阻 | 降分辨率/相机数先跑通；`vast-train` skill 起 48GB 卡（成本 ~$0.5/h，5k smoke 级） | E0.3 |
 | R-v4.3 | 自有 clip 与 nre 26.x 的 NCore 版本兼容性（项目 clip 较旧 vs NCore 2026.04） | E0.3 数据加载报错 | 同上 | 先 `ncore` skill validate；不兼容则用官方 PhysicalAI 场景完成 E0.3/E0.4（锚点换数据，对照价值略降但仍立得住） | E0.3 |
 | R-v4.4 | Harmonizer 域差（NVIDIA 车队数据 post-train vs NCore clip 相机/ISP） | E2.1 spike 修复质量差/引入异物 | E2 全线打折 | E2.1 先 spike 实测再投 E2.2/2.3；域差坐实走 E2.4 微调（DiFix3D+ 降质构造法已备） | E2 |
@@ -295,7 +295,15 @@ flowchart TD
 - **v3 T15.2**：Fixer 一代已集成（[`correction/difix.py`](threedgrut/correction/difix.py)），E2.1 升级起点；Stage 15 全图蒸馏 +0.30 教训 → E2.2 改打外推档+病灶区。
 
 **新条目（v4 启动后填充，格式：日期 + commit + 实测数）**：
-- （空）
+- **2026-06-11 E0.1 + E0.2 + E0.3 + E0.5 完成**（commit `8b2fcbe`，worktree 分支 claude/amazing-tereshkova-5c7b30）——E0 首日四卡落地（剩 E0.4 gate E1 工具、E0.6 材料已备），全程无 NGC key：
+  - **E0.1 容器冒烟**：`nre-ga:latest` 实测 = **26.4.146-c63f08a4**（2026-05-28 build，entrypoint `/app/run`）。容器内 nvidia-smi（CUDA 13.1）/ CLI 全子命令面正常。**R-v4.1 答案：无 NGC key 跑通 validate→train→render 全链**；key 唯一已知需求点 = 官方 train-time difix 蒸馏权重 `cosmos_3dgut.pt`（NGC API URL，HF 无副本）。
+  - **E0.3 官方配方训练**（inceptio 4090）：clip 9ae151dc + Hyperion-8.1 `car2sim_6cam` + `references/configs/pai.yaml` overlay（`--config-name=external_overrides`），40k 步 **2h07m**（7.45 it/s），峰值显存 16GB（**24GB 无需任何降配**，R-v4.2 未触发），2.62M gaussians。**官方口径锚（每 3 帧 + 1/4 分辨率 + cpsnr）：test/psnr 30.30 / cpsnr road 38.27 · car 34.59 · person 32.65 · sky 38.81 / chamfer_distance 0.295**；产物 `~/work/nurec_e0/train_out/PVG7YYV72YKPLumogi7F7U/`（`artifacts/last.usdz` 1.1GB + val mp4 + metrics.yaml 20 类全套）。“传闻 ~36dB”在本 clip 官方口径下不存在（30.30）；与 multilayer 26.06 的对比须待 E0.4 统一口径。
+  - **数据兼容实录（R-v4.3 实际未命中）**：官方 13 个 itar 全兼容 nre 26.4；唯一阻塞 = **v3 P3.0 自产 `aux.lane.zarr.itar`**（旧版 ncore 写入、缺 `.zmetadata.cbor.xz` 且 sequence 标识不符），两次启动失败（KeyError / Can't load aux data for different sequences）→ 用容器内官方 `consolidate_compressed_metadata()` 升级全部 itar 至 `9ae151dc_consolidated/` + lane aux 移出 → 三次启动成功。教训入档：**自产 aux 文件会被 nre 按文件名 glob 自动吞掉，喂官方容器的目录必须只留官方产物**。
+  - **E0.2 渲染 + 修复链全链完成**（官方 USDZ 场景 0fd06bc3，1.92GB，4K→1080p）：`nre render` 三档各 595 帧（原轨迹 GT / lateral 3m / 6m，**17.8ms/帧** @4090，rig offset 法）→ Harmonizer 时间模式修复两档（~1.07it/s，594 帧/档 ~9min）。**FID（vs 真实参考帧分布，正确口径）：原轨迹渲染 7.37 / lat3m 57.3→修复后 65.6（↑8.4）/ lat6m 91.8→86.6（↓5.2）**；（早期 vs GT 渲染分布口径：57.3/93.0，留档备查）。**目视修复显著**（lat6m 锥桶修直、左缘树木涂抹消除、路面脏斑清除、黄线连续）**但 FID 几乎不动——E0 判别性结论：① 官方表示侧太强（原轨迹 FID 7.4、6m 横移 raw 才 92，伪影占比低），FID 大头是视角内容差，修复链 FID 收益∝伪影占比（DiFix3D+ 论文 134→50 是重伪影场景）；② 推论：3dgrut2 自有 ckpt 伪影远重于官方 → E2 修复收益预期更接近论文场景；③ FID 单指标评修复会系统性误判（修复输出的扩散平滑风格会抵消去伪影收益）→ E1.4 必须搭配区域化/patch 指标，R-v4.5 双协议验收被实测证实必要**。对照帧存档：inceptio `~/work/nurec_e0/renders/0fd06bc3/{gt,lat3m,lat6m}/`、修复帧 `~/repo/harmonizer/input_frames_cosmos_temporal_lat{3,6}m/`、真帧 `~/work/nurec_e0/real_frames/0fd06bc3/`（594 帧 ffmpeg 自参考 mp4）。Harmonizer 链工程留档：镜像 `harmonizer-cosmos-env`（33.1GB，base `pytorch:25.10-py3` 本地、Dockerfile COPY stage 改本地镜像绕 docker.io 拉取）；HF 权重全量（`diffusion_harmonizer.pkl` 5GB + `Cosmos-Predict2-0.6B-Text2Image` 4.1GB）；**HF 侧两道人工解锁：fine-grained token 勾 gated repos read 权限（403 报错文案误导为网络错误）+ Cosmos-Predict2 模型页接受 license（与 token 权限独立）**；推理须 `--entrypoint python` + 每 run 独立输出目录（时间模式会回读历史输出做参考帧）。
+  - **E0.5 配方 diff**：见 §1.2 行内 Top-5 与 [`docs/superpowers/specs/2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md`](docs/superpowers/specs/2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md)（11 维度 / 全部引 resolved key 路径）。**最大架构发现：官方 road = 几何冻结的 ground-mesh 薄片层 + MCMC 全豁免**（aperture problem 的官方答案是“路面不让动”，与 v3 诊断完全互证）；官方 difix 蒸馏钩子原生就是 ±3m lateral（默认关）。
+  - **大g 目视终评（nre viewer 交互对比，E0 判别预答案）**：官方配方产物 vs multilayer 自训——①整体锐度**不更好**（官方 subsample:2 半分辨率监督所致，我们 full-res 不输）；②**路面车道线明显更好**；③**3m 侧向移动退化明显更小**。且该 run difix 蒸馏关闭——**官方纯表示侧（road 冻结五件套 + LiDAR ray 监督）就赢下外推**，E0.4 判别初步指向：表示侧为主差距 → **E3 优先级 ≥ E2**（待 E1 量化锚正式确认）。
+  - nre viewer 工程留档：26.4.146 viewer 两个 bug/坑——①客户端连接竞态（camera on_update 先于 reload action → `Can't unpack empty optional` 渲染线程死），host-side 两行 patch 绕过（`~/work/nurec_e0/patches/av_patched.py` 挂载覆盖）；②nrend 快速路径对自训 USDZ 间歇性 `NRenderer.render failed`（官方 USDZ 正常），`--no-enable-nrend` 走 torch 路径稳定。viewer GUI 自带 Camera Translation Offset（可直接体验横移外推）+ Render Video 导出。
+  - 环境备忘：HF 下载一律 `HF_HUB_DISABLE_XET=1` + 代理（xet/直连均会卡死或失败）；harmonizer 容器 entrypoint 是 `/bin/bash`，跑推理须 `--entrypoint python`。
 
 ---
 
