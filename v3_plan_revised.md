@@ -75,7 +75,10 @@ kanban
         [P2.1 行人 rigid track 垫脚石]
         [P2.2 DriveStudio SMPL-LBS 移植进 dynamic_deformables]
         [P2.3 行人 SMPL 输入链路（HMR2@NCore + 全局运动 + 对齐）]
-        [P3.2 遮挡式 bg（mask-loss 不杀粒子）v3可选（plan 就绪 gate P3.1 已满足）]
+        [P3.2 遮挡式 bg（mask-loss 不杀粒子 + 绑 road 覆盖率补足）v3可选（plan 就绪 gate P3.1 已满足）]
+        [P3.3 ★ novel 外推测量门扩展（lateral 3m/6m 新档 + lane 区域 novel 指标 + 三方 ckpt 立锚）]
+        [P3.4 路面上空 bg 空气区 penalty（V3-R2 扩展打悬浮鬼影，gate P3.3）]
+        [P3.5 road 层 SH 降阶 DC-only（freeze 法，Lambertian 先验，gate P3.3）]
         [PCAP MCMC per-layer cap bg→actor 重分配]
         [AH-0 warm-start 最小验证 spike（1-2 track→5k smoke）]
         [AH-1 per-track 坐标/尺度对齐（cuboids_dims 米制还原）]
@@ -120,7 +123,10 @@ kanban
 | **P2.3** | 2 | 行人 SMPL 输入链路 — HMR2 在 NCore 相机跑通 + 全局运动估计 + 坐标系对齐 | 新 | 3 | ⬜ | — |
 | **P3.0** ★ | 3 | **车道线测量门（方案 A，对标 Phase 0）** — 自跑 Mapillary lane sseg（[`gen_lane_sseg.py`](scripts/gen_lane_sseg.py)）+ `compute_lane_metrics`（dilated-band + 梯度锐度）接通 render/dataset；baseline 立锚（纯 eval 无训练） | 新（spec 2026-06-09） | 1 | ✅ | `per_class_eval.py`(+lane) / `datasetNcore.py` / `render.py` / scripts；**grad_corr 0.693**，守护线零回归 |
 | **P3.1** | 3 | road 当 2D 纹理问题 — 沿车道线定向加密 / 平面 feature grid（**非堆 Fourier 时间维**） | 新（替代 13b L1/L2 Fourier） | 3 | ✅ P3.1-A（B 二阶未投） | `lane_loss.py`+trainer+datasetNcore+[p31preset](configs/apps/ncore_3dgut_mcmc_multilayer_p31.yaml)；**grad_corr 0.693→0.744（+0.051）** 拆变量 loss 主导(+0.035)+几何(+0.026)，守护 cc25.87/novel 0.596，[plan↗](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md) |
-| **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续 | 想法③ | 1.5 | ⬜（plan 就绪） | v3 可选·见同 plan（gate=P3.1） |
+| **P3.2** | 3 | 遮挡式 bg（penalty 改「只 mask loss 不杀粒子」+ 深度合成）— 保 actor 移开帧路面连续；**绑 road 覆盖率补足**（Phase 2A 实测 road 仅盖 68%、bg 替补 24%——硬解耦先补洞：P-CAP road 粒子 / 定向加密） | 想法③ | 2 | ⬜（plan 就绪） | v3 可选·见同 plan（gate=P3.1 已过） |
+| **P3.3** ★ | 3 | **novel 外推测量门扩展（2026-06-11 诊断第 0 层）** — [`novel_view.py`](threedgrut/utils/novel_view.py) 加 lateral_3m/6m 档（**4 档 avg 字段口径不变**保历史可比，新档独立字段）+ lane 区域限定 novel 指标（路面平面诱导 warp：ray-plane 求交重投影 lane band/GT 到 novel 相机，FTheta 兼容）+ inceptio 现存 ckpt（baseline/B3/aniso20）三方立锚，顺带回答「B3 放宽几何是否放大 3m/6m 退化」 | 新（2026-06-11 诊断） | 1.5 | ⬜ | 纯 eval 无训练 |
+| **P3.4** | 3 | **路面上空 bg 空气区 penalty** — 现 z_band=0.4m 只罚贴地带，0.4m 以上悬浮 bg 零约束（novel 鬼影主要来源）；新增路面上方空气区（0.4m~上界 A/B 定，cuboid 内 actor 豁免）bg opacity penalty，复用 V3-R2 全套基建（height field / query_ground_z / cuboid mask） | 新（V3-R2 扩展） | 1.5 | ⬜ | gate=P3.3 锚；先定 PR #24 去留（R9） |
+| **P3.5** | 3 | **road 层 SH 降阶 DC-only（freeze 法）** — 砍 view-dependent 过拟合逃逸通道（路面/车道线近似 Lambertian，高阶 SH 只会被用来补偿几何错误）；保 45 维 zero+freeze 高阶系数（V3-R1.1 fused SH 宽度一致坑的已知解法）；V3-R2 后 road 已主导路面渲染，降阶才真正起作用 | 部分 V3-R1.1 复活 | 1 | ⬜ | gate=P3.3 锚；先定 PR #24 去留（R9） |
 | **P-CAP** | 容量 | MCMC per-layer cap 重分配 — 砍 bg(1M) 补 actor(200K)，预算向前景倾斜 | 新（V3-R2 套路延伸） | 1 | ⬜ | — |
 | **AH-0** ★ | 1(spike) | asset-harvester warm-start **最小验证** — 1–2 track 注入 `init_layer_from_points` → 5k smoke → 对比 class PSNR（**P1.4 立项 gate**） | 新 | 1.5 | ⬜ | — |
 | **AH-1** | 1 | per-track 坐标/尺度对齐（**头号风险**）— Objaverse 归一化 canonical → object-local 旋转对齐 + `cuboids_dims` 米制还原 | 新 | 2 | ⬜ | — |
@@ -134,10 +140,10 @@ kanban
 | **0** ★ | 把目标测出来（前置/便宜/无新训练） | 4/4 | **per-class 真实数字+缺口入档** ✅ | cc 25.79 守住 | ✅ 门(过) |
 | **1** ★ | 车辆（高 ROI/已验证） | 0/7（含 AH-0/1/2） | 车辆 class_psnr 闭合 gap | ≥ 24.7 | ⬜ |
 | **2** | 行人（最大缺口/工程重） | 0/3 | 行人从「没有」到「有」 | ≥ 24.0(容忍轻退) | ⬜ |
-| **3** | 道路/车道线 | 2/3（**P3.0 门 + P3.1-A 见效** ✅） | 车道线锐度 lane **grad_corr 0.693→0.744（+0.051）** ✅ | ≥ 24.7（实 25.87） | 🟢 P3.1-A 过 |
+| **3** | 道路/车道线 | 2/6（**P3.0 门 + P3.1-A 见效** ✅；P3.3-P3.5 为 2026-06-11 诊断新增） | 车道线锐度 lane **grad_corr 0.693→0.744（+0.051）** ✅；3m/6m 外推质量待 P3.3 立锚 | ≥ 24.7（实 25.87） | 🟢 P3.1-A 过 |
 | 容量 | bg→actor 预算重分配 | 0/1 | actor 粒子占比↑ | — | ⬜ |
 | bug | cuboid overlay 对齐修复（BUG-1，仅 viz） | 0/1 | viser cuboid wireframe 与 gaussian 实物目视重合 | 不影响 metric | ⬜ |
-| **总计** | — | **6/19** | — | — | — |
+| **总计** | — | **6/22** | — | — | — |
 
 > **per-class gap 表（2026-06-04 P0 实测回填，baseline ckpt `v3_base_scratch30k_lam01`，metrics.json=`output/p0_percls_eval2/.../metrics.json`）**：
 > | actor 类 | Phase 0 实测 | v3 出口目标 | 缺口 |
@@ -165,7 +171,7 @@ flowchart TD
   P1["Phase 1 车辆<br/>P1.1 sseg边界 → P1.2 track-pose完整 → P1.3 per-track外观<br/>+ P1.4 asset-harvester warm-start"]:::todo
   AH["AH-0 spike（并行探针）<br/>1-2 track→5k→class PSNR<br/>过了才投 AH-1/AH-2/P1.4"]:::wip
   P2["Phase 2 行人<br/>P2.1 rigid垫脚石 → P2.3 SMPL输入链路 → P2.2 DriveStudio SMPL-LBS"]:::todo
-  P3["Phase 3 道路/车道线<br/>P3.1 定向加密/平面grid（+P3.2 遮挡式bg 可选）"]:::todo
+  P3["Phase 3 道路/车道线<br/>P3.0✅ P3.1-A✅ → P3.3 外推测量门 → P3.4 空气区penalty / P3.5 road DC-only → P3.2 遮挡式bg+覆盖率"]:::wip
   CAP["P-CAP 容量重分配<br/>bg 1M ↓ → actor ↑"]:::todo
 
   DROP["⏸ 降级（保留供历史）<br/>Stage10 sky / Stage12 MCMC移植 / 13b Fourier+DINOv2<br/>/ Stage14 大部分 mask / DiFix救世主 / 深度监督 / Stage17 secondary ray"]:::drop
@@ -278,13 +284,37 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | Task | 描述 | 改动文件 |
 |---|---|---|
 | P3.1 | road 当 2D 纹理：沿车道线定向加密 / 平面 feature grid（**非 Fourier 时间维**）；可复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | `road_region.py`, 致密化策略 |
-| P3.2 | 遮挡式 bg（v3 可选）：现 `bg_road_penalty` / `bg_cuboid_loss` 的「杀死」机制改「只 mask loss 不杀粒子」+ 深度合成 → 保 actor 移开帧路面连续（同时为 v4 打底） | `bg_cuboid_loss.py`, `road_region.py` |
+| P3.2 | 遮挡式 bg（v3 可选）：现 `bg_road_penalty` / `bg_cuboid_loss` 的「杀死」机制改「只 mask loss 不杀粒子」+ 深度合成 → 保 actor 移开帧路面连续（同时为 v4 打底）；**绑 road 覆盖率补足**（P-CAP road 粒子 / 定向加密为前置或伴随项，防硬解耦出洞，R10） | `bg_cuboid_loss.py`, `road_region.py` |
+| P3.3 ★ | novel 外推测量门扩展（第 0 层先行，纯 eval 无训练）：lateral_3m/6m 新档 + lane 区域限定 novel 指标 + 三方 ckpt 立锚 | `novel_view.py`, `render.py`, `per_class_eval.py` |
+| P3.4 | 路面上空 bg 空气区 penalty（第 1 层短刀 ①）：0.4m 以上悬浮 bg 驱逐、cuboid actor 豁免 | `road_region.py`, `trainer.py`, yaml |
+| P3.5 | road 层 SH 降阶 DC-only（第 1 层短刀 ②，freeze 法）：砍 view-dependent 过拟合逃逸通道 | `layered_model.py`, `registry.py` |
 
 > **执行 plan（2026-06-09 展开为可执行阶梯）**：[`p31-p32-road-lane plan`](docs/superpowers/plans/2026-06-09-p31-p32-road-lane.md)（11 task，TDD，沿用 P3.0 plan 格式）。
 > - **P3.1 阶梯**：① lane-band 监督 loss（band 内 Sobel 梯度幅值 L1，复用 P3.0 `_grad_mag`/`dilate_mask`；KPI `grad_corr` 只读、loss 不复用 Pearson 防 Goodhart）+ 放宽 road 各向异性/scale（**与 V3-R1.2/R1.3 抑制细长高斯反向**，A/B 权衡，须看 novel_lpips）→ 便宜先证 grad_corr 可被推过 0.693；② MCMC 定向加密（near-lane `valid_indices` 偏置，仅 road 层，gate=①见效）。平面 feature grid 留 stretch/v4。
 > - **P3.2**（v3 可选，gate=P3.1 见效）：penalty kill→mask-only（保留 bg 粒子不杀）+ 深度合成（Task9 先 Explore 渲染合成路径再动手）。
 
-**验收**：车道线 `mean_lane_grad_corr`（+ band_psnr / band_lpips 辅证）相对 2026-06-09 门锚（grad_corr 0.693）改善；road 区不再被 background 偷渲（延续 V3-R2 成果）。
+#### 2026-06-11 诊断扩展 — road/bg 耦合 + 3m/6m 外推（P3.3–P3.5 立项依据）
+
+**大g 两问题**：① road 与 background 高斯空间耦合仍紧（交叉多）；② 横向 novel view 3m/6m 下车道线/路面质量下降快（extrapolation）。
+
+**诊断（同根因的两面）**：训练相机全在 ego 轨迹一条线上、路面以掠射角被观测 → 路面几何/外观**严重欠约束**（aperture problem）——无数种「高斯在空中的排列」都能在训练视角下渲染出正确路面。bg 悬浮粒子「帮忙」渲染是该欠约束的空间表现（问题①）；横移 3m/6m 后视差暴露真实几何，悬浮粒子错位/细长高斯露侧面/SH 朝未观测方向错误外推全部露馅（问题②）。
+
+**指标双盲区（关键发现，P3.3 立项依据）**：
+- **幅度盲区**：现 [`novel_view.py`](threedgrut/utils/novel_view.py) `NOVEL_VIEW_MODES` 只测 lateral_1m/2m + yaw_5/10deg——3m/6m 在测量范围外，P3.1-A「novel 0.5962 安全」结论**仅 ≤2m 成立**；
+- **区域盲区**：novel 指标为全图 LPIPS（沥青/bg 主导），车道线在 novel 下糊掉它几乎无反应（P0.3 沥青主导问题在 novel 轴重演）；
+- **未测张力**：B3 放宽 anisotropy 8→30 的细长高斯是 hair-thin novel artifact 经典来源（V3-R1.2/R1.3 当年收紧正为此），3m/6m 下是否放大退化未知 → P3.3 三方 A/B（baseline/B3/aniso20）直接回答，决定锐度/外推取舍点。
+
+**耦合现状量化（P3.4 立项依据）**：V3-R2 后路面区 bg 粒子 −86%，但 Phase 2A 实测 road 自身只盖 68%、bg 替补到 91.7%（≈24% 路面渲染仍由 bg 承担——残余耦合**非纯寄生，bg 在补 road 的洞**，硬切会出洞 → P3.2 绑覆盖率补足）；penalty 是 z_band=0.4m 窄带软驱逐，**路面上方 0.4m 以上空气区悬浮 bg 完全不受约束**——正是 novel 鬼影主要来源（两问题交汇点 → P3.4）。
+
+**分层路线**：
+1. **第 0 层 P3.3（先行，纯 eval）**：测量锚——没有 3m/6m + lane 区域指标，后面任何「改善」不可证（项目测量门纪律，对标 P0.x/P3.0）；
+2. **第 1 层 P3.4 + P3.5（短刀，gate=P3.3 锚）**：空气区 penalty（打耦合+鬼影交汇点）+ road SH DC-only（路面近似 Lambertian，高阶 SH 自由度只会被优化器用来补偿几何错误、过拟合训练视角；freeze 法绕 V3-R1.1 fused SH 宽度坑；V3-R2 后 road 已主导路面渲染，降阶才真正起作用）；
+3. **第 2 层 P3.2**（既定 plan + 绑 road 覆盖率补足）；
+4. **第 3 层 BEV 纹理平面化**（v4 方向性赌注，§5）：颜色从 BEV feature grid/纹理图采样、真正贴在高度场平面上，外推天然正确——P3.1-A 用 loss+几何**逼近**其效果，但参数化本身不改、外推正确性不来。
+
+> ⚠️ **PR #24 依赖**：P3.1-A 代码（`lane_loss.py` / registry / p31 yaml）仍在 PR #24 未合 main；P3.4/P3.5 动同一批 road spec/penalty/yaml → **先定 PR #24 去留再开工**（R9），保 road 几何参数单一来源。
+
+**验收**：车道线 `mean_lane_grad_corr`（+ band_psnr / band_lpips 辅证）相对 2026-06-09 门锚（grad_corr 0.693）改善；road 区不再被 background 偷渲（延续 V3-R2 成果）；**P3.3 后新增**——lateral_3m/6m + lane 区域 novel 指标立锚入档（§1.3 gap 表加行），P3.4/P3.5 以该锚验收（3m/6m lane 外推指标改善、existing 4 档 avg 与 grad_corr 不退）。
 
 ### 2.4 停 / 降级清单（保留供历史，不在新主线）
 
@@ -363,6 +393,8 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 | R6 | per-class warm-start 退化 cc | asset 外观域差 | 背景守护破线 | warm-start 由训练消化 + per-track bias；守护线监控。**2026-06-05 实测：freeze 式 protected warm-start 否定**（10k 追平、未观测面 spiky，见 § 6）；真瓶颈=asset 质量+未观测面缺约束 → 走约束式/re-harvest，**勿再冻结** | P1.4 |
 | R7 | resume 续训退化（已坐实） | MCMC+多层 resume | cc −1.92 | **所有 baseline 对照从头训** | §0.4 |
 | R8 | cuboid overlay 错位 | viser overlay 投影相机 ≠ renderer 相机 | playground 可视化误导（**仅 viz；metric/init 不受影响**——gaussian init 与 class_psnr 共享同一 3D pose，错则 init 崩，现 init 正常 ⇒ pose 对，已排除污染度量） | BUG-1 只修 playground overlay，⛔ 勿碰 3D pose/metric 链路 | BUG-1 |
+| R9 | PR #24 与 P3.4/P3.5 改动交叠 | P3.1-A 代码（`lane_loss.py`/registry/p31 yaml）在 PR #24 review 未合 main；P3.4/P3.5 动同一批 road spec/penalty/yaml | 两套 road 几何参数并行漂移 / 合并冲突 | **先定 PR #24 去留再开工 P3.4/P3.5**，road spec 单一来源 | P3.4/P3.5 |
+| R10 | 解耦驱逐后路面出洞 | road 自身覆盖仅 68%（Phase 2A 实测），bg 替补 24% ——残余耦合非纯寄生 | P3.2/P3.4 驱逐 bg 后路面出洞/变暗 | P3.2 绑 road 覆盖率补足（P-CAP road 粒子/定向加密）；P3.4 只动 0.4m 以上空气区、贴地带机制不变 | P3.2/P3.4 |
 
 ---
 
@@ -370,6 +402,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 
 - asset-harvester **frozen drop-in**（换车/删插不留痕）—— 需先补量化评测（PSNR/LPIPS vs 本 clip GT）+ 域适配
 - 想法 ③ 遮挡式 bg 完整版 / ④ inpaint 遮挡地面 / ⑤ 学习式软分割（per-gaussian 动/静软归属）
+- **路面 BEV 纹理平面化**（2026-06-11 诊断第 3 层 / extrapolation 终极方向）：road 颜色不再 per-gaussian SH，改从 BEV feature grid / 纹理图采样——纹理真正贴在高度场平面上，novel-view 外推天然正确（P3.1「平面 feature grid」stretch 同源；P3.1-A 是其 loss+几何近似）。备选补充：路面平面诱导 warp 伪横移一致性 loss、Cosmos-DiFix synthesized GT（Stage 15 备选）
 - NuRec 专有 DiFix 数据复现、跨 clip 联训、USDZ、Marching Cubes mesh
 - **v3 打底承诺**：Phase 1 ①② 优先选「能产出干净动静分解」的实现；v3 测出的 per-class 指标 + 干净分解 = v4 的起点
 
@@ -433,6 +466,11 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **anisotropy 调幅 A/B（depth-off，inceptio 内部可比）**：aniso20 grad_corr **0.7325** vs B3 0.7386（差 **−0.0061**，噪声级）/ band_psnr 21.91 vs 21.96 / cc 25.95 vs 25.90 → **anisotropy 30→20 锐度几乎不损**（仍 +0.039 vs baseline）。
   - **viser 三方目视（大g）**：aniso20 的「消失」与 B3 **肉眼看不出区别** → **anisotropy 调幅不解决消失**（坐实诊断：消失根因主要是 **Mapillary lane mask 漏检**，非 anisotropy 横向窄）。
   - **结论**：**维持 B3 为 P3.1-A 最终配方**（aniso20 不优——锐度同、消失同）。消失改善若要做须走 **lane mask 补全**（诊断根因①，重，留 v4 / 后续）。inceptio worktree 工作流 + submodule 补齐 + viser `--renderer 3dgut`(A800)/`3dgrt`(4090) 均入 CLAUDE.md/skill。
+- **2026-06-11 Phase 3 扩展诊断备案（大g 两问题 → P3.3/P3.4/P3.5 立项 + P3.2 增补，纯 plan 无代码）**：
+  - **大g 两问题**：① road/bg 高斯空间耦合仍紧（交叉多）；② 横向 novel 3m/6m 车道线/路面退化快（extrapolation）。诊断为**同根因两面**：掠射角单轨迹下路面欠约束（aperture problem）——bg 悬浮粒子「帮忙」渲染是欠约束的空间表现（①），训练视角合法、横移后视差暴露错误几何（②）。
+  - **指标双盲区坐实（P3.3 立项）**：`NOVEL_VIEW_MODES` 仅 lateral_1m/2m + yaw_5/10deg（**幅度盲区**——3m/6m 不在测量范围，P3.1-A「novel 0.5962 安全」仅 ≤2m 成立）+ 全图 LPIPS 沥青/bg 主导（**区域盲区**——lane 在 novel 下糊掉指标无反应，P0.3 沥青主导问题在 novel 轴重演）；B3 细长高斯（aniso 30）与外推目标张力未测（hair-thin artifact 经典来源，V3-R1.2 当年收紧正为此）→ P3.3 三方 ckpt A/B 直接回答。
+  - **耦合现状量化（P3.4 立项）**：V3-R2 后路面区 bg 粒子 −86%，但 road 自身仅盖 68%、bg 替补 24%（Phase 2A）——残余耦合非纯寄生（bg 在补 road 的洞，硬切出洞 → P3.2 绑覆盖率，R10）；z_band=0.4m 窄带软驱逐，**0.4m 以上空气区悬浮 bg 零约束 = novel 鬼影主要来源**（两问题交汇点）。
+  - **排期（分层）**：P3.3 测量门扩展（第 0 层先行，纯 eval；4 档 avg 口径不变保历史可比）→ P3.4 空气区 penalty + P3.5 road SH DC-only freeze 法（第 1 层短刀，gate=P3.3 锚；⚠️ **先定 PR #24 去留**防 road spec 漂移，R9）→ P3.2 绑 road 覆盖率补足（第 2 层）→ **BEV 纹理平面化入 v4 backlog**（第 3 层终极方向，§5）。看板 §1.1/1.2/1.3/1.4 + §2.3 诊断小节 + §4 R9/R10 同步更新（Phase 3 任务数 2/3→2/6，总计 6/19→6/22）。
 
 ---
 
