@@ -42,7 +42,13 @@ STANDARD_LAYERS: dict[str, LayerSpec] = {
     ),
     "road": LayerSpec(
         name="road", layer_id=1, max_n_particles=200_000,
-        scale_prior=(0.1, 0.1, 0.001), scale_lr_mult=0.2,
+        # scale_lr_mult sat at 0.2 from T1.2 but was dead config (no consumer)
+        # until the 2026-06-11 E0.5 recipe audit wired it up in
+        # LayeredGaussians._apply_scale_lr_mult. Default stays identity so no
+        # anchor recipe changes underfoot; E3 road-freeze experiments opt in
+        # via ++layers.overrides.road.scale_lr_mult=0.02 (official NuRec road
+        # scales lr 1e-4 over base 5e-3) or 0.2 (historical T1.2 intent).
+        scale_prior=(0.1, 0.1, 0.001), scale_lr_mult=1.0,
         mask_field="road_mask",
         perturb_scale_mask=(1.0, 1.0, 0.0),  # T3.4 D1: Z lock during MCMC perturb
         scale_xy_max=0.3, scale_z_max=0.05,   # V3-R1.2

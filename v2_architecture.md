@@ -324,7 +324,7 @@ flowchart TB
 
     %% layers
     BG["background : MoG<br/>positions world frame<br/>scale_prior [0.1,0.1,0.1]<br/>兼容 v1 ckpt 透传<br/>DONE · T1.1 ✅"]:::done
-    Road["road : MoG<br/>positions world Z 锁定<br/>scale_prior [0.1,0.1,0.001]<br/>scale_lr_mult 0.2<br/>perturb_scale_mask 1,1,0 (D1)<br/>mask_field road_mask<br/>DONE · T1.2 + T3.3.b ✅"]:::done
+    Road["road : MoG<br/>positions world Z 锁定<br/>scale_prior [0.1,0.1,0.001]<br/>scale_lr_mult 已接线·默认 1.0（E3 旋钮）<br/>perturb_scale_mask 1,1,0 (D1)<br/>mask_field road_mask<br/>DONE · T1.2 + T3.3.b ✅"]:::done
     DynR["dynamic_rigids : MoG<br/>positions object-local frame<br/>scale_prior [0.05,0.05,0.05]<br/>mask_field dynamic_mask<br/>track_ids per-particle buffer<br/>(sync on MCMC add/relocate, T4.5)<br/>timestamp-aligned world transform<br/>DONE · T1.2+T4.2.b+T4.3+T4.5 ✅"]:::done
     DynD["dynamic_deformables<br/>registered, v2.x 占位<br/>is_particle_layer=False"]:::existing
     SkyL["sky_envmap : SkyEnvmap<br/>is_particle_layer=False<br/>cubemap [6,128,128,3] or MLP fallback<br/>forward(viewdirs) -> rgb_sky<br/>挂 ModuleDict; setup_optimizer 挂独立 Adam<br/>DONE · T5.2 + T5.3 ✅ (Stage 5 Mac)"]:::done
@@ -664,6 +664,7 @@ flowchart TB
 | **V3-R2 核心机制** road 层渲染由 background 主导（路面 XY 内 75 万 alive bg opacity 主导 vs road 11 万 op 中位 0.014 隐形）⇒ road-only 改动（SH/clamp/effrank）对画面零影响。`bg_road_penalty` 压低路面区 bg opacity → MCMC relocate 搬走 → road 接管。grad 只过 bg density，spatial mask（BEV height field `\|z-ground\|<z_band`）no_grad，镜像 bg_cuboid_loss；base 默认 off 字节兼容 | V3-R2 ✅ (`7bf4992`+`41fc55d`) | 5k A/B 实测：路面 bg 粒子 246729→33996 (−86%)、road opacity_sum 24768→31602 (+28% 反超)、cc_psnr_masked 23.09→23.74 (+0.65 dB)；viser 肉眼用户验收路面完整度 ON≫OFF；8 单测 + bg_cuboid 范式对齐 |
 | **P3.0 lane 指标单路径** per-class lane 指标**只在 render.py `render_all`**（trainer 不算，与 class_psnr 的双路径不同）；lane 来自**独立产物** `*.aux.lane.zarr.itar`（Mapillary 类，**不动** Cityscapes `semantic_sseg`）经 `semantic_lane_sseg` 透传；前视相机 gate；`lane_npix_acc` 空 ⇒ metrics.json **零新字段字节等价**（NeRF/Colmap 及无 lane 产物的 clip 不受影响）；lane 产物可只覆盖前视，dataset try/except 跳过缺失相机/帧 | P3.0 ✅ (2026-06-09, `247ce9c`→`98bd9b3`) | 23 Mac 单测（dilate/grad-corr/lane keys/guard）；inceptio baseline 立锚 grad_corr 0.693，守护线前视 5 指标全 =baseline per_camera[front] 差<1e-3 |
 | **P3.1-A lane 监督字节等价 + novel 安全** `lambda_lane=0`（默认）⇒ `loss_lane` 整块 lambda-gate 跳过 ⇒ baseline 字节等价；lane loss 用 **eps-safe** `_grad_mag_safe`（不复用 P3.0 eval `_grad_mag`——后者 sqrt(0) 反向 NaN，TDD 抓到）；train 分支 lane 前视 try/except 软失败（lane 缺帧不崩）；放宽 road anisotropy 8→30 实测 **novel_lpips 0.5962<0.5987 不退**（无 hair-thin artifact，V3-R1.2/R1.3 反向但本 clip 安全） | P3.1-A ✅ (2026-06-10, `0e9d7c1`→`35a1e54`) | 三档消融 grad_corr 0.693→0.744（+0.051）；lane loss 主导+0.035 / 几何+0.026；守护 cc 25.84~25.89 全过；Mac 30 测绿 |
+| **scale_lr_mult 接线生效 + baseline 字节等价**：`LayerSpec.scale_lr_mult` 经 `LayeredGaussians._apply_scale_lr_mult` 乘到该层 scale param-group lr（仅 scale 组；scale 组配 lr scheduler 时 fail-loud ValueError，防 scheduler_step 每步静默覆写）；registry road 默认 0.2→**1.0**（0.2 自 T1.2 起从未被消费＝死配置，2026-06-11 E0.5 配方审计发现；默认改 identity 保所有锚点配方不变，E3 实验经 `++layers.overrides.road.scale_lr_mult=0.02`（官方 NuRec road scales 1e-4/5e-3）或 0.2 显式开启） | E0.5 顺手修缮 ✅ (2026-06-11) | `test_scale_lr_mult_wiring.py` 7 测 (Mac)：乘子生效/层间隔离/其他组不动/scheduler 组合 fail-loud/scheduler_step 不覆写/registry 默认 identity |
 
 ---
 

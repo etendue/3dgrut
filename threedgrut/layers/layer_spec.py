@@ -26,8 +26,13 @@ class LayerSpec:
         max_n_particles: per-layer particle cap consumed by LayeredMCMCStrategy.
         scale_prior: log-space initial scale (sx, sy, sz). Road layer uses
             (0.1, 0.1, 0.001) to enforce thin-disc Z-lock; default isotropic.
-        scale_lr_mult: optimizer LR multiplier on the scale parameter group.
-            Road layer uses 0.2 so the Z-lock survives optimization.
+        scale_lr_mult: per-layer multiplier on the 'scale' param-group lr,
+            applied once after the layer optimizer is built
+            (LayeredGaussians._apply_scale_lr_mult; wired 2026-06-11 -- dead
+            config from T1.2 until then). Incompatible with a conf lr
+            scheduler on the scale group (fails loud at setup). Registry
+            defaults are identity everywhere; E3 road-freeze experiments
+            enable it via ++layers.overrides.road.scale_lr_mult=....
         mask_field: which mask in image_infos this layer's loss is gated by
             (e.g. "road_mask", "dynamic_mask"). None = no mask gating.
         is_particle_layer: False for sky_envmap / dynamic_deformables (v2 stub)

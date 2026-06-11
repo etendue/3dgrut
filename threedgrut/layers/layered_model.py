@@ -1383,9 +1383,40 @@ class LayeredGaussians(nn.Module):
             layer.set_optimizable_parameters()
             layer.setup_optimizer()
             layer.validate_fields()
+            self._apply_scale_lr_mult(layer, spec)
 
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
+
+    def _apply_scale_lr_mult(self, layer: MixtureOfGaussians, spec: LayerSpec) -> None:
+        """Multiply this layer's 'scale' param-group lr by ``spec.scale_lr_mult``.
+
+        Post-construction patch, same pattern as the positions x scene_extent
+        multiply inside MoG.setup_optimizer. Wired 2026-06-11 (E0.5 recipe
+        audit); the field was dead config from T1.2 until then.
+
+        The scale group must NOT be lr-scheduled while the multiplier is
+        active: MoG.scheduler_step writes ``schedulers[name](step)`` straight
+        into the group lr every step, which would silently drop the
+        multiplier. base_gs.yaml only schedules positions, so fail loud if a
+        conf ever schedules scale. E3.1/E3.2-style absolute per-layer lr
+        overrides (official NuRec road recipe: positions 1e-6, scales 1e-4)
+        are a separate mechanism -- this multiplier covers only scale.
+        """
+        mult = float(spec.scale_lr_mult)
+        if mult == 1.0:
+            return
+        if "scale" in getattr(layer, "schedulers", {}):
+            raise ValueError(
+                f"layer '{spec.name}': scale_lr_mult={mult} cannot be combined "
+                "with a conf lr scheduler on the 'scale' param group -- "
+                "MoG.scheduler_step would overwrite the multiplied lr every "
+                "step (silent no-op). Drop scheduler.scale or use "
+                "scale_lr_mult=1.0."
+            )
+        for pg in layer.optimizer.param_groups:
+            if pg["name"] == "scale":
+                pg["lr"] *= mult
 
     # ------------------------------------------------------------------ T4.5: populate tracks post-construct
     def populate_tracks(self, tracks: dict) -> None:
