@@ -42,6 +42,22 @@ def test_resolve_pred_path_template_and_map(tmp_path):
     assert p2.endswith("weird/name 0007.png")
 
 
+def test_resolve_pred_path_timestamp_key_takes_precedence(tmp_path):
+    """NCore batches carry no frame_idx (-1) — sensor timestamp is the only
+    honest join key against nre's timestamps.json."""
+    m = {
+        "ts:cam_a:55132": "cam_a/cam_a/000000.png",
+        "cam_a:-1": "wrong.png",
+    }
+    p = resolve_pred_path(str(tmp_path), "cam_a", -1, frames_map=m,
+                          timestamp_us=55132)
+    assert p.endswith("cam_a/cam_a/000000.png")
+    # no ts entry → falls back to frame_idx key
+    p2 = resolve_pred_path(str(tmp_path), "cam_a", -1, frames_map=m,
+                           timestamp_us=99999)
+    assert p2.endswith("wrong.png")
+
+
 def test_evaluate_identity_frames(tmp_path):
     torch.manual_seed(0)
     H, W = 16, 24

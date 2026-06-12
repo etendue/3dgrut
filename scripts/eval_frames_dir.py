@@ -60,9 +60,20 @@ DEFAULT_LANE_EVAL_CAMERAS = ("camera_front_wide_120fov",)
 def resolve_pred_path(
     frames_dir: str, camera_id: str, frame_idx: int,
     frames_map: Optional[Dict[str, str]] = None,
+    timestamp_us: Optional[int] = None,
 ) -> str:
-    """Map a (camera_id, frame_idx) batch to its prediction file."""
+    """Map a batch to its prediction file.
+
+    Key precedence: ``ts:<camera_id>:<timestamp_us>`` (exact sensor-time
+    match — NCore batches carry no frame_idx, and nre render emits a
+    timestamps.json per camera, so time is the only honest join key) →
+    ``<camera_id>:<frame_idx>`` → index template.
+    """
     if frames_map:
+        if timestamp_us is not None:
+            ts_key = f"ts:{camera_id}:{int(timestamp_us)}"
+            if ts_key in frames_map:
+                return os.path.join(frames_dir, frames_map[ts_key])
         key = f"{camera_id}:{int(frame_idx)}"
         if key in frames_map:
             return os.path.join(frames_dir, frames_map[key])
@@ -133,7 +144,11 @@ def evaluate_frames(
         if cameras and cam not in cameras:
             continue
         pred = _load_pred(
-            resolve_pred_path(frames_dir, cam, fi, frames_map), device,
+            resolve_pred_path(
+                frames_dir, cam, fi, frames_map,
+                timestamp_us=int(getattr(batch, "timestamp_us", -1)),
+            ),
+            device,
         )
         if pred.shape != gt.shape:
             raise ValueError(
