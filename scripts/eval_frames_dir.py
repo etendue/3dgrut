@@ -376,9 +376,10 @@ def _build_tracks_provider(ckpt):
                 continue
             if act is not None and not bool(torch.as_tensor(act)[idx]):
                 continue
-            size = torch.as_tensor(
-                tr.get("size") or tr.get("dims") or tr.get("cuboid_dims")
-            )
+            size = tr.get("size")
+            if size is None:  # array truthiness is ambiguous — no `or` chain
+                size = tr.get("dims", tr.get("cuboid_dims"))
+            size = torch.as_tensor(size)
             active.append({
                 "id": tid,
                 "class": str(tr.get("class", "unknown")),
