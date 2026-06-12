@@ -80,9 +80,24 @@ if __name__ == "__main__":
         default=None,
         help="Phase 3 lane dilated-band half-width (px). Default = DEFAULT_LANE_BAND_PX (8).",
     )
+    parser.add_argument(
+        "--dataset-cameras",
+        type=str,
+        default="",
+        help=(
+            "E1.3 held-out protocol: comma-separated camera_id list that "
+            "REPLACES the ckpt-embedded dataset.camera_ids before the eval "
+            "dataset is built (e.g. eval a 4-cam ckpt on the excluded cross "
+            "camera). Unlike --eval-cameras (a batch filter over loaded "
+            "cameras), this changes which cameras the dataset loads. "
+            "Side effect: BilateralGrid exposure is disabled (train-time "
+            "camera_idx mapping invalid) — use cc_* metrics."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
+    dataset_cameras_list = [c.strip() for c in args.dataset_cameras.split(",") if c.strip()] or None
 
     renderer = Renderer.from_checkpoint(
         checkpoint_path=args.checkpoint,
@@ -95,6 +110,7 @@ if __name__ == "__main__":
         use_difix=args.use_difix,
         load_lane_masks=args.load_lane_masks,
         lane_band_px=args.lane_band_px,
+        dataset_cameras=dataset_cameras_list,
     )
 
     renderer.render_all()

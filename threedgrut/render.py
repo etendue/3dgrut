@@ -46,6 +46,33 @@ from threedgrut.utils.misc import create_summary_writer
 from threedgrut.utils.render import apply_post_processing
 
 
+def apply_dataset_cameras_override(conf, dataset_cameras) -> bool:
+    """E1.3 held-out protocol: replace the ckpt-embedded ``dataset.camera_ids``.
+
+    ``make_test`` builds the eval dataset from ``conf.dataset.camera_ids``
+    (datasets/__init__.py), so a camera excluded at train time is invisible
+    to the existing ``--eval-cameras`` batch filter — the dataset never loads
+    it. This override swaps the camera set before dataset construction.
+
+    Struct note: ckpt confs are struct-locked OmegaConf; adding/replacing a
+    dataset key requires ``set_struct(conf, False)`` first (same pattern as
+    the load_lane_masks injection in ``from_checkpoint``).
+
+    Returns True when an override was applied, False on None/empty.
+    """
+    if not dataset_cameras:
+        return False
+    try:
+        from omegaconf import OmegaConf
+
+        if OmegaConf.is_config(conf):
+            OmegaConf.set_struct(conf, False)
+    except ImportError:  # plain-dict confs (tests)
+        pass
+    conf["dataset"]["camera_ids"] = list(dataset_cameras)
+    return True
+
+
 class Renderer:
     def __init__(
         self,
@@ -138,6 +165,7 @@ class Renderer:
         use_difix=False,
         load_lane_masks=False,
         lane_band_px=None,
+        dataset_cameras=None,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -186,6 +214,10 @@ class Renderer:
             conf["dataset"]["load_lane_masks"] = True
         if lane_band_px is not None:
             conf["render"]["lane_band_px"] = int(lane_band_px)
+        # E1.3 held-out protocol: swap the dataset camera set (e.g. eval a
+        # 4-cam ckpt on the excluded cross camera). Must happen before
+        # make_test builds the dataset below.
+        dataset_cameras_active = apply_dataset_cameras_override(conf, dataset_cameras)
 
         object_name = Path(conf.path).stem
         experiment_name = conf["experiment_name"]
@@ -288,8 +320,19 @@ class Renderer:
         # instead of {grids, _rgb2gray_w} — skip with a warning so v2 ckpts
         # still load (eval falls back to no exposure applied, matching the
         # pre-T9.3 behavior for those ckpts).
+        # E1.3: with a dataset-camera override the BilateralGrid camera_idx
+        # mapping no longer matches training (grid i belongs to train-camera
+        # i) — applying it would color-correct the held-out camera with some
+        # other camera's grid. Force exposure off; read held-out numbers from
+        # the cc_* (per-frame affine) metrics instead. Protocol doc: R-v4.8.
         exposure_model = None
-        if "exposure_state" in checkpoint:
+        if dataset_cameras_active and "exposure_state" in checkpoint:
+            logger.warning(
+                "📷 --dataset-cameras active → BilateralGrid exposure model "
+                "DISABLED (train-time camera_idx mapping invalid for an "
+                "overridden camera set); use cc_* metrics for held-out eval."
+            )
+        elif "exposure_state" in checkpoint:
             from threedgrut.correction import BilateralGrid
 
             module_state = checkpoint["exposure_state"]["module"]
