@@ -462,6 +462,7 @@ class Renderer:
         # small content shifts). Empty when self.novel_view=False so
         # metrics.json stays byte-identical for the default eval path.
         from threedgrut.utils.novel_view import (
+            LEGACY_NOVEL_AVG_MODES,
             NOVEL_VIEW_MODES,
             perturb_batch_shutter_pair_torch,
         )
@@ -889,14 +890,22 @@ class Renderer:
         if novel_lpips and any(novel_lpips.values()):
             nvjson: dict[str, float] = {}
             means = []
+            legacy_means = []
             for mode in NOVEL_VIEW_MODES:
                 lst = novel_lpips[mode]
                 if lst:
                     m = float(np.mean(lst))
                     nvjson[f"mean_novel_lpips_{mode}"] = m
                     means.append(m)
+                    if mode in LEGACY_NOVEL_AVG_MODES:
+                        legacy_means.append(m)
+            # E1.1: mean_novel_lpips_avg aggregates ONLY the legacy 4 modes —
+            # the v3 anchor (B3 0.5962) depends on this exact field meaning.
+            # The 6-mode aggregate (incl. lateral_3m/6m) goes to _avg6.
+            if legacy_means:
+                nvjson["mean_novel_lpips_avg"] = float(np.mean(legacy_means))
             if means:
-                nvjson["mean_novel_lpips_avg"] = float(np.mean(means))
+                nvjson["mean_novel_lpips_avg6"] = float(np.mean(means))
             metrics_json.update(nvjson)
             logger.info(
                 f"[T8.5.3 / V3-E3] novel-view LPIPS — "
