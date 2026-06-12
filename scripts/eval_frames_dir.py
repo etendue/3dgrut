@@ -24,6 +24,15 @@ poison the anchor.
 """
 from __future__ import annotations
 
+import os as _os
+import sys as _sys
+
+# scripts/ 下直跑时 sys.path[0] 是 scripts/ 而非仓库根 —— import threedgrut 会
+# 落到 conda env 的 editable 安装（可能是另一份 checkout/旧分支）。强制本仓库优先。
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+
 import argparse
 import json
 import os
