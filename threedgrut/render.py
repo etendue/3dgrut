@@ -466,6 +466,7 @@ class Renderer:
             NOVEL_VIEW_MODES,
             perturb_batch_shutter_pair_torch,
         )
+        from threedgrut.model.plane_warp import build_plane_warp, warp_image
         novel_lpips: dict[str, list] = (
             {m: [] for m in NOVEL_VIEW_MODES} if self.novel_view else {}
         )
@@ -483,6 +484,36 @@ class Renderer:
                 f"[T8.5.3 / V3-E3] novel-view mode ON — {len(NOVEL_VIEW_MODES)}"
                 f" extra renders per anchor: {NOVEL_VIEW_MODES}"
             )
+
+        # E1.1 — novel-view lane metrics via plane-induced warp. Lane paint
+        # lies on the road surface, so the surface-induced warp is exact for
+        # lane content: novel pixel ray → road height field hit → reproject
+        # into the original camera → sample GT / lane mask as pseudo-GT.
+        # Needs the road layer for the height field; absent → metric skipped
+        # (soft-fail, same "missing → no keys" semantics as lane_acc above).
+        # NOTE: warped metrics are comparable ACROSS models under the same
+        # warp version only — not against interpolated mean_lane_* absolutes
+        # (bilinear resampling smooths the warped GT slightly).
+        novel_lane_acc: dict[str, dict[str, list]] = {}
+        novel_lane_frames: dict[str, int] = {}
+        novel_lane_valid_ratio: dict[str, list] = {}
+        plane_warp_height_field = None
+        if self.novel_view:
+            _layers = getattr(self.model, "layers", None)
+            if (_layers is not None and "road" in _layers
+                    and _layers["road"].positions.numel() > 0):
+                from threedgrut.model.road_region import build_road_height_field
+                plane_warp_height_field = build_road_height_field(
+                    _layers["road"].positions.detach(), cell_size=1.0,
+                )
+                logger.info(
+                    f"[E1.1] plane-warp height field: "
+                    f"{int(plane_warp_height_field['occupied'].sum())} occupied cells @ 1.0m"
+                )
+            else:
+                logger.warning(
+                    "[E1.1] no road layer on model — novel-view lane metrics skipped"
+                )
 
         # T8.5.7 / V3-E4 — per-camera metric aggregation. keys = camera_id
         # strings (set by NCoreDataset's __getitem__); each value mirrors the
@@ -728,6 +759,48 @@ class Renderer:
                                 f"{iteration:05d}.png",
                             ),
                         )
+
+                    # E1.1 — lane metrics at the novel pose via plane-induced
+                    # warp (all 6 modes; yaw warps are equally exact for
+                    # road-plane content). Same camera whitelist as the
+                    # interpolated lane block; rays must be camera-frame
+                    # (NCore default) for build_plane_warp.
+                    _lane_nv = (getattr(gpu_batch, "image_infos", None) or {}).get(
+                        "semantic_lane_sseg"
+                    )
+                    _ftheta_nv = getattr(
+                        gpu_batch, "intrinsics_FThetaCameraModelParameters", None,
+                    )
+                    if (
+                        plane_warp_height_field is not None
+                        and _lane_nv is not None
+                        and _cam_id in lane_eval_cameras
+                        and _ftheta_nv is not None
+                        and not getattr(gpu_batch, "rays_in_world_space", False)
+                    ):
+                        lane_one_nv = _lane_nv[0] if _lane_nv.dim() == 3 else _lane_nv
+                        wgrid, wvalid = build_plane_warp(
+                            gpu_batch.rays_dir[0], nT[0], orig_T[0], _ftheta_nv,
+                            height_field=plane_warp_height_field,
+                        )
+                        gt_warp = warp_image(rgb_gt_full[0].float(), wgrid, wvalid)
+                        lane_warp = warp_image(
+                            lane_one_nv.unsqueeze(-1).float(), wgrid, wvalid,
+                            mode="nearest",
+                        )[..., 0].long()
+                        lm_nv = compute_lane_metrics(
+                            pred_novel[0], gt_warp, lane_warp, LANE_CLASS_IDS,
+                            band_px=lane_band_px, restrict_mask=wvalid,
+                            lpips_fn=criterions.get("lpips"),
+                        )
+                        _acc = novel_lane_acc.setdefault(mode, {})
+                        for _k in lane_metric_keys:
+                            if lm_nv[_k] is not None:
+                                _acc.setdefault(_k, []).append(lm_nv[_k])
+                        novel_lane_frames[mode] = novel_lane_frames.get(mode, 0) + 1
+                        novel_lane_valid_ratio.setdefault(mode, []).append(
+                            float(wvalid.float().mean())
+                        )
                 # Restore originals so downstream class_psnr / per_cam see
                 # the unperturbed batch.
                 gpu_batch.T_to_world = orig_T
@@ -912,6 +985,36 @@ class Renderer:
                 + " | ".join(
                     f"{m}={novel_lpips and np.mean(novel_lpips[m]):.4f}"
                     for m in NOVEL_VIEW_MODES if novel_lpips[m]
+                )
+            )
+
+        # E1.1 — novel-view lane metric aggregation (plane-induced warp
+        # pseudo-GT). Absent when no lane product / no road layer / novel off
+        # → metrics.json byte-identical (same soft-fail semantics as lane_*).
+        if novel_lane_frames:
+            for mode in NOVEL_VIEW_MODES:
+                if mode not in novel_lane_frames:
+                    continue
+                _acc = novel_lane_acc.get(mode, {})
+                for _k in lane_metric_keys:
+                    _v = _acc.get(_k, [])
+                    metrics_json[f"mean_novel_{_k}_{mode}"] = (
+                        float(np.mean(_v)) if _v else None
+                    )
+                metrics_json[f"novel_lane_n_records_{mode}"] = int(
+                    novel_lane_frames[mode]
+                )
+                metrics_json[f"novel_lane_warp_valid_ratio_{mode}"] = float(
+                    np.mean(novel_lane_valid_ratio[mode])
+                )
+            _gc = {
+                m: metrics_json.get(f"mean_novel_lane_grad_corr_{m}")
+                for m in NOVEL_VIEW_MODES if m in novel_lane_frames
+            }
+            logger.info(
+                "[E1.1] novel-view lane grad_corr — "
+                + " | ".join(
+                    f"{m}={v:.4f}" for m, v in _gc.items() if v is not None
                 )
             )
 
