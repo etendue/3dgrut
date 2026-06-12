@@ -103,6 +103,11 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # point_clouds_source.get_pc_generic_data(). Required for v2 Stage 3/4.
         # Defaults to False so v1 / Stage 1-2 dataloader behaviour is byte-identical.
         load_aux_masks: bool = False,
+        # Phase 3 lane GT：独立的 lane 分割产物（*.aux.lane.zarr.itar，Mapillary
+        # palette 含 lane-marking）。纯 eval 指标，只在 val/test 分支加载 →
+        # render.py per-class 评测器读 image_infos["semantic_lane_sseg"]。
+        # 默认 False → 现有路径字节等价。
+        load_lane_masks: bool = False,
         # Stage 11 T11.C1: pre-dumped LiDAR → image-plane depth maps.
         # When True, reads <lidar_depth_aux_root>/<camera_id>/<ts_end_us>.npz
         # (written by scripts/dump_lidar_depth_map.py) and injects a per-frame
@@ -169,6 +174,10 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self.init_lidar_ids: list[str] | None = lidar_ids
 
         self.open_consolidated: bool = open_consolidated
+        # Phase 3: lane 加载复用 aux reader 基建 → 开 lane 必然开 aux_masks。
+        # 在写入 self 之前归一化 load_aux_masks，避免 __init__ 中途改写 self 字段。
+        if load_lane_masks:
+            load_aux_masks = True
         self.load_aux_masks: bool = load_aux_masks
 
         # T3.1.b / T3.2.b: lazy-initialized aux readers (sseg / lidar-sseg).
@@ -178,6 +187,9 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self._sseg_reader: Optional[SsegAuxReader] = None
         self._lidar_sseg_reader: Optional[LidarSsegAuxReader] = None
         self._aux_readers_initialized: bool = False
+        self.load_lane_masks: bool = load_lane_masks
+        # 复用 SsegAuxReader（lane 产物内部 group 名同为 semantic_segmentation）。
+        self._lane_reader: Optional[SsegAuxReader] = None
 
         # Stage 11 T11.C1: pre-dumped LiDAR depth-map reader (lazy-built in
         # _ensure_lidar_depth_reader after camera resolutions are known).
@@ -958,6 +970,23 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 # derive any class mask from one passthrough — person/rider/
                 # bicycle (P0.2) + road (P0.3). Eval-only; training never reads it.
                 batch_dict["semantic_sseg"] = to_torch(sseg, device="cpu")
+                # Phase 3 P3.1: lane 监督在 train 分支也加载（P3.0 只在 val/test）。
+                # lane 是前视-only 产物：非前视相机/帧不在 lane itar → read() 抛
+                # KeyError → 软失败跳过（镜像 val 分支）。复用 sseg 的 END-ts +
+                # downsample NEAREST resize；下游 lane loss 条件式「有才算」。
+                if self.load_lane_masks and self._lane_reader is not None:
+                    try:
+                        lane = self._lane_reader.read(sampled_camera_id, ts_us)  # [H_full, W_full] uint8
+                    except KeyError:
+                        lane = None
+                    if lane is not None:
+                        if self.downsample < 1.0:
+                            _lw = int(round(lane.shape[1] * self.downsample))
+                            _lh = int(round(lane.shape[0] * self.downsample))
+                            lane = cv2.resize(
+                                lane, (_lw, _lh), interpolation=cv2.INTER_NEAREST
+                            )
+                        batch_dict["semantic_lane_sseg"] = to_torch(lane, device="cpu")
 
             # T11.C1: per-frame LiDAR depth map → batch["lidar_depth_map"].
             # Keyed by the same END timestamp the dump script wrote (matches
@@ -1134,6 +1163,22 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     )
                     # Raw id map for the per-class evaluator (render.py reads it).
                     val_batch["semantic_sseg"] = to_torch(sseg, device="cpu")
+                    # Phase 3: lane 产物（独立 itar）。复用 sseg 的 END-ts + 渲染分辨率
+                    # NEAREST resize（类 id 不可插值）。软失败：reader None → 跳过。
+                    # lane 产物可只覆盖前视相机（risk L2：lane 最清处；metric 也只在
+                    # 前视算）→ 该相机/帧不在 lane itar 里时 read() 抛 KeyError，
+                    # 跳过即可（render.py 的 lane 评测本就只取前视相机）。
+                    if self.load_lane_masks and self._lane_reader is not None:
+                        try:
+                            lane = self._lane_reader.read(camera_id, val_ts_us)  # [H_full,W_full] uint8
+                        except KeyError:
+                            lane = None
+                        if lane is not None:
+                            if lane.shape[0] != h_render or lane.shape[1] != w_render:
+                                lane = cv2.resize(
+                                    lane, (w_render, h_render), interpolation=cv2.INTER_NEAREST
+                                )
+                            val_batch["semantic_lane_sseg"] = to_torch(lane, device="cpu")
 
                 return val_batch
 
@@ -1261,6 +1306,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         """Lazily discover + open aux.sseg.zarr.itar and aux.lidar-sseg.zarr.itar
         from the clip directory. Idempotent; safe to call multiple times.
         No-op when load_aux_masks=False.
+        When load_lane_masks=True, also discovers the lane itar (soft-fail: warn if absent).
         """
         if not self.load_aux_masks or self._aux_readers_initialized:
             return
@@ -1280,6 +1326,20 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 f"NCoreDataset: no aux.lidar-sseg.zarr.itar in {clip_dir}; "
                 f"get_road_lidar_points / get_dynamic_lidar_points will fail."
             )
+        if self.load_lane_masks:
+            lane_path = discover_aux_path(clip_dir, "lane")
+            if lane_path is not None:
+                # ⚠️ Reuses SsegAuxReader → assumes the lane itar has the same
+                # internal zarr group layout as sseg (aux/semantic_segmentation/
+                # <camera_id>/<ts_us>). If the lane generator uses a different
+                # group name, parametrize SsegAuxReader.group_name instead.
+                self._lane_reader = SsegAuxReader(lane_path)
+                logger.info(f"NCoreDataset[{self.split}] lane reader ready: {lane_path.name}")
+            else:
+                logger.warning(
+                    f"NCoreDataset: load_lane_masks=True but no *.aux.lane.zarr.itar "
+                    f"in {clip_dir}; lane metrics skipped (软失败，不影响其他类)."
+                )
         self._aux_readers_initialized = True
         logger.info(
             f"NCoreDataset[{self.split}] aux readers ready: "
@@ -1607,6 +1667,9 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             # load_aux_masks gate). render.py's per-class evaluator reads it.
             if "semantic_sseg" in batch:
                 batch_dict["image_infos"]["semantic_sseg"] = _to_gpu(batch["semantic_sseg"])
+            # Phase 3 lane：与 semantic_sseg 并列透传给 render.py 评测器。
+            if "semantic_lane_sseg" in batch:
+                batch_dict["image_infos"]["semantic_lane_sseg"] = _to_gpu(batch["semantic_lane_sseg"])
 
         # --- T11.C1: LiDAR depth map → Batch.image_infos["lidar_depth_map"] -----
         # Independent of sky_mask: load_lidar_depth_map can be on without aux
