@@ -94,6 +94,17 @@ if __name__ == "__main__":
             "camera_idx mapping invalid) — use cc_* metrics."
         ),
     )
+    parser.add_argument(
+        "--novel-fid",
+        action="store_true",
+        help=(
+            "E1.4: compute FID/KID distribution metrics — interpolated "
+            "renders vs GT always; per novel mode when --novel-view is also "
+            "set. KID is the primary small-sample metric (subset size "
+            "auto-adapted); FID reported alongside for E0.2-anchor "
+            "comparability. Off by default (byte-identical metrics.json)."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
@@ -111,6 +122,7 @@ if __name__ == "__main__":
         load_lane_masks=args.load_lane_masks,
         lane_band_px=args.lane_band_px,
         dataset_cameras=dataset_cameras_list,
+        novel_fid=args.novel_fid,
     )
 
     renderer.render_all()

@@ -40,7 +40,11 @@ from threedgrut.model.per_class_eval import (
 from threedgrut.correction.difix import DifixPostProcessor
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.color_correct import color_correct_affine
-from threedgrut.utils.eval_metrics import compute_lidar_psnr  # T11.F1
+from threedgrut.utils.eval_metrics import (  # T11.F1 / E1.4
+    compute_lidar_psnr,
+    kid_subset_size,
+    rgb01_to_uint8_chw,
+)
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import create_summary_writer
 from threedgrut.utils.render import apply_post_processing
@@ -87,6 +91,7 @@ class Renderer:
         post_processing=None,
         novel_view=False,
         exposure_model=None,
+        novel_fid=False,
     ) -> None:
 
         if path:  # Replace the path to the test data
@@ -105,6 +110,10 @@ class Renderer:
         # T8.5.3 / V3-E3: 5x render cost when enabled — 4 extra renders per
         # anchor frame (lateral_1m / lateral_2m / yaw_5deg / yaw_10deg).
         self.novel_view = bool(novel_view)
+        # E1.4: FID/KID distribution metrics (interpolated always; per
+        # novel mode when novel_view is also on). Off by default so
+        # metrics.json stays byte-identical.
+        self.novel_fid = bool(novel_fid)
         # T9.3 / V3-P1.c: BilateralGrid (or legacy ExposureModel) applied
         # AFTER model forward + post_processing, BEFORE metrics. Aligns the
         # eval-time pred_rgb with the train-time loss target (which goes
@@ -166,6 +175,7 @@ class Renderer:
         load_lane_masks=False,
         lane_band_px=None,
         dataset_cameras=None,
+        novel_fid=False,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -373,6 +383,7 @@ class Renderer:
             post_processing=post_processing,
             novel_view=novel_view,
             exposure_model=exposure_model,
+            novel_fid=novel_fid,
         )
 
     @classmethod
@@ -388,6 +399,7 @@ class Renderer:
         post_processing=None,
         novel_view=False,
         exposure_model=None,
+        novel_fid=False,
     ):
         """Loads checkpoint for test path.
 
@@ -413,6 +425,7 @@ class Renderer:
             post_processing=post_processing,
             novel_view=novel_view,
             exposure_model=exposure_model,
+            novel_fid=novel_fid,
         )
 
     @torch.no_grad()
@@ -530,6 +543,35 @@ class Renderer:
             except Exception as e:  # ultralytics missing / weights offline
                 logger.warning(f"[E1.2 NTA-IoU] detector unavailable, skipping: {e}")
                 _nta_detector = None
+
+        # E1.4 — FID/KID accumulators (accumulate-then-finalize): one
+        # fid/kid pair for the interpolated render distribution and one per
+        # novel mode (novel pairs only when novel_view is on). Soft-fail on
+        # missing torch-fidelity backend → no keys, byte-identical.
+        _fid_pairs = None
+        _fid_counts: dict[str, int] = {}
+        if self.novel_fid:
+            try:
+                from torchmetrics.image.fid import FrechetInceptionDistance
+                from torchmetrics.image.kid import KernelInceptionDistance
+
+                def _mk_fid_pair():
+                    return {
+                        "fid": FrechetInceptionDistance(feature=2048).to("cuda"),
+                        # subset_size finalized via kid_subset_size(n) before
+                        # compute() — constructor value is a placeholder.
+                        "kid": KernelInceptionDistance(subset_size=2).to("cuda"),
+                    }
+
+                _fid_pairs = {"render": _mk_fid_pair()}
+                if self.novel_view:
+                    for _m in NOVEL_VIEW_MODES:
+                        _fid_pairs[_m] = _mk_fid_pair()
+                _fid_counts = {k: 0 for k in _fid_pairs}
+                _fid_counts["real"] = 0
+            except Exception as e:
+                logger.warning(f"[E1.4 FID/KID] unavailable, skipping: {e}")
+                _fid_pairs = None
         if self.novel_view:
             for m in NOVEL_VIEW_MODES:
                 os.makedirs(
@@ -789,6 +831,20 @@ class Renderer:
             # that PSNR is dominated by parallax noise floor, not view-
             # extrapolation quality. Skipped entirely when self.novel_view
             # is False (metrics.json stays byte-identical with pre-T8.5.3).
+            # E1.4 — feed the frame into every FID/KID pair: GT is the
+            # shared real distribution; the interpolated render is the
+            # "render" fake; novel fakes are fed inside the loop below.
+            if _fid_pairs is not None:
+                _real_u8 = rgb01_to_uint8_chw(rgb_gt_full)
+                _fake_u8 = rgb01_to_uint8_chw(pred_rgb_full)
+                for _pk, _pair in _fid_pairs.items():
+                    _pair["fid"].update(_real_u8, real=True)
+                    _pair["kid"].update(_real_u8, real=True)
+                _fid_pairs["render"]["fid"].update(_fake_u8, real=False)
+                _fid_pairs["render"]["kid"].update(_fake_u8, real=False)
+                _fid_counts["real"] += 1
+                _fid_counts["render"] += 1
+
             # E1.2 — resolve GT tracks once per batch; consumed by BOTH the
             # novel-view NTA-IoU (inside the loop below) and the interpolated
             # class_psnr / NTA-IoU block further down. Cuboids stay at their
@@ -891,6 +947,13 @@ class Renderer:
                         )
                         if nta_nv is not None:
                             novel_nta_records.setdefault(mode, []).append(nta_nv)
+
+                    # E1.4 — novel-mode render joins its mode's fake set.
+                    if _fid_pairs is not None and mode in _fid_pairs:
+                        _nv_u8 = rgb01_to_uint8_chw(pred_novel)
+                        _fid_pairs[mode]["fid"].update(_nv_u8, real=False)
+                        _fid_pairs[mode]["kid"].update(_nv_u8, real=False)
+                        _fid_counts[mode] += 1
                 # Restore originals so downstream class_psnr / per_cam see
                 # the unperturbed batch.
                 gpu_batch.T_to_world = orig_T
@@ -1191,6 +1254,35 @@ class Renderer:
                 metrics_json[f"mean_{_name}_lpips"] = float(np.mean(_lv)) if _lv else None
                 metrics_json[f"{_name}_n_records"] = int(len(_pv))
                 metrics_json[f"{_name}_total_pixels"] = int(np.sum(_nv)) if _nv else 0
+
+        # E1.4 — FID/KID finalize. KID subset_size adapted to the actual
+        # sample count (legal: subset_size <= n). compute() wrapped so a
+        # degenerate split degrades to missing keys, not a crashed eval.
+        if _fid_pairs is not None and _fid_counts.get("real", 0) >= 2:
+            _key_name = {"render": "render"}
+            for _pk, _pair in _fid_pairs.items():
+                _n_fake = _fid_counts.get(_pk, 0)
+                if _n_fake < 2:
+                    continue
+                _label = "render" if _pk == "render" else f"novel_{_pk}"
+                try:
+                    metrics_json[f"mean_{_label}_fid"] = float(_pair["fid"].compute())
+                except Exception as e:
+                    logger.warning(f"[E1.4] FID compute failed for {_pk}: {e}")
+                try:
+                    _pair["kid"].subset_size = kid_subset_size(
+                        min(_fid_counts["real"], _n_fake)
+                    )
+                    _kid_mean, _kid_std = _pair["kid"].compute()
+                    metrics_json[f"mean_{_label}_kid"] = float(_kid_mean)
+                    metrics_json[f"mean_{_label}_kid_std"] = float(_kid_std)
+                except Exception as e:
+                    logger.warning(f"[E1.4] KID compute failed for {_pk}: {e}")
+                metrics_json[f"fid_n_fake_{_pk}"] = int(_n_fake)
+            metrics_json["fid_n_real"] = int(_fid_counts["real"])
+            _fid_log = {k: v for k, v in metrics_json.items()
+                        if k.startswith("mean_") and ("_fid" in k or "_kid" in k)}
+            logger.info(f"[E1.4] FID/KID — {_fid_log}")
 
         # E1.2 — NTA-IoU aggregation (interpolated + per novel mode). Keys
         # absent when the detector was unavailable or no vehicle frames →

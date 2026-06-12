@@ -40,3 +40,4 @@ isort==5.13.0
 polyscope>=2.3.0
 viser
 ultralytics>=8.2.0
+torch-fidelity
