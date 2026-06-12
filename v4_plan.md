@@ -68,11 +68,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [E0.4 同 clip 双向对照锚（NuRec vs multilayer 全指标）]
-        [E0.6 官方链 actor 插入取代体验（nre 编辑 + asset-harvester + Harmonizer 协调）]
-        [E1.2 NTA-IoU 接入（plan 已备）+ 外推档联动]
-        [E1.3 held-out camera 真 GT 外推协议]
-        [E1.4 FID KID 感知指标接入]
         [E2.1 Harmonizer 升级集成 + 域差 spike]
         [E2.2 渐进外推蒸馏（核心移植）]
         [E2.3 actor 弱观测面修复蒸馏]
@@ -81,13 +76,18 @@ kanban
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
 
     "In Progress"
+        [E1.3 held-out 协议：dataset-cameras 开关 ✅，4-cam 30k 训练中（排除 cross_left）]
+        [E0.4 双向对照锚：manifest + 离线评测工具 ✅，待 NuRec 出帧]
+        [E0.6 官方编辑体验：run-book + 资产 + schema 全就绪，待 GPU 空档]
 
     "Blocked"
-        [E1.1 ＝v3 P3.3 移交：3m6m 档 + lane 区域 novel 指标 + 三方 ckpt 立锚]
-        [E3.1 ＝v3 P3.4 移交：空气区 penalty（gate E1.1 + R9 PR24）]
-        [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate E1.1 + R9 PR24）]
+        [E3.1 ＝v3 P3.4 移交：空气区 penalty（gate E1.1 锚 ✅ + R9 PR24）]
+        [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate 同 E3.1）]
 
     "Done"
+        [E1.1 外推测量门 ✅ 2026-06-12：6 档 + lane warp 指标；三方锚 grad_corr@6m≈0.30，B3 张力否定]
+        [E1.2 NTA-IoU ✅ 2026-06-12：interp ≈0.12，@6m ≈0.06，novel 档联动]
+        [E1.4 FID KID ✅ 2026-06-12：render 75 → 6m 193 单调，KID 主指标]
         [E0.1 容器冒烟 ✅ 2026-06-11：nre 26.4.146，无 key 全链通]
         [E0.2 USDZ 渲染+修复链 ✅：FID 锚 7.4/57/92，Harmonizer 两档跑通，目视显著]
         [E0.3 自有 clip 官方训练 ✅：40k 步 2h07m，test psnr 30.30（官方口径）]
@@ -108,13 +108,13 @@ kanban
 | **E0.1** ★ | E0 | **容器环境 gate**：镜像拉取 ✅ + 运行时冒烟 ✅（2026-06-11 全部完成）。实测：`nre-ga:latest` = **26.4.146-c63f08a4**（2026-05-28 build）；validate_setup.py 仅 2 预期 FAIL（24GB 边界 + key 空）；容器内 nvidia-smi/CLI 全子命令面正常；**无 NGC key 跑通 train/render 全链**（R-v4.1 答案：key 仅 difix-distill 下载 `cosmos_3dgut.pt` 时需要） | 新 | 0.5 | ✅ | 无 key 训练+渲染实测通过；唯一例外＝官方 train-time difix 蒸馏权重在 NGC |
 | **E0.2** ★ | E0 | **官方 USDZ 场景渲染 + 修复链体验** ✅（2026-06-11）：场景 0fd06bc3（1.92GB 4K）+ 048b974e 已下；`nre render` 三档各 595 帧（gt / lat3m / lat6m，rig offset 法，17.8ms/帧 @4090 1080p）；Harmonizer 时间模式修复两档跑通。**FID（vs 真实参考帧分布）：原轨迹渲染 7.37（忠实度极高）/ lat3m 57.3→修复后 65.6（↑）/ lat6m 91.8→86.6（↓5.2）**；目视修复显著（锥桶修直 / 涂抹消除 / 黄线连续）但 FID 几乎不动——**判别产出：官方表示侧伪影轻，FID 大头＝视角内容差，修复链 FID 收益∝伪影占比**（论文 134→50 是重伪影场景；3dgrut2 伪影重于官方→E2 收益预期更大）；FID 单指标评修复会误判（E1.4 须配区域化指标，R-v4.5 实证） | 新 | 1 | ✅ | 帧档：inceptio `~/work/nurec_e0/renders/0fd06bc3/` + `~/repo/harmonizer/input_frames_cosmos_temporal_lat{3,6}m/`；真帧 `~/work/nurec_e0/real_frames/`；Harmonizer 权重全 HF 化（token 须开 gated 权限 + Cosmos-Predict2 模型页接受 license——两步均需 HF 网页手动操作，已留档） |
 | **E0.3** ★ | E0 | **自有 clip 官方配方训练复现** ✅（2026-06-11）：clip 9ae151dc 用 Hyperion-8.1 `car2sim_6cam`+pai overlay（PAI 配方，非 Waymo 3dgut_dynamic）40k 步一次训完——**4090 24GB 无降配**（峰值 16GB / 稳态 ~9GB，2.62M gaussians），2h07m（7.45 it/s）。**官方口径锚：test/psnr 30.30 / cpsnr road 38.27 · car 34.59 · person 32.65 / chamfer 0.295**；产物 `artifacts/last.usdz`（1.1GB）+ 20 类 cpsnr 全套。兼容性结论：官方分片全兼容 nre 26.4，唯一不兼容＝v3 自产 lane aux（缺 consolidated 元数据 + sequence 标识不符）→ 移出即过（R-v4.3 实际未命中） | 新 | 1.5 | ✅ | ⚠️ 官方 val 口径＝每 3 帧+1/4 分辨率+cpsnr，**不可直接对比 multilayer 数字**（E0.4 统一口径重算） |
-| **E0.4** ★ | E0 | **同 clip 双向对照锚**：NuRec ckpt 与 multilayer baseline 互渲 — interpolated（PSNR/LPIPS/per-class）+ 外推（lateral 3m/6m lane/NTA-IoU/FID，用 E1 工具）双向跑全指标 → **v4 gap 表首行**（量化"差距在哪一层"：表示/配方/修复器） | 新 | 1 | ⬜ | gate=E0.3 + E1.1/E1.2 工具就绪 |
+| **E0.4** ★ | E0 | **同 clip 双向对照锚**：NuRec ckpt 与 multilayer baseline 互渲 — interpolated（PSNR/LPIPS/per-class）+ 外推（lateral 3m/6m lane/NTA-IoU/FID，用 E1 工具）双向跑全指标 → **v4 gap 表首行**（量化"差距在哪一层"：表示/配方/修复器） | 新 | 1 | 🟡 | E1 工具 ✅（manifest 375 帧 + eval_frames_dir 离线评测器，2026-06-12）；待 NuRec 侧出帧（O3，GPU 空档执行） |
 | **E0.5** | E0 | **配方 diff 清单** ✅（2026-06-11）：官方 resolved 全量（8438 行 parsed.yaml）vs [`ncore_3dgut_mcmc_multilayer.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer.yaml) 11 维度逐项 diff → [`2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md`](docs/superpowers/specs/2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md)。**Top-5**：① road 几何冻结五件套（ground-mesh init + lr 1e-6 冻结 + MCMC 豁免 + z-scale/平整正则，喂 E3.1-E3.3）② road/bg 所有权 init 切分（bg init 剔 road 类点）③ 官方 train-time difix 蒸馏钩子原生＝±3m lateral 增强（本 run 关，sqa_difix_distill 开，喂 E2.2）④ 对锚口径陷阱（官方 val 每 3 帧+1/4 res+cpsnr）⑤ LiDAR ray 级监督 2048 ray/step + 200m 远场 | 新 | 0.5 | ✅ | 顺手发现：`LayerSpec.scale_lr_mult` 死配置（已 spawn 后台任务）；官方 `noise_lr 5000` vs 本项目 5e5 待验证 |
-| **E0.6** | E0 | **官方链 actor 插入/取代体验**：在 E0.2 USDZ 场景或 E0.3 自有 clip 重建上走官方编辑工作流——nre actor 编辑（gRPC/CLI 删/移/替）+ `asset-harvester` 资产插入（项目已收割 3 车+3 人直接可用）+ Harmonizer 协调（训练管道③④正为此设）→ 渲染对照 + **官方编辑能力/限制清单**（删除后路面是否出洞 / 插入物阴影来源 / 协调前后 FID） | 新（大g 2026-06-11 提议纳入） | 1 | ⬜ | 直接回答「官方如何解决 P1.4 撞到的 spiky/光照失配/悬浮」；清单喂 E2.5 |
-| **E1.1** ★ | E1 | **外推测量门扩展** = **v3 P3.3 移交**：lateral_3m/6m 新档（4 档 avg 口径不变保历史可比）+ lane 区域 novel 指标（路面平面诱导 warp 重投影）+ 三方 ckpt（baseline/B3/aniso20）立锚，顺答 B3 细长高斯外推张力 | v3 P3.3（2026-06-11 立项原文 [`v3_plan_revised.md`](v3_plan_revised.md) §1.2） | 1.5 | ⬜ | 纯 eval 无训练；**E1 之门** |
-| **E1.2** ★ | E1 | **NTA-IoU 接入**：按 [`2026-06-10-nta-iou-eval-metric.md`](docs/superpowers/plans/2026-06-10-nta-iou-eval-metric.md) 执行（Task 0–5 全 TDD 已写好）+ **增量**：novel 外推档下也跑 NTA-IoU（渲 lateral_3m/6m 帧→检测→与投影 GT box IoU） | docs/superpowers plan（未执行） | 1.5 | ⬜ | 外推档增量是对原 plan 的小扩展 |
-| **E1.3** ★ | E1 | **held-out camera 真 GT 外推协议**：训练排除 1–2 台侧相机（`dataset.camera_ids` 覆盖），eval 在被排除相机跑 per-class 全套 → 唯一**有真 GT** 的外推轴（DiFix3D+ RDS cross-reference 协议反用）；需从头训 1 个对照 ckpt | NuRec 调研 § 5.1 | 1.5 | ⬜ | 1 次 30k 训练成本；与 E1.1 档位互补 |
-| **E1.4** | E1 | **FID/KID 接入**：novel 外推档渲染帧 vs 训练视角真图分布的 FID/KID（torchmetrics/clean-fid），写 metrics.json `mean_novel_fid_{mode}` | SOTA 综述（无 GT 外推共识指标） | 1 | ⬜ | 帧数少时 KID 优先（无偏） |
+| **E0.6** | E0 | **官方链 actor 插入/取代体验**：在 E0.2 USDZ 场景或 E0.3 自有 clip 重建上走官方编辑工作流——nre actor 编辑（gRPC/CLI 删/移/替）+ `asset-harvester` 资产插入（项目已收割 3 车+3 人直接可用）+ Harmonizer 协调（训练管道③④正为此设）→ 渲染对照 + **官方编辑能力/限制清单**（删除后路面是否出洞 / 插入物阴影来源 / 协调前后 FID） | 新（大g 2026-06-11 提议纳入） | 1 | 🟡 | run-book + 能力清单骨架已入档（[`2026-06-12-e06-official-actor-editing-capability.md`](docs/superpowers/specs/2026-06-12-e06-official-actor-editing-capability.md)）；前置全验证（sequence_tracks ✅ / AH 资产已传 / schema 全文消化）；待 GPU 空档执行 |
+| **E1.1** ★ | E1 | **外推测量门扩展** = **v3 P3.3 移交**：lateral_3m/6m 新档（4 档 avg 口径不变保历史可比）+ lane 区域 novel 指标（路面平面诱导 warp 重投影）+ 三方 ckpt（baseline/B3/aniso20）立锚，顺答 B3 细长高斯外推张力 | v3 P3.3（2026-06-11 立项原文 [`v3_plan_revised.md`](v3_plan_revised.md) §1.2） | 1.5 | ✅ | **2026-06-12 完成**：PR #24 eval 侧移植（R9 中立）+ plane_warp 模块 + 6 档扩档；avg 口径回归 Δ1.5e-5 PASS；三方锚 lane grad_corr@3m≈0.38 / @6m≈0.30 三方打平 → **B3 张力否定、外推退化配方无关**；详见 §5 Done Log |
+| **E1.2** ★ | E1 | **NTA-IoU 接入**：按 [`2026-06-10-nta-iou-eval-metric.md`](docs/superpowers/plans/2026-06-10-nta-iou-eval-metric.md) 执行（Task 0–5 全 TDD 已写好）+ **增量**：novel 外推档下也跑 NTA-IoU（渲 lateral_3m/6m 帧→检测→与投影 GT box IoU） | docs/superpowers plan（未执行） | 1.5 | ✅ | **2026-06-12 完成**：interp 0.117/0.120/0.120（三方），@3m 0.076–0.096，@6m 0.054–0.062 单调；口径注记：全 GT 车含远景小目标、YOLOv8m conf 0.3 best-match，绝对值不与论文比 |
+| **E1.3** ★ | E1 | **held-out camera 真 GT 外推协议**：训练排除 1–2 台侧相机（`dataset.camera_ids` 覆盖），eval 在被排除相机跑 per-class 全套 → 唯一**有真 GT** 的外推轴（DiFix3D+ RDS cross-reference 协议反用）；需从头训 1 个对照 ckpt | NuRec 调研 § 5.1 | 1.5 | 🟡 | `--dataset-cameras` eval 开关 ✅（含 exposure 错套强制关断）；4-cam 30k 训练中（排除 cross_left，2026-06-12 14:17 自动接力开训，~7h） |
+| **E1.4** | E1 | **FID/KID 接入**：novel 外推档渲染帧 vs 训练视角真图分布的 FID/KID（torchmetrics/clean-fid），写 metrics.json `mean_novel_fid_{mode}` | SOTA 综述（无 GT 外推共识指标） | 1 | ✅ | **2026-06-12 完成**：`--novel-fid` 开关；baseline FID render 75.3 → 1m 124 → 3m 168 → 6m 193 单调（K4 sanity PASS）；KID 主指标（subset 自适应）；**FID render 75 vs 官方场景 7.4 → 自有表示侧伪影重一个量级（E0.2 推论③实证）** |
 | **E1.5** | E1 | **v4 gap 表回填**：E0.4 NuRec 锚 + E1.1–E1.4 自有锚汇总入 § 1.3，**据实重排 E2/E3 优先级**（对标 v3 R1 纪律） | — | 0.5 | ⬜ | E1 出口 |
 | **E2.1** ★ | E2 | **Harmonizer 升级集成 + 域差 spike**：[`third_party/Fixer`](third_party/Fixer)（一代）→ [NVIDIA/harmonizer](https://github.com/NVIDIA/harmonizer)（Cosmos Predict2 0.6B，时间条件，Apache-2.0）；HF `nvidia/Harmonizer` 权重 → 对 baseline 渲染的 3m/6m 帧离线修复 → E1 指标前后对比（**纯后处理预期：FID/感知大改善、几何指标不动**——正确预期，勿误判失败） | NuRec 调研 § 2.3/5.2 + v3 T15.2 | 1 | ⬜ | inceptio 4090 推理（0.6B 单步 OK）；`nurec-fixer` skill 辅助 |
 | **E2.2** ★★ | E2 | **渐进外推蒸馏（v4 核心）**：DiFix3D+ progressive update 移植——外推位姿从 1m→2m→3m→6m 逐步推进，每步「渲染→Harmonizer 修复→修复帧按低权重蒸馏回 3D（road/lane 区域加权）→下一步」；区别 v3 Stage 15 教训：不打全图 repro 轴，蒸馏目标=外推档 + road/lane 病灶区 | NuRec 调研 § 2.4（ablation 证据）+ v3 Stage 15 复活改轴 | 2.5 | ⬜ | gate=E2.1 spike + E1 锚；验收=E1 全指标 |
@@ -132,19 +132,19 @@ kanban
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
 | **E0** ★ | NuRec 工具链复现立锚（**首要**） | 4/6 | ≥2 场景跑通（1 USDZ 渲染+修复链 ✅、1 自有 clip 训练 ✅）+ NuRec 锚入档 ✅ + 配方 diff 清单 ✅ + 官方编辑能力清单（E0.6 待开） | — | 🟡 |
-| **E1** ★ | 外推测量门（gate 后续一切） | 0/5 | 3m/6m + NTA-IoU + held-out + FID/KID 全部立锚入 gap 表 | interpolated 全指标不退 | ⬜ |
+| **E1** ★ | 外推测量门（gate 后续一切） | 3/5 | 3m/6m ✅ + NTA-IoU ✅ + FID/KID ✅ 已立锚入 gap 表；held-out 训练中（E1.3）；E1.5 待 E0.4 | interpolated 全指标不退（已验：avg Δ1.5e-5 / cc 25.79 / grad_corr 0.6931 三点零回归） | 🟡 |
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike | 0/5（含 1 备选） | E1 外推指标相对锚改善（量级参考 DiFix3D+：蒸馏+后处理 +1.8dB/FID −20%）；E2.5 插入协调立带指标基石 | cc ≥ 24.7 / grad_corr 0.744 不退 | ⬜ |
 | **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
-| **总计** | — | **0/21** | — | — | — |
+| **总计** | — | **7/21** | — | — | — |
 
 > **v4 gap 表（E0.4 + E1.5 回填，格式预置）**：
 > | 轴 | 3dgrut2 锚（E1） | NuRec 锚（E0.4） | 差距 | E2/E3 后 |
 > |---|---|---|---|---|
-> | lane grad_corr @ 3m / 6m | 待测 | 待测 | — | — |
-> | NTA-IoU @ 原轨迹 / 3m / 6m | 待测 | 待测 | — | — |
-> | held-out cam per-class（车/lane） | 待测 | 待测 | — | — |
-> | FID/KID @ 3m / 6m | 待测 | 官方 USDZ 场景参考：FID 57.3 @3m / 93.0 @6m（vs 原轨迹分布，0fd06bc3，修复前） | — | — |
+> | lane grad_corr @ 3m / 6m（warped 口径） | **B3 0.381 / 0.307**（baseline 0.384/0.303，aniso20 0.389/0.298——三方打平；对照 interp 0.74 → 外推腰斩再腰斩） | 待测（E0.4） | — | — |
+> | NTA-IoU @ 原轨迹 / 3m / 6m | **B3 0.120 / 0.076 / 0.054**（baseline 0.117/0.096/0.062；口径＝全 GT 车含远景，绝对值不与论文比） | 待测（E0.4） | — | — |
+> | held-out cam per-class（车/lane） | 训练中（E1.3，4-cam 排除 cross_left） | 待测 | — | — |
+> | FID/KID @ 3m / 6m | **B3 FID 165/192 · KID 0.081/0.098**（baseline 168/193 · 0.082/0.102；render 75.3/0.021） | 待测（E0.4）；官方 USDZ 场景参考：FID 57.3 @3m / 93.0 @6m（0fd06bc3，修复前） | — | — |
 > | interpolated（守护线） | class 25.07 / cc 26.06 / grad_corr 0.744 | **官方口径**：psnr 30.30 / cpsnr car 34.59 · road 38.27 · person 32.65 / chamfer 0.295（E0.3，**口径未统一不可直接比**，E0.4 重算） | 待 E0.4 | 不退化 |
 
 ### 1.4 任务依赖图
@@ -304,6 +304,15 @@ flowchart TD
   - **大g 目视终评（nre viewer 交互对比，E0 判别预答案）**：官方配方产物 vs multilayer 自训——①整体锐度**不更好**（官方 subsample:2 半分辨率监督所致，我们 full-res 不输）；②**路面车道线明显更好**；③**3m 侧向移动退化明显更小**。且该 run difix 蒸馏关闭——**官方纯表示侧（road 冻结五件套 + LiDAR ray 监督）就赢下外推**，E0.4 判别初步指向：表示侧为主差距 → **E3 优先级 ≥ E2**（待 E1 量化锚正式确认）。
   - nre viewer 工程留档：26.4.146 viewer 两个 bug/坑——①客户端连接竞态（camera on_update 先于 reload action → `Can't unpack empty optional` 渲染线程死），host-side 两行 patch 绕过（`~/work/nurec_e0/patches/av_patched.py` 挂载覆盖）；②nrend 快速路径对自训 USDZ 间歇性 `NRenderer.render failed`（官方 USDZ 正常），`--no-enable-nrend` 走 torch 路径稳定。viewer GUI 自带 Camera Translation Offset（可直接体验横移外推）+ Render Video 导出。
   - 环境备忘：HF 下载一律 `HF_HUB_DISABLE_XET=1` + 代理（xet/直连均会卡死或失败）；harmonizer 容器 entrypoint 是 `/bin/bash`，跑推理须 `--entrypoint python`。
+- **2026-06-12 E1.1 + E1.2 + E1.4 完成，E1.3 训练中，E0.4 工具就绪，E0.6 run-book 入档**（worktree 分支 claude/dreamy-raman-8264ca，commit 链 `4d27bf6`→`5e61064`，Mac 测试 71 个全绿）——E1 测量门首日三卡落地 + 三方 canonical 锚（每 ckpt 全 5 相机 375 val 帧 × 7 渲染 × 全指标，26 min/ckpt @4090）：
+  - **E1.1 外推测量门**（`d53e4d9` 移植 / `c3779c2` 扩档 / `a3a6d26` 口径保护 / `02d458c` plane_warp / `6ef63ac` 接线）：PR #24 eval 侧 path 限定移植（9 文件 +634 行，lane loss/trainer/yaml 未拉——**R9 中立**，决议后 reconcile）；`NOVEL_VIEW_MODES` 扩 lateral_3m/6m，`LEGACY_NOVEL_AVG_MODES` 冻结 4 档历史口径，新增 `mean_novel_lpips_avg6`；新建 [`plane_warp.py`](threedgrut/model/plane_warp.py)（novel 射线↔road 高度场定点求交→FTheta 投回原相机采伪 GT；复用 dataset `rays_dir` 缓存 + `query_ground_z` + dynamic_mask 同源投影，BUG-1 隔离）。**口径回归三点全中**：baseline `mean_novel_lpips_avg` 0.598718 vs 历史 0.598733（Δ1.5e-5）、cc_psnr_masked 25.789 ≡ v3 锚、interp `mean_lane_grad_corr` 0.6931 ≡ P3.0 门锚 0.6932。
+  - **三方锚 + F3 判别（lane grad_corr，warped 口径，front cam 75 帧）**：baseline 1m 0.551 / 2m 0.467 / 3m 0.384 / 6m 0.303；B3 0.581/0.473/**0.381/0.307**；aniso20 0.573/0.465/0.389/0.298。**结论①（B3 张力否定）**：aniso 8→30 未放大 3m/6m 退化（三方 ±0.01 打平），B3 可继续当主配方；**结论②（更重要）**：lane loss 的 interpolated 优势（+0.05）到 2m 即耗尽、3m/6m 三方无差——**外推退化与表示侧短刀配方无关，必须 E2 修复链 / E3 参数化级方案**，与 E0 判别（官方 road 冻结五件套赢外推）同向互证。
+  - **E1.2 NTA-IoU**（`add0aa7` 核心 / `ea22e2c` 接线）：VEHICLE_TRACK_CLASSES 实测＝automobile 68/heavy_truck 1/bus 1（ckpt viz_4d census）；投影含 behind-camera 前置剔除（pinhole 分支 z-clamp 坑）；interp 0.117/0.120/0.120（baseline/B3/aniso20），novel 档单调降至 @6m 0.054–0.062，375/375 帧有车。**口径注记**：全 GT 车含远景小目标（检不出按 0 计入 best-match）→ 绝对值偏低是口径效应，作相对标尺；novel 档 B3/aniso20 略低于 baseline（@3m 0.076 vs 0.096）**待 E1.3 真 GT 复核**。
+  - **E1.4 FID/KID**（`b20ff48` + `5e61064` key 名修正为 `mean_novel_fid_<mode>`）：baseline FID render 75.3 → 1m 124 → 2m 152 → 3m 168 → 6m 193 全程单调（K4 sanity PASS）；KID 0.021 → 0.102 @6m（subset 自适应 37）。**FID render 75 vs 官方场景同口径 7.4 → 自有表示侧伪影重一个量级，E0.2 推论③（E2 修复收益更接近论文场景）获定量支撑**；三方 FID/KID 互差 <3（配方间外推无感知差，与 lane 结论一致）。
+  - **E1.3 进行中**（`9503242`）：`--dataset-cameras` 开关 ✅（ckpt 嵌入 conf 的 camera_ids 替换 + **BilateralGrid 强制关断**——camera_idx 错套陷阱，held-out 口径以 cc_* 为准，R-v4.8）；4-cam（排除 cross_left）30k depth-off 训练 14:17 自动接力开训（排队脚本），~7h。
+  - **E0.4 工具就绪**（`49f27b2`/`7096b55`）：[`dump_test_split_manifest.py`](scripts/dump_test_split_manifest.py) 实测 375=75×5 ✓；[`eval_frames_dir.py`](scripts/eval_frames_dir.py)（render_all 去模型版：项目数据集供 GT/sseg/lane/cuboid/FTheta，NuRec 只供像素帧；interpolated 全指标 + lateral 档 plane-warp/NTA/KID；缺帧硬报错保对齐完整性；tracks 从 ckpt viz_4d 免建模查找——validity 字段实名 `frame_info`）。
+  - **E0.6 run-book 入档**（`21e64f8`）：[`2026-06-12-e06-official-actor-editing-capability.md`](docs/superpowers/specs/2026-06-12-e06-official-actor-editing-capability.md)——前置五项全验证（last.usdz 含 sequence_tracks.json 可编辑、AH 3 车+3 人已传 inceptio、镜像/patch 在位）；上游 asset-editing schema 全文消化：remove/replace/insert 三操作 JSON 语法、**`--renderer default` 取代弃用的 `--no-enable-nrend`**、编辑是会话级内存态（render-grpc 完成自动 `restore_model_parameters` 回滚）、AH bundle 需重排嵌套目录。
+  - 工程留档：anchor 跑批耗时几乎全在指标栈（渲染仅 ~2%：每帧 7×LPIPS + 6×plane-warp + 7×YOLO + 14×Inception）；权重预下（yolov8m 52MB CWD 解析 + Inception 91MB torch hub）经 mihomo；`pkill -f` 自匹配坑（ssh bash -c 命令行含目标串会自杀，用 `[.]` 正则规避）；三份 anchor metrics.json 已补规范 FID key 别名。
 
 ---
 

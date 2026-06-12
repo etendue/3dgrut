@@ -429,6 +429,11 @@ flowchart TB
 | `threedgrut/model/road_region.py` | **V3-R2 ✅ (7bf4992, build_road_height_field + query_ground_z + compute_bg_road_opacity_penalty)** —— bg-in-road opacity penalty，**首个真正有效改动**：5k A/B 路面 bg 粒子 −86%、road opacity +28% 反超主导、cc_psnr_masked +0.65 dB；镜像 bg_cuboid_loss.py |
 | `threedgrut/model/pose_anchor.py` | **P1.2 ✅ (2026-06-06, compute_pose_boundary_loss 首/末活跃帧锚 GT + compute_pose_prior_loss 全帧软 L2，旋转矩阵 Frobenius²，纯函数)** —— 修 track-pose 漂移；30k A/B fix 三者最优 class25.07/cc26.06（−0.61 未在本配方复现）|
 | `threedgrut/model/track_albedo_fourier.py` | **P1.3b ✅ (2026-06-06, fourier_albedo_bias Σ f_i·cos(iπt/N_t) + upgrade_albedo_table ckpt 升降维，纯函数)** —— 4D-SH 时变 albedo；A/B k4 24.13 vs DC k1 24.20 **无增益**，default k1 关、gated 留未来 |
+| `threedgrut/model/plane_warp.py` | **E1.1 ✅ (2026-06-12, ftheta_project_points + build_plane_warp + warp_image 纯函数)** —— 平面诱导 warp 伪 GT：novel 像素射线↔road 高度场定点求交→FTheta 投回原相机；novel lane 指标内核（render.py + eval_frames_dir 共用） |
+| `threedgrut/model/nta_iou.py` | **E1.2 ✅ (2026-06-12, project_track_to_2d_box + compute_frame_nta_iou)** —— GT cuboid→2D AABB best-match IoU；behind-camera 前置剔除 |
+| `threedgrut/model/vehicle_detector.py` | **E1.2 ✅ (YOLOv8m 懒加载单例)** —— 唯一 ultralytics 耦合点，duck-typed 注入 |
+| `scripts/dump_test_split_manifest.py` | **E0.4 ✅ (2026-06-12)** —— test split 位姿 manifest（NuRec 侧出帧对齐用） |
+| `scripts/eval_frames_dir.py` | **E0.4 ✅ (2026-06-12)** —— render_all 去模型离线评测器：外部帧（nre render）喂项目侧全指标，同口径双向对照核心 |
 | `threedgrut/datasets/ncore_semantic.py` | T3.1.a ✅ (e8cb490, Cityscapes palette 常量) |
 | `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) |
 | `threedgrut/datasets/tracks_loader.py` | T4.1.b ✅ (b22a506) + T4.5 ✅ (4807951, load_tracks_from_ncore_cuboids) |
@@ -558,6 +563,9 @@ flowchart TB
 | **T3.4 D1** road perturb mask Z 锁定 | T3.4 ✅ | `test_layered_mcmc_installs_road_perturb_mask` (Mac, 9077fd6) |
 | **T3.4 D6** 小区域 mask < min_pixels 时该区贡献 = 0 (数值稳定) | T3.4 ✅ | `test_compute_layered_l1_loss_small_region_skipped` (Mac, 9077fd6) |
 | **T3.5.a** 多层 forward 调 fused_view + _FusedView + ref_renderer | T3.5.a ✅ | `test_forward_multi_layer_dispatches_to_ref_renderer` (Mac, c688984) |
+| **E1.1** `mean_novel_lpips_avg` 永远只聚合 LEGACY_NOVEL_AVG_MODES 4 档（B3 锚 0.5962 历史可比） | E1.1 ✅ | `test_legacy_avg_modes_frozen_at_four` (Mac) + inceptio 实测回归 Δ1.5e-5 |
+| **E1.1** lane novel 指标＝plane-warp 伪 GT 口径，仅同 warp 版本内跨模型可比（不与 interpolated mean_lane_* 比绝对值） | E1.1 ✅ | `test_flat_plane_warp_consistency` (Mac) + render.py 注释/Done Log 注记 |
+| **E1.2** NTA-IoU 投影只走 `dynamic_mask.project_cuboids_to_mask`，不走 viser `FthetaForwardProjector`（BUG-1 隔离） | E1.2 ✅ | `test_ftheta_project_matches_dynamic_mask` (Mac) 钉死同源公式 |
 | **T3.5.b** A800 5k step Stage 3 出口 PSNR ≥ 23.6 | T3.5.b ✅ | A800 实测 (8a625c2): **PSNR 26.133 dB (+2.5 超额)**, road 200K particles, Z lock 保持 |
 | **T4.0** tracks_poses buffer 与 mirror dict identity 同步 | T4.0 ✅ | `test_layered_gaussians_holds_tracks_buffers` (Mac, b22a506) |
 | **T4.1.a/b** 真 NCore cuboid autolabels v2 解析 schema 正确 (179 unique tracks) | T4.1.b ✅ / T4.5 ✅ | `test_tracks_loader.py` 10 tests + A800 探测 (4807951): 13657 obs, 179 unique tracks, 31 vehicle tracks in 2s window |
