@@ -280,16 +280,24 @@ def evaluate_frames(
 
     if fid_pair is not None and n_real >= 2:
         from threedgrut.utils.eval_metrics import kid_subset_size
-        label = "render" if not is_novel else f"novel_{mode}"
+        if not is_novel:
+            k_fid, k_kid, k_kid_std = (
+                "mean_render_fid", "mean_render_kid", "mean_render_kid_std",
+            )
+        else:  # plan §6 naming: metric before mode
+            k_fid, k_kid, k_kid_std = (
+                f"mean_novel_fid_{mode}", f"mean_novel_kid_{mode}",
+                f"mean_novel_kid_std_{mode}",
+            )
         try:
-            out[f"mean_{label}_fid"] = float(fid_pair["fid"].compute())
+            out[k_fid] = float(fid_pair["fid"].compute())
         except Exception as e:  # degenerate split → keys absent
             print(f"[eval_frames_dir] FID compute failed: {e}")
         try:
             fid_pair["kid"].subset_size = kid_subset_size(min(n_real, n_fake))
             km, ks = fid_pair["kid"].compute()
-            out[f"mean_{label}_kid"] = float(km)
-            out[f"mean_{label}_kid_std"] = float(ks)
+            out[k_kid] = float(km)
+            out[k_kid_std] = float(ks)
         except Exception as e:
             print(f"[eval_frames_dir] KID compute failed: {e}")
         out["fid_n_real"] = n_real

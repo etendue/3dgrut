@@ -1259,14 +1259,23 @@ class Renderer:
         # sample count (legal: subset_size <= n). compute() wrapped so a
         # degenerate split degrades to missing keys, not a crashed eval.
         if _fid_pairs is not None and _fid_counts.get("real", 0) >= 2:
-            _key_name = {"render": "render"}
             for _pk, _pair in _fid_pairs.items():
                 _n_fake = _fid_counts.get(_pk, 0)
                 if _n_fake < 2:
                     continue
-                _label = "render" if _pk == "render" else f"novel_{_pk}"
+                # Key naming per plan §6: mean_render_fid / mean_novel_fid_<mode>
+                # (metric name BEFORE mode, consistent with mean_novel_lpips_<mode>).
+                if _pk == "render":
+                    _k_fid, _k_kid, _k_kid_std = (
+                        "mean_render_fid", "mean_render_kid", "mean_render_kid_std",
+                    )
+                else:
+                    _k_fid, _k_kid, _k_kid_std = (
+                        f"mean_novel_fid_{_pk}", f"mean_novel_kid_{_pk}",
+                        f"mean_novel_kid_std_{_pk}",
+                    )
                 try:
-                    metrics_json[f"mean_{_label}_fid"] = float(_pair["fid"].compute())
+                    metrics_json[_k_fid] = float(_pair["fid"].compute())
                 except Exception as e:
                     logger.warning(f"[E1.4] FID compute failed for {_pk}: {e}")
                 try:
@@ -1274,8 +1283,8 @@ class Renderer:
                         min(_fid_counts["real"], _n_fake)
                     )
                     _kid_mean, _kid_std = _pair["kid"].compute()
-                    metrics_json[f"mean_{_label}_kid"] = float(_kid_mean)
-                    metrics_json[f"mean_{_label}_kid_std"] = float(_kid_std)
+                    metrics_json[_k_kid] = float(_kid_mean)
+                    metrics_json[_k_kid_std] = float(_kid_std)
                 except Exception as e:
                     logger.warning(f"[E1.4] KID compute failed for {_pk}: {e}")
                 metrics_json[f"fid_n_fake_{_pk}"] = int(_n_fake)
