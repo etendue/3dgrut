@@ -90,6 +90,7 @@ def evaluate_frames(
     fid_kid: bool = False,
     lane_band_px: int = DEFAULT_LANE_BAND_PX,
     lane_eval_cameras=DEFAULT_LANE_EVAL_CAMERAS,
+    cameras=None,
 ) -> dict:
     """Run the offline eval over an iterable of gpu_batch-like objects."""
     is_novel = mode != "interpolated"
@@ -117,6 +118,11 @@ def evaluate_frames(
         device = gt.device
         cam = getattr(batch, "camera_id", None)
         fi = int(getattr(batch, "frame_idx", -1))
+        # E0.4-O3: rig-offset lateral renders only equal our per-camera
+        # lateral pose for the front camera — allow restricting eval to a
+        # camera subset (skip BEFORE prediction loading).
+        if cameras and cam not in cameras:
+            continue
         pred = _load_pred(
             resolve_pred_path(frames_dir, cam, fi, frames_map), device,
         )
@@ -376,6 +382,9 @@ def main():
     ap.add_argument("--lpips", action="store_true")
     ap.add_argument("--ground-z", type=float, default=None,
                     help="constant ground plane fallback (no road layer)")
+    ap.add_argument("--cameras", default="",
+                    help="comma list; restrict eval to these camera_ids "
+                         "(lateral rig-offset passes: front camera only)")
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
 
@@ -445,6 +454,7 @@ def main():
         mode=args.mode, lpips_fn=lpips_fn, detector=detector,
         tracks_provider=tracks_provider, height_field=height_field,
         ground_z=args.ground_z, fid_kid=args.kid,
+        cameras=[c.strip() for c in args.cameras.split(",") if c.strip()] or None,
     )
     with open(args.output, "w") as f:
         json.dump(out, f, indent=2)

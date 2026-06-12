@@ -68,6 +68,32 @@ def test_evaluate_identity_frames(tmp_path):
     assert out["mean_ssim"] > 0.99
 
 
+def test_cameras_filter_skips_other_cameras(tmp_path):
+    """E0.4-O3: rig-offset lateral passes only match our per-camera lateral
+    definition for the FRONT camera — eval must be restrictable to it. A
+    filtered-out camera must be skipped BEFORE prediction loading (no
+    FileNotFoundError for frames we never rendered)."""
+    img = torch.rand(8, 8, 3)
+    (tmp_path / "cam_front").mkdir()
+    torchvision.utils.save_image(
+        img.permute(2, 0, 1), str(tmp_path / "cam_front" / "000000.png"),
+    )
+    saved = torchvision.io.read_image(
+        str(tmp_path / "cam_front" / "000000.png")
+    ).float().div(255.0).permute(1, 2, 0)
+    batches = [
+        _mk_batch("cam_front", 0, saved),
+        _mk_batch("cam_other", 0, torch.rand(8, 8, 3)),  # no frames on disk
+    ]
+    out = evaluate_frames(
+        batches, frames_dir=str(tmp_path), frames_map=None,
+        mode="interpolated", lpips_fn=None, detector=None,
+        height_field=None, ground_z=None, fid_kid=False,
+        cameras=("cam_front",),
+    )
+    assert out["n_frames"] == 1
+
+
 def test_evaluate_missing_pred_raises(tmp_path):
     img = torch.rand(8, 8, 3)
     batches = [_mk_batch("cam_a", 3, img)]
