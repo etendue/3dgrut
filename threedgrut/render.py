@@ -516,6 +516,20 @@ class Renderer:
         # Save first N novel-view samples for visual inspection (per-mode
         # subdir under ours_<step>/novel_view/<mode>/).
         novel_save_first_n = 5 if self.novel_view else 0
+
+        # E1.2 — NTA-IoU accumulators + lazy YOLO detector. Soft-fail: a
+        # missing/undownloadable detector logs once and skips (no new keys →
+        # metrics.json byte-identical, downstream comparators safe).
+        nta_iou_records: list[dict] = []
+        novel_nta_records: dict[str, list] = {}
+        _nta_detector = None
+        if bool(self.conf.render.get("enable_nta_iou", True)):
+            try:
+                from threedgrut.model.vehicle_detector import get_vehicle_detector
+                _nta_detector = get_vehicle_detector(device="cuda")
+            except Exception as e:  # ultralytics missing / weights offline
+                logger.warning(f"[E1.2 NTA-IoU] detector unavailable, skipping: {e}")
+                _nta_detector = None
         if self.novel_view:
             for m in NOVEL_VIEW_MODES:
                 os.makedirs(
@@ -775,6 +789,27 @@ class Renderer:
             # that PSNR is dominated by parallax noise floor, not view-
             # extrapolation quality. Skipped entirely when self.novel_view
             # is False (metrics.json stays byte-identical with pre-T8.5.3).
+            # E1.2 — resolve GT tracks once per batch; consumed by BOTH the
+            # novel-view NTA-IoU (inside the loop below) and the interpolated
+            # class_psnr / NTA-IoU block further down. Cuboids stay at their
+            # world-frame GT pose for novel views (timestamp unchanged).
+            tp = getattr(self.model, "tracks_poses", None)
+            ftheta_params = getattr(
+                gpu_batch, "intrinsics_FThetaCameraModelParameters", None,
+            )
+            active = []
+            if tp and ftheta_params is not None and hasattr(self.model, "_resolve_pose_idx"):
+                _pose_idx = self.model._resolve_pose_idx(
+                    int(getattr(gpu_batch, "timestamp_us", -1)),
+                    int(getattr(gpu_batch, "frame_idx", -1)) if int(getattr(gpu_batch, "frame_idx", -1)) >= 0 else None,
+                )
+                active = collect_active_tracks_for_frame(
+                    self.model.tracks_poses,
+                    self.model.tracks_active,
+                    getattr(self.model, "tracks_metadata", {}),
+                    _pose_idx,
+                )
+
             if self.novel_view:
                 orig_T = gpu_batch.T_to_world.detach().clone()
                 orig_T_end = gpu_batch.T_to_world_end.detach().clone()
@@ -811,19 +846,16 @@ class Renderer:
                     _lane_nv = (getattr(gpu_batch, "image_infos", None) or {}).get(
                         "semantic_lane_sseg"
                     )
-                    _ftheta_nv = getattr(
-                        gpu_batch, "intrinsics_FThetaCameraModelParameters", None,
-                    )
                     if (
                         plane_warp_height_field is not None
                         and _lane_nv is not None
                         and _cam_id in lane_eval_cameras
-                        and _ftheta_nv is not None
+                        and ftheta_params is not None
                         and not getattr(gpu_batch, "rays_in_world_space", False)
                     ):
                         lane_one_nv = _lane_nv[0] if _lane_nv.dim() == 3 else _lane_nv
                         wgrid, wvalid = build_plane_warp(
-                            gpu_batch.rays_dir[0], nT[0], orig_T[0], _ftheta_nv,
+                            gpu_batch.rays_dir[0], nT[0], orig_T[0], ftheta_params,
                             height_field=plane_warp_height_field,
                         )
                         gt_warp = warp_image(rgb_gt_full[0].float(), wgrid, wvalid)
@@ -844,6 +876,21 @@ class Renderer:
                         novel_lane_valid_ratio.setdefault(mode, []).append(
                             float(wvalid.float().mean())
                         )
+
+                    # E1.2 — NTA-IoU at the novel pose: GT cuboids stay at
+                    # their world-frame GT pose (timestamp unchanged), only
+                    # the camera moves → T_w2c = inv(perturbed c2w).
+                    if _nta_detector is not None and active:
+                        from threedgrut.model.nta_iou import compute_frame_nta_iou
+                        H_nv = int(pred_novel.shape[1])
+                        W_nv = int(pred_novel.shape[2])
+                        nta_nv = compute_frame_nta_iou(
+                            pred_novel[0], active, _nta_detector,
+                            K=None, ftheta_params=ftheta_params,
+                            T_w2c=torch.linalg.inv(nT[0]), H=H_nv, W=W_nv,
+                        )
+                        if nta_nv is not None:
+                            novel_nta_records.setdefault(mode, []).append(nta_nv)
                 # Restore originals so downstream class_psnr / per_cam see
                 # the unperturbed batch.
                 gpu_batch.T_to_world = orig_T
@@ -853,32 +900,30 @@ class Renderer:
             # has no dyn tracks loaded (single-bg / road-only multi-layer) OR
             # the batch lacks FTheta intrinsics (current dyn projection only
             # supports FTheta to match training-side cuboid mask path).
-            tp = getattr(self.model, "tracks_poses", None)
-            ftheta_params = getattr(
-                gpu_batch, "intrinsics_FThetaCameraModelParameters", None,
-            )
-            if tp and ftheta_params is not None and hasattr(self.model, "_resolve_pose_idx"):
-                idx = self.model._resolve_pose_idx(
-                    int(getattr(gpu_batch, "timestamp_us", -1)),
-                    int(getattr(gpu_batch, "frame_idx", -1)) if int(getattr(gpu_batch, "frame_idx", -1)) >= 0 else None,
+            # (tracks resolved above, before the novel-view block — E1.2)
+            if active:
+                T_w2c = torch.linalg.inv(gpu_batch.T_to_world[0])
+                H_, W_ = int(pred_rgb_full.shape[1]), int(pred_rgb_full.shape[2])
+                cp = compute_class_psnr(
+                    pred_rgb_full, rgb_gt_full, mask,
+                    active, T_world2cam=T_w2c, H=H_, W=W_,
+                    ftheta_params=ftheta_params,
                 )
-                active = collect_active_tracks_for_frame(
-                    self.model.tracks_poses,
-                    self.model.tracks_active,
-                    getattr(self.model, "tracks_metadata", {}),
-                    idx,
-                )
-                if active:
-                    T_w2c = torch.linalg.inv(gpu_batch.T_to_world[0])
-                    H_, W_ = int(pred_rgb_full.shape[1]), int(pred_rgb_full.shape[2])
-                    cp = compute_class_psnr(
-                        pred_rgb_full, rgb_gt_full, mask,
-                        active, T_world2cam=T_w2c, H=H_, W=W_,
-                        ftheta_params=ftheta_params,
+                for r in cp["per_track"]:
+                    r["frame"] = int(iteration)
+                    class_psnr_records.append(r)
+
+                # E1.2 — interpolated-view NTA-IoU (same active/T_w2c as
+                # class_psnr; FTheta clip → K=None).
+                if _nta_detector is not None:
+                    from threedgrut.model.nta_iou import compute_frame_nta_iou
+                    nta = compute_frame_nta_iou(
+                        pred_rgb_full[0], active, _nta_detector,
+                        K=None, ftheta_params=ftheta_params,
+                        T_w2c=T_w2c, H=H_, W=W_,
                     )
-                    for r in cp["per_track"]:
-                        r["frame"] = int(iteration)
-                        class_psnr_records.append(r)
+                    if nta is not None:
+                        nta_iou_records.append(nta)
 
             # P0.2 / P0.3 — sseg-based per-class PSNR/LPIPS. Reads the raw sseg
             # id map passed through image_infos (load_aux_masks=true) and derives
@@ -1146,6 +1191,33 @@ class Renderer:
                 metrics_json[f"mean_{_name}_lpips"] = float(np.mean(_lv)) if _lv else None
                 metrics_json[f"{_name}_n_records"] = int(len(_pv))
                 metrics_json[f"{_name}_total_pixels"] = int(np.sum(_nv)) if _nv else 0
+
+        # E1.2 — NTA-IoU aggregation (interpolated + per novel mode). Keys
+        # absent when the detector was unavailable or no vehicle frames →
+        # metrics.json byte-identical for those runs.
+        if nta_iou_records:
+            _vals = [r["mean_nta_iou"] for r in nta_iou_records]
+            metrics_json["mean_nta_iou"] = float(np.mean(_vals))
+            metrics_json["nta_iou_n_frames"] = int(len(_vals))
+        if novel_nta_records:
+            for mode in NOVEL_VIEW_MODES:
+                _recs = novel_nta_records.get(mode, [])
+                if _recs:
+                    metrics_json[f"mean_novel_nta_iou_{mode}"] = float(
+                        np.mean([r["mean_nta_iou"] for r in _recs])
+                    )
+                    metrics_json[f"novel_nta_iou_n_frames_{mode}"] = int(len(_recs))
+            logger.info(
+                "[E1.2] NTA-IoU — interp="
+                + (f"{metrics_json.get('mean_nta_iou'):.4f}"
+                   if nta_iou_records else "n/a")
+                + " | "
+                + " | ".join(
+                    f"{m}={metrics_json[f'mean_novel_nta_iou_{m}']:.4f}"
+                    for m in NOVEL_VIEW_MODES
+                    if f"mean_novel_nta_iou_{m}" in metrics_json
+                )
+            )
 
         # Phase 3 lane 指标聚合。仅当 lane 产物被加载（lane_npix_acc 非空）→
         # 否则整块缺省，metrics.json 字节等价（守护线零回归）。
