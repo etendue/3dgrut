@@ -331,7 +331,9 @@ def _build_tracks_provider(ckpt):
         active = []
         for tid, tr in tracks.items():
             poses = torch.as_tensor(tr.get("poses"))
-            act = tr.get("active")
+            # per-frame validity flag: ckpt viz_4d uses "frame_info"
+            # (bool [T]); older dumps may use "active".
+            act = tr.get("frame_info", tr.get("active"))
             if poses is None or poses.dim() != 3 or idx >= poses.shape[0]:
                 continue
             if act is not None and not bool(torch.as_tensor(act)[idx]):
