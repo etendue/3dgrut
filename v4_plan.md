@@ -70,7 +70,6 @@ kanban
     Backlog
         [E0.4 同 clip 双向对照锚（NuRec vs multilayer 全指标）]
         [E0.6 官方链 actor 插入取代体验（nre 编辑 + asset-harvester + Harmonizer 协调）]
-        [E0.7 官方 difix-distill 对照 run（α 权重 gate ／ β E1 回填）]
         [E1.2 NTA-IoU 接入（plan 已备）+ 外推档联动]
         [E1.3 held-out camera 真 GT 外推协议]
         [E1.4 FID KID 感知指标接入]
@@ -93,6 +92,7 @@ kanban
         [E0.2 USDZ 渲染+修复链 ✅：FID 锚 7.4/57/92，Harmonizer 两档跑通，目视显著]
         [E0.3 自有 clip 官方训练 ✅：40k 步 2h07m，test psnr 30.30（官方口径）]
         [E0.5 配方 diff 清单 ✅：docs/superpowers/specs/ 入档，Top-5 借鉴点]
+        [E0.7 IPC difix 对照 ✅ α：B 级 Fixer 蒸馏 40k，C1 interpolated −0.5dB / 目视车道线略好·6m 难接受 / β 定量待 E1]
         [继承: v3 P1.2 track-pose（class 25.07 cc 26.06）]
         [继承: v3 P3.0 lane 门 + P3.1-A lane loss（grad_corr 0.744，代码 PR #24）]
         [继承: 2026-06-11 外推诊断（aperture problem + 测量双盲区）]
@@ -112,7 +112,7 @@ kanban
 | **E0.4** ★ | E0 | **同 clip 双向对照锚**：NuRec ckpt 与 multilayer baseline 互渲 — interpolated（PSNR/LPIPS/per-class）+ 外推（lateral 3m/6m lane/NTA-IoU/FID，用 E1 工具）双向跑全指标 → **v4 gap 表首行**（量化"差距在哪一层"：表示/配方/修复器） | 新 | 1 | ⬜ | gate=E0.3 + E1.1/E1.2 工具就绪 |
 | **E0.5** | E0 | **配方 diff 清单** ✅（2026-06-11）：官方 resolved 全量（8438 行 parsed.yaml）vs [`ncore_3dgut_mcmc_multilayer.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer.yaml) 11 维度逐项 diff → [`2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md`](docs/superpowers/specs/2026-06-11-e05-nurec-vs-multilayer-recipe-diff.md)。**Top-5**：① road 几何冻结五件套（ground-mesh init + lr 1e-6 冻结 + MCMC 豁免 + z-scale/平整正则，喂 E3.1-E3.3）② road/bg 所有权 init 切分（bg init 剔 road 类点）③ 官方 train-time difix 蒸馏钩子原生＝±3m lateral 增强（本 run 关，sqa_difix_distill 开，喂 E2.2）④ 对锚口径陷阱（官方 val 每 3 帧+1/4 res+cpsnr）⑤ LiDAR ray 级监督 2048 ray/step + 200m 远场 | 新 | 0.5 | ✅ | 顺手发现：`LayerSpec.scale_lr_mult` 死配置（已 spawn 后台任务）；官方 `noise_lr 5000` vs 本项目 5e5 待验证 |
 | **E0.6** | E0 | **官方链 actor 插入/取代体验**：在 E0.2 USDZ 场景或 E0.3 自有 clip 重建上走官方编辑工作流——nre actor 编辑（gRPC/CLI 删/移/替）+ `asset-harvester` 资产插入（项目已收割 3 车+3 人直接可用）+ Harmonizer 协调（训练管道③④正为此设）→ 渲染对照 + **官方编辑能力/限制清单**（删除后路面是否出洞 / 插入物阴影来源 / 协调前后 FID） | 新（大g 2026-06-11 提议纳入） | 1 | ⬜ | 直接回答「官方如何解决 P1.4 撞到的 spiky/光照失配/悬浮」；清单喂 E2.5 |
-| **E0.7** | E0 | **官方 difix-distill 对照 run**（2026-06-12 大g 拍板新增；独立执行 plan [`2026-06-12-e07-official-difix-distill-ab.md`](docs/superpowers/plans/2026-06-12-e07-official-difix-distill-ab.md)）：**E0.3 配方 + `difix.training.enabled=true` 单 key 覆盖**（最小变量——E0.5 实测蒸馏钩子参数已固化在 parsed.yaml：±3m novel poses + p_scheduler + color transfer，唯 enabled=false；`sqa_difix_distill.yaml` 降级为开蒸馏方式的文档性对照）同 clip 9ae151dc 重训 40k → 与 E0.3 锚（difix OFF）单变量对比 → **官方修复器蒸馏增益上限锚**＝E2.2 预期收益的直接校准（Δ@3m vs Δ@6m＝渐进推进收益读数）。权重：① inceptio 已 ngc login，先试官方下 `cosmos_3dgut.pt`（A 级口径）；② 不行走 R-v4.10 hack——B 级 HF [nvidia/Fixer](https://huggingface.co/nvidia/Fixer) / C 级 sd_difix+HF Difix3D，等级标进增益表列头 | 新（E0.5 diff Top-5 ③衍生） | 0.5 | ⬜ | **α/β 拆分（2026-06-12 大g拍板）**：硬 gate＝权重可得；α＝训练+C1 interpolated+FID 先行（完成后停 🔵）；β＝lane/NTA-IoU 待 E1.1/E1.2 就绪对落盘 USDZ 纯渲染回填后才 ✅；权重全不通则 ⏸ 不阻塞主线 |
+| **E0.7** | E0 | **官方 difix-distill 对照 run**（2026-06-12 大g 拍板新增；独立执行 plan [`2026-06-12-e07-official-difix-distill-ab.md`](docs/superpowers/plans/2026-06-12-e07-official-difix-distill-ab.md)）：**E0.3 配方 + `difix.training.enabled=true` 单 key 覆盖**（最小变量——E0.5 实测蒸馏钩子参数已固化在 parsed.yaml：±3m novel poses + p_scheduler + color transfer，唯 enabled=false；`sqa_difix_distill.yaml` 降级为开蒸馏方式的文档性对照）同 clip 9ae151dc 重训 40k → 与 E0.3 锚（difix OFF）单变量对比 → **官方修复器蒸馏增益上限锚**＝E2.2 预期收益的直接校准（Δ@3m vs Δ@6m＝渐进推进收益读数）。权重：① inceptio 已 ngc login，先试官方下 `cosmos_3dgut.pt`（A 级口径）；② 不行走 R-v4.10 hack——B 级 HF [nvidia/Fixer](https://huggingface.co/nvidia/Fixer) / C 级 sd_difix+HF Difix3D，等级标进增益表列头 | 新（E0.5 diff Top-5 ③衍生） | 0.5 | ✅ α | **α 完成（2026-06-12，IPC 方案，权重级 B）**：NGC/hack 权重因 jit.load-vs-state_dict 格式墙不可行 → 大g改 IPC（Fixer server@harmonizer 容器 + nre DifixModel socket 转发，换 server=换修复器）。B 级 HF Fixer 蒸馏 40k（2h19m，单变量审计干净）。**C1 interpolated 全面 −0.5~1.35dB**（psnr 30.30→29.77）；**C3 目视车道线略好·其它持平·6m 难接受** → difix 蒸馏机制有效（车道线正中 v4 lane KPI）但 B 级权重温和局部，显著增益需官方权重+progressive（喂 E2.2）。**β lane/NTA-IoU 定量待 E1.1/E1.2**（USDZ 已落盘）。详见 §5 Done Log |
 | **E1.1** ★ | E1 | **外推测量门扩展** = **v3 P3.3 移交**：lateral_3m/6m 新档（4 档 avg 口径不变保历史可比）+ lane 区域 novel 指标（路面平面诱导 warp 重投影）+ 三方 ckpt（baseline/B3/aniso20）立锚，顺答 B3 细长高斯外推张力 | v3 P3.3（2026-06-11 立项原文 [`v3_plan_revised.md`](v3_plan_revised.md) §1.2） | 1.5 | ⬜ | 纯 eval 无训练；**E1 之门** |
 | **E1.2** ★ | E1 | **NTA-IoU 接入**：按 [`2026-06-10-nta-iou-eval-metric.md`](docs/superpowers/plans/2026-06-10-nta-iou-eval-metric.md) 执行（Task 0–5 全 TDD 已写好）+ **增量**：novel 外推档下也跑 NTA-IoU（渲 lateral_3m/6m 帧→检测→与投影 GT box IoU） | docs/superpowers plan（未执行） | 1.5 | ⬜ | 外推档增量是对原 plan 的小扩展 |
 | **E1.3** ★ | E1 | **held-out camera 真 GT 外推协议**：训练排除 1–2 台侧相机（`dataset.camera_ids` 覆盖），eval 在被排除相机跑 per-class 全套 → 唯一**有真 GT** 的外推轴（DiFix3D+ RDS cross-reference 协议反用）；需从头训 1 个对照 ckpt | NuRec 调研 § 5.1 | 1.5 | ⬜ | 1 次 30k 训练成本；与 E1.1 档位互补 |
@@ -133,12 +133,12 @@ kanban
 
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
-| **E0** ★ | NuRec 工具链复现立锚（**首要**） | 4/7 | ≥2 场景跑通（1 USDZ 渲染+修复链 ✅、1 自有 clip 训练 ✅）+ NuRec 锚入档 ✅ + 配方 diff 清单 ✅ + 官方编辑能力清单（E0.6 待开）+ difix-distill 增益锚（E0.7 可选，2026-06-12 新增） | — | 🟡 |
+| **E0** ★ | NuRec 工具链复现立锚（**首要**） | 5/7 | ≥2 场景跑通（1 USDZ 渲染+修复链 ✅、1 自有 clip 训练 ✅）+ NuRec 锚入档 ✅ + 配方 diff 清单 ✅ + difix-distill 增益锚 ✅（E0.7 α：B 级 Fixer 蒸馏，车道线略好 / interpolated −0.5dB / β 定量待 E1）+ 官方编辑能力清单（E0.6 待开） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | 0/5 | 3m/6m + NTA-IoU + held-out + FID/KID 全部立锚入 gap 表 | interpolated 全指标不退 | ⬜ |
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike | 0/5（含 1 备选） | E1 外推指标相对锚改善（量级参考 DiFix3D+：蒸馏+后处理 +1.8dB/FID −20%）；E2.5 插入协调立带指标基石 | cc ≥ 24.7 / grad_corr 0.744 不退 | ⬜ |
 | **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
-| **总计** | — | **4/22** | — | — | — |
+| **总计** | — | **5/22** | — | — | — |
 
 > **v4 gap 表（E0.4 + E1.5 回填，格式预置）**：
 > | 轴 | 3dgrut2 锚（E1） | NuRec 锚（E0.4） | 差距 | E2/E3 后 |
@@ -158,7 +158,7 @@ flowchart TD
   classDef opt fill:#fbe9e7,stroke:#d33,color:#900
 
   v3["v3 成果（继承）<br/>class 25.07 / lane 0.744 / 外推诊断 / NTA-IoU plan"]:::gate
-  E0["E0 NuRec 复现立锚 ★首要<br/>E0.1 环境 → E0.2 USDZ渲染+修复链 → E0.3 自有clip训练<br/>→ E0.4 双向对照锚 + E0.5 配方diff + E0.6 编辑体验<br/>+ E0.7 官方difix蒸馏对照（可选，α gate 权重／β E1 回填）"]:::gate
+  E0["E0 NuRec 复现立锚 ★首要<br/>E0.1 环境 → E0.2 USDZ渲染+修复链 → E0.3 自有clip训练<br/>→ E0.4 双向对照锚 + E0.5 配方diff + E0.6 编辑体验<br/>+ E0.7 difix蒸馏对照 ✅α（IPC方案／B级Fixer／车道线略好·6m难接受）"]:::gate
   E1["E1 外推测量门<br/>E1.1 三米六米档（＝P3.3） / E1.2 NTA-IoU / E1.3 held-out<br/>/ E1.4 FID-KID → E1.5 gap表+重排"]:::gate
   E2["E2 生成修复链<br/>E2.1 Harmonizer升级spike → E2.2 渐进外推蒸馏 ★★<br/>→ E2.3 actor弱面蒸馏 / E2.5 编辑协调spike（E2.4 微调备选）"]:::todo
   E3["E3 表示侧强化<br/>E3.1 空气区penalty（＝P3.4） / E3.2 road DC-only（＝P3.5）<br/>→ E3.3 BEV纹理平面化（E3.4 warp备选）"]:::todo
@@ -196,7 +196,7 @@ flowchart TD
 | E0.4 | 双向对照：NuRec ckpt 与 multilayer baseline ckpt 在**同一评测协议**下跑全指标——interpolated（PSNR/LPIPS/class_psnr/lane grad_corr）+ 外推（E1.1 的 3m/6m lane 指标、E1.2 NTA-IoU、E1.4 FID/KID）。NuRec 侧用 `nre render` 出帧后喂项目 eval 工具（指标代码统一用项目侧，保口径一致） | **v4 gap 表首行**；若 NuRec 外推也糊 → 修复器才是主差距，E2 权重↑；若 NuRec 表示侧就稳 → 配方/E3 权重↑。**这个判别本身就是 E0 最大价值** |
 | E0.5 | diff 官方 yaml vs [`ncore_3dgut_mcmc_multilayer.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer.yaml)：LiDAR intensity 监督、densification/正则参数、相机/rolling shutter 处理、sky/road 专项、训练长度与 lr 调度 → 按「外推相关性」标记优先级，喂 E3 | 产出 markdown 清单入 `docs/superpowers/specs/` |
 | E0.6 | nre actor 编辑（gRPC `serve-grpc` 演员编辑 / CLI）做「删一辆 / 插一辆 AH 收割车 / 取代一辆」→ Harmonizer 协调 → 渲染对照存档 + 能力/限制清单（删除后路面洞？插入物阴影来源？协调前后 FID/目视） | **P1.4 官方解法对照**：官方不把 asset 做完美，而是插入后生成协调器擦屁股；清单直接喂 E2.5 设计 |
-| E0.7 | 按独立 plan [`2026-06-12-e07-official-difix-distill-ab.md`](docs/superpowers/plans/2026-06-12-e07-official-difix-distill-ab.md) 执行（Task 0–5）：E0.3 配方 + `difix.training.enabled=true` 单 key 覆盖同 clip 重训 40k（蒸馏钩子参数已固化于 parsed.yaml：±3m / p_scheduler / color transfer）→ vs E0.3（OFF）单变量对比（parsed.yaml diff 审计入档）→ **官方蒸馏增益上限锚**（E2.2 校准；Δ@3m vs Δ@6m＝渐进推进收益读数）。权重路径：先试官方 ngc 下载（A 级），不行 hack——B 级 HF Fixer 预放 cache / C 级 `difix=sd_difix`+HF Difix3D；state_dict 探针先行 + 300 步 smoke（start_step=50 强迫早 fire）再烧全量，等级标进增益表列头 | **α/β 拆分**：硬 gate＝权重；α＝训练+C1+FID 先行（🔵），β＝lane/NTA-IoU 待 E1.1/E1.2 回填后 ✅；增益差值直接回答「训练时蒸馏在本 clip 值多少」；权重全不通则 ⏸，E2.2 校准改用 E2.1 spike 实测 |
+| E0.7 | 按独立 plan [`2026-06-12-e07-official-difix-distill-ab.md`](docs/superpowers/plans/2026-06-12-e07-official-difix-distill-ab.md) 执行（Task 0–5）：E0.3 配方 + `difix.training.enabled=true` 单 key 覆盖同 clip 重训 40k（蒸馏钩子参数已固化于 parsed.yaml：±3m / p_scheduler / color transfer）→ vs E0.3（OFF）单变量对比（parsed.yaml diff 审计入档）→ **官方蒸馏增益上限锚**（E2.2 校准；Δ@3m vs Δ@6m＝渐进推进收益读数）。权重路径：先试官方 ngc 下载（A 级），不行 hack——B 级 HF Fixer 预放 cache / C 级 `difix=sd_difix`+HF Difix3D；state_dict 探针先行 + 300 步 smoke（start_step=50 强迫早 fire）再烧全量，等级标进增益表列头 | **✅ α 完成（2026-06-12，IPC 方案，权重级 B）**：NGC/hack 权重因 jit.load-vs-state_dict 格式墙走不通 → 大g改 **IPC**（Fixer server@harmonizer 容器 + nre `DifixModel` socket 转发，换 server=换修复器）。C1 interpolated −0.5dB（psnr 30.30→29.77）/ 目视车道线略好·6m 难接受 → difix 蒸馏机制有效（正中 v4 lane KPI）·B 级权重温和局部·显著增益需官方权重+progressive（喂 E2.2）。β lane/NTA-IoU 定量待 E1.1/E1.2。详见 §5 Done Log |
 
 **验收**：≥2 场景跑通（1 官方 USDZ 渲染+修复链、1 自有 clip 官方训练）；NuRec 锚数字写入 § 1.3 gap 表 + § 5 Done Log（commit hash + 实测数）；配方 diff 清单 + 官方编辑能力/限制清单入档。**E0 不改 3dgrut2 任何训练代码。**
 
@@ -274,7 +274,7 @@ flowchart TD
 | R-v4.7 | 渐进蒸馏破坏 interpolated 质量（修复帧与真图监督打架） | E2.2 训练 | 守护线破 | λ_distill 低权重起步 + 外推帧只在病灶区域加权 + 守护线全程监控（v3 全套 interpolated 指标在同一 metrics.json） | E2.2 |
 | R-v4.8 | E1.3 held-out 协议与 5-cam ring 配方互斥（少相机训练本身改变 baseline） | E1.3 立锚 | 锚点口径混乱 | held-out 对照独立成线（自己 vs 自己），不与全相机 baseline 跨协议比较；文档写死口径 | E1.3 |
 | R-v4.9 | Harmonizer license 合规（权重 NVIDIA Open Model License；PhysicalAI 数据集限制性专有） | 商用/再分发场景 | 合规风险 | 代码 Apache-2.0 无虞；权重许可允许商用但需保留条款；PhysicalAI 数据**仅限内部开发评测**、不入训练数据、不再分发 | E0/E2 |
-| R-v4.10 | **E0.7 的 cosmos-difix 权重不可得**：`cosmos_3dgut.pt` 仅在 NGC（`nurec-fixer/versions/cosmos_3dgut`，HF 无副本，E0.5 实测确认），NGC key 拿不到或权限不足则官方蒸馏配方跑不起来 | E0.7 启动 | E0.7 阻塞 | **hack 缓解（大g 2026-06-12 指定）**：用开源 [HF nvidia/Fixer](https://huggingface.co/nvidia/Fixer) 权重塞进 nre pipeline——① 先试容器自带 legacy 变体 `difix=sd_difix`（SD 架构加载器，与 HF Fixer 同源概率高）；② HF 权重预放 `~/.cache/nre/difix/cosmos_3dgut.pt` 绕过 NGC 下载（`difix.model_url` 仅在 cache miss 时拉取）；③ 加载不兼容则对齐 state_dict / 改 `difix` 配置段指向本地。⚠️ hack 版增益锚口径与官方 cosmos-difix 不完全等价（架构/post-train 数据不同），入档时须标注权重来源。**2026-06-12 更新**：大g确认 inceptio 已 ngc login——先试官方下载一次（403/404 证据入档），预期权限不足再走 hack；α/β 拆分已拍板（硬 gate＝权重，E1.1/E1.2 仅 gate β 段指标回填）；权重等级 A/B/C 口径与全套步骤见独立 plan [`2026-06-12-e07-official-difix-distill-ab.md`](docs/superpowers/plans/2026-06-12-e07-official-difix-distill-ab.md)；全部不通 → E0.7 ⏸ 不阻塞主线 | E0.7 |
+| R-v4.10 | **E0.7 的 cosmos-difix 权重不可得**：`cosmos_3dgut.pt` 仅在 NGC（`nurec-fixer/versions/cosmos_3dgut`，HF 无副本，E0.5 实测确认），NGC key 拿不到或权限不足则官方蒸馏配方跑不起来 | E0.7 启动 | E0.7 阻塞 | **hack 缓解（大g 2026-06-12 指定）**：用开源 [HF nvidia/Fixer](https://huggingface.co/nvidia/Fixer) 权重塞进 nre pipeline——① 先试容器自带 legacy 变体 `difix=sd_difix`（SD 架构加载器，与 HF Fixer 同源概率高）；② HF 权重预放 `~/.cache/nre/difix/cosmos_3dgut.pt` 绕过 NGC 下载（`difix.model_url` 仅在 cache miss 时拉取）；③ 加载不兼容则对齐 state_dict / 改 `difix` 配置段指向本地。⚠️ hack 版增益锚口径与官方 cosmos-difix 不完全等价（架构/post-train 数据不同），入档时须标注权重来源。**2026-06-12 更新**：大g确认 inceptio 已 ngc login——先试官方下载一次（403/404 证据入档），预期权限不足再走 hack；α/β 拆分已拍板（硬 gate＝权重，E1.1/E1.2 仅 gate β 段指标回填）；权重等级 A/B/C 口径与全套步骤见独立 plan [`2026-06-12-e07-official-difix-distill-ab.md`](docs/superpowers/plans/2026-06-12-e07-official-difix-distill-ab.md)；全部不通 → E0.7 ⏸ 不阻塞主线。**2026-06-12 结案（IPC 方案绕开，非 ⏸）**：权重确证不可得（A 级 NGC 无特权 key；B 级 HF Fixer = state_dict、C 级 HF Difix3D = diffusers，而 nre difix loader = `torch.jit.load`（自包含 TorchScript），格式墙实测失败；JIT 自导出 trace 卡 cosmos 模型 cpu inlined 常量 device 无底洞）→ 大g改 **IPC 方案**：不把权重塞 nre，而是 Fixer 做独立 server（harmonizer 容器原生 Python 推理）+ nre `DifixModel` socket 转发，零 trace/device 坑、换 server=换修复器。E0.7 α 已完成（权重级 B，详见 §5 Done Log） | E0.7 ✅(IPC) |
 
 ---
 
@@ -308,6 +308,15 @@ flowchart TD
   - **大g 目视终评（nre viewer 交互对比，E0 判别预答案）**：官方配方产物 vs multilayer 自训——①整体锐度**不更好**（官方 subsample:2 半分辨率监督所致，我们 full-res 不输）；②**路面车道线明显更好**；③**3m 侧向移动退化明显更小**。且该 run difix 蒸馏关闭——**官方纯表示侧（road 冻结五件套 + LiDAR ray 监督）就赢下外推**，E0.4 判别初步指向：表示侧为主差距 → **E3 优先级 ≥ E2**（待 E1 量化锚正式确认）。
   - nre viewer 工程留档：26.4.146 viewer 两个 bug/坑——①客户端连接竞态（camera on_update 先于 reload action → `Can't unpack empty optional` 渲染线程死），host-side 两行 patch 绕过（`~/work/nurec_e0/patches/av_patched.py` 挂载覆盖）；②nrend 快速路径对自训 USDZ 间歇性 `NRenderer.render failed`（官方 USDZ 正常），`--no-enable-nrend` 走 torch 路径稳定。viewer GUI 自带 Camera Translation Offset（可直接体验横移外推）+ Render Video 导出。
   - 环境备忘：HF 下载一律 `HF_HUB_DISABLE_XET=1` + 代理（xet/直连均会卡死或失败）；harmonizer 容器 entrypoint 是 `/bin/bash`，跑推理须 `--entrypoint python`。
+- **2026-06-12 E0.7 difix 蒸馏对照 run 完成（α 段，IPC 方案）**（commit `39cfe12`，worktree 分支 claude/sleepy-einstein-bf3a95）——回答「difix 蒸馏在本 clip 值多少」：**B 级权重温和局部增益（车道线外推略好），interpolated 微降代价，6m 无改善**。
+  - **方案转向（大g 拍板）**：原 plan 的 NGC/hack 权重路径不可行——nre difix loader 是 `torch.jit.load`（NVIDIA 内部 `torch.jit.save` 导出的自包含 TorchScript，图里嵌 transformer_engine 算子），而 HF 公开权重全是 state_dict/diffusers 格式，**交付物类型不同、非 state_dict remap 可桥接**（A 级 NGC `cosmos_3dgut.pt`：inceptio 无 ngc CLI / 特权 key 拿不到；B 级 HF Fixer = state_dict、C 级 HF Difix3D = diffusers：实测 `torch.jit.load` 均失败）。JIT 导出工程（harmonizer 容器把 `Pix2Pix_Turbo` trace 成 TorchScript）实测攻克了跨 torch 2.9→2.7 / TE 2.8→1.11 兼容 + checkpoint/RoPE/flash_attn 三大 fused-op patch + trace+save+跨容器 nre-ga load，但**卡在 cosmos 模型内 cpu inlined 标量常量的 device 无底洞**（逐个 patch 不收敛）。→ **大g 改定 IPC 方案**：Fixer 推理做成独立 server（harmonizer 容器跑 `Pix2Pix_Turbo` 原生 Python 推理，**零 trace/device 坑**）+ nre 容器 patch `DifixModel`（`training_controller.py:335` 唯一调用点）经 socket（127.0.0.1:59487）转发降质渲染帧、收回修复帧当蒸馏目标；color_transfer 留 client（nre 有 kornia，harmonizer 无）。**换 server 进程 = 换修复器，训练侧零改动**（Harmonizer 三代 A/B 已据此备好）。
+  - **权重级 = B**（HF `nvidia/Fixer`，Cosmos-Predict2-0.6B 架构族，非官方 cosmos-difix；增益方向可信、幅度打折号）。
+  - **训练**（inceptio 4090，run id `Qm52hePw64ydcMF3cz3vdA`）：E0.3 配方 + 恰好两处 override（`difix.training.enabled=true` + ckpt 频率 40000→5000）+ IPC difix，difix 钩子全官方默认（start_step=20000 / p_init=0.5 → milestones[25k,28k]×0.5 / ±3m novel poses / color_transfer），40k 步 **2h19m**（vs E0.3 2h07m，difix 蒸馏仅 +12min，IPC 开销小）。**parsed.yaml diff 单变量审计**：仅 `difix.training.enabled` + ckpt 频率两处差（外加 camera_cross_right 列表顺序差一位，同 6 相机集合不影响训练/val 聚合）。蒸馏实证 fire：step 20000 后 833+ 个 novel-view 蒸馏步（`train/nrays` 1.3e5 vs 普通步 9.79e5）+ server GPU 49% util；smoke（start_step=50/p_init=1.0 强迫早 fire）已先验通路。
+  - **C1 interpolated（官方 val 口径，与 E0.3 同协议直接可比）**：test/psnr **30.30→29.77（−0.53）**；cpsnr car 34.59→33.92 / road 38.27→37.79 / person 32.65→31.71 / building 39.50→38.33 / vegetation 38.07→36.72；chamfer 0.295→0.317。**全面略降 0.5–1.35 dB**（蒸馏微调代价，符合 R-v4.5/R-v4.7 预期管理：蒸馏优化外推分布、interpolated 可能微降）。
+  - **C3 目视（大g viser 交互 + `render` 截图对照，frame300 同轨迹同帧）**：**外推 3m 车道线 E0.7-Fixer 略好**（路面标线外推改善，大g viser + 截图双确认），其它区域差不多；**6m 仍难以接受**（超出 ±3m 蒸馏增强分布，扩散平滑甚至让细节略糊）。
+  - **判别结论**：hack **B 级** Fixer 蒸馏在本 clip 是**温和、局部**增益——difix 蒸馏机制有效（车道线/路面标线外推改善被目视证实，正中 v4 lane KPI 方向），但 ① interpolated 微降代价 ② 增益不外推到 6m（Δ@3m ≫ Δ@6m，分布外泛化不足）③ B 级权重幅度有限。**两个读数喂 v4**：(a) difix 蒸馏方向对 → 支持 E2.2 渐进外推蒸馏；(b) 显著增益需官方 cosmos-difix 权重（NGC）+ progressive 蒸馏（1m→3m→6m 逐步扩大增强范围），±3m 单档蒸馏不能直接泛化到 6m。
+  - **β 段待 E1**（lane grad_corr / band_lpips @3m/6m + NTA-IoU 定量）：大g 目视的「车道线略好」须 E1.1/E1.2 工具定量坐实；两个 USDZ 已落盘（E0.3 `PVG7…` + E0.7-Fixer `Qm52…` 的 last.usdz），届时纯渲染回填，不重训。
+  - **工程留档**：IPC server `~/work/nurec_e0/e07/ipc/fixer_server.py` + client `model_ipc.py`（mount 覆盖 nre `nre/difix/model.py` 真身路径，`run.runfiles` 是其 symlink）+ launch `launch_full.sh`；完整记录 `~/work/nurec_e0/e07/ipc_solution_log.md` + 权重决策 `weight_decision.md`。**关键教训：把 Fixer「塞进 nre」两条路——JIT trace 卡在序列化（device 无底洞）、in-process Python 卡在依赖缺失（nre-ga 无 cosmos_predict2/imaginaire）；IPC 用跨容器 socket 绕开两者**。
 
 ---
 
