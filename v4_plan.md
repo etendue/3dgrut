@@ -77,6 +77,7 @@ kanban
         [E2.2 渐进外推蒸馏（核心移植）]
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.5 编辑协调 spike（AH 注入 + Harmonizer 协调 + NTA-IoU FID 验收）]
+        [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
         [E3.3 BEV 纹理平面化（gate E1 锚）]
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
 
@@ -123,6 +124,7 @@ kanban
 | **E2.3** | E2 | **actor 弱观测面修复蒸馏**：对车辆 track object-centric 环绕渲染弱观测面 → Harmonizer 修复 → cuboid×sseg mask 内低权蒸馏；攻 P1.4 验尸根因（未观测面缺约束）的 2D 监督解法 | v3 P1.4 否定结论 + SOTA 共识（2D 监督非 3D 注入） | 2 | ⬜ | gate=E2.1；验收=class_psnr + NTA-IoU + 守护线 |
 | **E2.4** | E2 | （备选）**Harmonizer 域内微调**：若 E2.1 spike 显示 NCore 域差大——按 DiFix3D+ 降质构造法（cycle reconstruction 横移 1–6m / model underfitting / cross reference）在自有 clip 造配对，LoRA 级微调 | DiFix3D+ 论文 § 训练数据构造 | 2 | ⬜ | 仅 E2.1 域差坐实才投 |
 | **E2.5** | E2 | **编辑协调 spike（3dgrut2 侧）**：复用 AH 注入引擎（PR #18 plumbing / frozen 离线手术）在自有 ckpt 插入/取代 1–2 辆 asset-harvester 车 → Harmonizer 时间模式协调 → NTA-IoU/FID + 目视验收；**不训练或轻训练**——区别 P1.4 warm-start（重建轴）：本卡是编辑场景 + 生成协调，正是 NuRec 官方编辑形态 | 新（E0.6 的 3dgrut2 对应） | 1.5 | ⬜ | gate=E2.1 + E0.6 清单；v5 编辑轴第一块带指标基石 |
+| **E2.6** ★ | E2 | **viser_gui_4d 交互 difixer 升级（temporal 后处理提 inference 质量）**：[`viser_gui_4d.py`](threedgrut_playground/viser_gui_4d.py) 现 `--difix_server` 接 Fixer 一代（单帧）→ 换 DiffusionHarmonizer 三代**时间模式**（`diffusion_harmonizer.pkl`，回读前 K 帧已修复输出做时序参考）→ 对交互渲染的连续帧序列后处理，用帧间时序一致性提升 inference 视觉质量（去闪烁/运动连贯）。复用 E0.7 IPC server 架构（`fixer_server.py`→harmonizer temporal server）+ viser_gui_4d 已有 `--difix_server` 钩子。**唯有连续渲染序列能发挥 Harmonizer 时序优势**（区别 E2.1 离线单帧 / E2.2 训练蒸馏必 nontemporal）| 新（2026-06-12 大g 提议）| 1 | ⬜ | gate=E2.1（Harmonizer 集成）；纯 inference 后处理不依赖训练 |
 | **E3.1** | E3 | **空气区 penalty** = **v3 P3.4 移交**：路面上方 0.4m~上界悬浮 bg opacity penalty（cuboid actor 豁免），复用 V3-R2 基建 | v3 P3.4 | 1.5 | ⬜ | gate=E1.1 锚 + **R9（PR #24 去留先决）** |
 | **E3.2** | E3 | **road SH 降阶 DC-only（freeze 法）** = **v3 P3.5 移交**：砍 view-dependent 过拟合逃逸通道（路面近似 Lambertian） | v3 P3.5 | 1 | ⬜ | gate 同 E3.1 |
 | **E3.3** ★ | E3 | **BEV 纹理平面化**（v4 backlog 转正）：road 颜色不再 per-gaussian SH，改 BEV feature grid/纹理图采样、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem；ExtraGS Road Surface Gaussians 同思路）；复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | v3 § 5 backlog「外推终极方向」 | 3 | ⬜ | gate=E1 锚 + E3.1/E3.2 结果（短刀够用则缓） |
@@ -135,10 +137,10 @@ kanban
 |---:|---|---:|---|:---:|:---:|
 | **E0** ★ | NuRec 工具链复现立锚（**首要**） | 5/7 | ≥2 场景跑通（1 USDZ 渲染+修复链 ✅、1 自有 clip 训练 ✅）+ NuRec 锚入档 ✅ + 配方 diff 清单 ✅ + difix-distill 增益锚 ✅（E0.7 α：B 级 Fixer 蒸馏，车道线略好 / interpolated −0.5dB / β 定量待 E1）+ 官方编辑能力清单（E0.6 待开） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | 0/5 | 3m/6m + NTA-IoU + held-out + FID/KID 全部立锚入 gap 表 | interpolated 全指标不退 | ⬜ |
-| **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike | 0/5（含 1 备选） | E1 外推指标相对锚改善（量级参考 DiFix3D+：蒸馏+后处理 +1.8dB/FID −20%）；E2.5 插入协调立带指标基石 | cc ≥ 24.7 / grad_corr 0.744 不退 | ⬜ |
+| **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 | 0/6（含 1 备选） | E1 外推指标相对锚改善（量级参考 DiFix3D+：蒸馏+后处理 +1.8dB/FID −20%）；E2.5 插入协调立带指标基石；E2.6 交互 temporal 修复提 inference 质量 | cc ≥ 24.7 / grad_corr 0.744 不退 | ⬜ |
 | **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
-| **总计** | — | **5/22** | — | — | — |
+| **总计** | — | **5/23** | — | — | — |
 
 > **v4 gap 表（E0.4 + E1.5 回填，格式预置）**：
 > | 轴 | 3dgrut2 锚（E1） | NuRec 锚（E0.4） | 差距 | E2/E3 后 |
@@ -227,6 +229,7 @@ flowchart TD
 | E2.3 | object-centric 弱面渲染（复用 playground 环绕相机基建 [`threedgrut_playground/`](threedgrut_playground/)）→ Harmonizer 修复 → cuboid×sseg mask 内蒸馏（与 E2.2 共用蒸馏 buffer 机制，目标区域不同）；攻 P1.4 根因——**约束式 2D 监督**替代被否定的 freeze 式 3D 注入 |
 | E2.4 | （备选）域内微调：DiFix3D+ 降质构造（cycle reconstruction：训练 ckpt 沿横移轨迹渲帧再反向重建造退化对；underfit：25–75% epoch ckpt 渲帧）造自有 clip 配对 → LoRA 微调 Harmonizer。**仅 E2.1 域差坐实才投** |
 | E2.5 | 编辑协调 spike：AH 注入引擎（PR #18 plumbing / frozen 离线手术）在自有 ckpt 插入/取代 1–2 辆收割车 → [`correction/difix.py`](threedgrut/correction/difix.py)（E2.1 升级后）Harmonizer 时间模式协调 → **三验收**：NTA-IoU（插入车被检出且框齐）/ FID（协调前后）/ 目视存档；E0.6 官方能力清单作设计输入；产出即 v5 编辑轴立项依据 |
+| E2.6 ★ | **viser_gui_4d 交互 difixer 升级 = temporal 后处理提 inference 质量（2026-06-12 大g 新增）**：[`viser_gui_4d.py`](threedgrut_playground/viser_gui_4d.py) 现 `--difix_server` 接的 Fixer 一代（单帧，via [`correction/difix.py`](threedgrut/correction/difix.py)）→ 换 DiffusionHarmonizer 三代 **时间模式**（`diffusion_harmonizer.pkl`，回读前 K 帧已修复输出做时序参考）→ 对交互渲染的连续帧序列后处理，用帧间时序一致性提升 inference 视觉质量（去闪烁 / 运动连贯）。复用 E0.7 IPC server 架构（`fixer_server.py` → harmonizer temporal server，回读历史输出做参考帧）+ viser_gui_4d 已有 `--difix_server` 钩子。**为何独立于 E2.1/E2.2：E2.1 离线单帧修复、E2.2 训练蒸馏必 nontemporal（随机单 novel view 无时序可言）——唯有交互 viewer 的连续渲染序列能发挥 Harmonizer 的时序优势，这正是 Harmonizer 三代相对 Fixer 二代的核心代际升级（视频级一致性）的用武之地**。验收：viser_gui_4d 下 temporal Harmonizer vs Fixer 单帧的帧间一致性（去闪烁目视存档 + 可选时序抖动指标）；gate=E2.1（Harmonizer 集成）；纯 inference 后处理、不依赖训练 |
 
 **验收**：E1 外推指标（lane@3m/6m + NTA-IoU + FID/KID + held-out per-class）相对锚改善；守护线不破（cc ≥ 24.7 / interpolated grad_corr、class_psnr 不退）；**双协议验收防幻觉**（R-v4.5）：held-out 真 GT 指标与无 GT 感知指标须同向改善。
 
@@ -311,10 +314,10 @@ flowchart TD
 - **2026-06-12 E0.7 difix 蒸馏对照 run 完成（α 段，IPC 方案）**（commit `2d974de`，worktree 分支 claude/sleepy-einstein-bf3a95）——回答「difix 蒸馏在本 clip 值多少」：**B 级权重温和局部增益（车道线外推略好），interpolated 微降代价，6m 无改善**。
   - **方案转向（大g 拍板）**：原 plan 的 NGC/hack 权重路径不可行——nre difix loader 是 `torch.jit.load`（NVIDIA 内部 `torch.jit.save` 导出的自包含 TorchScript，图里嵌 transformer_engine 算子），而 HF 公开权重全是 state_dict/diffusers 格式，**交付物类型不同、非 state_dict remap 可桥接**（A 级 NGC `cosmos_3dgut.pt`：inceptio 无 ngc CLI / 特权 key 拿不到；B 级 HF Fixer = state_dict、C 级 HF Difix3D = diffusers：实测 `torch.jit.load` 均失败）。JIT 导出工程（harmonizer 容器把 `Pix2Pix_Turbo` trace 成 TorchScript）实测攻克了跨 torch 2.9→2.7 / TE 2.8→1.11 兼容 + checkpoint/RoPE/flash_attn 三大 fused-op patch + trace+save+跨容器 nre-ga load，但**卡在 cosmos 模型内 cpu inlined 标量常量的 device 无底洞**（逐个 patch 不收敛）。→ **大g 改定 IPC 方案**：Fixer 推理做成独立 server（harmonizer 容器跑 `Pix2Pix_Turbo` 原生 Python 推理，**零 trace/device 坑**）+ nre 容器 patch `DifixModel`（`training_controller.py:335` 唯一调用点）经 socket（127.0.0.1:59487）转发降质渲染帧、收回修复帧当蒸馏目标；color_transfer 留 client（nre 有 kornia，harmonizer 无）。**换 server 进程 = 换修复器，训练侧零改动**（Harmonizer 三代 A/B 已据此备好）。
   - **权重级 = B**（HF `nvidia/Fixer`，Cosmos-Predict2-0.6B 架构族，非官方 cosmos-difix；增益方向可信、幅度打折号）。
-  - **训练**（inceptio 4090，run id `Qm52hePw64ydcMF3cz3vdA`）：E0.3 配方 + 恰好两处 override（`difix.training.enabled=true` + ckpt 频率 40000→5000）+ IPC difix，difix 钩子全官方默认（start_step=20000 / p_init=0.5 → milestones[25k,28k]×0.5 / ±3m novel poses / color_transfer），40k 步 **2h19m**（vs E0.3 2h07m，difix 蒸馏仅 +12min，IPC 开销小）。**parsed.yaml diff 单变量审计**：仅 `difix.training.enabled` + ckpt 频率两处差（外加 camera_cross_right 列表顺序差一位，同 6 相机集合不影响训练/val 聚合）。蒸馏实证 fire：step 20000 后 833+ 个 novel-view 蒸馏步（`train/nrays` 1.3e5 vs 普通步 9.79e5）+ server GPU 49% util；smoke（start_step=50/p_init=1.0 强迫早 fire）已先验通路。
-  - **C1 interpolated（官方 val 口径，与 E0.3 同协议直接可比）**：test/psnr **30.30→29.77（−0.53）**；cpsnr car 34.59→33.92 / road 38.27→37.79 / person 32.65→31.71 / building 39.50→38.33 / vegetation 38.07→36.72；chamfer 0.295→0.317。**全面略降 0.5–1.35 dB**（蒸馏微调代价，符合 R-v4.5/R-v4.7 预期管理：蒸馏优化外推分布、interpolated 可能微降）。
+  - **训练**（inceptio 4090，run id `Qm52hePw64ydcMF3cz3vdA`）：E0.3 配方 + 恰好两处 override（`difix.training.enabled=true` + ckpt 频率 40000→5000）+ IPC difix，difix 钩子全官方默认（start_step=20000 / p_init=0.5 → milestones[25k,28k]×0.5 / ±3m novel poses / color_transfer），40k 步 **2h19m**（vs E0.3 2h07m，difix 蒸馏仅 +12min，IPC 开销小）。**parsed.yaml diff 单变量审计**：仅 `difix.training.enabled` + ckpt 频率两处差（外加 camera_cross_right 列表顺序差一位，同 6 相机集合不影响训练/val 聚合）。蒸馏实证 fire：step 20000 后密集 novel-view 蒸馏步（`train/nrays` 1.3e5 vs 普通步 9.79e5，p_scheduler 期望 ~4750 次）+ server GPU 49% util；smoke（start_step=50/p_init=1.0 强迫早 fire）已先验通路。
+  - **C1 interpolated（官方 val 口径，与 E0.3 同协议直接可比）**：test/psnr **30.30→29.77（−0.53）**；cpsnr car 34.59→33.92 / road 38.27→37.79 / person 32.65→31.71 / building 39.50→38.33 / vegetation 38.07→36.72；chamfer 0.295→0.317。**全面略降 ~0.48–1.35 dB**（蒸馏微调代价，符合 R-v4.5/R-v4.7 预期管理：蒸馏优化外推分布、interpolated 可能微降）。
   - **C3 目视（大g viser 交互 + `render` 截图对照，frame300 同轨迹同帧）**：**外推 3m 车道线 E0.7-Fixer 略好**（路面标线外推改善，大g viser + 截图双确认），其它区域差不多；**6m 仍难以接受**（超出 ±3m 蒸馏增强分布，扩散平滑甚至让细节略糊）。
-  - **判别结论**：hack **B 级** Fixer 蒸馏在本 clip 是**温和、局部**增益——difix 蒸馏机制有效（车道线/路面标线外推改善被目视证实，正中 v4 lane KPI 方向），但 ① interpolated 微降代价 ② 增益不外推到 6m（Δ@3m ≫ Δ@6m，分布外泛化不足）③ B 级权重幅度有限。**两个读数喂 v4**：(a) difix 蒸馏方向对 → 支持 E2.2 渐进外推蒸馏；(b) 显著增益需官方 cosmos-difix 权重（NGC）+ progressive 蒸馏（1m→3m→6m 逐步扩大增强范围），±3m 单档蒸馏不能直接泛化到 6m。
+  - **判别结论**：hack **B 级** Fixer 蒸馏在本 clip 是**温和、局部**增益——difix 蒸馏机制有效（车道线/路面标线外推改善被目视证实，正中 v4 lane KPI 方向），但 ① interpolated 微降代价 ② 增益不外推到 6m（目视 3m 改善 > 6m，分布外泛化不足；定量 Δ@3m/Δ@6m 待 β/E1 lane grad_corr）③ B 级权重幅度有限。**两个读数喂 v4**：(a) difix 蒸馏方向对 → 支持 E2.2 渐进外推蒸馏；(b) 显著增益需官方 cosmos-difix 权重（NGC）+ progressive 蒸馏（1m→3m→6m 逐步扩大增强范围），±3m 单档蒸馏不能直接泛化到 6m。
   - **β 段待 E1**（lane grad_corr / band_lpips @3m/6m + NTA-IoU 定量）：大g 目视的「车道线略好」须 E1.1/E1.2 工具定量坐实；两个 USDZ 已落盘（E0.3 `PVG7…` + E0.7-Fixer `Qm52…` 的 last.usdz），届时纯渲染回填，不重训。
   - **工程留档**：IPC server `~/work/nurec_e0/e07/ipc/fixer_server.py` + client `model_ipc.py`（mount 覆盖 nre `nre/difix/model.py` 真身路径，`run.runfiles` 是其 symlink）+ launch `launch_full.sh`；完整记录 `~/work/nurec_e0/e07/ipc_solution_log.md` + 权重决策 `weight_decision.md`。**关键教训：把 Fixer「塞进 nre」两条路——JIT trace 卡在序列化（device 无底洞）、in-process Python 卡在依赖缺失（nre-ga 无 cosmos_predict2/imaginaire）；IPC 用跨容器 socket 绕开两者**。
 
