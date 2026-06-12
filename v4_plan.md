@@ -70,6 +70,7 @@ kanban
     Backlog
         [E0.4 同 clip 双向对照锚（NuRec vs multilayer 全指标）]
         [E0.6 官方链 actor 插入取代体验（nre 编辑 + asset-harvester + Harmonizer 协调）]
+        [E0.7 官方 difix-distill 对照 run（sqa 配方，gate E1.1 + NGC key 或 Fixer hack）]
         [E1.2 NTA-IoU 接入（plan 已备）+ 外推档联动]
         [E1.3 held-out camera 真 GT 外推协议]
         [E1.4 FID KID 感知指标接入]
