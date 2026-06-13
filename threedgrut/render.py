@@ -92,6 +92,7 @@ class Renderer:
         novel_view=False,
         exposure_model=None,
         novel_fid=False,
+        novel_save_n: int = 5,
     ) -> None:
 
         if path:  # Replace the path to the test data
@@ -114,6 +115,9 @@ class Renderer:
         # novel mode when novel_view is also on). Off by default so
         # metrics.json stays byte-identical.
         self.novel_fid = bool(novel_fid)
+        # E2.1: how many novel-view frames to persist (-1 = all). Default 5
+        # preserves the historical visual-sample behaviour byte-for-byte.
+        self.novel_save_n = int(novel_save_n)
         # T9.3 / V3-P1.c: BilateralGrid (or legacy ExposureModel) applied
         # AFTER model forward + post_processing, BEFORE metrics. Aligns the
         # eval-time pred_rgb with the train-time loss target (which goes
@@ -176,6 +180,7 @@ class Renderer:
         lane_band_px=None,
         dataset_cameras=None,
         novel_fid=False,
+        novel_save_n: int = 5,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -384,6 +389,7 @@ class Renderer:
             novel_view=novel_view,
             exposure_model=exposure_model,
             novel_fid=novel_fid,
+            novel_save_n=novel_save_n,
         )
 
     @classmethod
@@ -400,6 +406,7 @@ class Renderer:
         novel_view=False,
         exposure_model=None,
         novel_fid=False,
+        novel_save_n: int = 5,
     ):
         """Loads checkpoint for test path.
 
@@ -426,6 +433,7 @@ class Renderer:
             novel_view=novel_view,
             exposure_model=exposure_model,
             novel_fid=novel_fid,
+            novel_save_n=novel_save_n,
         )
 
     @torch.no_grad()
@@ -526,9 +534,17 @@ class Renderer:
         novel_lpips: dict[str, list] = (
             {m: [] for m in NOVEL_VIEW_MODES} if self.novel_view else {}
         )
-        # Save first N novel-view samples for visual inspection (per-mode
-        # subdir under ours_<step>/novel_view/<mode>/).
-        novel_save_first_n = 5 if self.novel_view else 0
+        # E2.1: save up to novel_save_n frames per mode (-1 = all frames).
+        # Default novel_save_n=5 keeps historical visual-sample count.
+        # Per-camera subdir naming + frames_map.json are written regardless
+        # of n — they don't affect metrics.json (LPIPS etc.) at all.
+        novel_save_first_n = (
+            (self.novel_save_n if self.novel_save_n >= 0 else 10**9)
+            if self.novel_view else 0
+        )
+        # E2.1: per-mode {ts:<cam>:<ts> -> relpath} maps, written after the loop.
+        novel_frames_map: dict[str, dict] = {m: {} for m in NOVEL_VIEW_MODES} if self.novel_view else {}
+        novel_save_counter: dict[str, int] = {m: 0 for m in NOVEL_VIEW_MODES} if self.novel_view else {}
 
         # E1.2 — NTA-IoU accumulators + lazy YOLO detector. Soft-fail: a
         # missing/undownloadable detector logs once and skips (no new keys →
@@ -885,14 +901,24 @@ class Renderer:
                         ).item()
                     )
                     if iteration < novel_save_first_n:
-                        torchvision.utils.save_image(
-                            pred_novel.squeeze(0).permute(2, 0, 1),
-                            os.path.join(
-                                self.out_dir, f"ours_{int(self.global_step)}",
-                                "novel_view", mode,
-                                f"{iteration:05d}.png",
-                            ),
+                        from threedgrut.utils.novel_view import (
+                            novel_frame_key, novel_frame_relpath,
                         )
+                        _cam = str(getattr(gpu_batch, "camera_id", "cam0"))
+                        _ts = int(getattr(gpu_batch, "timestamp_us", -1))
+                        _sidx = novel_save_counter[mode]
+                        novel_save_counter[mode] += 1
+                        _rel = novel_frame_relpath(_cam, _sidx)
+                        _dst = os.path.join(
+                            self.out_dir, f"ours_{int(self.global_step)}",
+                            "novel_view", mode, _rel,
+                        )
+                        os.makedirs(os.path.dirname(_dst), exist_ok=True)
+                        torchvision.utils.save_image(
+                            pred_novel.squeeze(0).permute(2, 0, 1), _dst,
+                        )
+                        if _ts >= 0:
+                            novel_frames_map[mode][novel_frame_key(_cam, _ts)] = _rel
 
                     # E1.1 — lane metrics at the novel pose via plane-induced
                     # warp (all 6 modes; yaw warps are equally exact for
@@ -1106,6 +1132,19 @@ class Renderer:
             mean_cc_ssim_masked=float(mean_cc_ssim_masked),
             mean_cc_lpips_masked=float(mean_cc_lpips_masked),
         )
+        # E2.1 — write per-mode frames_map.json so eval_frames_dir can join
+        # rendered novel frames by timestamp. Only written when frames were
+        # saved (novel_view=True and novel_save_n != 0); no effect on
+        # metrics.json content (pure side-output).
+        if self.novel_view:
+            import json as _json
+            for _m, _fm in novel_frames_map.items():
+                if _fm:
+                    _mp = os.path.join(self.out_dir, f"ours_{int(self.global_step)}",
+                                       "novel_view", _m, "frames_map.json")
+                    with open(_mp, "w") as _f:
+                        _json.dump(_fm, _f)
+
         # T8.5.3 / V3-E3 — per-mode novel-view LPIPS averaged across all
         # eval frames. Only populated when self.novel_view=True; absent
         # otherwise so metrics.json stays byte-identical for the default

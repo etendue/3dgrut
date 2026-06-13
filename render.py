@@ -105,6 +105,17 @@ if __name__ == "__main__":
             "comparability. Off by default (byte-identical metrics.json)."
         ),
     )
+    parser.add_argument(
+        "--novel-save-n",
+        type=int,
+        default=5,
+        help=(
+            "E2.1: # novel frames to save per mode (-1=all). Default 5 = "
+            "historical visual-sample behaviour. Pass -1 to persist ALL frames "
+            "with per-camera subdir naming + frames_map.json for offline "
+            "Harmonizer fix."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
@@ -123,6 +134,7 @@ if __name__ == "__main__":
         lane_band_px=args.lane_band_px,
         dataset_cameras=dataset_cameras_list,
         novel_fid=args.novel_fid,
+        novel_save_n=args.novel_save_n,
     )
 
     renderer.render_all()

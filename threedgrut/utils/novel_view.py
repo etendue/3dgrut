@@ -167,3 +167,18 @@ def perturb_batch_shutter_pair_torch(
     new_start = torch.from_numpy(s).to(T_to_world.device, dtype=T_to_world.dtype).unsqueeze(0)
     new_end = torch.from_numpy(e).to(T_to_world_end.device, dtype=T_to_world_end.dtype).unsqueeze(0)
     return new_start, new_end
+
+
+# ---------------------------------------------------------------------------
+# E2.1 Harmonizer frame-alignment helpers
+# ---------------------------------------------------------------------------
+
+def novel_frame_key(camera_id: str, timestamp_us) -> str:
+    """E2.1 frame-alignment key, must match eval_frames_dir.resolve_pred_path's
+    ``ts:<camera_id>:<timestamp_us>`` join key (NCore batches carry no frame_idx)."""
+    return f"ts:{camera_id}:{int(timestamp_us)}"
+
+
+def novel_frame_relpath(camera_id: str, save_idx: int) -> str:
+    """Per-camera subdir, 6-digit zero-padded — matches eval_frames_dir fallback layout."""
+    return f"{camera_id}/{int(save_idx):06d}.png"
