@@ -248,7 +248,11 @@ class Renderer:
             conf["dataset"]["load_lidar_depth_map"] = False
             conf["dataset"]["load_depth_prior"] = False
             conf["render"]["enable_nta_iou"] = False
-            computes_extra_metrics = False
+            # Keep compute_extra_metrics ON: the 2D metric stack is only
+            # ~0.5s/frame (profiled — NOT the bottleneck; the GT-supervision
+            # dataloader is). The --render-only win is skipping the supervision
+            # LOADS above + NTA, not the cheap SSIM/LPIPS. Turning it off would
+            # also trip render_all's criterions["ssim"/"lpips"] access.
         # E1.3 held-out protocol: swap the dataset camera set (e.g. eval a
         # 4-cam ckpt on the excluded cross camera). Must happen before
         # make_test builds the dataset below.
@@ -749,18 +753,19 @@ class Renderer:
                 worst_psnr_img_gt = gt_img_to_write
 
             # evaluate on full image
-            ssim.append(
-                criterions["ssim"](
-                    pred_rgb_full.permute(0, 3, 1, 2),
-                    rgb_gt_full.permute(0, 3, 1, 2),
-                ).item()
-            )
-            lpips.append(
-                criterions["lpips"](
-                    pred_rgb_full.clip(0, 1).permute(0, 3, 1, 2),
-                    rgb_gt_full.permute(0, 3, 1, 2),
-                ).item()
-            )
+            if self.compute_extra_metrics:
+                ssim.append(
+                    criterions["ssim"](
+                        pred_rgb_full.permute(0, 3, 1, 2),
+                        rgb_gt_full.permute(0, 3, 1, 2),
+                    ).item()
+                )
+                lpips.append(
+                    criterions["lpips"](
+                        pred_rgb_full.clip(0, 1).permute(0, 3, 1, 2),
+                        rgb_gt_full.permute(0, 3, 1, 2),
+                    ).item()
+                )
 
             # V3-T15.2: optional DiFix post-process metrics. Runs against the
             # raw pred_rgb (not color-corrected) so the comparison is the pure
@@ -788,18 +793,19 @@ class Renderer:
             # Color-corrected metrics
             pred_rgb_cc = color_correct_affine(pred_rgb_full, rgb_gt_full)
             cc_psnr.append(criterions["psnr"](pred_rgb_cc, rgb_gt_full).item())
-            cc_ssim.append(
-                criterions["ssim"](
-                    pred_rgb_cc.permute(0, 3, 1, 2),
-                    rgb_gt_full.permute(0, 3, 1, 2),
-                ).item()
-            )
-            cc_lpips.append(
-                criterions["lpips"](
-                    pred_rgb_cc.clip(0, 1).permute(0, 3, 1, 2),
-                    rgb_gt_full.permute(0, 3, 1, 2),
-                ).item()
-            )
+            if self.compute_extra_metrics:
+                cc_ssim.append(
+                    criterions["ssim"](
+                        pred_rgb_cc.permute(0, 3, 1, 2),
+                        rgb_gt_full.permute(0, 3, 1, 2),
+                    ).item()
+                )
+                cc_lpips.append(
+                    criterions["lpips"](
+                        pred_rgb_cc.clip(0, 1).permute(0, 3, 1, 2),
+                        rgb_gt_full.permute(0, 3, 1, 2),
+                    ).item()
+                )
 
             # T6F.2: masked PSNR / SSIM / LPIPS (raw + cc)
             # mask=None (NeRF/Colmap 等): masked 指标 ≡ 全图指标 (byte-identical 回归)
@@ -831,18 +837,21 @@ class Renderer:
                 pred_filled_clipped = pred_perm_clipped * m4d + rgb_gt_perm * (1.0 - m4d)
                 pred_cc_filled = pred_cc_perm * m4d + rgb_gt_perm * (1.0 - m4d)
                 pred_cc_filled_clipped = pred_cc_perm_clipped * m4d + rgb_gt_perm * (1.0 - m4d)
-                ssim_masked.append(criterions["ssim"](pred_filled, rgb_gt_perm).item())
-                lpips_masked.append(criterions["lpips"](pred_filled_clipped, rgb_gt_perm).item())
-                cc_ssim_masked.append(criterions["ssim"](pred_cc_filled, rgb_gt_perm).item())
-                cc_lpips_masked.append(criterions["lpips"](pred_cc_filled_clipped, rgb_gt_perm).item())
+                if self.compute_extra_metrics:
+                    ssim_masked.append(criterions["ssim"](pred_filled, rgb_gt_perm).item())
+                    lpips_masked.append(criterions["lpips"](pred_filled_clipped, rgb_gt_perm).item())
+                    cc_ssim_masked.append(criterions["ssim"](pred_cc_filled, rgb_gt_perm).item())
+                    cc_lpips_masked.append(criterions["lpips"](pred_cc_filled_clipped, rgb_gt_perm).item())
             else:
                 # byte-identical 回归：直接复制全图值
                 psnr_masked.append(psnr[-1])
-                ssim_masked.append(ssim[-1])
-                lpips_masked.append(lpips[-1])
+                if self.compute_extra_metrics:
+                    ssim_masked.append(ssim[-1])
+                    lpips_masked.append(lpips[-1])
                 cc_psnr_masked.append(cc_psnr[-1])
-                cc_ssim_masked.append(cc_ssim[-1])
-                cc_lpips_masked.append(cc_lpips[-1])
+                if self.compute_extra_metrics:
+                    cc_ssim_masked.append(cc_ssim[-1])
+                    cc_lpips_masked.append(cc_lpips[-1])
 
             # T11.F1: LiDAR-domain depth PSNR per frame. Requires pred_dist in
             # outputs AND lidar_depth_map in gpu_batch.image_infos (NCore only;
