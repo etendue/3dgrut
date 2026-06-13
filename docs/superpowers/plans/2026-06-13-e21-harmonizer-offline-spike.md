@@ -10,6 +10,9 @@
 
 **Spec:** [docs/superpowers/specs/2026-06-13-e21-harmonizer-offline-spike-design.md](../specs/2026-06-13-e21-harmonizer-offline-spike-design.md)
 
+> **$BASELINE_CKPT（Task 0 锁定）= `/home/inceptio/work/output/v3_base_scratch30k_lam01/ckpt_30000.pt`**
+> 证据：`mean_cc_psnr_masked = 25.7891`（≈ 25.79 ✓）；lane eval（`p3_lane_anchor/v3_base_scratch30k_lam01`）`mean_lane_grad_corr = 0.6931`（≈ 0.6931 ✓）；depth-off 30k 无 lane loss 配方（非 B3）✓。harmonizer server smoke：`READY listening 127.0.0.1:59489` ✅。
+
 **已确认接口事实（探查于 2026-06-13，写 step code 的依据）：**
 - `eval_frames_dir.resolve_pred_path`（scripts/eval_frames_dir.py:60-80）：键优先级 `ts:<camera_id>:<timestamp_us>` → `<camera_id>:<frame_idx>` → `<frames_dir>/<camera_id>/<frame_idx:06d>.png`。本 dataset `frame_idx` 全 -1（E0.4 实证）→ **必须走 timestamp frames_map**。
 - eval 取键：`cam = getattr(batch,"camera_id")`、`timestamp_us=int(getattr(batch,"timestamp_us",-1))`（eval_frames_dir.py:139,149）。
