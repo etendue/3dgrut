@@ -68,7 +68,7 @@ flowchart TD
   E14 --> E04
   E13E --> E15
   E04 --> E15
-  E06 -. 能力清单喂 E2.5（截止 E1.5 前即可）.-> E15
+  E06-.->|"能力清单喂 E2.5（截止 E1.5 前即可）"|E15
 ```
 
 - **GPU 错峰（inceptio 4090 单卡）**：E1.3-B 训练是唯一长任务（~7h），**E1.1-A/B 完成当晚即启动**（训练只需配置覆盖，与 eval 工具解耦）；白天跑 eval 短任务（三方立锚每 ckpt 6 档 novel ~40–60min、smoke ~15min、nre render 17.8ms/帧级、E0.6 serve-grpc）。serve-grpc 常驻占显存，**与训练/eval 互斥**，用完即收。
