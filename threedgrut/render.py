@@ -528,6 +528,8 @@ class Renderer:
         from threedgrut.utils.novel_view import (
             LEGACY_NOVEL_AVG_MODES,
             NOVEL_VIEW_MODES,
+            novel_frame_key,
+            novel_frame_relpath,
             perturb_batch_shutter_pair_torch,
         )
         from threedgrut.model.plane_warp import build_plane_warp, warp_image
@@ -901,9 +903,6 @@ class Renderer:
                         ).item()
                     )
                     if iteration < novel_save_first_n:
-                        from threedgrut.utils.novel_view import (
-                            novel_frame_key, novel_frame_relpath,
-                        )
                         _cam = str(getattr(gpu_batch, "camera_id", "cam0"))
                         _ts = int(getattr(gpu_batch, "timestamp_us", -1))
                         _sidx = novel_save_counter[mode]
@@ -1133,17 +1132,17 @@ class Renderer:
             mean_cc_lpips_masked=float(mean_cc_lpips_masked),
         )
         # E2.1 — write per-mode frames_map.json so eval_frames_dir can join
-        # rendered novel frames by timestamp. Only written when frames were
-        # saved (novel_view=True and novel_save_n != 0); no effect on
-        # metrics.json content (pure side-output).
+        # rendered novel frames by timestamp. Each map is written only when it
+        # has entries (empty when novel_save_n=0 or all timestamps < 0); no
+        # effect on metrics.json content (pure side-output).
         if self.novel_view:
-            import json as _json
+            import json
             for _m, _fm in novel_frames_map.items():
                 if _fm:
                     _mp = os.path.join(self.out_dir, f"ours_{int(self.global_step)}",
                                        "novel_view", _m, "frames_map.json")
                     with open(_mp, "w") as _f:
-                        _json.dump(_fm, _f)
+                        json.dump(_fm, _f)
 
         # T8.5.3 / V3-E3 — per-mode novel-view LPIPS averaged across all
         # eval frames. Only populated when self.novel_view=True; absent
