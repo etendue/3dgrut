@@ -116,6 +116,24 @@ if __name__ == "__main__":
             "Harmonizer fix."
         ),
     )
+    parser.add_argument(
+        "--render-only",
+        action="store_true",
+        help=(
+            "E2.1 fast frame dump: force-off GT supervision loads "
+            "(aux/lane/lidar_depth/depth_prior) + NTA + extra metrics. "
+            "Use with --novel-view --novel-only to dump lateral_3m/6m frames "
+            "at maximum speed without any eval overhead."
+        ),
+    )
+    parser.add_argument(
+        "--novel-only",
+        action="store_true",
+        help=(
+            "E2.1: with --novel-view, render ONLY lateral_3m + lateral_6m "
+            "(skip lateral_1m/2m + yaw_5/10deg). Cuts 6-mode cost to 2-mode."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
@@ -135,6 +153,8 @@ if __name__ == "__main__":
         dataset_cameras=dataset_cameras_list,
         novel_fid=args.novel_fid,
         novel_save_n=args.novel_save_n,
+        render_only=args.render_only,
+        novel_only=args.novel_only,
     )
 
     renderer.render_all()

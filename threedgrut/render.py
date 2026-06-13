@@ -93,6 +93,8 @@ class Renderer:
         exposure_model=None,
         novel_fid=False,
         novel_save_n: int = 5,
+        render_only: bool = False,
+        novel_only: bool = False,
     ) -> None:
 
         if path:  # Replace the path to the test data
@@ -118,6 +120,10 @@ class Renderer:
         # E2.1: how many novel-view frames to persist (-1 = all). Default 5
         # preserves the historical visual-sample behaviour byte-for-byte.
         self.novel_save_n = int(novel_save_n)
+        # E2.1: fast frame-dump — skip supervision loads, NTA, extra metrics.
+        self.render_only = bool(render_only)
+        # E2.1: restrict novel modes to lateral_3m + lateral_6m only.
+        self.novel_only = bool(novel_only)
         # T9.3 / V3-P1.c: BilateralGrid (or legacy ExposureModel) applied
         # AFTER model forward + post_processing, BEFORE metrics. Aligns the
         # eval-time pred_rgb with the train-time loss target (which goes
@@ -181,6 +187,8 @@ class Renderer:
         dataset_cameras=None,
         novel_fid=False,
         novel_save_n: int = 5,
+        render_only: bool = False,
+        novel_only: bool = False,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -222,13 +230,25 @@ class Renderer:
         # eval → render_all() emits mean_lane_*. Unlike conf.render (where
         # eval_cameras already exists), conf.dataset is struct-locked, so adding
         # a brand-new key raises ConfigKeyError — open the struct first.
-        if load_lane_masks or lane_band_px is not None:
+        if load_lane_masks or lane_band_px is not None or render_only:
             from omegaconf import OmegaConf
             OmegaConf.set_struct(conf, False)
         if load_lane_masks:
             conf["dataset"]["load_lane_masks"] = True
         if lane_band_px is not None:
             conf["render"]["lane_band_px"] = int(lane_band_px)
+        # E2.1 fast frame-dump: force-off all heavy supervision loads + NTA so
+        # the dataset skips LiDAR depth / aux masks / lane masks / depth-prior
+        # (the CPU/IO bottleneck), and render_all skips the metric stack.
+        # render_only wins over --load-lane-masks (mutually exclusive intent:
+        # render_only is for dumping, not eval).
+        if render_only:
+            conf["dataset"]["load_aux_masks"] = False
+            conf["dataset"]["load_lane_masks"] = False
+            conf["dataset"]["load_lidar_depth_map"] = False
+            conf["dataset"]["load_depth_prior"] = False
+            conf["render"]["enable_nta_iou"] = False
+            computes_extra_metrics = False
         # E1.3 held-out protocol: swap the dataset camera set (e.g. eval a
         # 4-cam ckpt on the excluded cross camera). Must happen before
         # make_test builds the dataset below.
@@ -390,6 +410,8 @@ class Renderer:
             exposure_model=exposure_model,
             novel_fid=novel_fid,
             novel_save_n=novel_save_n,
+            render_only=render_only,
+            novel_only=novel_only,
         )
 
     @classmethod
@@ -888,7 +910,10 @@ class Renderer:
                 orig_T = gpu_batch.T_to_world.detach().clone()
                 orig_T_end = gpu_batch.T_to_world_end.detach().clone()
                 rgb_gt_perm = rgb_gt_full.permute(0, 3, 1, 2)
-                for mode in NOVEL_VIEW_MODES:
+                # E2.1: --novel-only restricts to lateral_3m + lateral_6m
+                # (the harmonizer target modes); other 4 modes skipped.
+                _novel_modes = ("lateral_3m", "lateral_6m") if self.novel_only else NOVEL_VIEW_MODES
+                for mode in _novel_modes:
                     nT, nTe = perturb_batch_shutter_pair_torch(
                         orig_T, orig_T_end, mode,
                     )
