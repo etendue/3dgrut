@@ -68,7 +68,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [E2.1 Harmonizer 升级集成 + 域差 spike]
         [E2.2 渐进外推蒸馏（核心移植）]
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.5 编辑协调 spike（AH 注入 + Harmonizer 协调 + NTA-IoU FID 验收）]
@@ -85,6 +84,7 @@ kanban
         [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate 同 E3.1）]
 
     "Done"
+        [E2.1 Harmonizer 离线修复 spike ✅ 2026-06-13：FID −30%/KID −60%/NTA +35%，lane_grad_corr 退化（扩散平滑）→ E2.2 GO]
         [E0.4 双向对照锚 ✅ 2026-06-12：3m 档官方 +0.05 corr，6m 两家同崩；interp FID 61 vs 75]
         [E1.5 gap 表收口 ✅：重排结论 E3 先行、E2 补 6m+ 档；E1 阶段全绿]
         [E1.3 held-out 真 GT 外推 ✅ 2026-06-12：差距 7.77 dB（upper 26.93 − heldout 19.16）]
@@ -121,7 +121,7 @@ kanban
 | **E1.3** ★ | E1 | **held-out camera 真 GT 外推协议**：训练排除 1–2 台侧相机（`dataset.camera_ids` 覆盖），eval 在被排除相机跑 per-class 全套 → 唯一**有真 GT** 的外推轴（DiFix3D+ RDS cross-reference 协议反用）；需从头训 1 个对照 ckpt | NuRec 调研 § 5.1 | 1.5 | ✅ | **2026-06-12 完成**：4-cam 30k 实际仅 **70 min**（depth-off 轻配方）；三件套（同 exposure-off 口径）——held-out cc 19.16 / guard 25.82 / upper 26.93 → **真 GT 外推差距 7.77 dB**（car class gap 3.5 dB / NTA 0.101→0.071）；guard 25.82 ≈ 5-cam baseline 25.79 → 4-cam 不伤训练相机 |
 | **E1.4** | E1 | **FID/KID 接入**：novel 外推档渲染帧 vs 训练视角真图分布的 FID/KID（torchmetrics/clean-fid），写 metrics.json `mean_novel_fid_{mode}` | SOTA 综述（无 GT 外推共识指标） | 1 | ✅ | **2026-06-12 完成**：`--novel-fid` 开关；baseline FID render 75.3 → 1m 124 → 3m 168 → 6m 193 单调（K4 sanity PASS）；KID 主指标（subset 自适应）；**FID render 75 vs 官方场景 7.4 → 自有表示侧伪影重一个量级（E0.2 推论③实证）** |
 | **E1.5** | E1 | **v4 gap 表回填**：E0.4 NuRec 锚 + E1.1–E1.4 自有锚汇总入 § 1.3，**据实重排 E2/E3 优先级**（对标 v3 R1 纪律） | — | 0.5 | ✅ | **2026-06-12 重排结论：E3 先行、E2 定位 6m+ 档互补**。证据链：①官方纯表示侧（difix 关）3m lane +0.05/+3.9dB（road 冻结五件套之效）②6m 两家同崩 ~0.30 → 表示侧只能右移退化曲线一档，6m 必须修复链 ③三方锚配方无差 → 差距是结构性配方非调参 ④interp FID 61 vs 75 官方伪影少 ⑤E1.3 真 GT gap 7.77dB。**执行序：E3.1/E3.2 短刀（待 R9，大g暂缓）→ E3.3 BEV；E2.1 spike 低成本并行（域差已被 E0.7 smoke 初步排除）** |
-| **E2.1** ★ | E2 | **Harmonizer 升级集成 + 域差 spike**：[`third_party/Fixer`](third_party/Fixer)（一代）→ [NVIDIA/harmonizer](https://github.com/NVIDIA/harmonizer)（Cosmos Predict2 0.6B，时间条件，Apache-2.0）；HF `nvidia/Harmonizer` 权重 → 对 baseline 渲染的 3m/6m 帧离线修复 → E1 指标前后对比（**纯后处理预期：FID/感知大改善、几何指标不动**——正确预期，勿误判失败） | NuRec 调研 § 2.3/5.2 + v3 T15.2 | 1 | ⬜ | inceptio 4090 推理（0.6B 单步 OK）；`nurec-fixer` skill 辅助 |
+| **E2.1** ★ | E2 | **Harmonizer 升级集成 + 域差 spike**：[`third_party/Fixer`](third_party/Fixer)（一代）→ [NVIDIA/harmonizer](https://github.com/NVIDIA/harmonizer)（Cosmos Predict2 0.6B，时间条件，Apache-2.0）；HF `nvidia/Harmonizer` 权重 → 对 baseline 渲染的 3m/6m 帧离线修复 → E1 指标前后对比（**纯后处理预期：FID/感知大改善、几何指标不动**——正确预期，勿误判失败） | NuRec 调研 § 2.3/5.2 + v3 T15.2 | 1 | ✅ | **2026-06-13 完成**（render-only daefc03/4ac911d · batch-fix cd9fa6b · compare 24b03b0）：render-only 关监督出帧 10.6→4.62s/帧 + harmonizer IPC 批修复 750 帧 + eval_frames_dir 评。**FID −33%/−28% · KID −64%/−56% · NTA +0.033/+0.037 · lane_grad_corr −0.085/−0.095**（raw≡E1锚口径已验）；目视去伪影显著无异物 → **E2.2 GO**（§5 Done Log） |
 | **E2.2** ★★ | E2 | **渐进外推蒸馏（v4 核心）**：DiFix3D+ progressive update 移植——外推位姿从 1m→2m→3m→6m 逐步推进，每步「渲染→Harmonizer 修复→修复帧按低权重蒸馏回 3D（road/lane 区域加权）→下一步」；区别 v3 Stage 15 教训：不打全图 repro 轴，蒸馏目标=外推档 + road/lane 病灶区 | NuRec 调研 § 2.4（ablation 证据）+ v3 Stage 15 复活改轴 | 2.5 | ⬜ | gate=E2.1 spike + E1 锚；验收=E1 全指标 |
 | **E2.3** | E2 | **actor 弱观测面修复蒸馏**：对车辆 track object-centric 环绕渲染弱观测面 → Harmonizer 修复 → cuboid×sseg mask 内低权蒸馏；攻 P1.4 验尸根因（未观测面缺约束）的 2D 监督解法 | v3 P1.4 否定结论 + SOTA 共识（2D 监督非 3D 注入） | 2 | ⬜ | gate=E2.1；验收=class_psnr + NTA-IoU + 守护线 |
 | **E2.4** | E2 | （备选）**Harmonizer 域内微调**：若 E2.1 spike 显示 NCore 域差大——按 DiFix3D+ 降质构造法（cycle reconstruction 横移 1–6m / model underfitting / cross reference）在自有 clip 造配对，LoRA 级微调 | DiFix3D+ 论文 § 训练数据构造 | 2 | ⬜ | 仅 E2.1 域差坐实才投 |
@@ -139,7 +139,7 @@ kanban
 |---:|---|---:|---|:---:|:---:|
 | **E0** ★ | NuRec 工具链复现立锚（**首要**） | 5/7 | ≥2 场景跑通 ✅ + NuRec 锚 ✅ + 配方 diff ✅ + **双向对照 ✅（E0.4 判别数字入 gap 表）** + difix-distill 增益锚 ✅α（E0.7：B 级 Fixer 蒸馏，车道线略好 / interpolated −0.5dB / β 定量待回填）+ 官方编辑能力清单（E0.6 🟡）+ 修复器代际 β'（移交执行中） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | **5/5 ✅** | 3m/6m ✅ + NTA-IoU ✅ + FID/KID ✅ + held-out ✅（真 GT 差距 7.77 dB）+ gap 表收口 ✅（E1.5 重排：E3 先行） | interpolated 全指标不退（已验：avg Δ1.5e-5 / cc 25.79 / grad_corr 0.6931 三点零回归） | ✅ |
-| **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 | 0/6（含 1 备选） | E1 外推指标相对锚改善（量级参考 DiFix3D+：蒸馏+后处理 +1.8dB/FID −20%）；E2.5 插入协调立带指标基石；E2.6 交互 temporal 修复提 inference 质量 | cc ≥ 24.7 / grad_corr 0.744 不退 | ⬜ |
+| **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 | 1/6（含 1 备选） | 同左；**E2.1 ✅ 离线 Harmonizer：FID −30%/KID −60%/NTA +35%，lane_grad_corr 退化待 E2.2 蒸馏修 → E2.2 GO**；E2.5 插入协调；E2.6 交互 temporal | cc ≥ 24.7 / grad_corr 0.744 不退 | 🟡 |
 | **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
 | **总计** | — | **10/23** | — | — | — |
@@ -147,10 +147,10 @@ kanban
 > **v4 gap 表（E0.4 + E1.5 回填，格式预置）**：
 > | 轴 | 3dgrut2 锚（E1） | NuRec 锚（E0.4） | 差距 | E2/E3 后 |
 > |---|---|---|---|---|
-> | lane grad_corr @ 3m / 6m（warped 口径） | **B3 0.381 / 0.307**（baseline 0.384/0.303，aniso20 0.389/0.298——三方打平；对照 interp 0.74 → 外推腰斩再腰斩） | **0.437 / 0.297**（band_psnr 16.34/13.45 vs 我方 12.47/11.33——**3m 档官方 +0.05 corr/+3.9dB，6m 档两家同崩**） | 3m：表示侧差距实证；6m：无差 | — |
-> | NTA-IoU @ 原轨迹 / 3m / 6m | **B3 0.120 / 0.076 / 0.054**（baseline 0.117/0.096/0.062；口径＝全 GT 车含远景，绝对值不与论文比） | **0.126 / 0.087 / 0.044**（interp 略高；外推档与我方交错——样本小，仅观察不下结论） | ≈持平 | — |
+> | lane grad_corr @ 3m / 6m（warped 口径） | **B3 0.381 / 0.307**（baseline 0.384/0.303，aniso20 0.389/0.298——三方打平；对照 interp 0.74 → 外推腰斩再腰斩） | **0.437 / 0.297**（band_psnr 16.34/13.45 vs 我方 12.47/11.33——**3m 档官方 +0.05 corr/+3.9dB，6m 档两家同崩**） | 3m：表示侧差距实证；6m：无差 | **E2.1 后 fixed 0.299 / 0.208（Δ−0.085/−0.095）**：扩散平滑伤高频车道线，E2.2 蒸馏待修 |
+> | NTA-IoU @ 原轨迹 / 3m / 6m | **B3 0.120 / 0.076 / 0.054**（baseline 0.117/0.096/0.062；口径＝全 GT 车含远景，绝对值不与论文比） | **0.126 / 0.087 / 0.044**（interp 略高；外推档与我方交错——样本小，仅观察不下结论） | ≈持平 | **E2.1 后 fixed 0.128 / 0.100（Δ+0.033/+0.037 ✅）**：修复改善车辆检出 |
 > | held-out cam 真 GT 外推（cross_left，exposure-off 口径） | **gap 7.77 dB**（heldout cc 19.16 vs upper 26.93）；car class gap 3.5 dB；NTA 0.101→0.071；guard 25.82 ≈ baseline 25.79 | 待测（E0.4 可选：NuRec 同协议 4-cam 重训成本高，暂不对称） | — | — |
-> | FID/KID @ 3m / 6m | **B3 FID 165/192 · KID 0.081/0.098**（baseline 168/193 · 0.082/0.102；render 75.3/0.021；**口径＝5 相机混合分布**） | lateral：FID 217/237 · KID 0.230/0.265（**口径＝前视单相机 75 帧，与我方 5 相机口径不可直接比**）；**interp FID 61.3 vs 我方 75.3（同口径可比 → 官方伪影更少）** | interp 感知：官方更干净 | — |
+> | FID/KID @ 3m / 6m | **B3 FID 165/192 · KID 0.081/0.098**（baseline 168/193 · 0.082/0.102；render 75.3/0.021；**口径＝5 相机混合分布**） | lateral：FID 217/237 · KID 0.230/0.265（**口径＝前视单相机 75 帧，与我方 5 相机口径不可直接比**）；**interp FID 61.3 vs 我方 75.3（同口径可比 → 官方伪影更少）** | interp 感知：官方更干净 | **E2.1 后 fixed FID 113/139（−33%/−28%）· KID 0.029/0.045（−64%/−56%）✅** |
 > | interpolated（守护线） | class 25.07 / cc 26.06 / grad_corr 0.744 | **官方口径**：psnr 30.30 / cpsnr car 34.59 · road 38.27 · person 32.65 / chamfer 0.295（E0.3，**口径未统一不可直接比**，E0.4 重算） | 待 E0.4 | 不退化 |
 
 ### 1.4 任务依赖图
@@ -338,6 +338,13 @@ flowchart TD
   - **判别数字（同口径，项目工具）**：interpolated——NuRec psnr 25.12 / FID **61.3 vs 我方 75.3**（官方伪影更少）/ lane grad_corr **0.659 vs 我方 B3 0.739**（full-res + lane loss 近景反超官方半分辨率监督）/ NTA 0.126≈0.120；lateral——**@3m 官方 grad_corr 0.437 vs 0.381（+0.05）、band_psnr 16.34 vs 12.47（+3.9dB）；@6m 0.297 vs 0.307 两家同崩**；NTA 外推档交错（0.087/0.044 vs 0.076/0.054，小样本仅观察）；lateral FID 217/237（前视单相机口径，与我方 5 相机口径不可直接比，已注记）。
   - **E1.5 重排结论（E1 出口）**：**E3 先行，E2 定位 6m+ 档与残余伪影的互补**。证据链五条：①官方纯表示侧（difix 关）3m lane 全面领先 → road 冻结五件套之效，表示侧差距实证；②6m 两家同崩 ~0.30 → 表示侧只能把退化曲线右移一档，6m 档修复链是共同必需；③三方锚配方无差 → 差距是结构性配方非调参；④interp FID 61 vs 75；⑤E1.3 真 GT gap 7.77dB 待咬。执行序：E3.1/E3.2 短刀（**待 R9 决议，大g 暂缓**）→ E3.3 BEV 纹理平面化；E2.1 Harmonizer spike 低成本并行（域差已被 E0.7 smoke 初步排除：零微调修复我方重伪影帧目视显著）。
   - 工程留档：nre render 输出嵌套 `<cam>/<cam>/` + `timestamps.json`（file_name/render_frame_idx/frame_start・end_timestamp_us）——时间戳连接是对外部渲染器帧对齐的标准做法，假设性序号映射不可靠（nre 599-600 帧 vs dataset 595 帧）。
+- **2026-06-13 E2.1 离线 Harmonizer 修复 spike 完成（Task 0–5）**（branch `e21-harmonizer-spike`；commit 链 render-only `daefc03`/`4ac911d` · batch-fix `cd9fa6b` · compare/montage `24b03b0`；pytest frame_align 3 + ipc_client 1 + compare 3 全绿）——量化 DiffusionHarmonizer 三代对 baseline 3m/6m 渲染帧的纯离线修复增益，出 E2.2 go/no-go 判别：
+  - **核心对比（raw=修复前≡E1锚 / fixed=修复后，全 5 相机 375 帧/档）**：FID@3m 168→113（−33%）/@6m 193→139（−28%）；KID@3m 0.082→0.029（−64%）/@6m 0.102→0.045（−56%）；NTA-IoU@3m 0.095→0.128（+0.033）/@6m 0.062→0.100（+0.037）；lane_band_psnr +0.57/+0.25；**lane_grad_corr@3m 0.384→0.299（−0.085）/@6m 0.303→0.208（−0.095）**。产物 `~/work/e21/{raw,fixed,evals,montage}`。
+  - **raw 交叉验证 ≡ E1 锚（口径可信）**：raw lane_grad_corr 0.384/0.303、NTA 0.095/0.062、FID 168/193 与 E1.1/E1.2/E1.4 锚逐项吻合 → eval_frames_dir 口径 ≡ render_all。
+  - **目视（lateral_6m 拼图 raw\|fixed）**：银色悬浮涂抹消除、路面平整、建筑连贯、车辆清晰，**无引入异物** → R-v4.4 域差排除（Harmonizer 在 NCore 域零微调有效）。
+  - **E2.2 go/no-go = GO**：教科书级 DiFix3D+ ablation——纯后处理大幅提感知（FID −30%/KID −60%）+ 车辆检出（NTA +35%），但扩散平滑伤车道线高频（grad_corr 退 ~22%/31%）。**lane_grad_corr 退化正是 E2.2「蒸馏回 3D 提几何 + road/lane 区域加权保护」要解决的**（后处理提感知、蒸馏提几何、叠加最优）。修复链对我方重伪影场景显著有效，值得投 E2.2。
+  - **工程副产出（归因「render 出帧为何慢 10s/帧」，大g 提问驱动）**：① 主因是**每帧加载全套 GT 监督数据（LiDAR 深度图 8MB + sseg + lane mask）**——非指标栈（微基准 LPIPS/SSIM/FID/KID 仅 0.9s/帧）、非 GPU 争用（关 harmonizer server 仍 10.6s/帧）；新增 render.py `--render-only`（conf override 关 4 监督加载开关 + NTA）+ `--novel-only`（只渲 3m/6m）→ **10.6→4.62s/帧**，~29min 出齐 750 帧。② 修复用 E0.7 IPC 架构（harmonizer_server socket :59489 + `scripts/e21_harmonizer_batch_fix.py` client + kornia Reinhard color_transfer），harmonizer ~1.8s/帧 × 750。③ render_only 顺手加 `if compute_extra_metrics` guard，修了 render_all 无条件访问 `criterions["ssim"/"lpips"]` 的潜在 bug。
+  - 新增代码：`threedgrut/render.py`（novel-save-n + frames_map + render-only/novel-only）、`scripts/{e21_harmonizer_batch_fix,e21_compare_metrics,e21_visual_montage}.py`、`tests/test_e21_{frame_align,ipc_client,compare}.py`（7 测全绿）；零训练代码改动（trainer/difix.py/yaml 未碰，符合 spec §8）。
 
 ---
 
