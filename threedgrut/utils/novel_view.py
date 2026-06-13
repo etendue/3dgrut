@@ -37,13 +37,21 @@ from typing import Tuple
 import numpy as np
 import torch
 
-# 4 novel-view perturbation modes; v3_plan.md § 2.0 T8.5.3 spec.
-# Order matters: render.py writes metrics under mean_novel_lpips_<mode_name>.
-NOVEL_VIEW_MODES: Tuple[str, ...] = (
+# Legacy 4-mode set; v3_plan.md § 2.0 T8.5.3 spec.
+# mean_novel_lpips_avg aggregates ONLY these 4 modes, forever — the historical
+# anchor (B3 0.5962) depends on this field meaning exactly this average.
+# E1.1 adds extrapolation modes below; they go into mean_novel_lpips_avg6.
+LEGACY_NOVEL_AVG_MODES: Tuple[str, ...] = (
     "lateral_1m",   # +1 m along camera right axis
     "lateral_2m",   # +2 m along camera right axis
     "yaw_5deg",     # +5° rotation around camera up axis (world-up under AV convention)
     "yaw_10deg",    # +10° rotation around camera up axis
+)
+
+# Order matters: render.py writes metrics under mean_novel_lpips_<mode_name>.
+NOVEL_VIEW_MODES: Tuple[str, ...] = LEGACY_NOVEL_AVG_MODES + (
+    "lateral_3m",   # +3 m along camera right axis (E1.1 extrapolation gate)
+    "lateral_6m",   # +6 m along camera right axis (E1.1 extrapolation gate)
 )
 
 
@@ -87,6 +95,10 @@ def perturb_c2w(c2w, mode: str) -> np.ndarray:
         out[:3, 3] = m[:3, 3] + 1.0 * m[:3, 0]
     elif mode == "lateral_2m":
         out[:3, 3] = m[:3, 3] + 2.0 * m[:3, 0]
+    elif mode == "lateral_3m":
+        out[:3, 3] = m[:3, 3] + 3.0 * m[:3, 0]
+    elif mode == "lateral_6m":
+        out[:3, 3] = m[:3, 3] + 6.0 * m[:3, 0]
     elif mode == "yaw_5deg":
         # Camera up is -y in c2w convention; positive yaw_deg rotates camera
         # CCW when viewed from above (world-up).

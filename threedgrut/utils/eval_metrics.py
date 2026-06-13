@@ -11,6 +11,26 @@ from __future__ import annotations
 import torch
 
 
+def kid_subset_size(n: int) -> int:
+    """E1.4: legal KID subset size for an n-sample eval split.
+
+    torchmetrics KernelInceptionDistance requires subset_size <= n (default
+    1000 crashes on our ~74-frame val splits). Half the split capped at 50
+    (KID paper uses 50-100 for small sets); floor of 2 keeps tiny smoke runs
+    legal (subset_size=1 degenerates the polynomial-kernel MMD estimate).
+    """
+    return max(2, min(50, int(n) // 2))
+
+
+def rgb01_to_uint8_chw(img_bhw3: torch.Tensor) -> torch.Tensor:
+    """E1.4: [B, H, W, 3] float in [0, 1] → [B, 3, H, W] uint8 (clamped),
+    the input format torchmetrics FID/KID expect with normalize=False."""
+    return (
+        img_bhw3.detach().clamp(0.0, 1.0).mul(255.0).round()
+        .to(torch.uint8).permute(0, 3, 1, 2).contiguous()
+    )
+
+
 def compute_lidar_psnr(
     pred_dist: torch.Tensor,        # [B,H,W,1] or [H,W,1] rendered ray-depth
     lidar_depth_map: torch.Tensor,  # [B,H,W] or [H,W] sparse GT ray-depth (0 = no hit)

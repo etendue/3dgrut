@@ -64,9 +64,51 @@ if __name__ == "__main__":
             "third_party/Fixer/INSTALL.md."
         ),
     )
+    parser.add_argument(
+        "--load-lane-masks",
+        action="store_true",
+        help=(
+            "Phase 3 lane GT: load *.aux.lane.zarr.itar (Mapillary lane sseg) "
+            "and emit mean_lane_* metrics. Injects conf.dataset.load_lane_masks"
+            "=True so a pre-trained ckpt (whose embedded config predates lane) "
+            "still loads the lane product at eval."
+        ),
+    )
+    parser.add_argument(
+        "--lane-band-px",
+        type=int,
+        default=None,
+        help="Phase 3 lane dilated-band half-width (px). Default = DEFAULT_LANE_BAND_PX (8).",
+    )
+    parser.add_argument(
+        "--dataset-cameras",
+        type=str,
+        default="",
+        help=(
+            "E1.3 held-out protocol: comma-separated camera_id list that "
+            "REPLACES the ckpt-embedded dataset.camera_ids before the eval "
+            "dataset is built (e.g. eval a 4-cam ckpt on the excluded cross "
+            "camera). Unlike --eval-cameras (a batch filter over loaded "
+            "cameras), this changes which cameras the dataset loads. "
+            "Side effect: BilateralGrid exposure is disabled (train-time "
+            "camera_idx mapping invalid) — use cc_* metrics."
+        ),
+    )
+    parser.add_argument(
+        "--novel-fid",
+        action="store_true",
+        help=(
+            "E1.4: compute FID/KID distribution metrics — interpolated "
+            "renders vs GT always; per novel mode when --novel-view is also "
+            "set. KID is the primary small-sample metric (subset size "
+            "auto-adapted); FID reported alongside for E0.2-anchor "
+            "comparability. Off by default (byte-identical metrics.json)."
+        ),
+    )
     args = parser.parse_args()
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
+    dataset_cameras_list = [c.strip() for c in args.dataset_cameras.split(",") if c.strip()] or None
 
     renderer = Renderer.from_checkpoint(
         checkpoint_path=args.checkpoint,
@@ -77,6 +119,10 @@ if __name__ == "__main__":
         eval_cameras=eval_cameras_list,
         novel_view=args.novel_view,
         use_difix=args.use_difix,
+        load_lane_masks=args.load_lane_masks,
+        lane_band_px=args.lane_band_px,
+        dataset_cameras=dataset_cameras_list,
+        novel_fid=args.novel_fid,
     )
 
     renderer.render_all()

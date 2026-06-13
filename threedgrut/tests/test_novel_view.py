@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from threedgrut.utils.novel_view import (
+    LEGACY_NOVEL_AVG_MODES,
     NOVEL_VIEW_MODES,
     perturb_c2w,
     perturb_shutter_pair,
@@ -22,10 +23,53 @@ def _identity_c2w():
     return np.eye(4, dtype=np.float64)
 
 
-def test_modes_constant_has_exactly_four_modes():
-    assert NOVEL_VIEW_MODES == (
+def test_legacy_avg_modes_frozen_at_four():
+    """E1.1: mean_novel_lpips_avg 历史口径永远只聚合这 4 档（B3 锚 0.5962）。"""
+    assert LEGACY_NOVEL_AVG_MODES == (
         "lateral_1m", "lateral_2m", "yaw_5deg", "yaw_10deg",
     )
+
+
+def test_modes_constant_has_exactly_six_modes():
+    """E1.1: 新增 lateral_3m/6m 外推档；前 4 元素保持历史顺序。"""
+    assert NOVEL_VIEW_MODES == (
+        "lateral_1m", "lateral_2m", "yaw_5deg", "yaw_10deg",
+        "lateral_3m", "lateral_6m",
+    )
+    assert NOVEL_VIEW_MODES[:4] == LEGACY_NOVEL_AVG_MODES
+
+
+def test_lateral_3m_is_triple_of_1m():
+    m = _identity_c2w()
+    m[:3, 3] = [10.0, 20.0, 30.0]
+    delta1 = perturb_c2w(m, "lateral_1m")[:3, 3] - m[:3, 3]
+    delta3 = perturb_c2w(m, "lateral_3m")[:3, 3] - m[:3, 3]
+    assert np.allclose(delta3, 3.0 * delta1)
+
+
+def test_lateral_6m_shifts_along_right_axis_rotation_unchanged():
+    m = _identity_c2w()
+    out = perturb_c2w(m, "lateral_6m")
+    assert np.allclose(out[:3, 3], [6.0, 0.0, 0.0])
+    assert np.allclose(out[:3, :3], np.eye(3))
+
+
+def test_lateral_6m_shutter_pair_rigid():
+    """新档必须走 perturb_shutter_pair 的通用 lateral 分支：start/end 同 delta。"""
+    start = _identity_c2w()
+    end = _identity_c2w()
+    end[:3, 3] = [0.0, 0.0, 0.01]
+    R_end = np.array([
+        [np.cos(0.01), 0.0, np.sin(0.01)],
+        [0.0, 1.0, 0.0],
+        [-np.sin(0.01), 0.0, np.cos(0.01)],
+    ])
+    end[:3, :3] = R_end
+    new_s, new_e = perturb_shutter_pair(start, end, "lateral_6m")
+    delta_s = new_s[:3, 3] - start[:3, 3]
+    delta_e = new_e[:3, 3] - end[:3, 3]
+    assert np.allclose(delta_s, delta_e, atol=1e-9)
+    assert np.allclose(np.linalg.norm(delta_s), 6.0)
 
 
 def test_lateral_1m_shifts_position_along_right_axis():
