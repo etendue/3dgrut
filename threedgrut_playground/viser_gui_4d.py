@@ -23,6 +23,7 @@ Three fallback modes (matches Task G):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 import os
 import sys
@@ -96,7 +97,8 @@ class Viser4DViewer:
                  multi_cam_poses: Optional[dict] = None,
                  difix_server: Optional[str] = None,
                  harmonizer_temporal_server: Optional[str] = None,
-                 harmonizer_temporal_K: int = 4):
+                 harmonizer_temporal_K: int = 4,
+                 initial_cam_id: Optional[str] = None):
         self.engine = engine
         self.meta = metadata
         self.port = port
@@ -106,6 +108,12 @@ class Viser4DViewer:
         # "timestamps_us": (F,) int64}}. None when launched without
         # --dataset_path → dropdown contains only the primary camera.
         self._multi_cam_poses: dict = multi_cam_poses or {}
+        # E2.7 (H1 fix): lock initial viser client camera to this NCore camera
+        # id when present in multi_cam_poses. Without this, viser's default
+        # camera lands in far-field background gaussian noise on outdoor
+        # driving scenes, producing the "unrecognizable artifacts" symptom that
+        # killed the amazing-lalande session's visual validation.
+        self._initial_cam_id: Optional[str] = initial_cam_id
         self._follow_camera_enabled: bool = False
         self._cam_dropdown = None
         self._show_follow_cam = None
@@ -249,8 +257,36 @@ class Viser4DViewer:
 
         @self.server.on_client_connect
         def _on_connect(client: viser.ClientHandle):
-            # Apply viewer_defaults to the new client's free camera.
-            if self.meta is not None:
+            # E2.7 (H1): if --initial_cam_id given and present in
+            # multi_cam_poses, snap to that camera's c2w at the current
+            # timeline timestamp (default = t_us_first). Falls back to
+            # meta.initial_c2w (legacy behavior) when no cam_id given or not
+            # in the cam ring.
+            snapped = False
+            if (self._initial_cam_id
+                    and self._initial_cam_id in self._multi_cam_poses):
+                entry = self._multi_cam_poses[self._initial_cam_id]
+                c2w_arr = entry["c2w"]
+                ts_arr = entry["timestamps_us"]
+                if c2w_arr.shape[0] > 0:
+                    if ts_arr.size > 0:
+                        idx = int(np.searchsorted(ts_arr, self._t_us_current))
+                        idx = max(0, min(idx, ts_arr.size - 1))
+                    else:
+                        idx = 0
+                    c2w0 = c2w_arr[idx]
+                    R = c2w0[:3, :3]
+                    forward = R @ np.array([0.0, 0.0, 1.0], dtype=np.float32)
+                    up = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
+                    client.camera.wxyz = mat_to_wxyz(c2w0)
+                    client.camera.position = c2w0[:3, 3]
+                    client.camera.look_at = c2w0[:3, 3] + 10.0 * forward
+                    client.camera.up_direction = up
+                    snapped = True
+                    print(f"[E2.7] client snapped to initial_cam_id="
+                          f"'{self._initial_cam_id}' (frame_idx={idx})",
+                          flush=True)
+            if not snapped and self.meta is not None:
                 client.camera.wxyz = mat_to_wxyz(self.meta.initial_c2w)
                 client.camera.position = self.meta.initial_c2w[:3, 3]
             if self.initial_fov_rad is not None:
@@ -258,6 +294,25 @@ class Viser4DViewer:
             @client.camera.on_update
             def _(_):
                 self.need_update = True
+
+        # E2.7 (H1): swap engine FTheta + render WH to the initial cam's
+        # intrinsics once at startup, so the very first rendered backdrop
+        # uses the selected camera's projection. _snap_clients_to_camera
+        # also iterates connected clients (none yet at this point — safe
+        # no-op for client part; the FTheta swap is what we want here).
+        if (self._initial_cam_id
+                and self._initial_cam_id in self._multi_cam_poses):
+            self._snap_clients_to_camera(
+                self._initial_cam_id, self._t_us_current)
+            self._current_dropdown_cam = self._initial_cam_id
+            print(f"[E2.7] engine FTheta + dropdown locked to "
+                  f"'{self._initial_cam_id}'", flush=True)
+        elif self._initial_cam_id:
+            print(f"[E2.7-WARN] initial_cam_id='{self._initial_cam_id}' "
+                  f"not in multi_cam_poses "
+                  f"(have {list(self._multi_cam_poses.keys())[:5]}...); "
+                  f"viser will use meta.initial_c2w default — far-field "
+                  f"camera may produce 'unrecognizable artifacts'", flush=True)
 
     # ---------------------------------------------------------------- engine
     def _clear_engine_meshes(self) -> None:
@@ -1694,8 +1749,43 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gs_object", type=str, required=True,
-                        help="Path of pretrained 3dgrt checkpoint (.pt).")
+    parser.add_argument("--gs_object", type=str, default=None,
+                        help="Path of pretrained 3dgrt checkpoint (.pt). "
+                             "Mutually exclusive with --usdz; one of the two "
+                             "is required.")
+    # E2.7: NVIDIA NRE/NuRec USDZ entry — transparently downgrades to
+    # --gs_object path after on-the-fly conversion. Lets viser_gui_4d.py
+    # load NVIDIA-trained USDZ checkpoints for visual A/B comparison against
+    # 3dgrut2-native .pt outputs in a second viser instance.
+    parser.add_argument("--usdz", type=str, default=None,
+                        help="NVIDIA NRE/NuRec training-checkpoint USDZ path. "
+                             "Mutually exclusive with --gs_object. When given, "
+                             "main() calls convert_usdz_to_pt() to write a "
+                             "3dgrut2-native .pt to --usdz_cache_dir, then "
+                             "transparently downgrades to --gs_object path. "
+                             "Requires --dataset_path (USDZ-converted .pt has "
+                             "no viz_4d block; metadata comes from NCore "
+                             "fallback).")
+    parser.add_argument("--usdz_cache_dir", type=str,
+                        default=os.path.expanduser(
+                            "~/.cache/3dgrut2/nre_usdz_pt"),
+                        help="Where converted .pt files are cached "
+                             "(named <usdz_basename>_<mtime_hash>.pt for "
+                             "idempotent reload across viser restarts).")
+    parser.add_argument("--usdz_layers", type=str, default="background,road",
+                        help="Comma-separated NRE Gaussian layers to load. "
+                             "Default skips dynamic_rigids (Phase A scope) "
+                             "and sky_envmap (needs nvdiffrast, not installed "
+                             "on inceptio/A800).")
+    parser.add_argument("--initial_cam_id", type=str, default=None,
+                        help="E2.7 H1 fix: lock viser initial camera to this "
+                             "NCore camera id (must be present in "
+                             "_load_multi_cam_poses ring). Recommended "
+                             "'camera_front_120' for outdoor driving scenes "
+                             "— random/default viser cameras can land in "
+                             "far-field gaussian noise and produce "
+                             "'unrecognizable artifacts'. When omitted, "
+                             "viser uses meta.initial_c2w (legacy behavior).")
     parser.add_argument("--mesh_assets", type=str,
                         default=os.path.join(os.path.dirname(__file__), "assets"))
     parser.add_argument("--default_gs_config", type=str,
@@ -1772,6 +1862,51 @@ def main() -> None:
                              "--initial_fov_deg when omitted.")
     args = parser.parse_args()
 
+    # E2.7: USDZ entry — convert USDZ → 3dgrut2-native .pt, then
+    # transparently set args.gs_object so downstream Engine3DGRUT /
+    # torch.load / _load_metadata paths are unchanged.
+    if args.usdz is not None:
+        if args.gs_object is not None:
+            parser.error(
+                "--usdz and --gs_object are mutually exclusive; pick one.")
+        if not args.dataset_path:
+            parser.error(
+                "--usdz mode REQUIRES --dataset_path to the matching NCore "
+                "clip json — USDZ-converted .pt has no viz_4d block, so "
+                "metadata (timeline, ego pose, cam ring) must come from "
+                "NCore fallback. Without --dataset_path the viser panel "
+                "(timeline/frustum/cam dropdown) will be empty.")
+        from threedgrut_playground.utils.nre_usdz_loader import (
+            convert_usdz_to_pt,
+        )
+        os.makedirs(args.usdz_cache_dir, exist_ok=True)
+        usdz_abs = os.path.abspath(args.usdz)
+        mtime_hash = hashlib.md5(
+            f"{usdz_abs}:{os.path.getmtime(args.usdz)}".encode()
+        ).hexdigest()[:10]
+        cache_pt = os.path.join(
+            args.usdz_cache_dir,
+            f"{os.path.basename(args.usdz)}_{mtime_hash}.pt",
+        )
+        if not os.path.exists(cache_pt):
+            print(f"[E2.7-usdz] converting {args.usdz} → {cache_pt} "
+                  f"(layers={args.usdz_layers}, albedo_mode=dc)")
+            convert_usdz_to_pt(
+                args.usdz,
+                cache_pt,
+                config_name=(args.default_gs_config
+                             or "apps/ncore_3dgut_mcmc_multilayer"),
+                layers=tuple(l.strip() for l in args.usdz_layers.split(",")
+                             if l.strip()),
+                albedo_mode="dc",
+            )
+        else:
+            print(f"[E2.7-usdz] reusing cache {cache_pt} "
+                  f"(mtime_hash={mtime_hash})")
+        args.gs_object = cache_pt
+    elif args.gs_object is None:
+        parser.error("one of --gs_object or --usdz is required.")
+
     if args.no_gaussian_render:
         engine = None
         print("[viz_4d] --no_gaussian_render: skipping Engine3DGRUT "
@@ -1800,7 +1935,66 @@ def main() -> None:
         ckpt = torch.load(args.gs_object, weights_only=False)
     else:
         ckpt = {}
+
+    # E2.7 sanity-check (USDZ mode only): print per-layer position range +
+    # scene_extent so any coordinate-system / clip_floater issue surfaces
+    # immediately at startup instead of staring at a smeared viser. Cheap and
+    # diagnostic for H3 (far-field floaters) + H5 (coord-system mismatch).
+    if args.usdz and isinstance(ckpt, dict) and "model" in ckpt:
+        m = ckpt["model"]
+        nodes = m.get("gaussians_nodes", {}) if isinstance(m, dict) else {}
+        for layer, node in nodes.items():
+            try:
+                p = node["positions"]
+            except (KeyError, TypeError):
+                continue
+            try:
+                p_cpu = p.detach().cpu() if hasattr(p, "detach") else p
+                med = p_cpu.median(0).values.tolist()
+                print(
+                    f"[E2.7-sanity] layer={layer} N={p_cpu.shape[0]} "
+                    f"median=({med[0]:.2f},{med[1]:.2f},{med[2]:.2f}) "
+                    f"x=[{p_cpu[:,0].min().item():.1f},"
+                    f"{p_cpu[:,0].max().item():.1f}] "
+                    f"y=[{p_cpu[:,1].min().item():.1f},"
+                    f"{p_cpu[:,1].max().item():.1f}] "
+                    f"z=[{p_cpu[:,2].min().item():.1f},"
+                    f"{p_cpu[:,2].max().item():.1f}]",
+                    flush=True,
+                )
+            except Exception as _e:
+                print(f"[E2.7-sanity] layer={layer} stats failed: {_e!r}",
+                      flush=True)
+        ext = m.get("scene_extent", None) if isinstance(m, dict) else None
+        try:
+            ext_v = float(ext) if ext is not None else float("nan")
+        except (TypeError, ValueError):
+            ext_v = float("nan")
+        print(
+            f"[E2.7-sanity] scene_extent={ext_v:.2f}m "
+            f"(driving clip expect ~100-1000m; >5000m means "
+            f"clip_floater_gaussians 阈值还不够紧 — see plan H3)",
+            flush=True,
+        )
+
     metadata = _load_metadata(ckpt, args.dataset_path, args.default_gs_config)
+    # E2.7 H2 fix: explicit metadata source + USDZ-mode必填 enforcement.
+    if args.usdz and metadata is None:
+        raise RuntimeError(
+            f"--usdz mode failed to load metadata from "
+            f"--dataset_path={args.dataset_path}. USDZ-converted .pt has no "
+            f"viz_4d block, so NCore fallback is the only metadata source. "
+            f"Verify the dataset_path is the right pai_*.json for the same "
+            f"clip as {args.usdz}."
+        )
+    if metadata is not None:
+        print(
+            f"[E2.7] metadata source: "
+            f"{'USDZ→.pt (NCore fallback)' if args.usdz else 'ckpt viz_4d or NCore fallback'}, "
+            f"frames={len(metadata.frame_timestamps_us)}, "
+            f"t_us=[{metadata.t_us_first},{metadata.t_us_last}]",
+            flush=True,
+        )
     # T8.13: announce projection path so vast.ai / A800 operator sees
     # at a glance whether FTheta or pinhole approximation is in effect.
     if metadata is not None and metadata.has_ftheta():
@@ -1836,6 +2030,7 @@ def main() -> None:
         difix_server=args.difix_server,
         harmonizer_temporal_server=args.harmonizer_temporal_server,
         harmonizer_temporal_K=args.harmonizer_temporal_K,
+        initial_cam_id=args.initial_cam_id,
     )
     # Phase A diagnostic block — one-shot startup print, no GUI/render side
     # effects. See plan v2-t8-13-t8-14-bug-happy-starfish.md for the 4-bug
