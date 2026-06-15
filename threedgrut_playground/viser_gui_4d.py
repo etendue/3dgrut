@@ -52,6 +52,9 @@ from threedgrut_playground.utils.cuboid import (
     instance_color,
 )
 from threedgrut_playground.utils.difix_client import DifixClient
+from threedgrut_playground.utils.harmonizer_client import (
+    HarmonizerTemporalClient,
+)
 from threedgrut_playground.utils.viser_math import mat_to_wxyz
 from threedgrut_playground.utils.viser_overlay_compositor import (
     PolylineLayerSpec,
@@ -91,7 +94,9 @@ class Viser4DViewer:
                  target_fps: float = 20.0,
                  initial_fov_rad: Optional[float] = None,
                  multi_cam_poses: Optional[dict] = None,
-                 difix_server: Optional[str] = None):
+                 difix_server: Optional[str] = None,
+                 harmonizer_temporal_server: Optional[str] = None,
+                 harmonizer_temporal_K: int = 4):
         self.engine = engine
         self.meta = metadata
         self.port = port
@@ -213,6 +218,24 @@ class Viser4DViewer:
         self.difix_enabled: bool = False
         self.difix_rtt = None  # viser text handle, populated in _build_static_gui
 
+        # E2.6: temporal DiffusionHarmonizer post-process (optional). Sister to
+        # DiFix above but carries Harmonizer's temporal mode — the client holds
+        # a K-frame self-reference deque so the model de-flickers a continuous
+        # play sequence. Mutually exclusive with --difix_server (enforced in
+        # main()). The history deque lives on the client; a non-play timeline
+        # change (seek/scrub/loop-wrap) sets _postproc_reset_flag so the next
+        # frame is sent cold (V=1), preventing stale history leaking across a
+        # discontinuous jump.
+        self.harmonizer_temporal_client: Optional[HarmonizerTemporalClient] = (
+            HarmonizerTemporalClient.from_addr(
+                harmonizer_temporal_server, K=harmonizer_temporal_K
+            ) if harmonizer_temporal_server else None
+        )
+        self._postproc_reset_flag: bool = True  # cold-start the first frame
+        # Track the last-rendered resolution so a slider change forces a temporal
+        # history reset (history frames must match curr's HxW).
+        self._postproc_last_wh: Optional[tuple] = None
+
         # --- viser server + GUI ---
         self.server = viser.ViserServer(port=self.port)
         self._clear_engine_meshes()
@@ -286,6 +309,29 @@ class Viser4DViewer:
                         _self.need_update = True
                         print(f"[DiFix] enabled={_self.difix_enabled}",
                               flush=True)
+                # E2.6: temporal Harmonizer toggle — only when
+                # --harmonizer_temporal_server was given. Mutually exclusive
+                # with DiFix (main() rejects both flags). On enable, reset the
+                # temporal history so the model starts from a clean cold frame.
+                if self.harmonizer_temporal_client is not None:
+                    self.harmonizer_checkbox = self.server.gui.add_checkbox(
+                        "Harmonizer (temporal, de-flicker)",
+                        initial_value=False)
+                    self.difix_rtt = self.server.gui.add_text(
+                        "Harmonizer RTT", initial_value="-", disabled=True)
+                    self.server.gui.add_markdown(
+                        "_Harmonizer temporal 模式：回读前 K 帧已修复输出做"
+                        "时序参考，连续 Play 去闪烁。Seek/拖动会自动重置历史。_")
+
+                    @self.harmonizer_checkbox.on_update
+                    def _(_, _self=self):
+                        _self.difix_enabled = bool(
+                            _self.harmonizer_checkbox.value)
+                        if _self.difix_enabled:
+                            _self._postproc_reset_flag = True
+                        _self.need_update = True
+                        print(f"[Harmonizer-temporal] enabled="
+                              f"{_self.difix_enabled}", flush=True)
             else:
                 self.server.gui.add_text(
                     "Mode",
@@ -800,6 +846,12 @@ class Viser4DViewer:
         # Clamp to [first, last] range and store.
         t_us = max(self.meta.t_us_first, min(int(t_us), self.meta.t_us_last))
         self._t_us_current = t_us
+        # E2.6: any non-play timeline change (seek / scrub / loop-wrap / init)
+        # is a discontinuous jump — flag the temporal post-proc to reset its
+        # history on the next frame so stale frames don't leak across the jump.
+        # "play" is the only continuous-sequence source (advances by dt_us).
+        if source != "play":
+            self._postproc_reset_flag = True
         # Update ego frustum + cuboid + UI mirrors.
         self._update_ego_frustum(t_us)
         frame_idx = self.meta.lookup_frame_idx(t_us)
@@ -1195,14 +1247,43 @@ class Viser4DViewer:
         return img.cpu().numpy()
 
     def _maybe_difix(self, img: np.ndarray) -> np.ndarray:
-        """Route a rendered ``(H,W,3)`` uint8 frame through the DiFix server.
+        """Route a rendered ``(H,W,3)`` uint8 frame through the active post-proc.
+
+        Dispatches to whichever out-of-process server was configured:
+          * Harmonizer temporal client (E2.6) — when present, sends ``1 + K``
+            frames (curr + history) for de-flickering. Consumes and clears
+            ``_postproc_reset_flag`` (set by non-play timeline changes) so a
+            seek/scrub starts cold. Also forces a reset when the rendered
+            resolution changed since the last frame (history frames must match
+            curr's HxW).
+          * DiFix client (original single-frame path) — unchanged.
 
         No-op (returns ``img`` unchanged) when the toggle is off or no server
-        was configured. ``DifixClient.fix`` degrades gracefully — on any socket
-        / protocol error it returns the raw frame, so this never blocks or
+        was configured. Both clients degrade gracefully — on any socket /
+        protocol error they return the raw frame, so this never blocks or
         crashes the interactive loop.
         """
-        if not self.difix_enabled or self.difix_client is None:
+        if not self.difix_enabled:
+            return img
+        if self.harmonizer_temporal_client is not None:
+            hc = self.harmonizer_temporal_client
+            # Resolution lock: if HxW changed since the last frame, the history
+            # deque holds stale-sized frames → force a cold reset.
+            wh = (img.shape[1], img.shape[0])
+            if self._postproc_last_wh is not None and \
+                    self._postproc_last_wh != wh:
+                self._postproc_reset_flag = True
+            self._postproc_last_wh = wh
+            reset = self._postproc_reset_flag
+            self._postproc_reset_flag = False  # one-shot consume
+            out = hc.fix(img, reset=reset)
+            if self.difix_rtt is not None:
+                self.difix_rtt.value = (
+                    f"{hc.last_rtt_ms:.0f} ms"
+                    if hc.healthy else "unavailable"
+                )
+            return out
+        if self.difix_client is None:
             return img
         out = self.difix_client.fix(img)
         if self.difix_rtt is not None:
@@ -1633,6 +1714,23 @@ def main() -> None:
                              "Start the server with "
                              "threedgrut_playground/difix_server.py inside the "
                              "cosmos Docker env. Default: off.")
+    parser.add_argument("--harmonizer_temporal_server", type=str, default=None,
+                        help="E2.6: host:port of a temporal DiffusionHarmonizer "
+                             "server (e.g. 127.0.0.1:59490). When set, a "
+                             "'Harmonizer (temporal)' toggle appears; enabling "
+                             "it routes each rendered frame through Harmonizer's "
+                             "temporal mode (curr + last K corrected outputs) "
+                             "for de-flickering continuous play sequences. "
+                             "Seek/scrub auto-resets the history. Mutually "
+                             "exclusive with --difix_server. Start the server "
+                             "with threedgrut_playground/harmonizer_temporal_"
+                             "server.py inside the harmonizer-cosmos-env Docker "
+                             "env. Default: off.")
+    parser.add_argument("--harmonizer_temporal_K", type=int, default=4,
+                        help="E2.6: history depth K for temporal Harmonizer "
+                             "(default 4, the paper default). The client holds "
+                             "up to K prior corrected outputs; each request "
+                             "carries 1 + min(history, K) frames.")
     parser.add_argument("--no_gaussian_render", action="store_true",
                         help="Skip Engine3DGRUT init + Gaussian background "
                              "rendering. Required on Ampere datacenter SKUs "
@@ -1722,12 +1820,22 @@ def main() -> None:
     if multi_cam_poses:
         print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available "
               f"for dropdown / Follow Camera")
+    # E2.6: DiFix (single-frame) and Harmonizer (temporal) post-proc backends
+    # are mutually exclusive — both wire the same toggle/RTT slot.
+    if args.difix_server and args.harmonizer_temporal_server:
+        raise SystemExit(
+            "[viz_4d] --difix_server and --harmonizer_temporal_server are "
+            "mutually exclusive (both wire the single post-proc toggle). "
+            "Pick one."
+        )
     viewer = Viser4DViewer(
         port=args.port, engine=engine, metadata=metadata,
         target_fps=args.target_fps,
         initial_fov_rad=math.radians(args.initial_fov_deg),
         multi_cam_poses=multi_cam_poses,
         difix_server=args.difix_server,
+        harmonizer_temporal_server=args.harmonizer_temporal_server,
+        harmonizer_temporal_K=args.harmonizer_temporal_K,
     )
     # Phase A diagnostic block — one-shot startup print, no GUI/render side
     # effects. See plan v2-t8-13-t8-14-bug-happy-starfish.md for the 4-bug
