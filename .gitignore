@@ -50,3 +50,4 @@ uv.lock
 # scripts/download_depth_anything_v2.sh; ~1.3GB, never committed).
 models/depth_anything_v2/
 .claude
+.glm
