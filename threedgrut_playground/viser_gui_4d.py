@@ -487,6 +487,43 @@ class Viser4DViewer:
         @self.reset_view_button.on_click
         def _(_):
             self.need_update = True
+            # E2.7 P3 fix: if --initial_cam_id was given and resolves into
+            # multi_cam_poses, Reset View snaps back to THAT camera at the
+            # current timeline timestamp — matching the connect-time snap
+            # behavior. Without this, Reset would jump to meta.initial_c2w
+            # (typically alphabetical first camera, e.g. camera_cross_left)
+            # which surprised the user. Falls back to legacy meta.initial_c2w
+            # behavior when no initial_cam_id given or not in cam ring.
+            snapped = False
+            if (self._initial_cam_id
+                    and self._initial_cam_id in self._multi_cam_poses):
+                entry = self._multi_cam_poses[self._initial_cam_id]
+                c2w_arr = entry["c2w"]
+                ts_arr = entry["timestamps_us"]
+                if c2w_arr.shape[0] > 0:
+                    if ts_arr.size > 0:
+                        idx = int(np.searchsorted(ts_arr, self._t_us_current))
+                        idx = max(0, min(idx, ts_arr.size - 1))
+                    else:
+                        idx = 0
+                    c2w0 = c2w_arr[idx]
+                    R = c2w0[:3, :3]
+                    forward_world = R @ np.array([0.0, 0.0, 1.0],
+                                                 dtype=np.float32)
+                    up_world = R @ np.array([0.0, -1.0, 0.0],
+                                            dtype=np.float32)
+                    for client in self.server.get_clients().values():
+                        client.camera.wxyz = mat_to_wxyz(c2w0)
+                        client.camera.position = c2w0[:3, 3]
+                        client.camera.look_at = c2w0[:3, 3] + 10.0 * forward_world
+                        client.camera.up_direction = up_world
+                        if self.initial_fov_rad is not None:
+                            client.camera.fov = float(self.initial_fov_rad)
+                    snapped = True
+            if snapped:
+                return
+            # Legacy fallback: snap to meta.initial_c2w (the alphabetical
+            # first camera in 5/7-cam ring, kept for backwards compat).
             for client in self.server.get_clients().values():
                 # T8.12 fix: snap camera back to ckpt's initial_c2w so user
                 # sees the dashcam viewpoint matching the training cameras
@@ -939,7 +976,25 @@ class Viser4DViewer:
         assert self.meta is not None
         if self.h_ego_frustum is None:
             return
-        pose = self.meta.ego_pose_at(t_us)
+        # E2.7 P4 fix: when --initial_cam_id is given and present in
+        # multi_cam_poses, use THAT camera's c2w as the ego-frustum pose.
+        # Default NCore meta.ego_pose_at returns the primary camera which is
+        # the alphabetical first sensor (camera_cross_left_120fov) — its
+        # mount points down-left (A-pillar blindspot coverage), making the
+        # frustum visually "point at the ground" instead of "point forward".
+        # The user expects a dashcam-style forward frustum.
+        pose = None
+        if (self._initial_cam_id
+                and self._initial_cam_id in self._multi_cam_poses):
+            entry = self._multi_cam_poses[self._initial_cam_id]
+            c2w_arr = entry["c2w"]
+            ts_arr = entry["timestamps_us"]
+            if c2w_arr.shape[0] > 0 and ts_arr.size > 0:
+                idx = int(np.searchsorted(ts_arr, int(t_us)))
+                idx = max(0, min(idx, ts_arr.size - 1))
+                pose = c2w_arr[idx]
+        if pose is None:
+            pose = self.meta.ego_pose_at(t_us)
         self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
         self.h_ego_frustum.position = pose[:3, 3]
 
@@ -1739,7 +1794,32 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
     conf = ckpt["config"]
     conf = OmegaConf.merge(conf, OmegaConf.create({"path": dataset_path}))
     print(f"[viz_4d] no viz_4d block; extracting on-the-fly from {dataset_path}")
-    train_ds = NCoreDataset(conf, split="train")
+    # E2.7 fix: NCoreDataset.__init__ takes ``datapath: str`` as first positional
+    # arg, NOT a conf object. The previous ``NCoreDataset(conf, split="train")``
+    # call was a dormant bug since T8.6 (2026-05-20) because every v2 ckpt
+    # carried a viz_4d block and the fallback branch never ran. USDZ-converted
+    # ckpts have no viz_4d block, so this is the first real exercise of the
+    # fallback. Mirror _load_multi_cam_poses (L1604) signature — proven on the
+    # same NCore clip 9ae151dc — including the "Multiple camera sensors"
+    # ValueError fallback for multi-cam rings (camera_ids=None first probe
+    # surfaces the sensor list, second open passes the full list).
+    try:
+        train_ds = NCoreDataset(
+            datapath=str(dataset_path), split="train", device="cpu",
+            sample_full_image=True, camera_ids=None, load_aux_masks=False,
+        )
+    except ValueError as _err:
+        _msg = str(_err)
+        if "Multiple camera sensors" not in _msg or "[" not in _msg:
+            raise
+        import ast as _ast
+        _lit = _msg[_msg.index("["):_msg.rindex("]") + 1]
+        _all_cam_ids = sorted(_ast.literal_eval(_lit))
+        train_ds = NCoreDataset(
+            datapath=str(dataset_path), split="train", device="cpu",
+            sample_full_image=True, camera_ids=_all_cam_ids,
+            load_aux_masks=False,
+        )
     specs = specs_from_config(conf)
     model = LayeredGaussians(conf, specs=specs, scene_extent=1.0)
     model.init_from_checkpoint(ckpt, setup_optimizer=False)
@@ -1747,7 +1827,65 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
     return FourDMetadata.from_ckpt({"viz_4d": md_dict})
 
 
+def _cleanup_stale_jit_baton_locks(min_age_s: float = 60.0) -> None:
+    """E2.7: remove stale PyTorch JIT FileBaton lock files left by SIGKILL'd
+    extension-loading processes.
+
+    Root cause: ``torch.utils.file_baton.FileBaton.wait()`` is a presence-only
+    poll (``while os.path.exists(lock_path): sleep``). The lock file is created
+    on compile start and deleted on compile end — but if the holding process is
+    ``pkill -9``'d mid-compile (no atexit hook runs), the lock file persists
+    forever and ALL future processes block in an infinite loop trying to load
+    the same extension. nvidia-smi shows clean GPU; ``flock -n`` succeeds (it's
+    not an fcntl lock); restart doesn't fix it (lock is on disk).
+
+    Symptom: Engine3DGRUT init hangs silently in ``Tracer → load_3dgut_plugin
+    → jit.load → _jit_compile → file_baton.wait`` with WCHAN=hrtimer_nanosleep
+    and 0% CPU forever. faulthandler dump traces straight to file_baton.py:51.
+
+    Safe-removal heuristic: only delete locks older than ``min_age_s`` seconds.
+    A lock younger than that may belong to a peer process currently compiling.
+
+    Related upstream issues:
+      https://github.com/pytorch/pytorch/issues/9711
+      https://github.com/pytorch/pytorch/issues/41511
+    """
+    import glob as _glob
+    import time as _time
+    base = os.path.expanduser("~/.cache/torch_extensions")
+    if not os.path.isdir(base):
+        return
+    locks = _glob.glob(os.path.join(base, "py*/*/lock"))
+    now = _time.time()
+    cleared = []
+    for lk in locks:
+        try:
+            st = os.stat(lk)
+        except FileNotFoundError:
+            continue
+        age = now - st.st_mtime
+        if age < min_age_s:
+            continue
+        try:
+            os.remove(lk)
+            cleared.append((lk, age))
+        except OSError as e:
+            print(f"[viz_4d] stale-lock cleanup: {lk} rm failed ({e})",
+                  flush=True)
+    if cleared:
+        for lk, age in cleared:
+            print(f"[viz_4d] removed stale JIT FileBaton lock "
+                  f"{lk} (age {age:.0f}s) — prevents file_baton.wait() "
+                  f"infinite loop. See https://github.com/pytorch/pytorch/"
+                  f"issues/9711", flush=True)
+
+
 def main() -> None:
+    # E2.7: guard against zombie JIT locks from previously SIGKILL'd processes.
+    # Must run BEFORE the first import that triggers torch.utils.cpp_extension
+    # (Engine3DGRUT → Tracer → load_3dgut_plugin → jit.load). Cheap (~1ms).
+    _cleanup_stale_jit_baton_locks()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--gs_object", type=str, default=None,
                         help="Path of pretrained 3dgrt checkpoint (.pt). "
@@ -1904,9 +2042,103 @@ def main() -> None:
             print(f"[E2.7-usdz] reusing cache {cache_pt} "
                   f"(mtime_hash={mtime_hash})")
         args.gs_object = cache_pt
+
+        # E2.7 P1/P4 fix: align NRE gaussians to NCore world frame.
+        # NRE/NuRec training puts its sequence origin at ego[0] (sequence-
+        # local frame); NCore SDK ego trajectory / cam poses are in
+        # world_global frame where ego[0] sits at a non-zero offset
+        # (~few meters). Without this translation, viser renders gaussians
+        # correctly but ego frustum / trajectory polyline / initial camera
+        # land a few meters off the actual road position (the "P1 + P4"
+        # symptoms in plan H4/H5).
+        # Per-dataset offset is cached alongside the NRE-frame ckpt so the
+        # ~5s NCore SDK init only happens once per (usdz, dataset_path) pair.
+        aligned_pt = cache_pt[:-3] + "_aligned.pt"
+        if not os.path.exists(aligned_pt):
+            print(f"[E2.7-align] reading USDZ rig_trajectories.world_to_nre "
+                  f"for NRE→NCore world translate...", flush=True)
+            try:
+                # E2.7 P1 ROOT-CAUSE FIX: USDZ container carries
+                # ``rig_trajectories.json`` with a top-level ``world_to_nre``
+                # 4x4 matrix — the EXACT transform NRE applied to map NCore
+                # world → NRE training frame (typically pure translate by
+                # ego trajectory midpoint, e.g. -38m x for clip 9ae151dc, to
+                # keep float32 positions small near origin). Inverse =
+                # NRE→world translate = -world_to_nre.matrix[:3, 3]. This
+                # replaces the previous wrong heuristic of using NCore SDK
+                # ego_pose[0] (~2m, wrong magnitude by 18×, wrong direction).
+                # Detection by user (大g): "3dgrut2 ckpt 和 USDZ 同源，c2w
+                # 数值应该一样" — diff revealed world_to_nre as the missing
+                # transform.
+                import zipfile as _zf, json as _json
+                with _zf.ZipFile(args.usdz) as _zip:
+                    with _zip.open("rig_trajectories.json") as _fp:
+                        _rt = _json.load(_fp)
+                _w2nre = _rt.get("world_to_nre") or {}
+                _w2nre_mat = np.asarray(
+                    _w2nre.get("matrix") if isinstance(_w2nre, dict)
+                    else _w2nre,
+                    dtype=np.float64,
+                ).reshape(4, 4)
+                # NRE → NCore world translate = -world_to_nre.translation
+                _translate = (-_w2nre_mat[:3, 3]).astype(np.float32)
+                print(f"[E2.7-align] world_to_nre.translation="
+                      f"{_w2nre_mat[:3,3].tolist()}", flush=True)
+                print(f"[E2.7-align] NRE→world translate "
+                      f"={_translate.tolist()} (= -world_to_nre.translation)",
+                      flush=True)
+                # Sanity: rotation block should be identity (NRE typically
+                # only translates origin, never rotates). If non-identity,
+                # we'd need full matrix multiply on positions + per-axis
+                # rotation on rotation quaternions — warn but proceed with
+                # translate-only.
+                _R = _w2nre_mat[:3, :3]
+                if not np.allclose(_R, np.eye(3), atol=1e-4):
+                    print(f"[E2.7-align] WARN: world_to_nre rotation NOT "
+                          f"identity (R=\n{_R}\n); translate-only align is "
+                          f"insufficient. Visual artifact possible. Full "
+                          f"matrix align TODO if user sees rotation skew.",
+                          flush=True)
+                # Load NRE ckpt, apply +translate to every layer's positions,
+                # save to aligned cache.
+                _ckpt = torch.load(cache_pt, weights_only=False)
+                _trans_t = torch.as_tensor(_translate, dtype=torch.float32)
+                for _layer, _node in _ckpt["model"]["gaussians_nodes"].items():
+                    _p = _node["positions"]
+                    _orig_param = isinstance(_p, torch.nn.Parameter)
+                    _p_dev = _p.device
+                    _p_dtype = _p.dtype
+                    with torch.no_grad():
+                        _p_new = _p.detach() + _trans_t.to(
+                            device=_p_dev, dtype=_p_dtype)
+                    if _orig_param:
+                        _node["positions"] = torch.nn.Parameter(
+                            _p_new.contiguous(), requires_grad=False)
+                    else:
+                        _node["positions"] = _p_new.contiguous()
+                    print(f"[E2.7-align]   layer={_layer}: shifted "
+                          f"{_p.shape[0]} gaussians by "
+                          f"({_translate[0]:.2f},{_translate[1]:.2f},"
+                          f"{_translate[2]:.2f})", flush=True)
+                torch.save(_ckpt, aligned_pt)
+                print(f"[E2.7-align] wrote aligned ckpt → {aligned_pt}",
+                      flush=True)
+            except Exception as _ae:
+                print(f"[E2.7-align] WARN: world-align skipped ({_ae!r}); "
+                      f"P1/P4 frustum/trajectory may show ~few-meter offset",
+                      flush=True)
+                aligned_pt = None
+        else:
+            print(f"[E2.7-align] reusing aligned cache {aligned_pt}",
+                  flush=True)
+        if aligned_pt is not None and os.path.exists(aligned_pt):
+            args.gs_object = aligned_pt
     elif args.gs_object is None:
         parser.error("one of --gs_object or --usdz is required.")
 
+    print(f"[E2.7-init] about to init Engine3DGRUT(gs_object={args.gs_object}, "
+          f"default_config={args.default_gs_config}, renderer={args.renderer})",
+          flush=True)
     if args.no_gaussian_render:
         engine = None
         print("[viz_4d] --no_gaussian_render: skipping Engine3DGRUT "
@@ -1988,13 +2220,36 @@ def main() -> None:
             f"clip as {args.usdz}."
         )
     if metadata is not None:
+        _n_frames = (metadata.n_frames()
+                     if callable(getattr(metadata, "n_frames", None))
+                     else metadata.n_frames)
         print(
             f"[E2.7] metadata source: "
             f"{'USDZ→.pt (NCore fallback)' if args.usdz else 'ckpt viz_4d or NCore fallback'}, "
-            f"frames={len(metadata.frame_timestamps_us)}, "
+            f"frames={_n_frames}, "
             f"t_us=[{metadata.t_us_first},{metadata.t_us_last}]",
             flush=True,
         )
+
+    # E2.7 H1 alias fallback: NCore cam ids vary between clip generations
+    # (camera_front_120 vs camera_front_wide_120fov vs front_120). If user
+    # passed a non-existent id, try a few common forward-camera aliases so
+    # the visual-comparison workflow works without re-launching.
+    if args.initial_cam_id:
+        # Just an early hint; the actual snap happens in Viser4DViewer based
+        # on this exact arg value. _load_multi_cam_poses is called later
+        # (next block), so we don't have the cam ring here yet — the
+        # Viser4DViewer init prints a WARN with the available list when
+        # the id misses. This early alias note is purely informational.
+        _common_front_aliases = (
+            "camera_front_120", "front_120",
+            "camera_front_wide_120fov", "camera_front_wide", "front",
+        )
+        if args.initial_cam_id not in _common_front_aliases:
+            print(f"[E2.7] initial_cam_id='{args.initial_cam_id}' (custom; "
+                  f"if missing from cam ring, viser will WARN with the "
+                  f"available list — try one of {_common_front_aliases})",
+                  flush=True)
     # T8.13: announce projection path so vast.ai / A800 operator sees
     # at a glance whether FTheta or pinhole approximation is in effect.
     if metadata is not None and metadata.has_ftheta():
@@ -2014,6 +2269,44 @@ def main() -> None:
     if multi_cam_poses:
         print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available "
               f"for dropdown / Follow Camera")
+
+    # E2.7 P1/P4 diagnostic: dump NCore metadata frame origin vs USDZ gaussian
+    # center side-by-side so the operator can immediately tell if the two are
+    # in the same coordinate frame. If ego_poses[0] is at e.g. (200, 100, 0)
+    # while background median is at (3, -4, 8), the NCore SDK trajectory is
+    # in world_global (accumulated) frame but NRE USDZ gaussians are in
+    # ego/rig local frame — viser will then render gaussians correctly but
+    # the ego frustum / trajectory polyline / initial camera land in a
+    # different coordinate system (looks like "frustum position not at car",
+    # "initial camera x offset", "ego trajectory not on the road").
+    if args.usdz and metadata is not None:
+        try:
+            ego_first = metadata.ego_pose_at(metadata.t_us_first)
+            ep = ego_first[:3, 3]
+            print(f"[E2.7-coord] NCore ego_pose_at(t_us_first) "
+                  f"position=({ep[0]:.2f},{ep[1]:.2f},{ep[2]:.2f})", flush=True)
+            if hasattr(metadata, "ego_poses_c2w") and metadata.ego_poses_c2w is not None and metadata.ego_poses_c2w.size > 0:
+                e0 = metadata.ego_poses_c2w[0, :3, 3]
+                eN = metadata.ego_poses_c2w[-1, :3, 3]
+                print(f"[E2.7-coord] NCore ego_poses_c2w[0]={tuple(round(float(v),2) for v in e0)} "
+                      f"[-1]={tuple(round(float(v),2) for v in eN)} "
+                      f"(span={(eN-e0).round(1).tolist()})", flush=True)
+            if multi_cam_poses and args.initial_cam_id in multi_cam_poses:
+                c0 = multi_cam_poses[args.initial_cam_id]["c2w"][0, :3, 3]
+                print(f"[E2.7-coord] '{args.initial_cam_id}' c2w[0] "
+                      f"position=({c0[0]:.2f},{c0[1]:.2f},{c0[2]:.2f})", flush=True)
+            # Background gaussian median already printed by sanity-check
+            # above (E2.7-sanity layer=background median=...). Compare visually
+            # against these ego-frame coordinates: if magnitudes differ >100x
+            # or signs flip, gaussians and metadata are in different frames.
+            print("[E2.7-coord] compare with [E2.7-sanity] background median "
+                  "above. Same-frame: numbers should be in the same ballpark "
+                  "(driving scene ego trajectory ≤ a few km accumulated; "
+                  "NRE local frame: a few hundred m centered on ~0).",
+                  flush=True)
+        except Exception as _e:
+            print(f"[E2.7-coord] diagnostic failed: {_e!r}", flush=True)
+
     # E2.6: DiFix (single-frame) and Harmonizer (temporal) post-proc backends
     # are mutually exclusive — both wire the same toggle/RTT slot.
     if args.difix_server and args.harmonizer_temporal_server:

@@ -324,6 +324,18 @@ def build_native_ckpt(
     with initialize(version_base=None, config_path="../../configs"):
         conf = compose(config_name=config_name)
     conf.experiment_name = experiment_name
+    # E2.7 fix: force layered-model route. ``apps/ncore_3dgut_mcmc_multilayer``
+    # yaml sets ``use_layered_model: true`` at line 50, but its ``# @package
+    # _global_`` directive doesn't propagate via ``compose(config_name="apps/
+    # ncore_3dgut_mcmc_multilayer")`` — the resulting conf still carries the
+    # ``base_gs.yaml`` default ``use_layered_model: false``. Without this
+    # explicit override, engine.py:load_3dgrt_object detects
+    # ``use_layered_ckpt=False`` and routes our nested-gaussians_nodes ckpt
+    # through the v1 MixtureOfGaussians.init_from_checkpoint, which expects
+    # flat ``checkpoint["positions"]`` and crashes with KeyError: 'positions'.
+    # Force the flag so the engine takes the LayeredGaussians branch and reads
+    # ``checkpoint["model"]["gaussians_nodes"][<layer>][...]``.
+    conf.use_layered_model = True
     # Restrict enabled layers to exactly what we load. Crucially this drops
     # ``sky_envmap`` (multilayer default), whose cubemap backend needs
     # nvdiffrast (absent on inceptio/A800) and would crash _blend_sky on the
