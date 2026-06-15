@@ -119,7 +119,20 @@ class HarmonizerTemporalClient:
         try:
             t0 = time.perf_counter()
             s = self._connect()
-            s.sendall(pack_temporal(img, list(self._history), self.K))
+            # Harmonizer's temporal Conv3d (kernel size 3 on the V axis) only
+            # accepts V=1 (nontemporal path) or V >= 3. Intermediate V values
+            # (2, ...) make the kernel larger than the input and crash forward
+            # (RuntimeError: Kernel size can't be greater than actual input
+            # size). The official inference script (inference_pix2pix_turbo_
+            # harmonizer.py L133) avoids this by going temporal ONLY once the
+            # full history is available (have_history = len >= min_history),
+            # otherwise it runs V=1. We mirror that: send the full 1+K stack
+            # only when the deque is full; otherwise send curr alone (V=1).
+            if len(self._history) >= self.K:
+                payload_history = list(self._history)
+            else:
+                payload_history = []  # cold-start / warmup → V=1 nontemporal
+            s.sendall(pack_temporal(img, payload_history, self.K))
             out = read_frame(s)
             self.last_rtt_ms = (time.perf_counter() - t0) * 1000.0
             self.healthy = True

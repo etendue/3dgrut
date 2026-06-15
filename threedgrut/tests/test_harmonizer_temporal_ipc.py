@@ -207,11 +207,13 @@ def test_client_roundtrip_echo():
 
 
 def test_client_history_grows_then_caps_at_K():
-    """Successive fix() calls grow history up to K, then hold at K.
+    """History deque fills to K, but V stays 1 until full (Conv3d constraint).
 
-    Verifies the self-reference convention (corrected outputs feed history) and
-    the deque maxlen cap. observed_kin confirms the *server* sees the right
-    depth: 0, 1, 2, 3, 4, 4, ... for K=4.
+    Harmonizer's temporal Conv3d (kernel=3 on V axis) only accepts V=1 or V>=3;
+    V=2 crashes forward. So the client mirrors the official inference script:
+    send V=1 (curr alone) while history < K, then V=1+K once full. The deque
+    still fills frame-by-frame (self-reference), but the *wire* V jumps 1→1+K
+    only when full. observed_kin confirms: 0,0,0,0,4,4,4 for K=4.
     """
     with _echo_temporal_server() as (port, kin):
         c = HarmonizerTemporalClient("127.0.0.1", port, K=4)
@@ -222,54 +224,68 @@ def test_client_history_grows_then_caps_at_K():
             assert c.history_depth == 4
         finally:
             c.close()
-    # Server saw: 0,1,2,3,4,4,4 (cold start grows, then capped)
-    assert kin == [0, 1, 2, 3, 4, 4, 4]
+    # Server saw V=1 (K_in=0) for the first 4 frames (warmup), then V=5 (K_in=4).
+    assert kin == [0, 0, 0, 0, 4, 4, 4]
 
 
 def test_client_reset_clears_history():
-    """fix(img, reset=True) drops history — next request is V=1 again."""
+    """fix(img, reset=True) drops history — next request is V=1 again.
+
+    With the Conv3d warmup rule, V is already 1 while history < K, so a reset
+    during warmup is a no-op on the wire (still V=1). The meaningful test is
+    reset *after* history is full: it drops back to V=1.
+    """
     with _echo_temporal_server() as (port, kin):
-        c = HarmonizerTemporalClient("127.0.0.1", port, K=4)
+        c = HarmonizerTemporalClient("127.0.0.1", port, K=2)
         try:
-            c.fix(_rand_img(seed=1))
-            c.fix(_rand_img(seed=2))
+            c.fix(_rand_img(seed=1))  # V=1 (warmup, history 0<2)
+            c.fix(_rand_img(seed=2))  # V=1 (warmup, history 1<2)
             assert c.history_depth == 2
-            # Reset: this frame carries no history.
-            c.fix(_rand_img(seed=3), reset=True)
-            assert c.history_depth == 1  # the just-returned frame
-            c.fix(_rand_img(seed=4))
+            c.fix(_rand_img(seed=3))  # V=3 (history full: 1+K=3)
+            # Reset: history cleared → V=1 again.
+            c.fix(_rand_img(seed=4), reset=True)
+            assert c.history_depth == 1
+            c.fix(_rand_img(seed=5))  # V=1 (warmup again, 1<2)
+            c.fix(_rand_img(seed=6))  # V=1 (warmup, 2 not yet, history 1<2... actually 2 now)
         finally:
             c.close()
-    # Server saw: 0, 1, [reset->0], 1
-    assert kin == [0, 1, 0, 1]
+    # K=2: frame1 V=1(0), frame2 V=1(0, 1<2), frame3 V=3(2 full),
+    #       frame4 reset V=1(0), frame5 V=1(0, 1<2), frame6 V=3(2 full)
+    assert kin == [0, 0, 2, 0, 0, 2]
 
 
 def test_client_reset_method_clears_history():
     """The explicit reset() method also clears the deque."""
     with _echo_temporal_server() as (port, kin):
-        c = HarmonizerTemporalClient("127.0.0.1", port, K=4)
+        c = HarmonizerTemporalClient("127.0.0.1", port, K=2)
         try:
             c.fix(_rand_img(seed=1))
             c.fix(_rand_img(seed=2))
+            c.fix(_rand_img(seed=3))  # history full → V=3
             assert c.history_depth == 2
             c.reset()
             assert c.history_depth == 0
-            c.fix(_rand_img(seed=3))
+            c.fix(_rand_img(seed=4))  # V=1 after reset
         finally:
             c.close()
-    assert kin == [0, 1, 0]
+    assert kin == [0, 0, 2, 0]
 
 
-def test_client_cold_start_k_grows():
-    """First K frames: each request carries one more history frame than prior."""
+def test_client_cold_start_is_V1_until_full():
+    """While history < K, every request is V=1 (Conv3d warmup constraint).
+
+    The client never sends V=2..K — those crash Harmonizer's temporal Conv3d
+    (kernel size 3 > V). Only V=1 (warmup) and V=1+K (full) are valid.
+    """
     with _echo_temporal_server() as (port, kin):
         c = HarmonizerTemporalClient("127.0.0.1", port, K=3)
         try:
-            for i in range(3):
+            for i in range(5):
                 c.fix(_rand_img(seed=i))
         finally:
             c.close()
-    assert kin == [0, 1, 2]
+    # V=1,1,1 (warmup, history 0,1,2 < 3), then V=4,4 (history full at 3+)
+    assert kin == [0, 0, 0, 3, 3]
 
 
 def test_client_falls_back_to_raw_on_refused_connection():
