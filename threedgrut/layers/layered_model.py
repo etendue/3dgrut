@@ -593,6 +593,17 @@ class LayeredGaussians(nn.Module):
         }
         if layered_track_state:
             out["layered_track_state"] = layered_track_state
+        # E3.3: road BEV texture grid — saved explicitly (its _road_bev_ prefix
+        # doesn't match the _track_ filter above, so it would otherwise be
+        # dropped). set_road_bev_grid rebuilds it on load. Only present when
+        # road_bev_texture was enabled → OFF runs keep byte-identical ckpts.
+        if getattr(self, "_road_bev_grid", None) is not None:
+            out["road_bev_state"] = {
+                "grid_feature": self._road_bev_grid_feature.detach().cpu(),
+                "xy_min": self._road_bev_xy_min.detach().cpu(),
+                "occupied": self._road_bev_occupied.detach().cpu(),
+                "cell_size": float(self._road_bev_cell_size),
+            }
         return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
@@ -769,6 +780,21 @@ class LayeredGaussians(nn.Module):
             # in addmm on first browser render. Migrate the whole ModuleDict
             # here so all entry points (trainer, eval, playground,
             # inject_viz_4d) see a consistent device state.
+            # E3.3: restore road BEV texture grid (rebuild dict + register
+            # grid_feature Parameter + Adam via set_road_bev_grid) so fused_view
+            # samples the TRAINED grid instead of falling back to per-gaussian SH.
+            _rb = None
+            if isinstance(checkpoint.get("model"), dict) and "road_bev_state" in checkpoint["model"]:
+                _rb = checkpoint["model"]["road_bev_state"]
+            elif "road_bev_state" in checkpoint:
+                _rb = checkpoint["road_bev_state"]
+            if _rb is not None:
+                self.set_road_bev_grid({
+                    "grid_feature": _rb["grid_feature"],
+                    "xy_min": _rb["xy_min"],
+                    "occupied": _rb["occupied"],
+                    "cell_size": float(_rb["cell_size"]),
+                })
             if torch.cuda.is_available():
                 self.cuda()
             return
