@@ -464,6 +464,35 @@ class Trainer3DGRUT:
                                 f"🔆 road layer initialized: {r_pos.shape[0]} "
                                 f"particles (from {road_pts.shape[0]} road LiDAR pts)"
                             )
+                            # E3.3: optionally build a learnable BEV road texture
+                            # grid from the road init albedo + wire into fused_view
+                            # (default off = per-gaussian SH DC unchanged).
+                            road_bev = bool(
+                                _tconf.get("road_bev_texture", False)
+                                if hasattr(_tconf, "get")
+                                else getattr(_tconf, "road_bev_texture", False)
+                            )
+                            if road_bev:
+                                from threedgrut.model.bev_texture import build_bev_feature_grid
+                                _bev_cell = float(
+                                    _tconf.get("road_bev_cell_size", 1.0)
+                                    if hasattr(_tconf, "get")
+                                    else getattr(_tconf, "road_bev_cell_size", 1.0)
+                                )
+                                _bev_lr = float(
+                                    _tconf.get("road_bev_lr", 0.0025)
+                                    if hasattr(_tconf, "get")
+                                    else getattr(_tconf, "road_bev_lr", 0.0025)
+                                )
+                                _grid = build_bev_feature_grid(
+                                    r_pos.to(device), r_col.to(device), cell_size=_bev_cell
+                                )
+                                model.set_road_bev_grid(_grid, lr=_bev_lr)
+                                logger.info(
+                                    f"[E3.3] road BEV texture grid "
+                                    f"{tuple(_grid['grid_feature'].shape)} @ {_bev_cell}m "
+                                    f"lr={_bev_lr} → road DC albedo via bilinear sample"
+                                )
                         # 3. dynamic_rigids: real-cuboids path (T4.5).
                         # Source tracks from NCore manifest cuboid autolabels
                         # (loader.get_cuboid_track_observations); no mock.

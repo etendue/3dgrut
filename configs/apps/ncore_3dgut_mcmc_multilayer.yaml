@@ -198,6 +198,14 @@ trainer:
   # so it owns the surface as bg is removed. CLI A/B: trainer.road_init_density=2.0
   road_init_density: 0.0
 
+  # E3.3 — road BEV planar texture: road DC albedo ← learnable BEV grid bilinear
+  # sample (view-independent → correct under extrapolation; attacks lane grad_corr
+  # that E3.6 takeover alone can't). false = per-gaussian SH DC (byte-identical).
+  # CLI: trainer.road_bev_texture=true [trainer.road_bev_cell_size=1.0 trainer.road_bev_lr=0.0025]
+  road_bev_texture: false
+  road_bev_cell_size: 1.0
+  road_bev_lr: 0.0025
+
   # V3-R1.3 — road-layer effective rank reg.
   # ⚠ A/B 实测 null (5k/30k 方向翻转=纯噪声, 详见 v3_plan Done Log V3-R1).
   # ★ v3 baseline 剔除 (设回 0.0, 用户决策 2026-06-03), 不污染基线锚点.
