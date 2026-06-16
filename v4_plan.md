@@ -72,7 +72,6 @@ kanban
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.5 编辑协调 spike（AH 注入 + Harmonizer 协调 + NTA-IoU FID 验收）]
         [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
-        [E3.3 BEV 纹理平面化（gate E1 锚）]
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
 
     "In Progress"
@@ -84,6 +83,8 @@ kanban
         [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate 同 E3.1）]
 
     "Done"
+        [E3.6 road takeover spike ✅ 2026-06-16：bg −28% / road opacity p50 +62% / bg 替补 14%→10% / R10 不出洞 / 目视 road 抢回 crosswalk]
+        [E3.3 BEV 纹理平面化 spike ✅ 2026-06-16：novel grad_corr@6m +20% / band_psnr +1.44dB 越远越占优 / 零 kernel Python 注入]
         [E2.1 Harmonizer 离线修复 spike ✅ 2026-06-13：FID −30%/KID −60%/NTA +35%，lane_grad_corr 退化（扩散平滑）→ E2.2 GO]
         [E0.4 双向对照锚 ✅ 2026-06-12：3m 档官方 +0.05 corr，6m 两家同崩；interp FID 61 vs 75]
         [E1.5 gap 表收口 ✅：重排结论 E3 先行、E2 补 6m+ 档；E1 阶段全绿]
@@ -129,7 +130,8 @@ kanban
 | **E2.6** ★ | E2 | **viser_gui_4d 交互 difixer 升级（temporal 后处理提 inference 质量）**：[`viser_gui_4d.py`](threedgrut_playground/viser_gui_4d.py) 现 `--difix_server` 接 Fixer 一代（单帧）→ 换 DiffusionHarmonizer 三代**时间模式**（`diffusion_harmonizer.pkl`，回读前 K 帧已修复输出做时序参考）→ 对交互渲染的连续帧序列后处理，用帧间时序一致性提升 inference 视觉质量（去闪烁/运动连贯）。复用 E0.7 IPC server 架构（`fixer_server.py`→harmonizer temporal server）+ viser_gui_4d 已有 `--difix_server` 钩子。**唯有连续渲染序列能发挥 Harmonizer 时序优势**（区别 E2.1 离线单帧 / E2.2 训练蒸馏必 nontemporal）| 新（2026-06-12 大g 提议）| 1 | ✅ | **2026-06-15 完成，inceptio 端到端目测通过**（commits 9de9101/5cf26e7/4058704/cce14ba）。设计：client-side K-deque（history 在 client、server 无状态、seek=clear 自然 reset）；HMN1 协议独立于 DFX1（守护 E1 锚）；`_on_time_change` 的 `source!="play"` 自动 reset 历史。**关键修复（cce14ba）**：Harmonizer temporal Conv3d kernel=3 只接受 V=1 或 V≥3，冷启动逐步增长（V=2,3,4）会 crash → 改为 history 满了 K 才发 V=1+K，否则 V=1（对齐官方 `have_history = len >= min_history`）。实测 V=5 延迟 ~1000ms（5 帧 0.6B），K=2 可降到 ~600ms 备选。详见 §5 Done Log |
 | **E3.1** | E3 | **空气区 penalty** = **v3 P3.4 移交**：路面上方 0.4m~上界悬浮 bg opacity penalty（cuboid actor 豁免），复用 V3-R2 基建 | v3 P3.4 | 1.5 | ⬜ | gate=E1.1 锚 + **R9（PR #24 去留先决）** |
 | **E3.2** | E3 | **road SH 降阶 DC-only（freeze 法）** = **v3 P3.5 移交**：砍 view-dependent 过拟合逃逸通道（路面近似 Lambertian） | v3 P3.5 | 1 | ⬜ | gate 同 E3.1 |
-| **E3.3** ★ | E3 | **BEV 纹理平面化**（v4 backlog 转正）：road 颜色不再 per-gaussian SH，改 BEV feature grid/纹理图采样、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem；ExtraGS Road Surface Gaussians 同思路）；复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | v3 § 5 backlog「外推终极方向」 | 3 | ⬜ | gate=E1 锚 + E3.1/E3.2 结果（短刀够用则缓） |
+| **E3.3** ★ | E3 | **BEV 纹理平面化**（v4 backlog 转正）：road 颜色不再 per-gaussian SH，改 BEV feature grid/纹理图采样、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem；ExtraGS Road Surface Gaussians 同思路）；复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | v3 § 5 backlog「外推终极方向」 | 3 | 🔵 spike✅ | **2026-06-16 spike 证实核心假设**：fused_view road albedo ← learnable BEV grid（策略1 Python 端零 kernel/ABI）；3k A/B novel grad_corr@6m +20% / band_psnr +1.44dB，越远改善越大、interp 不退；commits `5b3ee7a`/`5adcc50`/`9097af9`。全量待 |
+| **E3.6** | E3 | **road/bg 所有权切分 + takeover**（2026-06-16 新增 spec，E3.3 前置）：bg init 剔 road 类点 + road `init_density` + 全高度 bg penalty（`z_ceil`），让 road 层独占路面渲染 | 新（2026-06-16 spec） | 2 | 🔵 spike✅ | **2026-06-16 spike 机制成立**：bg −28% / road opacity p50 +62% / bg 替补 14%→10% / R10 不出洞 / 外推 band_psnr +0.5dB；目视证实 road 抢回 crosswalk/车道线；commits `1e6a1dd`/`8d21476`。代价 interp −0.7dB；全量待 |
 | **E3.4** | E3 | （备选）**平面诱导 warp 伪横移一致性 loss**：训练时按路面平面 homography warp 伪横移视角做一致性约束 | v3 § 5 backlog 备选 | 1.5 | ⬜ | E3.3 的轻量替代/前菜 |
 | **E4.1** | E4 | （可选）**LiDAR 点云推理**：按 [`2026-06-10-lidar-pointcloud-from-gs.md`](docs/superpowers/plans/2026-06-10-lidar-pointcloud-from-gs.md) 执行（A0 gate：3DGUT ckpt 能否被 3DGRT 渲 → A1 射线表 → A2 range-L1/出 .ply）；外推的传感器维度（novel 轨迹渲 LiDAR），对标 NuRec LiDAR re-sim | docs/superpowers plan（未执行） | 2.5 | ⬜ | A0 NO-GO 则整线作废（plan 内置判据） |
 
@@ -140,7 +142,7 @@ kanban
 | **E0** ★ | NuRec 工具链复现立锚（**首要**） | 5/7 | ≥2 场景跑通 ✅ + NuRec 锚 ✅ + 配方 diff ✅ + **双向对照 ✅（E0.4 判别数字入 gap 表）** + difix-distill 增益锚 ✅α（E0.7：B 级 Fixer 蒸馏，车道线略好 / interpolated −0.5dB / β 定量待回填）+ 官方编辑能力清单（E0.6 🟡）+ 修复器代际 β'（**2026-06-15 已启动执行中**，e07_harmonizer_train 跑 40k ~2.5h） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | **5/5 ✅** | 3m/6m ✅ + NTA-IoU ✅ + FID/KID ✅ + held-out ✅（真 GT 差距 7.77 dB）+ gap 表收口 ✅（E1.5 重排：E3 先行） | interpolated 全指标不退（已验：avg Δ1.5e-5 / cc 25.79 / grad_corr 0.6931 三点零回归） | ✅ |
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 | 3/6（含 1 备选） | 同左；**E2.1 ✅ 离线 Harmonizer：FID −30%/KID −60%/NTA +35%，lane_grad_corr 退化待 E2.2 蒸馏修 → E2.2 GO**；E2.5 插入协调；**E2.6 ✅ inceptio 目测通过（V=5 temporal，延迟 ~1000ms；Conv3d warmup 修复 cce14ba）** | cc ≥ 24.7 / grad_corr 0.744 不退 | 🟡 |
-| **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
+| **E3** | 表示侧外推强化（与 E2 互补） | 2/5 spike（E3.3+E3.6 ✅ 假设证实；E3.1/E3.2/E3.4/E3.5 待） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | cc≥24.7 / grad_corr 不退 | 🟡 |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
 | **总计** | — | **10/23** | — | — | — |
 
@@ -362,6 +364,18 @@ flowchart TD
   - **零回归验证**：`test_difix_ipc.py` + `test_e21_ipc_client.py` 16 测 + `test_harmonizer_temporal_ipc.py` 20 测 = **36/36 全绿**（HMN1 magic 与 DFX1 隔离，DiFix 单帧路径逐字不变）。
   - **端到端验证完成（2026-06-15，inceptio 目测通过）**：β' 完成释放 GPU 后起 temporal server(:59490) + viser_gui_4d（baseline ckpt `p1_2_runB_fix_30k`）目测。**功能正常**：勾选 "Harmonizer (temporal, de-flicker)" → 前序 Play 连续帧走 temporal（V=5，K=4），seek/拖动自动 reset 历史；frame buffer 存的是 Harmonizer 修复后数据（`_maybe_difix` 覆盖 img 后才 `set_background_image`），history deque 自引用修复帧（符合 Harmonizer 设计）。**实测 V=5 延迟 ~1000ms**（5 帧过 0.6B），交互 Play 会降到 ~1fps；K=2（V=3）可降到 ~600ms 备选。
   - **Conv3d warmup 关键修复（commit `cce14ba`）**：首次 inceptio 联调 server 端报 `RuntimeError: Kernel size (3,1,1) can't be greater than actual input size (2 x 144 x 256)`——Harmonizer temporal CausalConv3d（kernel=3 on V 轴）**只接受 V=1 或 V≥3**，我的冷启动逐步增长（V=1→2→3→4→5）撞进 V=2..K-1 禁区。查官方 `inference_pix2pix_turbo_harmonizer.py` L133 `have_history = len >= min_history`（min_history=-min(offset_list=[-1,-2,-3,-4])=4）→ 凑满 4 帧才走 temporal，否则 V=1。**修复**：client 侧 `fix()` 改为 `len(history)>=K` 才发 V=1+K，否则 V=1（payload_history=[]），对齐官方语义；20/20 Mac 测更新通过。**教训**：model 类注释说 "V can be 1" 是指 nontemporal 路径，不是任意 V 都行——temporal 路径有 kernel=3 硬约束。
+
+- **2026-06-16 E3.6（road takeover）+ E3.3（BEV 纹理）road 轴双 spike 完成**（分支 `e36-road-takeover`；commits `1e6a1dd`/`8d21476`(E3.6) · `5b3ee7a`/`5adcc50`/`9097af9`(E3.3) · `d4b7d7c`(render json fix)；33 单测全绿，全开关默认关字节等价）——R9 调研拍板「E3 干净 base 独立推进、不碰 PR#24」（PR#24 road 冲突全隔离在 `multilayer_p31.yaml` 一个 preset，主链 lane loss 默认关字节等价）：
+  - **E3.6 road takeover ✅ 机制成立**（`trainer.bg_init_exclude_road` + `road_init_density` + `bg_road_penalty.z_ceil` 全高度，三开关默认关）。inceptio depth-off 5k A/B（e36_baseline vs e36_takeover）：
+    - ownership：bg 粒子 1.00M→0.72M（−28%）/ road opacity p50 0.026→0.042（+62%）/ road 自盖@0.3 0.750→0.802 / bg 替补@0.3 14%→10.2%；R10 union 覆盖@0.3 0.890→0.904（不出洞）
+    - 外推 road band_psnr @3m +0.59dB / @6m +0.44dB；interp 守护代价 cc_psnr_masked −0.69dB
+    - **大g viser 目视双证**：takeover 把 crosswalk/车道分割线从 background 抢回 road 层；新病灶 ego 前方 near-field 白底座 floater（删 road 还在=bg）→ 对症 E3.5 floater prune（本轮未做）
+  - **E3.3 BEV 纹理 ✅ 核心假设证实**（fused_view road `features_albedo` ← learnable BEV grid 双线性采样，策略1 Python 端零 kernel/ABI；grid Parameter + Adam + ckpt 持久化 `road_bev_state`）。inceptio depth-off 3k A/B（e33off SH vs e33on BEV 同步数单变量，两 waiter 交叉验证一致）：
+    - **novel lane_grad_corr@6m 0.247→0.296（+20%）** / @3m 0.366→0.372；**novel band_psnr@6m 12.07→13.51（+1.44dB）** / @3m +0.68dB；interp grad_corr 0.591→0.600；interp cc 23.10→23.05（守护不退）
+    - **越远外推改善越大**（符合「平面纹理外推天然正确」：远档 SH 越糊、平面纹理越占优）；3k 欠训就有效（grid 实证训练变化 值域 [-0.41,1.53] 超 init [0,1]），全量 grid 学充分预期更强
+    - 关键修复 `9097af9`：TaskB 注册的 `_road_bev_grid_feature` 没进 ckpt（`get_model_parameters` 的 `_track_` prefix 不匹配）→ 补显式 `road_bev_state` save + `init_from_checkpoint` 调 `set_road_bev_grid` 重建（否则 eval fallback 回 SH）
+  - **road 轴三病灶 vs 三解法**：ownership→E3.6 ✅；外推锐度→E3.3 ✅；near-field floater→E3.5（未做）。**双 spike 核心假设证实；全量训练 / E3.6+E3.3 联合 / E3.5 floater prune 留下一阶段。**
+  - 工程教训：① render.py json 遮蔽 bug（E2.1 `530a27c` 引入，`novel_view=False` 时崩 on_training_end eval）已修 `d4b7d7c` + 回归测试 pin；② **验证输出必须交叉核对**——首次因 grep 串行 + 一段注入噪声给过假「零差异」，两 waiter 交叉验证 + `grep -m1` 取 top-level 才确认真实正向。
 
 ---
 
