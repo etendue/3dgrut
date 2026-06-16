@@ -31,6 +31,7 @@ def init_road_layer(
     cut_range: float = 30.0,
     resolution: float = 0.05,
     max_n: int = 200_000,
+    init_density: float = 0.0,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Generate per-particle init tensors for the road layer.
 
@@ -41,6 +42,10 @@ def init_road_layer(
         cut_range:      meters padded around ego XY extent for BEV bbox.
         resolution:     BEV grid cell size in meters.
         max_n:          cap on returned particle count.
+        init_density:   log-space raw density seeded for every road particle
+                        (E3.6 Task2A road takeover). 0.0 = sigmoid 0.5 (default,
+                        byte-identical); higher → road starts more opaque so it
+                        owns the road surface as bg is removed.
 
     Returns:
         positions:  [N, 3]  world frame, Z snapped to nearest road LiDAR Z
@@ -114,7 +119,7 @@ def init_road_layer(
     rotations[:, 0] = 1.0  # identity quat wxyz
     scale_prior = torch.tensor([0.1, 0.1, 0.001], dtype=dtype, device=device)
     scales = torch.log(scale_prior).expand(N, 3).contiguous()
-    densities = torch.zeros(N, 1, dtype=dtype, device=device)  # log-space ≈ 0
+    densities = torch.full((N, 1), init_density, dtype=dtype, device=device)  # log-space (E3.6 T2A)
     colors = torch.full((N, 3), 0.5, dtype=dtype, device=device)  # neutral gray
 
     return positions, rotations, scales, densities, colors

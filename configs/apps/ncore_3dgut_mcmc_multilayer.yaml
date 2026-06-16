@@ -183,11 +183,20 @@ trainer:
     lambda_warmup_iters: 1000
     cell_size: 1.0
     z_band: 0.4
+    # E3.6 Task2 — full-height air-region column. null = V3-R2 symmetric thin
+    # band (byte-identical). float (e.g. 3.0/5.0) = penalize bg up to ground+z_ceil
+    # over the road (kills novel-view air ghosts). CLI A/B: ...bg_road_penalty.z_ceil=3.0
+    z_ceil: null
 
   # E3.6 Task1 — bg-init road exclusion (source-level ownership split, mirrors
   # NuRec "bg init drops road-class points"). Default false = byte-identical
   # baseline. CLI A/B: trainer.bg_init_exclude_road=true
   bg_init_exclude_road: false
+
+  # E3.6 Task2A — road-layer takeover: log-space init density for road particles.
+  # 0.0 = sigmoid 0.5 (byte-identical). Higher (e.g. 2.0→0.88) seeds opaque road
+  # so it owns the surface as bg is removed. CLI A/B: trainer.road_init_density=2.0
+  road_init_density: 0.0
 
   # V3-R1.3 — road-layer effective rank reg.
   # ⚠ A/B 实测 null (5k/30k 方向翻转=纯噪声, 详见 v3_plan Done Log V3-R1).

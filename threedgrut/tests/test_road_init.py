@@ -120,3 +120,20 @@ def test_road_init_z_follows_uneven_terrain():
     if near_zero.shape[0] > 0 and near_forty.shape[0] > 0:
         assert near_zero[:, 2].abs().mean().item() < 0.5
         assert (near_forty[:, 2].mean().item() - 4.0) < 1.0
+
+
+def test_road_init_respects_init_density():
+    """E3.6 Task2(A): init_density raises the road layer's starting opacity so it
+    can own the road surface as bg is removed. Default 0.0 = log-space 0 (sigmoid
+    0.5, current byte-identical behavior); a positive value seeds higher opacity."""
+    road_pts = _flat_ground_lidar(n=100)
+    traj = _ego_trajectory(n=10, length=20.0)
+    # default: log-space density 0.0 (unchanged contract)
+    _, _, _, dens0, _ = init_road_layer(
+        road_pts, traj, cut_range=5.0, resolution=0.5, max_n=2_000)
+    assert torch.allclose(dens0, torch.zeros_like(dens0)), "default init_density must stay 0.0"
+    # raised: every road particle seeded at the given log-space density
+    _, _, _, dens2, _ = init_road_layer(
+        road_pts, traj, cut_range=5.0, resolution=0.5, max_n=2_000, init_density=2.0)
+    assert dens2.shape == dens0.shape
+    assert torch.allclose(dens2, torch.full_like(dens2, 2.0)), f"got {dens2.unique().tolist()}"

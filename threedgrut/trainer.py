@@ -437,9 +437,18 @@ class Trainer3DGRUT:
                                 dtype=torch.float32,
                             )
                             road_spec = next(s for s in model.specs if s.name == "road")
+                            # E3.6 Task2A: optionally seed road at higher opacity so
+                            # it takes over the road surface (default 0.0 = byte-
+                            # identical sigmoid 0.5). _tconf defined above (L396).
+                            road_init_density = float(
+                                _tconf.get("road_init_density", 0.0)
+                                if hasattr(_tconf, "get")
+                                else getattr(_tconf, "road_init_density", 0.0)
+                            )
                             r_pos, r_rot, r_sca, r_den, r_col = init_road_layer(
                                 road_pts, traj,
                                 max_n=road_spec.max_n_particles,
+                                init_density=road_init_density,
                             )
                             device = model.layers["road"].device
                             model.init_layer_from_points(
@@ -1410,15 +1419,19 @@ class Trainer3DGRUT:
         )
         if cfg is None:
             return {"enabled": False, "lambda_max": 0.0, "warmup_iters": 0,
-                    "cell_size": 1.0, "z_band": 0.4}
+                    "cell_size": 1.0, "z_band": 0.4, "z_ceil": None}
         def g(k, d):
             return cfg.get(k, d) if hasattr(cfg, "get") else getattr(cfg, k, d)
+        _zc = g("z_ceil", None)
         return {
             "enabled": bool(g("enabled", False)),
             "lambda_max": float(g("lambda", 0.0)),
             "warmup_iters": int(g("lambda_warmup_iters", 0)),
             "cell_size": float(g("cell_size", 1.0)),
             "z_band": float(g("z_band", 0.4)),
+            # E3.6 Task2: None = symmetric thin band (V3-R2); float = full-height
+            # air-region column [ground-z_band, ground+z_ceil).
+            "z_ceil": (None if _zc is None else float(_zc)),
         }
 
     def _compute_bg_road_penalty_term(self, trainer_conf) -> torch.Tensor:
@@ -1444,6 +1457,7 @@ class Trainer3DGRUT:
         bg = layers["background"]
         return compute_bg_road_opacity_penalty(
             bg.positions, bg.density, hf, z_band=cfg["z_band"], lambda_val=lam,
+            z_ceil=cfg["z_ceil"],
         ).reshape(1)
 
     def _gather_active_tracks_for_batch(self, gpu_batch):

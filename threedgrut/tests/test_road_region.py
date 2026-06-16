@@ -127,3 +127,45 @@ def test_on_road_mask_flags_grounded_road_cell_points():
     # bg-init keep mask is the complement; together they partition all points
     keep = ~mask
     assert (mask | keep).all() and not (mask & keep).any()
+
+
+def test_on_road_mask_full_height_column_with_z_ceil():
+    """E3.6 Task2: with z_ceil, on_road becomes a full-height column
+    [ground - z_band, ground + z_ceil) — capturing air-region bg above the road
+    (novel-view ghost source) that the V3-R2 symmetric thin band misses. z_ceil
+    defaults to None = symmetric thin band (byte-identical with Task1/V3-R2)."""
+    from threedgrut.model.road_region import compute_on_road_mask
+    xy = torch.stack(torch.meshgrid(
+        torch.linspace(0,4,9), torch.linspace(0,4,9), indexing="ij"), dim=-1).reshape(-1,2)
+    road = torch.cat([xy, torch.zeros(xy.shape[0],1)], dim=-1)
+    hf = build_road_height_field(road, cell_size=1.0)
+    pts = torch.tensor([
+        [2.0,   2.0,   0.1],   # #0 grounded               -> True (both modes)
+        [2.0,   2.0,   2.0],   # #1 2m air above road       -> thin False, column True
+        [2.0,   2.0,   5.0],   # #2 5m above (> z_ceil=3)    -> both False
+        [2.0,   2.0,  -0.2],   # #3 below floor within band -> True
+        [100.0, 100.0, 2.0],   # #4 outside grid            -> False
+    ])
+    thin = compute_on_road_mask(pts, hf, z_band=0.4)               # symmetric (default)
+    assert thin.tolist() == [True, False, False, True, False], f"thin {thin.tolist()}"
+    column = compute_on_road_mask(pts, hf, z_band=0.4, z_ceil=3.0)  # full-height
+    assert column.tolist() == [True, True, False, True, False], f"column {column.tolist()}"
+
+
+def test_penalty_full_height_column_penalizes_air_region_bg():
+    """E3.6 Task2: penalty with z_ceil also pulls down air-region bg opacity
+    above the road (not just the V3-R2 grounded thin band)."""
+    xy = torch.stack(torch.meshgrid(
+        torch.linspace(0,4,9), torch.linspace(0,4,9), indexing="ij"), dim=-1).reshape(-1,2)
+    road = torch.cat([xy, torch.zeros(xy.shape[0],1)], dim=-1)
+    hf = build_road_height_field(road, cell_size=1.0)
+    # bg: #0 grounded (z=0.1), #1 air 2m above road (z=2.0), #2 outside XY
+    bgp = torch.tensor([[2.0,2.0,0.1],[2.0,2.0,2.0],[100.0,100.0,0.0]])
+    bgd = torch.zeros(3, requires_grad=True)  # sigmoid(0)=0.5 each
+    # thin band (default z_ceil=None): only #0 contributes → 0.5/3
+    L_thin = compute_bg_road_opacity_penalty(bgp, bgd, hf, z_band=0.4, lambda_val=1.0)
+    assert torch.allclose(L_thin, torch.tensor(0.5/3), atol=1e-5), f"thin {float(L_thin)}"
+    # full-height column z_ceil=3: #0 and #1 both contribute → 1.0/3
+    L_col = compute_bg_road_opacity_penalty(
+        bgp, bgd, hf, z_band=0.4, lambda_val=1.0, z_ceil=3.0)
+    assert torch.allclose(L_col, torch.tensor(1.0/3), atol=1e-5), f"col {float(L_col)}"
