@@ -149,6 +149,29 @@ def query_ground_z(
         return ground_z, valid
 
 
+def compute_on_road_mask(
+    positions: torch.Tensor,   # [N,3] world frame
+    height_field: Dict,
+    z_band: float,
+) -> torch.Tensor:
+    """[N] bool — True iff xy falls in an occupied road cell AND |z - ground_z| < z_band.
+
+    Shared primitive used by two call sites:
+      (a) the bg-in-road opacity penalty's on_road test (loss → push opacity down);
+      (b) E3.6 bg-init road exclusion (keep = ~mask → bg particles never seeded
+          on the road surface in the first place).
+    Pure and no_grad (piecewise-constant in positions). Returns a [N] bool on
+    positions.device; all-False when grid is empty or positions is empty.
+    """
+    with torch.no_grad():
+        positions_xy = positions[:, :2]
+        positions_z = positions[:, 2]
+        ground_z, valid = query_ground_z(positions_xy, height_field)
+        z_dist = (positions_z - ground_z).abs()
+        on_road = valid & (z_dist < z_band)
+    return on_road
+
+
 def compute_bg_road_opacity_penalty(
     bg_positions: torch.Tensor,    # [N,3] world frame
     bg_density_raw: torch.Tensor,  # [N] or [N,1] pre-sigmoid nn.Parameter
@@ -180,16 +203,8 @@ def compute_bg_road_opacity_penalty(
     )
 
     # Spatial mask is piecewise-constant in positions — no grad through it.
-    with torch.no_grad():
-        positions_xy = bg_positions[:, :2].detach()
-        positions_z  = bg_positions[:, 2].detach()
-
-        ground_z, valid = query_ground_z(positions_xy, height_field)
-
-        # on_road: inside an occupied cell AND within z_band of ground
-        z_dist = (positions_z - ground_z).abs()
-        on_road = valid & (z_dist < z_band)
-
+    # Shared primitive with E3.6 bg-init road exclusion (keep = ~on_road).
+    on_road = compute_on_road_mask(bg_positions, height_field, z_band)
     mask_f = on_road.to(dtype=bg_density_raw.dtype)
 
     opacity = torch.sigmoid(bg_density_raw.view(-1))    # [N]

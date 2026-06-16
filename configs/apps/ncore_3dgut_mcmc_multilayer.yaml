@@ -184,6 +184,11 @@ trainer:
     cell_size: 1.0
     z_band: 0.4
 
+  # E3.6 Task1 — bg-init road exclusion (source-level ownership split, mirrors
+  # NuRec "bg init drops road-class points"). Default false = byte-identical
+  # baseline. CLI A/B: trainer.bg_init_exclude_road=true
+  bg_init_exclude_road: false
+
   # V3-R1.3 — road-layer effective rank reg.
   # ⚠ A/B 实测 null (5k/30k 方向翻转=纯噪声, 详见 v3_plan Done Log V3-R1).
   # ★ v3 baseline 剔除 (设回 0.0, 用户决策 2026-06-03), 不污染基线锚点.

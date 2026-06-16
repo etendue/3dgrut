@@ -386,6 +386,41 @@ class Trainer3DGRUT:
                     if isinstance(model, LayeredGaussians) and model._single_bg_layer() is None:
                         # multi-layer: per-spec init dispatcher
                         layer_names = [s.name for s in model.specs]
+                        # E3.6 Task1: optionally exclude road-region points from bg
+                        # init so the road layer owns the road surface from the start
+                        # (source-level ownership split, aligns NuRec "bg init drops
+                        # road-class points"). Default off = byte-identical. bg LiDAR
+                        # (get_point_clouds) and road LiDAR (lidar-sseg) are DIFFERENT
+                        # sources → exclusion is geometric via the road height field
+                        # (shared compute_on_road_mask), not a per-point sseg index.
+                        _tconf = getattr(conf, "trainer", {})
+                        exclude_road = bool(
+                            _tconf.get("bg_init_exclude_road", False)
+                            if hasattr(_tconf, "get")
+                            else getattr(_tconf, "bg_init_exclude_road", False)
+                        )
+                        if exclude_road and "road" in model.layers and "background" in model.layers:
+                            from threedgrut.model.road_region import (
+                                build_road_height_field, compute_on_road_mask,
+                            )
+                            road_pts_excl, _ = train_dataset.get_road_lidar_points()
+                            if road_pts_excl.numel() > 0:
+                                brp = self._bg_road_conf(_tconf)
+                                hf_excl = build_road_height_field(
+                                    road_pts_excl, cell_size=brp["cell_size"]
+                                )
+                                on_road = compute_on_road_mask(
+                                    pc.xyz_end.cpu(), hf_excl, z_band=brp["z_band"]
+                                )
+                                keep = (~on_road).nonzero(as_tuple=True)[0]
+                                n_before = len(pc.xyz_end)
+                                pc = pc.selected_idxs(keep)
+                                logger.info(
+                                    f"[E3.6] bg-init road exclusion: {n_before} -> "
+                                    f"{len(pc.xyz_end)} bg pts "
+                                    f"({n_before - len(pc.xyz_end)} on-road removed "
+                                    f"@ z_band={brp['z_band']})"
+                                )
                         # 1. background: standard LiDAR init (non-dynamic points)
                         if "background" in model.layers:
                             model.layers["background"].init_from_lidar(pc, observer_points)

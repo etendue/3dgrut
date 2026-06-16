@@ -96,3 +96,34 @@ def test_penalty_shape_mismatch_raises():
     bgp = torch.zeros(5,3); bgd = torch.zeros(3, requires_grad=True)  # mismatch 5 vs 3
     with _pt.raises(Exception):
         compute_bg_road_opacity_penalty(bgp, bgd, hf, z_band=0.4, lambda_val=1.0)
+
+
+# ─── E3.6 Task1: bg-init road exclusion (geometric, reuses height field) ───
+
+def test_on_road_mask_flags_grounded_road_cell_points():
+    """compute_on_road_mask: True iff xy in occupied road cell AND |z-ground|<z_band.
+
+    This is the shared primitive for (a) bg-init road exclusion (keep=~mask)
+    and (b) the existing opacity penalty's on_road test. bg LiDAR points and
+    road LiDAR points come from DIFFERENT sources (get_point_clouds vs
+    lidar-sseg), so exclusion must be GEOMETRIC via the road height field,
+    not a per-point sseg-label index.
+    """
+    from threedgrut.model.road_region import compute_on_road_mask
+    # road plane z=0 over [0,4]x[0,4]
+    xy = torch.stack(torch.meshgrid(
+        torch.linspace(0,4,9), torch.linspace(0,4,9), indexing="ij"), dim=-1).reshape(-1,2)
+    road = torch.cat([xy, torch.zeros(xy.shape[0],1)], dim=-1)
+    hf = build_road_height_field(road, cell_size=1.0)
+    pts = torch.tensor([
+        [2.0,   2.0,   0.1],   # #0 grounded in road cell      -> True
+        [2.0,   2.0,  10.0],   # #1 high air above road        -> False (|z|>band)
+        [100.0, 100.0, 0.0],   # #2 outside grid               -> False (not road cell)
+        [2.0,   2.0,  -0.2],   # #3 just below ground in band   -> True
+    ])
+    mask = compute_on_road_mask(pts, hf, z_band=0.4)
+    assert mask.dtype == torch.bool
+    assert mask.tolist() == [True, False, False, True], f"got {mask.tolist()}"
+    # bg-init keep mask is the complement; together they partition all points
+    keep = ~mask
+    assert (mask | keep).all() and not (mask & keep).any()
