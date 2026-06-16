@@ -417,7 +417,7 @@ flowchart TB
 | 文件 | 任务 |
 |---|---|
 | `threedgrut/layers/__init__.py` | T1.1 ✅ / T1.2 ✅ (导出 LayerSpec/registry，lazy-import LayeredGaussians) |
-| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 ✅ (fused_view + get_layer_mask, d4841df) / T3.0 ✅ (init_layer_from_points + optimizer property + _LayeredOptimizerView) |
+| `threedgrut/layers/layered_model.py` | T1.1 ✅ / T1.3 ✅ (错误消息) / T2.5 ✅ (fused_view + get_layer_mask, d4841df) / T3.0 ✅ (init_layer_from_points + optimizer property + _LayeredOptimizerView) / **E3.3 ✅ (5adcc50/9097af9): fused_view road `features_albedo` ← BEV grid 双线性采样 + set_road_bev_grid（Parameter+Adam）+ ckpt `road_bev_state` save/load 持久化** |
 | `threedgrut/layers/layer_spec.py` | T1.1 ✅ / T1.2 ✅ (8 字段) |
 | `threedgrut/layers/registry.py` | T1.2 ✅ |
 | `threedgrut/layers/road_init.py` | T3.3.b ✅ (9f6a54c, scipy.cKDTree + cdist fallback) |
@@ -426,10 +426,11 @@ flowchart TB
 | `threedgrut/strategy/layered_mcmc.py` | T2.2 ✅ (7ad883b) |
 | `threedgrut/model/layered_loss.py` | T3.4 ✅ (9077fd6, region-weighted L1 纯函数) |
 | `threedgrut/model/road_reg.py` | **V3-R1.2/1.3 ✅ (75ab6f9, clamp_layer_scales + compute_effective_rank_loss + compute_depth_tv_loss 纯函数)** —— road scale clamp（实测生效但 novel-view null）|
-| `threedgrut/model/road_region.py` | **V3-R2 ✅ (7bf4992, build_road_height_field + query_ground_z + compute_bg_road_opacity_penalty)** —— bg-in-road opacity penalty，**首个真正有效改动**：5k A/B 路面 bg 粒子 −86%、road opacity +28% 反超主导、cc_psnr_masked +0.65 dB；镜像 bg_cuboid_loss.py |
+| `threedgrut/model/road_region.py` | **V3-R2 ✅ (7bf4992, build_road_height_field + query_ground_z + compute_bg_road_opacity_penalty)** —— bg-in-road opacity penalty，**首个真正有效改动**：5k A/B 路面 bg 粒子 −86%、road opacity +28% 反超主导、cc_psnr_masked +0.65 dB；镜像 bg_cuboid_loss.py。**E3.6 ✅ (1e6a1dd/8d21476): compute_on_road_mask 共享原语（penalty + bg-init 剔 road 复用）+ penalty z_ceil 全高度（空气区 bg）；5k takeover A/B bg −28% / road opacity p50 +62% / bg 替补 14%→10% / R10 不出洞** |
 | `threedgrut/model/pose_anchor.py` | **P1.2 ✅ (2026-06-06, compute_pose_boundary_loss 首/末活跃帧锚 GT + compute_pose_prior_loss 全帧软 L2，旋转矩阵 Frobenius²，纯函数)** —— 修 track-pose 漂移；30k A/B fix 三者最优 class25.07/cc26.06（−0.61 未在本配方复现）|
 | `threedgrut/model/track_albedo_fourier.py` | **P1.3b ✅ (2026-06-06, fourier_albedo_bias Σ f_i·cos(iπt/N_t) + upgrade_albedo_table ckpt 升降维，纯函数)** —— 4D-SH 时变 albedo；A/B k4 24.13 vs DC k1 24.20 **无增益**，default k1 关、gated 留未来 |
 | `threedgrut/model/plane_warp.py` | **E1.1 ✅ (2026-06-12, ftheta_project_points + build_plane_warp + warp_image 纯函数)** —— 平面诱导 warp 伪 GT：novel 像素射线↔road 高度场定点求交→FTheta 投回原相机；novel lane 指标内核（render.py + eval_frames_dir 共用） |
+| `threedgrut/model/bev_texture.py` | **E3.3 ✅ (2026-06-16, 5adcc50, build_bev_feature_grid + sample_bev_feature_bilinear 纯函数)** —— road BEV 平面纹理：road albedo 聚合成 [H,W,C] grid（网格对齐 build_road_height_field）+ 双线性可微采样；fused_view 注入替代 per-gaussian SH DC（策略1 Python 端零 kernel/ABI）；3k spike novel grad_corr@6m +20% / band_psnr +1.44dB，越远外推越占优 |
 | `threedgrut/model/nta_iou.py` | **E1.2 ✅ (2026-06-12, project_track_to_2d_box + compute_frame_nta_iou)** —— GT cuboid→2D AABB best-match IoU；behind-camera 前置剔除 |
 | `threedgrut/model/vehicle_detector.py` | **E1.2 ✅ (YOLOv8m 懒加载单例)** —— 唯一 ultralytics 耦合点，duck-typed 注入 |
 | `scripts/dump_test_split_manifest.py` | **E0.4 ✅ (2026-06-12)** —— test split 位姿 manifest（NuRec 侧出帧对齐用） |

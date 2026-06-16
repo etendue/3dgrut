@@ -14,7 +14,7 @@ A bg particle is "on road" iff its XY lands in an occupied cell and
 |z - ground_z| < z_band.
 """
 from __future__ import annotations
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 
@@ -149,16 +149,54 @@ def query_ground_z(
         return ground_z, valid
 
 
+def compute_on_road_mask(
+    positions: torch.Tensor,   # [N,3] world frame
+    height_field: Dict,
+    z_band: float,
+    z_ceil: Optional[float] = None,
+) -> torch.Tensor:
+    """[N] bool — True iff xy falls in an occupied road cell AND z is within the
+    vertical band of local ground.
+
+    z_ceil is None (default): symmetric thin band ``|z - ground_z| < z_band``
+        (V3-R2 / Task1 — grounded bg that steals road rendering).
+    z_ceil given: asymmetric full-height column
+        ``ground_z - z_band <= z < ground_z + z_ceil`` (E3.6 Task2 — also captures
+        air-region bg above the road, the novel-view ghost source the thin band
+        misses; z_band stays a thin floor so sub-road structure is left alone).
+
+    Shared primitive used by:
+      (a) the bg-in-road opacity penalty's on_road test (loss → push opacity down);
+      (b) E3.6 bg-init road exclusion (keep = ~mask → bg never seeded on road).
+    Pure and no_grad (piecewise-constant in positions). All-False when grid /
+    positions empty.
+    """
+    with torch.no_grad():
+        positions_xy = positions[:, :2]
+        positions_z = positions[:, 2]
+        ground_z, valid = query_ground_z(positions_xy, height_field)
+        dz = positions_z - ground_z
+        if z_ceil is None:
+            in_band = dz.abs() < z_band
+        else:
+            in_band = (dz > -z_band) & (dz < z_ceil)
+        on_road = valid & in_band
+    return on_road
+
+
 def compute_bg_road_opacity_penalty(
     bg_positions: torch.Tensor,    # [N,3] world frame
     bg_density_raw: torch.Tensor,  # [N] or [N,1] pre-sigmoid nn.Parameter
     height_field: Dict,
     z_band: float,
     lambda_val: float,
+    z_ceil: Optional[float] = None,
 ) -> torch.Tensor:
     """Scalar loss = lambda * mean( sigmoid(bg_density) * on_road_mask ).
 
-    on_road_mask[i] = valid_cell(xy_i) AND |z_i - ground_z(xy_i)| < z_band,
+    on_road_mask[i] = valid_cell(xy_i) AND z_i within the vertical band of ground
+    (symmetric |z-ground|<z_band when z_ceil is None — V3-R2 default; else the
+    full-height column ground-z_band .. ground+z_ceil — E3.6 Task2 air-region),
     computed under torch.no_grad (piecewise-constant in positions; we only
     want to pull opacity down, not drag positions). Gradient flows through
     bg_density_raw only. Returns torch.zeros(()) on bg_positions.device when
@@ -180,16 +218,8 @@ def compute_bg_road_opacity_penalty(
     )
 
     # Spatial mask is piecewise-constant in positions — no grad through it.
-    with torch.no_grad():
-        positions_xy = bg_positions[:, :2].detach()
-        positions_z  = bg_positions[:, 2].detach()
-
-        ground_z, valid = query_ground_z(positions_xy, height_field)
-
-        # on_road: inside an occupied cell AND within z_band of ground
-        z_dist = (positions_z - ground_z).abs()
-        on_road = valid & (z_dist < z_band)
-
+    # Shared primitive with E3.6 bg-init road exclusion (keep = ~on_road).
+    on_road = compute_on_road_mask(bg_positions, height_field, z_band, z_ceil=z_ceil)
     mask_f = on_road.to(dtype=bg_density_raw.dtype)
 
     opacity = torch.sigmoid(bg_density_raw.view(-1))    # [N]

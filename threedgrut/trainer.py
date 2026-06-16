@@ -386,6 +386,41 @@ class Trainer3DGRUT:
                     if isinstance(model, LayeredGaussians) and model._single_bg_layer() is None:
                         # multi-layer: per-spec init dispatcher
                         layer_names = [s.name for s in model.specs]
+                        # E3.6 Task1: optionally exclude road-region points from bg
+                        # init so the road layer owns the road surface from the start
+                        # (source-level ownership split, aligns NuRec "bg init drops
+                        # road-class points"). Default off = byte-identical. bg LiDAR
+                        # (get_point_clouds) and road LiDAR (lidar-sseg) are DIFFERENT
+                        # sources → exclusion is geometric via the road height field
+                        # (shared compute_on_road_mask), not a per-point sseg index.
+                        _tconf = getattr(conf, "trainer", {})
+                        exclude_road = bool(
+                            _tconf.get("bg_init_exclude_road", False)
+                            if hasattr(_tconf, "get")
+                            else getattr(_tconf, "bg_init_exclude_road", False)
+                        )
+                        if exclude_road and "road" in model.layers and "background" in model.layers:
+                            from threedgrut.model.road_region import (
+                                build_road_height_field, compute_on_road_mask,
+                            )
+                            road_pts_excl, _ = train_dataset.get_road_lidar_points()
+                            if road_pts_excl.numel() > 0:
+                                brp = self._bg_road_conf(_tconf)
+                                hf_excl = build_road_height_field(
+                                    road_pts_excl, cell_size=brp["cell_size"]
+                                )
+                                on_road = compute_on_road_mask(
+                                    pc.xyz_end.cpu(), hf_excl, z_band=brp["z_band"]
+                                )
+                                keep = (~on_road).nonzero(as_tuple=True)[0]
+                                n_before = len(pc.xyz_end)
+                                pc = pc.selected_idxs(keep)
+                                logger.info(
+                                    f"[E3.6] bg-init road exclusion: {n_before} -> "
+                                    f"{len(pc.xyz_end)} bg pts "
+                                    f"({n_before - len(pc.xyz_end)} on-road removed "
+                                    f"@ z_band={brp['z_band']})"
+                                )
                         # 1. background: standard LiDAR init (non-dynamic points)
                         if "background" in model.layers:
                             model.layers["background"].init_from_lidar(pc, observer_points)
@@ -402,9 +437,18 @@ class Trainer3DGRUT:
                                 dtype=torch.float32,
                             )
                             road_spec = next(s for s in model.specs if s.name == "road")
+                            # E3.6 Task2A: optionally seed road at higher opacity so
+                            # it takes over the road surface (default 0.0 = byte-
+                            # identical sigmoid 0.5). _tconf defined above (L396).
+                            road_init_density = float(
+                                _tconf.get("road_init_density", 0.0)
+                                if hasattr(_tconf, "get")
+                                else getattr(_tconf, "road_init_density", 0.0)
+                            )
                             r_pos, r_rot, r_sca, r_den, r_col = init_road_layer(
                                 road_pts, traj,
                                 max_n=road_spec.max_n_particles,
+                                init_density=road_init_density,
                             )
                             device = model.layers["road"].device
                             model.init_layer_from_points(
@@ -420,6 +464,35 @@ class Trainer3DGRUT:
                                 f"🔆 road layer initialized: {r_pos.shape[0]} "
                                 f"particles (from {road_pts.shape[0]} road LiDAR pts)"
                             )
+                            # E3.3: optionally build a learnable BEV road texture
+                            # grid from the road init albedo + wire into fused_view
+                            # (default off = per-gaussian SH DC unchanged).
+                            road_bev = bool(
+                                _tconf.get("road_bev_texture", False)
+                                if hasattr(_tconf, "get")
+                                else getattr(_tconf, "road_bev_texture", False)
+                            )
+                            if road_bev:
+                                from threedgrut.model.bev_texture import build_bev_feature_grid
+                                _bev_cell = float(
+                                    _tconf.get("road_bev_cell_size", 1.0)
+                                    if hasattr(_tconf, "get")
+                                    else getattr(_tconf, "road_bev_cell_size", 1.0)
+                                )
+                                _bev_lr = float(
+                                    _tconf.get("road_bev_lr", 0.0025)
+                                    if hasattr(_tconf, "get")
+                                    else getattr(_tconf, "road_bev_lr", 0.0025)
+                                )
+                                _grid = build_bev_feature_grid(
+                                    r_pos.to(device), r_col.to(device), cell_size=_bev_cell
+                                )
+                                model.set_road_bev_grid(_grid, lr=_bev_lr)
+                                logger.info(
+                                    f"[E3.3] road BEV texture grid "
+                                    f"{tuple(_grid['grid_feature'].shape)} @ {_bev_cell}m "
+                                    f"lr={_bev_lr} → road DC albedo via bilinear sample"
+                                )
                         # 3. dynamic_rigids: real-cuboids path (T4.5).
                         # Source tracks from NCore manifest cuboid autolabels
                         # (loader.get_cuboid_track_observations); no mock.
@@ -1375,15 +1448,19 @@ class Trainer3DGRUT:
         )
         if cfg is None:
             return {"enabled": False, "lambda_max": 0.0, "warmup_iters": 0,
-                    "cell_size": 1.0, "z_band": 0.4}
+                    "cell_size": 1.0, "z_band": 0.4, "z_ceil": None}
         def g(k, d):
             return cfg.get(k, d) if hasattr(cfg, "get") else getattr(cfg, k, d)
+        _zc = g("z_ceil", None)
         return {
             "enabled": bool(g("enabled", False)),
             "lambda_max": float(g("lambda", 0.0)),
             "warmup_iters": int(g("lambda_warmup_iters", 0)),
             "cell_size": float(g("cell_size", 1.0)),
             "z_band": float(g("z_band", 0.4)),
+            # E3.6 Task2: None = symmetric thin band (V3-R2); float = full-height
+            # air-region column [ground-z_band, ground+z_ceil).
+            "z_ceil": (None if _zc is None else float(_zc)),
         }
 
     def _compute_bg_road_penalty_term(self, trainer_conf) -> torch.Tensor:
@@ -1409,6 +1486,7 @@ class Trainer3DGRUT:
         bg = layers["background"]
         return compute_bg_road_opacity_penalty(
             bg.positions, bg.density, hf, z_band=cfg["z_band"], lambda_val=lam,
+            z_ceil=cfg["z_ceil"],
         ).reshape(1)
 
     def _gather_active_tracks_for_batch(self, gpu_batch):

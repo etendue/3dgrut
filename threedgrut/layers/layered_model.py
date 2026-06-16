@@ -593,6 +593,17 @@ class LayeredGaussians(nn.Module):
         }
         if layered_track_state:
             out["layered_track_state"] = layered_track_state
+        # E3.3: road BEV texture grid — saved explicitly (its _road_bev_ prefix
+        # doesn't match the _track_ filter above, so it would otherwise be
+        # dropped). set_road_bev_grid rebuilds it on load. Only present when
+        # road_bev_texture was enabled → OFF runs keep byte-identical ckpts.
+        if getattr(self, "_road_bev_grid", None) is not None:
+            out["road_bev_state"] = {
+                "grid_feature": self._road_bev_grid_feature.detach().cpu(),
+                "xy_min": self._road_bev_xy_min.detach().cpu(),
+                "occupied": self._road_bev_occupied.detach().cpu(),
+                "cell_size": float(self._road_bev_cell_size),
+            }
         return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
@@ -769,6 +780,21 @@ class LayeredGaussians(nn.Module):
             # in addmm on first browser render. Migrate the whole ModuleDict
             # here so all entry points (trainer, eval, playground,
             # inject_viz_4d) see a consistent device state.
+            # E3.3: restore road BEV texture grid (rebuild dict + register
+            # grid_feature Parameter + Adam via set_road_bev_grid) so fused_view
+            # samples the TRAINED grid instead of falling back to per-gaussian SH.
+            _rb = None
+            if isinstance(checkpoint.get("model"), dict) and "road_bev_state" in checkpoint["model"]:
+                _rb = checkpoint["model"]["road_bev_state"]
+            elif "road_bev_state" in checkpoint:
+                _rb = checkpoint["road_bev_state"]
+            if _rb is not None:
+                self.set_road_bev_grid({
+                    "grid_feature": _rb["grid_feature"],
+                    "xy_min": _rb["xy_min"],
+                    "occupied": _rb["occupied"],
+                    "cell_size": float(_rb["cell_size"]),
+                })
             if torch.cuda.is_available():
                 self.cuda()
             return
@@ -1021,6 +1047,13 @@ class LayeredGaussians(nn.Module):
                 getattr(self, "_track_albedo_table", None)
                 if apply_dyn_bias else None
             )
+            # E3.3: road BEV planar texture — override road DC albedo with a
+            # bilinear sample of a learnable BEV grid (view-independent → correct
+            # under extrapolation). None (default) = SH DC unchanged.
+            apply_road_bev = (
+                spec.name == "road"
+                and getattr(self, "_road_bev_grid", None) is not None
+            )
             log_scale_table = (
                 getattr(self, "_track_log_scale_table", None)
                 if apply_dyn_bias else None
@@ -1060,6 +1093,20 @@ class LayeredGaussians(nn.Module):
                     inactive_value = torch.full_like(v, -50.0)
                     v = torch.where(
                         active_mask.unsqueeze(-1), v, inactive_value,
+                    )
+                elif (
+                    n == "features_albedo"
+                    and apply_road_bev
+                    and v.shape[0] > 0
+                ):
+                    # E3.3 strategy-1 (no kernel, no ABI change): road DC albedo
+                    # ← BEV grid bilinear sample at this layer's world xy. The
+                    # grid_feature inside _road_bev_grid may be a learnable
+                    # Parameter, so this stays differentiable (fused-view-time
+                    # injection, not an offline pre-bake).
+                    from threedgrut.model.bev_texture import sample_bev_feature_bilinear
+                    v = sample_bev_feature_bilinear(
+                        self._road_bev_grid, layer.positions[:, :2]
                     )
                 elif (
                     n == "features_albedo"
@@ -1709,7 +1756,36 @@ class LayeredGaussians(nn.Module):
         track_opt = getattr(self, "_track_optim", None)
         if track_opt is not None:
             extras.append(track_opt)
+        road_bev_opt = getattr(self, "_road_bev_optim", None)
+        if road_bev_opt is not None:
+            extras.append(road_bev_opt)
         return _LayeredOptimizerView(self.layers, extra_optimizers=extras)
+
+    # ------------------------------------------------------------------ E3.3 road BEV texture
+    def set_road_bev_grid(self, grid, lr: float = 0.0025) -> None:
+        """E3.3: attach a learnable BEV road-texture grid (dict from
+        build_bev_feature_grid). grid_feature is registered as a Parameter
+        (trains + rides in state_dict) and gets an Adam wired into the optimizer
+        view's extras; fused_view then overrides road DC albedo with a bilinear
+        sample of it. Pass None to disable (default = per-gaussian SH DC)."""
+        if grid is None:
+            self._road_bev_grid = None
+            return
+        gf = grid["grid_feature"]
+        if not isinstance(gf, torch.nn.Parameter):
+            gf = torch.nn.Parameter(gf.detach().clone())
+        self.register_parameter("_road_bev_grid_feature", gf)
+        self.register_buffer("_road_bev_xy_min", grid["xy_min"].detach().clone(), persistent=True)
+        self.register_buffer("_road_bev_occupied", grid["occupied"].detach().clone(), persistent=True)
+        self._road_bev_cell_size = float(grid["cell_size"])
+        self._road_bev_grid = {
+            "grid_feature": self._road_bev_grid_feature,
+            "xy_min": self._road_bev_xy_min,
+            "cell_size": self._road_bev_cell_size,
+            "occupied": self._road_bev_occupied,
+        }
+        object.__setattr__(self, "_road_bev_optim",
+                           torch.optim.Adam([self._road_bev_grid_feature], lr=float(lr)))
 
     # ------------------------------------------------------------------ V3-L8/L9
     def _maybe_setup_track_optim(self) -> None:

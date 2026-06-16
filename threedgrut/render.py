@@ -1170,7 +1170,6 @@ class Renderer:
         # has entries (empty when novel_save_n=0 or all timestamps < 0); no
         # effect on metrics.json content (pure side-output).
         if self.novel_view:
-            import json
             for _m, _fm in novel_frames_map.items():
                 if _fm:
                     _mp = os.path.join(self.out_dir, f"ours_{int(self.global_step)}",
