@@ -1910,10 +1910,15 @@ def main() -> None:
                         help="Where converted .pt files are cached "
                              "(named <usdz_basename>_<mtime_hash>.pt for "
                              "idempotent reload across viser restarts).")
-    parser.add_argument("--usdz_layers", type=str, default="background,road",
+    parser.add_argument("--usdz_layers", type=str,
+                        default="background,road,dynamic_rigids",
                         help="Comma-separated NRE Gaussian layers to load. "
-                             "Default skips dynamic_rigids (Phase A scope) "
-                             "and sky_envmap (needs nvdiffrast, not installed "
+                             "Default includes dynamic_rigids (E2.7-B: "
+                             "vehicles move with timeline via populate_tracks "
+                             "auto-hook on viz_4d.tracks). Skip "
+                             "dynamic_rigids if --dataset_path is absent or "
+                             "USDZ has no sequence_tracks.json. Don't add "
+                             "sky_envmap (needs nvdiffrast, not installed "
                              "on inceptio/A800).")
     parser.add_argument("--initial_cam_id", type=str, default=None,
                         help="E2.7 H1 fix: lock viser initial camera to this "
@@ -2053,6 +2058,33 @@ def main() -> None:
         # symptoms in plan H4/H5).
         # Per-dataset offset is cached alongside the NRE-frame ckpt so the
         # ~5s NCore SDK init only happens once per (usdz, dataset_path) pair.
+        # E2.7-B FINAL FRAME-OF-REFERENCE RULES (2026-06-15, 大g insight):
+        # **Two different data sources live in two different frames** in the
+        # E0.3 NRE Lightning USDZ container, and cross-source diff proved it:
+        #
+        #   (1) NRE state_dict gaussians (background / road / dynamic_rigids
+        #       per-particle positions, ego frame poses inside ckpt):
+        #       **NRE local frame** = NCore world − (38.00, -2.155, -0.278).
+        #       MUST apply +translate to bring into NCore world frame.
+        #
+        #   (2) sequence_tracks.json cuboid track poses + sequence_tracks.usda
+        #       cuboid declaration:
+        #       **NCore world frame** directly (NRE training dumped them
+        #       verbatim from NCore SDK annotations). DO NOT apply translate.
+        #
+        # Evidence on clip 9ae151dc tid='18' parked car:
+        #   3dgrut2-own viz_4d.tracks["18"][0].translation = (-51.30, 1.07, 1.42)
+        #   NRE sequence_tracks  ["18"] raw 7-vec[0:3]    = (-51.30, 1.12, 1.47)
+        # ↑ both in NCore world frame, agree to 0.05m — cuboid pose: no translate.
+        #
+        # NRE raw background median = (3.28, -4.16, 7.83); NCore ego_pose[0] =
+        # (2.17, 0.03, 1.44). NRE bg median near (0,0,0) is the
+        # "ego-centric" NRE local origin — bg must be translated by +38m to
+        # cover the trajectory in NCore world frame.
+        #
+        # Net rule below: align block translates background+road, skips
+        # dynamic_rigids (object-local). Dyn track-pose build below uses
+        # world_translate=None.
         aligned_pt = cache_pt[:-3] + "_aligned.pt"
         if not os.path.exists(aligned_pt):
             print(f"[E2.7-align] reading USDZ rig_trajectories.world_to_nre "
@@ -2104,6 +2136,25 @@ def main() -> None:
                 _ckpt = torch.load(cache_pt, weights_only=False)
                 _trans_t = torch.as_tensor(_translate, dtype=torch.float32)
                 for _layer, _node in _ckpt["model"]["gaussians_nodes"].items():
+                    # E2.7-B fix: dynamic_rigids gaussians live in
+                    # **object-local frame** (each gaussian position is
+                    # relative to its track's box center 0,0,0). At render
+                    # time LayeredGaussians' ``_transform_means_and_active``
+                    # transforms object-local → world using
+                    # ``tracks_poses[tid][frame_idx]`` (which IS in world
+                    # frame, post-translate per build_dynamic_tracks_for_viz4d).
+                    # Applying world_translate here too would DOUBLE-translate
+                    # the per-vehicle world position by 38m: all dyn gaussians
+                    # would pile up around (+38, -2.16, -0.28) instead of
+                    # following their respective track poses scattered along
+                    # the trajectory. fervent-knuth 873L: ``node_offset =
+                    # offset if spec.name != 'dynamic_rigids' else None``.
+                    if _layer == "dynamic_rigids":
+                        print(f"[E2.7-align]   layer={_layer}: "
+                              f"{_node['positions'].shape[0]} gaussians kept "
+                              f"in object-local frame (render_pass applies "
+                              f"track_pose per timestamp)", flush=True)
+                        continue
                     _p = _node["positions"]
                     _orig_param = isinstance(_p, torch.nn.Parameter)
                     _p_dev = _p.device
@@ -2230,6 +2281,182 @@ def main() -> None:
             f"t_us=[{metadata.t_us_first},{metadata.t_us_last}]",
             flush=True,
         )
+
+    # E2.7-B: wire dynamic_rigids tracks. amazing-lalande's simplified loader
+    # only ride-along's the per-gaussian ``_nre_cuboid_ids`` from NRE state_dict;
+    # to make vehicles MOVE with the timeline we must parse volume.usda +
+    # sequence_tracks.json out of the USDZ container, resample each track's
+    # raw 7-vec poses onto the NCore shared camera timeline, apply the same
+    # world_to_nre.inv translate the static layers got, then both:
+    #   (a) register layer.track_ids buffer on dynamic_rigids (gaussian → tid slot)
+    #   (b) populate_tracks(...) so render_pass(timestamp_us=t_us) finds
+    #       the per-frame pose to transform object-local gaussians
+    #   (c) inject metadata.tracks + metadata.tracks_camera_timestamps_us
+    #       so viser cuboid wireframes also follow the timeline (the
+    #       NCore SDK fallback path used by --dataset_path does NOT
+    #       provide tracks; only viz_4d-ckpt path does, see _load_metadata)
+    if args.usdz and metadata is not None and engine is not None:
+        try:
+            dyn_node = ckpt.get("model", {}).get("gaussians_nodes", {}).get(
+                "dynamic_rigids")
+            if dyn_node is None:
+                print("[E2.7-B] dynamic_rigids not in ckpt (loader skipped it "
+                      "or --usdz_layers excluded it); no track wiring.",
+                      flush=True)
+            elif "_nre_cuboid_ids" not in dyn_node:
+                print("[E2.7-B] dynamic_rigids loaded but no _nre_cuboid_ids "
+                      "ride-along — NRE state_dict missing gaussian_cuboid_ids; "
+                      "vehicles will render at static base pose, no track motion.",
+                      flush=True)
+            else:
+                from threedgrut_playground.utils.nre_usdz_loader import (
+                    build_dynamic_tracks_for_viz4d,
+                )
+                cuboid_ids_t = dyn_node["_nre_cuboid_ids"]
+                cuboid_ids_np = (
+                    cuboid_ids_t.detach().cpu().numpy()
+                    if hasattr(cuboid_ids_t, "detach")
+                    else np.asarray(cuboid_ids_t)
+                )
+                # E2.7-B ROOT-CAUSE-CORRECTION: NRE world frame == NCore
+                # world frame (verified by tid='18' cross-source diff between
+                # 3dgrut2-own viz_4d.tracks and NRE sequence_tracks). Do NOT
+                # apply any world_translate to track poses — they're already
+                # in NCore world frame directly. The static-layer align block
+                # above also skips translate now.
+                world_translate = None
+
+                # Shared timeline = NCore primary cam frame timestamps the
+                # FourDMetadata already loaded. Tracks are resampled onto
+                # this so frame_info masks the in-window frames.
+                timeline_us = np.asarray(
+                    metadata.ego_frame_timestamps_us, dtype=np.int64
+                )
+                print(f"[E2.7-B] resampling dynamic_rigids tracks onto "
+                      f"{timeline_us.size}-frame NCore timeline "
+                      f"(world_translate=None; NRE pose == NCore world)...",
+                      flush=True)
+                track_ids_np, tracks_dict = build_dynamic_tracks_for_viz4d(
+                    args.usdz, cuboid_ids_np, timeline_us,
+                    world_translate=world_translate,
+                )
+                print(f"[E2.7-B] built {len(tracks_dict)} tracks for "
+                      f"{cuboid_ids_np.size} gaussians; track_ids range "
+                      f"[{track_ids_np.min()},{track_ids_np.max()}].",
+                      flush=True)
+                # (a) register track_ids buffer on dynamic_rigids layer.
+                # layered_model.py:639 also restores this from
+                # ckpt["model"]["gaussians_nodes"][name]["track_ids"], but
+                # amazing-lalande loader doesn't write it that way — do the
+                # register here instead (idempotent: delattr first).
+                _dyn_layer = engine.scene_mog.layers["dynamic_rigids"]
+                _dev = _dyn_layer.positions.device
+                if hasattr(_dyn_layer, "track_ids"):
+                    delattr(_dyn_layer, "track_ids")
+                _dyn_layer.register_buffer(
+                    "track_ids",
+                    torch.as_tensor(track_ids_np, dtype=torch.long, device=_dev),
+                    persistent=True,
+                )
+                # (b) populate_tracks. First-tid carries shared timeline.
+                _first_tid = next(iter(tracks_dict))
+                _torch_tracks = {}
+                _n_active_per_track = []
+                for _tid, _t in tracks_dict.items():
+                    _fi = torch.as_tensor(
+                        _t["frame_info"], dtype=torch.bool, device=_dev)
+                    _n_active_per_track.append(int(_fi.sum().item()))
+                    _torch_tracks[_tid] = {
+                        "poses": torch.as_tensor(
+                            _t["poses"], dtype=torch.float32, device=_dev),
+                        "size": torch.as_tensor(
+                            _t["size"], dtype=torch.float32, device=_dev),
+                        "frame_info": _fi,
+                        "class": _t["class"],
+                    }
+                _act = np.asarray(_n_active_per_track)
+                print(f"[E2.7-B] active-frame distribution per track: "
+                      f"min={_act.min()} max={_act.max()} "
+                      f"median={int(np.median(_act))} of {timeline_us.size} frames, "
+                      f"all-zero tracks={(_act==0).sum()}/{len(_act)}",
+                      flush=True)
+                _torch_tracks[_first_tid]["cam_timestamps_us"] = torch.as_tensor(
+                    timeline_us, dtype=torch.int64, device=_dev)
+                engine.scene_mog.populate_tracks(_torch_tracks)
+                print(f"[E2.7-B] populate_tracks done: "
+                      f"{len(_torch_tracks)} tracks on dynamic_rigids "
+                      f"({_dyn_layer.positions.shape[0]} gaussians).",
+                      flush=True)
+                # E2.7-B diagnostic: verify the 3 conditions LayeredGaussians
+                # checks in _transform_means_and_active path
+                # (layered_model.py:999-1003). If any is False, dyn gaussians
+                # stay in object-local frame (invisible far from camera).
+                _tp = engine.scene_mog.tracks_poses
+                _has_tid = hasattr(_dyn_layer, "track_ids")
+                _n_track_pose_bufs = sum(
+                    1 for name, _ in engine.scene_mog.named_buffers()
+                    if name.startswith("_track_pose_")
+                )
+                _n_track_active_bufs = sum(
+                    1 for name, _ in engine.scene_mog.named_buffers()
+                    if name.startswith("_track_active_")
+                )
+                _has_shared_ts = hasattr(
+                    engine.scene_mog, "tracks_camera_timestamps_us"
+                )
+                _shared_ts_len = (
+                    int(engine.scene_mog.tracks_camera_timestamps_us.shape[0])
+                    if _has_shared_ts else 0
+                )
+                print(
+                    f"[E2.7-B-diag] dynamic transform pre-flight:\n"
+                    f"  hasattr(dyn_layer, track_ids)        = {_has_tid}\n"
+                    f"  len(scene_mog.tracks_poses)          = "
+                    f"{len(_tp) if _tp is not None else 'None'}\n"
+                    f"  _track_pose_* buffer count           = {_n_track_pose_bufs}\n"
+                    f"  _track_active_* buffer count         = {_n_track_active_bufs}\n"
+                    f"  tracks_camera_timestamps_us shape    = "
+                    f"({_shared_ts_len},)\n"
+                    f"  layer.positions median (object-local)= "
+                    f"{_dyn_layer.positions.median(0).values.tolist()}\n"
+                    f"  layer.track_ids range                = "
+                    f"[{_dyn_layer.track_ids.min().item()},"
+                    f"{_dyn_layer.track_ids.max().item()}]",
+                    flush=True,
+                )
+                # Sample one track's pose to confirm world-frame translate is in
+                if _n_track_pose_bufs > 0:
+                    _first_tid = sorted(_torch_tracks.keys())[0]
+                    _sample_buf = getattr(
+                        engine.scene_mog, f"_track_pose_{_first_tid}", None
+                    )
+                    if _sample_buf is not None:
+                        print(
+                            f"  sample _track_pose_{_first_tid}[0] pos="
+                            f"{_sample_buf[0, :3, 3].tolist()}",
+                            flush=True,
+                        )
+                # (c) inject metadata.tracks + tracks_camera_timestamps_us
+                # so viser cuboid wireframes follow the timeline too.
+                metadata.tracks = {
+                    _tid: {
+                        "poses": _t["poses"],
+                        "size": _t["size"],
+                        "frame_info": _t["frame_info"],
+                        "class": _t["class"],
+                    }
+                    for _tid, _t in tracks_dict.items()
+                }
+                metadata.tracks_camera_timestamps_us = timeline_us
+                print(f"[E2.7-B] injected metadata.tracks ({len(metadata.tracks)} "
+                      f"tids) — viser cuboid wireframes now timeline-aware.",
+                      flush=True)
+        except Exception as _e:
+            print(f"[E2.7-B] WARN: dynamic_rigids track wiring failed ({_e!r}); "
+                  f"vehicles will render at static base pose, no track motion.",
+                  flush=True)
+            import traceback as _tb
+            _tb.print_exc()
 
     # E2.7 H1 alias fallback: NCore cam ids vary between clip generations
     # (camera_front_120 vs camera_front_wide_120fov vs front_120). If user

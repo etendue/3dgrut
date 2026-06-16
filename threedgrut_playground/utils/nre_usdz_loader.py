@@ -40,14 +40,21 @@ orchestration (:func:`convert_usdz_to_pt`) needs the 3dgrut env + GPU.
 from __future__ import annotations
 
 import io
+import json
+import logging
 import math
 import pickle
+import re
 import types
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
+import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 
 # Layers we translate from NRE → 3dgrut2. ``dynamic_deformables`` is
 # intentionally absent: viser does not support its neural deform field (大g
@@ -246,6 +253,358 @@ def nre_layer_tensors(
     return out
 
 
+# --------------------------------------------------------------------------- #
+# 2b. E2.7-B: dynamic_rigids tracks wiring (pure numpy — Mac-testable).
+# --------------------------------------------------------------------------- #
+# Helpers adapted from fervent-knuth-d25fe9's nurec_usdz_loader.py (873L
+# complete version, Stage 2 wiring). amazing-lalande's simplified loader
+# (this file) was Phase A (static layers only); E2.7-B adds dynamic_rigids
+# per-track 4D pose wiring so vehicles move with the timeline in viser.
+#
+# Data flow:
+#   USDZ container ─→ volume.usda  (regex parse → track_order: cuboid_idx → tid)
+#                  ─→ sequence_tracks.json  (per-tid raw 7-vec poses + ts_us)
+#   gaussians_nodes.dynamic_rigids.gaussian_cuboid_ids  (N, int32)
+#       ─→ remap via track_order → sorted-tid int slot (populate_tracks 约定)
+#   per-track raw poses ─→ resample to shared camera timeline (slerp + lerp)
+#                       ─→ apply world_to_nre.inv translate (NRE→world frame)
+#                       ─→ tracks_dict[tid] = {poses(F,4,4), size, frame_info, class}
+#
+# Then viser_gui_4d.py:
+#   model.layers["dynamic_rigids"].register_buffer("track_ids", remap)
+#   model.populate_tracks(tracks_dict with cam_timestamps_us on first tid)
+#   metadata.tracks = tracks_dict
+#   metadata.tracks_camera_timestamps_us = shared_timeline
+#
+# Per claude-mem #4845 (fervent-knuth dry_run on 0fd06bc3): the NRE
+# omni:nurec:offset is NOT applied to dynamic_rigids (object-local frame).
+
+# volume.usda cuboid prim suffix → tid pattern. Measured (fervent-knuth
+# observation, claude-mem #4844): "bounding_boxes/track_00000_9/cuboid"
+# → tid '9' (the suffix after the final '_').
+_TRACK_PRIM_RE = re.compile(r"bounding_boxes/track_\d+_(\d+)/cuboid")
+
+
+@dataclass
+class TrackRaw:
+    """One dynamic-object track from sequence_tracks.json."""
+    tid: str
+    poses7: np.ndarray      # (F_i, 7) [x,y,z, qx,qy,qz,qw] xyzw
+    ts_us: np.ndarray       # (F_i,) int64
+    label_class: str
+    dims: np.ndarray        # (3,) L,W,H
+
+
+def _quat_wxyz_to_rotmat(q: np.ndarray) -> np.ndarray:
+    """Single wxyz quaternion → 3x3 rotation matrix (q must be normalized)."""
+    w, x, y, z = q
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _slerp_wxyz(q0: np.ndarray, q1: np.ndarray, alpha: float) -> np.ndarray:
+    """Spherical interpolation between two normalized wxyz quaternions."""
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:  # take the short arc
+        q1 = -q1
+        dot = -dot
+    if dot > 0.9995:  # nearly parallel → lerp + renormalize
+        q = q0 + alpha * (q1 - q0)
+        return q / np.linalg.norm(q)
+    theta0 = np.arccos(np.clip(dot, -1.0, 1.0))
+    s0 = np.sin((1.0 - alpha) * theta0) / np.sin(theta0)
+    s1 = np.sin(alpha * theta0) / np.sin(theta0)
+    return s0 * q0 + s1 * q1
+
+
+def pose7_to_mat(pose7: np.ndarray) -> np.ndarray:
+    """sequence_tracks 7-vec [x,y,z,qx,qy,qz,qw] (xyzw) → 4x4 matrix.
+
+    Accepts a single (7,) vector or any batched (..., 7) array; quaternions
+    are normalized before conversion.
+    """
+    p = np.asarray(pose7, dtype=np.float64)
+    single = p.ndim == 1
+    flat = p.reshape(-1, 7)
+    out = np.tile(np.eye(4, dtype=np.float64), (flat.shape[0], 1, 1))
+    quat_wxyz = flat[:, [6, 3, 4, 5]]  # xyzw → wxyz
+    norms = np.linalg.norm(quat_wxyz, axis=1, keepdims=True)
+    quat_wxyz = quat_wxyz / np.maximum(norms, 1e-12)
+    for i in range(flat.shape[0]):
+        out[i, :3, :3] = _quat_wxyz_to_rotmat(quat_wxyz[i])
+        out[i, :3, 3] = flat[i, :3]
+    if single:
+        return out[0]
+    return out.reshape(p.shape[:-1] + (4, 4))
+
+
+def resample_track_to_timeline(
+    poses7: np.ndarray,
+    ts_us: np.ndarray,
+    timeline_us: np.ndarray,
+    *,
+    tolerance_us: int = 200_000,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Resample a per-track pose sequence onto the shared camera timeline.
+
+    Inside the track's time window poses are interpolated (translation lerp +
+    quaternion slerp); outside they clamp to the nearest endpoint and
+    ``frame_info`` is False, matching the viz_4d contract where the viewer
+    only consumes poses at frames with frame_info=True.
+
+    Returns (poses (F, 4, 4) float32, frame_info (F,) bool).
+    """
+    p = np.asarray(poses7, dtype=np.float64).reshape(-1, 7)
+    ts = np.asarray(ts_us, dtype=np.int64).reshape(-1)
+    timeline = np.asarray(timeline_us, dtype=np.int64).reshape(-1)
+    n_frames = timeline.shape[0]
+
+    frame_info = ((timeline >= ts[0] - tolerance_us)
+                  & (timeline <= ts[-1] + tolerance_us))
+
+    quats = p[:, [6, 3, 4, 5]]  # xyzw → wxyz
+    quats = quats / np.maximum(np.linalg.norm(quats, axis=1, keepdims=True), 1e-12)
+
+    out = np.empty((n_frames, 4, 4), dtype=np.float32)
+    for i, t in enumerate(timeline):
+        if t <= ts[0]:
+            j, alpha = 0, 0.0
+        elif t >= ts[-1]:
+            j, alpha = len(ts) - 2 if len(ts) >= 2 else 0, 1.0
+        else:
+            j = int(np.searchsorted(ts, t, side="right")) - 1
+            j = min(max(j, 0), len(ts) - 2)
+            span = float(ts[j + 1] - ts[j])
+            alpha = float(t - ts[j]) / max(span, 1.0)
+        if len(ts) == 1:
+            trans = p[0, :3]
+            q = quats[0]
+        else:
+            trans = (1.0 - alpha) * p[j, :3] + alpha * p[j + 1, :3]
+            q = _slerp_wxyz(quats[j], quats[j + 1], alpha)
+        mat = np.eye(4, dtype=np.float64)
+        mat[:3, :3] = _quat_wxyz_to_rotmat(q / np.linalg.norm(q))
+        mat[:3, 3] = trans
+        out[i] = mat.astype(np.float32)
+    return out, frame_info
+
+
+def _find_usdz_member(zf: zipfile.ZipFile, member: str) -> str:
+    """Resolve a USDZ member by exact name or basename (may have dir prefix)."""
+    names = zf.namelist()
+    if member in names:
+        return member
+    for name in names:
+        if name.rsplit("/", 1)[-1] == member:
+            return name
+    raise FileNotFoundError(f"USDZ member not found: {member} (have: {names[:20]})")
+
+
+def read_usdz_member_bytes(usdz_path: "str | Path", member: str) -> bytes:
+    """Read one small member (json / usda) without extracting the archive."""
+    with zipfile.ZipFile(usdz_path) as zf:
+        return zf.read(_find_usdz_member(zf, member))
+
+
+def parse_volume_usda_track_order(text: str) -> list:
+    """Extract cuboid declaration order → tid list from a USDZ .usda member.
+
+    Index ``i`` of the returned list is what ``gaussian_cuboid_ids == i``
+    refers to in the dynamic_rigids node. Element is the string tid that
+    keys into sequence_tracks.json's ``tracks_id`` array.
+
+    Two USDZ container variants supported:
+
+    * **NVIDIA demo scenes** (e.g. 0fd06bc3 NuRec sample) — volume.usda
+      carries strict ``bounding_boxes/track_NNNNN_TID/cuboid`` prims; the
+      strict regex matches and preserves declaration order.
+
+    * **NRE Lightning training-checkpoint USDZ** (e.g. E0.3 last.usdz
+      produced by ``nre train``) — sequence_tracks.usda carries
+      ``track_NNNNN_TID`` prims under a different scope (e.g.
+      ``/World/sequence_tracks/...``) with no ``bounding_boxes/`` prefix.
+      Fall back to a lax ``track_(\\d+)_(\\d+)`` match, sort by sequence
+      index, and dedup so each cuboid index appears once in order.
+    """
+    matches = _TRACK_PRIM_RE.findall(text)
+    if matches:
+        return matches
+    # Lax fallback for NRE Lightning USDZ sequence_tracks.usda. Pairs are
+    # (seq_idx, tid); a single prim attribute reference (e.g.
+    # ``add varying rig:track_00007_252:...``) may repeat seq_idx across
+    # multiple lines — dedup by seq_idx ascending so the result is the
+    # cuboid declaration order without duplicates.
+    rough = re.findall(r"track_(\d+)_(\d+)", text)
+    if not rough:
+        return []
+    seen: set = set()
+    ordered: list = []
+    for seq_idx, tid in sorted(rough, key=lambda x: int(x[0])):
+        if seq_idx in seen:
+            continue
+        seen.add(seq_idx)
+        ordered.append(tid)
+    return ordered
+
+
+def parse_sequence_tracks(st_json: dict) -> list:
+    """sequence_tracks.json → [TrackRaw]. All tracks kept (static ones too —
+    their cuboids are still worth drawing on the timeline)."""
+    out: list = []
+    for chunk in st_json.values():
+        td = (chunk or {}).get("tracks_data")
+        if not td:
+            continue
+        dims_all = (chunk.get("cuboidtracks_data", {}) or {}).get("cuboids_dims", [])
+        tids = td.get("tracks_id", [])
+        for i, tid in enumerate(tids):
+            out.append(TrackRaw(
+                tid=str(tid),
+                poses7=np.asarray(td["tracks_poses"][i], dtype=np.float64).reshape(-1, 7),
+                ts_us=np.asarray(td["tracks_timestamps_us"][i], dtype=np.int64),
+                label_class=str(td["tracks_label_class"][i]),
+                dims=(np.asarray(dims_all[i], dtype=np.float32)
+                      if i < len(dims_all)
+                      else np.ones(3, dtype=np.float32)),
+            ))
+    return out
+
+
+def build_dynamic_tracks_for_viz4d(
+    usdz_path: "str | Path",
+    gaussian_cuboid_ids: np.ndarray,
+    shared_timeline_us: np.ndarray,
+    *,
+    world_translate: Optional[np.ndarray] = None,
+    tolerance_us: int = 200_000,
+) -> Tuple[np.ndarray, dict]:
+    """USDZ dynamic_rigids → (track_ids_remap, tracks_dict) for viz_4d / populate_tracks.
+
+    Args:
+        usdz_path: USDZ container path (NRE training checkpoint flavor).
+        gaussian_cuboid_ids: (N,) int array; per-gaussian cuboid index from
+            ``state_dict["model.gaussians_nodes.dynamic_rigids.gaussian_cuboid_ids"]``.
+        shared_timeline_us: (F,) int64 shared camera timeline (typically
+            NCore primary camera frame timestamps; tracks are resampled
+            onto this so per-frame ``frame_info`` masks the active window).
+        world_translate: optional (3,) translate to apply to each pose's
+            translation column — for E2.7 NRE→world frame alignment use
+            ``-world_to_nre.matrix[:3, 3]`` (same translate as static layers).
+        tolerance_us: ms before/after a track's window where frame_info
+            still reports True (smooths the edges, matches fervent-knuth).
+
+    Returns:
+        track_ids: (N,) int64 — per-gaussian sorted-tid slot
+            (populate_tracks indexes ``sorted(tracks.keys())``).
+        tracks_dict: ``{tid: {poses (F,4,4) float32, size (3,) float32,
+                              frame_info (F,) bool, class str}}``.
+            Caller adds ``cam_timestamps_us`` to the first tid entry.
+
+    Schema notes (fervent-knuth measured on 0fd06bc3, claude-mem #4845):
+        * sequence_tracks 7-vec is xyzw (rotations in volume.nurec are wxyz).
+        * dynamic_rigids gaussians are object-local — never apply NRE
+          omni:nurec:offset to them. But the track poses are in world frame
+          and DO need the NRE→world translate (same as static layers).
+    """
+    # USDZ container variants: NVIDIA demo scenes (e.g. 0fd06bc3, used by
+    # fervent-knuth-d25fe9 873L tests) have ``volume.usda``; NRE Lightning
+    # training-checkpoint USDZs (e.g. E0.3 last.usdz produced by `nre train`)
+    # have ``sequence_tracks.usda`` instead and no volume.usda. Both files
+    # carry the same ``track_NNNNN_TID`` prim naming convention that the
+    # cuboid_index → tid mapping comes from — try each member in turn.
+    track_order: list = []
+    last_err: Optional[Exception] = None
+    for _member in ("volume.usda", "sequence_tracks.usda"):
+        try:
+            _text = read_usdz_member_bytes(usdz_path, _member).decode(
+                "utf-8", errors="replace"
+            )
+            track_order = parse_volume_usda_track_order(_text)
+            if track_order:
+                logger.info("dynamic_rigids: parsed track_order from %s "
+                            "(%d cuboid entries)", _member, len(track_order))
+                break
+        except FileNotFoundError as _e:
+            last_err = _e
+            continue
+    if not track_order:
+        raise ValueError(
+            f"USDZ {usdz_path}: no 'volume.usda' or 'sequence_tracks.usda' "
+            f"with 'track_NNNNN_TID' prims found — dynamic_rigids wiring "
+            f"impossible. Last container-access error: {last_err!r}"
+        )
+
+    # populate_tracks indexes sorted(tracks.keys()) — fix sorted order so
+    # the int slot for each tid is deterministic & matches LayeredGaussians'
+    # internal ordering.
+    sorted_tids = sorted(set(track_order))
+    cid_to_sorted = np.array(
+        [sorted_tids.index(t) for t in track_order], dtype=np.int64
+    )
+    cuboid_ids = np.asarray(gaussian_cuboid_ids, dtype=np.int64)
+    if cuboid_ids.size and cuboid_ids.max() >= len(track_order):
+        raise IndexError(
+            f"gaussian_cuboid_ids max {cuboid_ids.max()} >= "
+            f"track_order len {len(track_order)} — inconsistent USDZ "
+            f"container (volume.usda 'rel tracks' shorter than expected)."
+        )
+    track_ids = cid_to_sorted[cuboid_ids]
+
+    st_json = json.loads(
+        read_usdz_member_bytes(usdz_path, "sequence_tracks.json")
+    )
+    raw_tracks = parse_sequence_tracks(st_json)
+    by_tid = {tr.tid: tr for tr in raw_tracks}
+
+    translate = None
+    if world_translate is not None:
+        translate = np.asarray(world_translate, dtype=np.float32).reshape(-1)
+        if translate.shape != (3,):
+            raise ValueError(
+                f"world_translate must be (3,) — got shape {translate.shape}"
+            )
+
+    tracks_dict: dict = {}
+    n_missing = 0
+    for tid in sorted_tids:
+        tr = by_tid.get(tid)
+        if tr is None:
+            logger.warning(
+                "dynamic_rigids tid '%s' from volume.usda not in "
+                "sequence_tracks.json — skipped", tid,
+            )
+            n_missing += 1
+            continue
+        poses, frame_info = resample_track_to_timeline(
+            tr.poses7, tr.ts_us, shared_timeline_us, tolerance_us=tolerance_us,
+        )
+        if translate is not None:
+            poses = poses.copy()
+            poses[:, :3, 3] += translate
+        tracks_dict[tid] = {
+            "poses": poses,
+            "size": tr.dims,
+            "frame_info": frame_info,
+            "class": tr.label_class,
+        }
+    if n_missing:
+        logger.warning(
+            "dynamic_rigids: %d/%d tids missing from sequence_tracks.json — "
+            "their gaussians will render at the parent group's default pose",
+            n_missing, len(sorted_tids),
+        )
+    return track_ids, tracks_dict
+
+
+# --------------------------------------------------------------------------- #
+# 2c. Scene-extent + floater clip helpers.
+# --------------------------------------------------------------------------- #
 def estimate_scene_extent(positions: torch.Tensor, q: float = 0.95) -> float:
     """Robust scene-extent estimate (percentile radius) so far-field
     background points don't blow up the value. Render-only, so the exact number
