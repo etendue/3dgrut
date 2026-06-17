@@ -26,7 +26,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_dir
 
-from threedgrut.layers.layered_model import LayeredGaussians, _SH_C0
+from threedgrut.layers.layered_model import LayeredGaussians, _SH_C0, _rotmat_to_quat_wxyz
 from threedgrut.layers.registry import specs_from_config
 from threedgrut.layers.warmstart_ply import (
     AlignedAsset,
@@ -38,6 +38,7 @@ from threedgrut.layers.warmstart_ply import (
 from threedgrut.layers.e25_inject import (
     aligned_to_node_tensors,
     build_name_to_int_id,
+    flip_forward_180,
     match_assets_by_size,
     replace_tracks_in_dyn_node,
 )
@@ -261,6 +262,49 @@ def test_compute_axis_alignment_proper_rotation():
     xf = compute_axis_alignment("consumer_vehicles", (4.47, 1.82, 1.43), half, center)
     assert abs(torch.det(xf.R).item() - 1.0) < 1e-5
     assert abs(xf.q_R.norm().item() - 1.0) < 1e-5
+
+
+def test_flip_forward_180_is_yaw_about_up():
+    """NCore cuboid forward(+X) is opposite the AH Objaverse canonical forward,
+    so the injected car drives backwards (head/tail swapped). flip_forward_180
+    composes a 180° yaw about object-local up(Z): X,Y rows negated, Z unchanged,
+    det stays +1 (proper rotation, not a mirror)."""
+    half = torch.tensor([2.0, 1.0, 0.7])
+    center = torch.zeros(3)
+    xf = compute_axis_alignment("consumer_vehicles", (4.0, 2.0, 1.4), half, center)
+    xff = flip_forward_180(xf)
+
+    assert abs(torch.det(xff.R).item() - 1.0) < 1e-5, "flip must stay a proper rotation"
+    assert torch.allclose(xff.R[0], -xf.R[0], atol=1e-6), "forward(X) row must negate"
+    assert torch.allclose(xff.R[1], -xf.R[1], atol=1e-6), "left(Y) row must negate"
+    assert torch.allclose(xff.R[2], xf.R[2], atol=1e-6), "up(Z) row must be unchanged"
+    assert torch.allclose(xff.q_R, _rotmat_to_quat_wxyz(xff.R), atol=1e-5)
+    # scale / center / perm untouched
+    assert torch.allclose(xff.scale_local, xf.scale_local)
+    assert torch.allclose(xff.center, xf.center)
+    assert xff.perm == xf.perm
+
+
+def test_flip_forward_180_reverses_aligned_positions():
+    """End-to-end: a cloud that aligns to +local-X (forward) ends at -X after flip,
+    with up(Z) preserved — i.e. the car turns around in place."""
+    g = torch.Generator().manual_seed(0)
+    pts = (torch.rand(200, 3, generator=g) - 0.5) * 2.0
+    pts[:, 0] += 3.0  # bias along ply-x so the aligned cloud lands at +forward
+    asset = WarmStartAsset(
+        positions=pts,
+        rotations=torch.nn.functional.normalize(torch.randn(200, 4, generator=g), dim=-1),
+        scales_log=torch.zeros(200, 3),
+        density_logit=torch.zeros(200, 1),
+        albedo=torch.zeros(200, 3),
+    )
+    half, center = asset_extent(asset)
+    xf = compute_axis_alignment("consumer_vehicles", (4.0, 2.0, 1.4), half, center)
+    base = apply_alignment(asset, xf)
+    flipped = apply_alignment(asset, flip_forward_180(xf))
+    # forward (X) mean sign flips; up (Z) mean preserved
+    assert base.positions[:, 0].mean() * flipped.positions[:, 0].mean() < 0
+    assert torch.allclose(base.positions[:, 2].mean(), flipped.positions[:, 2].mean(), atol=1e-5)
 
 
 def test_apply_alignment_fills_cuboid():

@@ -15,14 +15,38 @@ from __future__ import annotations
 
 import torch
 
-from threedgrut.layers.warmstart_ply import AlignedAsset
-from threedgrut.layers.layered_model import _SH_C0
+from threedgrut.layers.warmstart_ply import AlignedAsset, AlignmentTransform
+from threedgrut.layers.layered_model import _SH_C0, _rotmat_to_quat_wxyz
 
 # MoG dynamic_rigids node tensors that scale with particle count.
 _PARTICLE_KEYS = (
     "positions", "rotation", "scale", "density",
     "features_albedo", "features_specular", "track_ids",
 )
+
+
+def flip_forward_180(xf: AlignmentTransform) -> AlignmentTransform:
+    """Compose a 180° yaw (about object-local up/Z) onto an alignment transform.
+
+    PR #18's ``_VEHICLE_AXIS_MAP`` is calibrated to the NuRec demo USDZ canonical
+    orientation, but E2.5 places cars onto **NCore cuboid** trajectories whose
+    forward(+X) convention is the opposite — so without this the injected car
+    drives backwards (head/tail swapped). A 180° yaw negates the forward(X) and
+    left(Y) axes while keeping up(Z), which is a proper rotation (det +1), not a
+    mirror. scale_local / center / perm are unchanged.
+    """
+    Rz = torch.tensor(
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=xf.R.dtype,
+    )
+    R_new = Rz @ xf.R
+    return AlignmentTransform(
+        R=R_new,
+        q_R=_rotmat_to_quat_wxyz(R_new),
+        scale_local=xf.scale_local,
+        center=xf.center,
+        perm=xf.perm,
+    )
 
 
 def build_name_to_int_id(tracks: dict) -> dict:

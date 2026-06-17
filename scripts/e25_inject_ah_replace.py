@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from threedgrut.layers.e25_inject import (  # noqa: E402
     build_name_to_int_id,
+    flip_forward_180,
     match_assets_by_size,
     replace_tracks_in_dyn_node,
 )
@@ -82,6 +83,9 @@ def _parse_args(argv=None):
                     help="if ckpt lacks viz_4d, run inject_viz_4d first (needs --dataset_path + NCore SDK)")
     ap.add_argument("--no_class_filter", action="store_true",
                     help="consider every present track (not just vehicle classes)")
+    ap.add_argument("--no_yaw_flip", action="store_true",
+                    help="skip the 180° yaw fix (NCore cuboid forward vs AH canonical); "
+                         "default applies it so cars face their direction of travel")
     ap.add_argument("--dry_run", action="store_true",
                     help="print probe + mapping + size deltas, write nothing")
     return ap.parse_args(argv)
@@ -172,6 +176,8 @@ def main(argv=None) -> int:
         half, center = asset_extent(asset)
         dims = recon_sizes[name]  # fill the recon car's cuboid, not AH metadata dims
         xf = compute_axis_alignment(spec.label_class, dims, half, center)
+        if not args.no_yaw_flip:
+            xf = flip_forward_180(xf)  # NCore cuboid forward is opposite AH canonical
         aligned = apply_alignment(asset, xf)
         aligned = subsample_asset(aligned, args.max_pts_per_track, generator=gen)
         aligned_by_id[name_to_id[name]] = aligned
