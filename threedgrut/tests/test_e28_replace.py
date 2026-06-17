@@ -50,3 +50,68 @@ def test_on_miss_skip_keeps_recon():
 def test_vehicle_classes_cover_ncore_autolabels():
     for c in ("automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle"):
         assert c in VEHICLE_CLASSES
+
+
+# ----------------------------------------------------------------------------
+# Task 3: replace_all_vehicle_tracks orchestration (guards bg/road/non-vehicle)
+# ----------------------------------------------------------------------------
+import torch
+from threedgrut.layers.e28_replace import replace_all_vehicle_tracks
+
+
+def _toy_dyn_node():
+    # 2 个 vehicle track (ids 0,1) 各 3 粒子 + 1 ped track (id 2) 2 粒子
+    tids = torch.tensor([0, 0, 0, 1, 1, 1, 2, 2], dtype=torch.int64)
+    n = tids.shape[0]
+
+    def p(c):
+        return torch.nn.Parameter(torch.arange(n * c, dtype=torch.float32).reshape(n, c))
+
+    return {
+        "positions": p(3), "rotation": p(4), "scale": p(3), "density": p(1),
+        "features_albedo": p(3), "features_specular": p(2),
+        "track_ids": tids, "n_active_features": 0,
+    }
+
+
+def test_non_vehicle_track_particles_unchanged(monkeypatch):
+    # ped track (id 2) 的粒子在替换后逐字节不变；bg 不动
+    node = _toy_dyn_node()
+    ped_before = node["positions"][node["track_ids"] == 2].clone()
+    ckpt = {"model": {"gaussians_nodes": {
+        "background": {"positions": torch.nn.Parameter(torch.randn(5, 3))},
+        "road": {"positions": torch.nn.Parameter(torch.randn(4, 3))},
+        "dynamic_rigids": node,
+    }}}
+    bg_before = ckpt["model"]["gaussians_nodes"]["background"]["positions"].clone()
+
+    # stub align: 让 vehicle track 各换成 2 粒子的假 AlignedAsset（避免依赖真 PLY）
+    from threedgrut.layers import e28_replace as M
+
+    class _Fake:  # 鸭子类型 AlignedAsset 的 5 字段
+        positions = torch.zeros(2, 3)
+        rotations = torch.zeros(2, 4)
+        scales_log = torch.zeros(2, 3)
+        density_logit = torch.zeros(2, 1)
+        colors = torch.full((2, 3), 0.5)
+
+    monkeypatch.setattr(M, "_align_asset", lambda *a, **k: _Fake())
+
+    recon = {"0": ("automobile", (4, 2, 1.5)), "1": ("car", (4, 2, 1.5)),
+             "2": ("VRU_pedestrians", (0.6, 0.6, 1.7))}
+    name_to_id = {"0": 0, "1": 1, "2": 2}
+    bundle = {"x": AssetSpec("x", "c/x/g.ply", "consumer_vehicles", (4, 2, 1.5))}
+
+    out, report = replace_all_vehicle_tracks(
+        ckpt, bundle_root="/tmp", bundle=bundle, recon=recon,
+        name_to_id=name_to_id, on_miss="global",
+    )
+    new = out["model"]["gaussians_nodes"]["dynamic_rigids"]
+    ped_after = new["positions"][new["track_ids"] == 2]
+    assert torch.equal(ped_before, ped_after)                       # ped 不动
+    bg_after = out["model"]["gaussians_nodes"]["background"]["positions"]
+    assert torch.equal(bg_before, bg_after)                         # bg 不动
+    # vehicle track 0/1 各变 2 粒子
+    assert int((new["track_ids"] == 0).sum()) == 2
+    assert int((new["track_ids"] == 1).sum()) == 2
+    assert {r.track for r in report if not r.skipped} == {"0", "1"}
