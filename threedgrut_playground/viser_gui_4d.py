@@ -1085,6 +1085,20 @@ class Viser4DViewer:
         local = np.array([sx * 0.5, sy * 0.5, sz * 0.5], dtype=np.float32)
         return (pose[:3, :3] @ local + pose[:3, 3]).astype(np.float64)
 
+    # E2.8 (大g 2026-06-17): active-cuboid display 只留 vehicle 类——person /
+    # animal / protruding_object 等 cuboid 是杂物（无 rigid gaussian，纯遮挡
+    # 视觉）。子串匹配覆盖 heavy_truck 等复合类。改这一处 + _update_cuboid_labels
+    # 即覆盖 line_segments + FTheta overlay + 两条 label 路径（共用 _iter）。
+    _VEHICLE_CUBOID_TOKENS = (
+        "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
+    )
+
+    def _is_vehicle_cuboid(self, tid) -> bool:
+        if self.meta is None:
+            return True
+        cls = str(self.meta.tracks.get(tid, {}).get("class", "")).lower()
+        return any(tok in cls for tok in self._VEHICLE_CUBOID_TOKENS)
+
     def _iter_active_cuboid_edges(self, frame_idx: int):
         """Yield ``(track_id, (12, 2, 3) world edges)`` per active track.
 
@@ -1092,10 +1106,12 @@ class Viser4DViewer:
         fallback logic shared by the line_segments path
         (_build_cuboid_edges) and the FTheta overlay path
         (_collect_overlay_layer_specs) — BUG-1 fix keeps both paths from
-        drifting apart again.
+        drifting apart again. E2.8: non-vehicle cuboids filtered out here.
         """
         assert self.meta is not None
         for tid in self.meta.active_tracks_at(frame_idx):
+            if not self._is_vehicle_cuboid(tid):
+                continue
             t = self.meta.tracks[tid]
             poses = t["poses"]
             if poses is None or frame_idx >= poses.shape[0]:
@@ -1193,7 +1209,9 @@ class Viser4DViewer:
         """
         if self.meta is None:
             return
-        active_ids = set(self.meta.active_tracks_at(frame_idx))
+        # E2.8: vehicle-only display (matches _iter_active_cuboid_edges filter).
+        active_ids = {tid for tid in self.meta.active_tracks_at(frame_idx)
+                      if self._is_vehicle_cuboid(tid)}
         # Remove labels for tracks no longer active.
         for tid in list(self._cuboid_label_handles.keys()):
             if tid not in active_ids:
