@@ -445,6 +445,11 @@ flowchart TB
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T4.5 ✅ (4807951) |
 | `configs/apps/ncore_3dgut_mcmc_v2_sky.yaml` | T5.3 ✅ (Stage 5 Mac, 基于 v2_full + sky_envmap 层 + use_sky_envmap=true) |
 | `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` | T6.2 ✅ (Stage 6 Mac, 基于 sky yaml + 5 相机环 + use_exposure=true) |
+| `threedgrut/layers/asset_bank.py` | **E2.8 ✅** (946147c) — bank 查询 `query_bank(bundle, class, dims, on_miss)`：同 class L2 最近 → 跨 class fallback → BankMiss；不消耗资产（区别 e25 bijection） |
+| `threedgrut/layers/e28_replace.py` | **E2.8 ✅** (60103e6/8dc4d0a/cd02856/05e8474) — 全 vehicle 枚举+bank 分配 (`assign_assets_to_tracks`) + 批 align+替换 (`replace_all_vehicle_tracks` 复用 `replace_tracks_in_dyn_node` 守护) + `qa_sanity`（覆盖率+防退化 opacity floor 0.02）；`is_vehicle` 子串匹配捕获 heavy_truck |
+| `threedgrut_playground/utils/nre_usdz_viz4d.py` | **E2.8 ✅** (321926f/05e8474) — USDZ(checkpoint.ckpt flavor)→可渲染 ckpt + viz_4d(torch tracks) + dyn track_ids + recon；复用本分支 `build_native_ckpt` + 移植 fervent-knuth `parse_rig_trajectories`/`build_viz4d_dict`（timeline/ftheta/world_to_nre 来自 USDZ rig_trajectories.json） |
+| `scripts/e28_systematic_replace_pipeline.py` | **E2.8 ✅** (321926f) — 编排 driver：USDZ拆→全替→QA sanity 一条龙 |
+| `threedgrut/tests/test_e28_{asset_bank,replace,qa_sanity,usdz_viz4d}.py` | **E2.8 ✅** — 22 测全绿 (inceptio) |
 | `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ / T2.5 ✅ / T3.0 ✅ / T4.0 ✅ / T4.3 ✅ / T3.5.a ✅ (28 tests total) |
 | `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (9 tests) |
 | `threedgrut/tests/test_layered_mcmc.py` | T2.1-T2.4 ✅ + T3.4 perturb mask 4 new tests (13 total) |
@@ -597,6 +602,10 @@ flowchart TB
 | **T6.1** invalid idx / num_camera=0 抛清晰异常 | T6.1 ✅ | `test_invalid_camera_idx_raises` + `test_constructor_rejects_zero_cameras` (Mac) |
 | **T6.2** exposure ckpt save/load state_dict roundtrip 字节一致 | T6.2 ✅ | `test_state_dict_roundtrip` (Mac, exposure_a/b float copy 验证) |
 | **T6.2** use_exposure=false 时 byte-identical with Stage 5 (no exposure_model attribute set) | T6.2 ✅ | trainer.exposure_model class default None; 全测试套件 123/123 PASS 维持 byte-identical |
+| **E2.8** 全替守护 bg/road/非 vehicle track 字节不变 (replace_all_vehicle_tracks 只动 vehicle track 粒子) | E2.8 ✅ | `test_non_vehicle_track_particles_unchanged` (ped/bg torch.equal before/after, inceptio) |
+| **E2.8** bank 查询不消耗资产 (同 dims 多次 query 返回同一 hash；一资产服务多 track) | E2.8 ✅ | `test_one_asset_reused_across_calls`；inceptio 实测 2 资产覆盖 8 车 |
+| **E2.8** is_vehicle 子串匹配捕获复合类 (heavy_truck/pickup_truck True；person/VRU/cyclist False) | E2.8 ✅ | `test_is_vehicle_substring_matches_compound_classes`（实数据修正） |
+| **E2.8** viz_4d tracks 存 torch tensor (engine/render populate_tracks auto-hook 需 .to()) | E2.8 ✅ | `test_build_viz4d_dict_timeline_and_tracks` (poses f32/frame_info bool)；viser 实测加载 179 tracks 不崩 |
 | **T5.4 / T5.5** sky_envmap_state ckpt save→load 字节一致 (非粒子层走 state_dict() sibling key) | T5.4 ✅ | `test_sky_envmap_state_roundtrip_in_checkpoint` + `test_get_model_parameters_skips_non_particle_layers` (Mac) |
 | **T5.6 A800** Stage 5 出口 5k step PSNR ≥ 25.8 dB | T5.6 ✅ | A800 GPU1 实测: **26.167 dB** (+0.37 over 出口, -0.15 vs Stage 4 baseline 26.315), 943.5s, 5.30 it/s, sky_envmap=MLP backend (nvdiffrast 不可用回退) |
 | **T5.6 A800** ckpt 含 sky_envmap_state (layer0/1/2.weight+bias) 实际训练了 | T5.6 ✅ | layer0.weight norm=19.04 (zero-init=0 → 训练后明显非零) |
