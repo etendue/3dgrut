@@ -7,6 +7,7 @@ validated end-to-end on inceptio with the real USDZ (driver run).
 """
 import numpy as np
 import pytest
+import torch
 
 from threedgrut_playground.utils.nre_usdz_loader import TrackRaw
 from threedgrut_playground.utils.nre_usdz_viz4d import (
@@ -103,8 +104,11 @@ def test_build_viz4d_dict_timeline_and_tracks():
     assert viz["tracks_camera_timestamps_us"].tolist() == [20, 40]
     assert set(viz["tracks"].keys()) == {"7"}
     t = viz["tracks"]["7"]
-    assert t["poses"].shape == (2, 4, 4)          # resampled onto 2-frame timeline
+    # torch tensors (populate_tracks auto-hook needs .to()); engine/render path
+    assert tuple(t["poses"].shape) == (2, 4, 4)   # resampled onto 2-frame timeline
+    assert t["poses"].dtype == torch.float32
+    assert t["frame_info"].dtype == torch.bool
     assert t["class"] == "automobile"
-    assert tuple(t["size"]) == pytest.approx((4.5, 1.8, 1.5))
+    assert [float(x) for x in t["size"]] == pytest.approx([4.5, 1.8, 1.5])
     assert viz["ego"]["poses_c2w"].shape == (2, 4, 4)
     assert viz["ego"]["primary_camera_id"] == "camera_front_wide_120fov"

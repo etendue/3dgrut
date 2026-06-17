@@ -183,11 +183,16 @@ def build_viz4d_dict(
     tracks_out: dict = {}
     for tr in tracks:
         poses, frame_info = resample_track_to_timeline(tr.poses7, tr.ts_us, timeline)
+        # torch tensors (not numpy): engine.load_3dgrt_object / render.py auto-hook
+        # call model.populate_tracks(viz_4d.tracks) → _populate_tracks_impl does
+        # poses.to(float32) / frame_info.to(bool) — numpy has no .to(). Matches the
+        # trainer-written viz_4d format. FourDMetadata.from_ckpt._to_np converts
+        # them back to numpy for the viewer overlays.
         tracks_out[tr.tid] = {
-            "poses": poses,
-            "size": tr.dims,
-            "frame_info": frame_info,
-            "class": tr.label_class,
+            "poses": torch.as_tensor(poses, dtype=torch.float32),
+            "size": torch.as_tensor(np.asarray(tr.dims), dtype=torch.float32),
+            "frame_info": torch.as_tensor(frame_info, dtype=torch.bool),
+            "class": str(tr.label_class),
         }
 
     W, H = cam["resolution"] if cam["resolution"] else (1920, 1080)
