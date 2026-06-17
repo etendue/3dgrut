@@ -12,6 +12,7 @@ import torch
 from threedgrut_playground.utils.nre_usdz_loader import TrackRaw
 from threedgrut_playground.utils.nre_usdz_viz4d import (
     RigInfo,
+    apply_nre_to_world_translate,
     build_viz4d_dict,
     cuboid_ids_to_track_ids,
     parse_rig_trajectories,
@@ -87,6 +88,34 @@ def test_cuboid_ids_to_track_ids_remap():
 def test_cuboid_ids_out_of_range_raises():
     with pytest.raises(IndexError):
         cuboid_ids_to_track_ids(np.array([0, 5]), track_order=["9", "3"])
+
+
+def test_apply_nre_to_world_translate_static_only():
+    # 实测 9ae151dc：world_to_nre.translation=[-38,2.16,0.28] → translate=[+38,-2.16,-0.28]
+    w2n = np.eye(4)
+    w2n[:3, 3] = [-38.0, 2.16, 0.28]
+    gn = {
+        "background": {"positions": torch.zeros(3, 3)},
+        "road": {"positions": torch.ones(2, 3)},
+        # dynamic_rigids object-local → 绝不平移（否则 double-translate 堆车）
+        "dynamic_rigids": {"positions": torch.full((4, 3), 7.0),
+                           "track_ids": torch.zeros(4)},
+    }
+    dyn_before = gn["dynamic_rigids"]["positions"].clone()
+    t = apply_nre_to_world_translate(gn, w2n)
+    assert t.tolist() == pytest.approx([38.0, -2.16, -0.28])
+    exp = torch.tensor([38.0, -2.16, -0.28])
+    assert torch.allclose(gn["background"]["positions"], torch.zeros(3, 3) + exp)
+    assert torch.allclose(gn["road"]["positions"], torch.ones(2, 3) + exp)
+    assert torch.equal(gn["dynamic_rigids"]["positions"], dyn_before)   # object-local 不动
+
+
+def test_apply_nre_to_world_translate_none_is_noop():
+    gn = {"background": {"positions": torch.ones(2, 3)}}
+    before = gn["background"]["positions"].clone()
+    t = apply_nre_to_world_translate(gn, None)
+    assert t.tolist() == [0.0, 0.0, 0.0]
+    assert torch.equal(gn["background"]["positions"], before)
 
 
 def test_build_viz4d_dict_timeline_and_tracks():
