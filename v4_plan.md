@@ -420,6 +420,11 @@ flowchart TD
   - **目测结论（大g）**：① 首版车头车尾颠倒，根因 = PR#18 `_VEHICLE_AXIS_MAP` 标定 NuRec demo USDZ 朝向、NCore cuboid forward 差 180° → `flip_forward_180`（绕 object-local up 180°，det+1 非镜像）修复；② 修复后 **harmonizer 协调有效但有限**——开 harmonizer 注入 asset 与场景违和感明显低于不开、但未完全自然 → 教科书式 DiFix3D+ ablation（纯 2D 后处理提感知/降违和、消不掉几何/域差，须 E2.2/E2.3 蒸馏回 3D 补）。
   - **决策**：E2.5 目测验收通过 = **v5 编辑轴立项依据**；spec 三验收剩 NTA-IoU/FID 两项定量按大g 决定本次跳过留 v5；E2.7 系统性替换暂不升级。
   - **踩坑（呼应 E2.7-C 流程教训④）**：`pkill -f viser_gui_4d.py` 的 pattern self-match 杀掉执行它的 launch shell（命令行含该串）→ 改用 `pkill -f "[v]iser_gui_4d.py"` 规避；inceptio ssh 抖动多次（exit 255/无回显）→ 用独立简单 ssh + until-loop poll 验证规避。
+- **2026-06-17 NRE USDZ 渲染开销对标（E0.3 `last.usdz`，inceptio 4090，nre-ga:latest，1080p，camera_front_wide_120fov，200 帧 frame-step3）** — 大g 任务：怀疑 deformable / dynamic_rigid 吃大算力 → **实测证伪**。Plan: [`nurec-usdz-4090-nurec-atomic-dewdrop.md`](../../.claude/plans/nurec-usdz-4090-nurec-atomic-dewdrop.md)；产物 inceptio `~/work/nurec_e0/profile/`（计时 log + `FINDINGS.md` + `structure.json` + 脚本 `drop_node.py`/`make_edit_json.py`/`analyze.py`）。
+  - **Phase 1（ckpt vs usda）**：usdz 12 成员里 `checkpoint.ckpt` = 1.06GB（占 96%），**无 `.nurec`、无 nrend dict**；编辑内嵌 ckpt 删层重打包后渲染随之改变（render_cam 7.15→2.10ms）→ 坐实 **NRE render 读 usdz 内嵌 ckpt**。per-node splat（`export-artifact-structure`）：background 2,349,423（89.7%）/ road 118,930 / dynamic_rigids 89,285 / dynamic_deformables 61,292，TOTAL 2,618,930（=2.62M ✓）。
+  - **Phase 2（ckpt-node drop ablation，按每帧 wall median Δ，权威口径）**：baseline **15.96ms/帧**（p95 17.30）。**background −5.11ms（32%，纯光栅化）最贵**；**dynamic_deformables −1.15ms（7.2%，每帧变形 MLP；keep=1 漏测 MLP 仅 −0.15，keep=0 才 −1.15）**；road −0.19ms（1.2%）；dynamic_rigids −0.19ms（1.2%）。固定开销 ~9.3ms（58%，raygen/FTheta 相机/sky/ISP，与场景无关）；冷启动 ~72.8s（每个新 render 容器一次性 JIT/TRT warmup）。
+  - **结论：动态 actor 不吃算力（rigid 0.19 / deformable 1.15ms/帧），background 才是渲染大头；整帧 ~16ms ≈ 60fps。原始怀疑证伪。** 方法学：keep=1 漏固定 MLP→须 keep=0；`--enable-timing` stage 计时因 GPU 异步重叠 Σ>wall→以 per-frame wall median Δ 为准。
+  - **附带（NRE viewer 交互卡顿排查）**：viser viewer 转视角 ~2-3fps 卡顿 = viewer render 线程**固有节流**（`render_trigger.wait(0.2)` + high/low 分辨率状态机），**与 actor 算力 / GPU / 网络 / 分辨率 / av_patch 均无关**——证据：GPU util 峰值仅 22%（没满载）、RTT 1.4ms 同 LAN、缩窗无效、客户端 WebGL 60fps、原版未打 patch 也卡。3dgrut2 viser 无此节流故顺（但渲染不了 deformable）。
 
 ---
 
