@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import torch
+
 from threedgrut.layers.warmstart_metadata import AssetSpec
 from threedgrut.layers.warmstart_ply import AlignedAsset
 from threedgrut.layers.e25_inject import replace_tracks_in_dyn_node
@@ -98,3 +100,28 @@ def replace_all_vehicle_tracks(
         ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = \
             replace_tracks_in_dyn_node(dyn, aligned_by_id)
     return ckpt, report
+
+
+def qa_sanity(dyn_node_after: dict, report: list[AssignRow],
+              *, opacity_floor: float = 0.15) -> dict:
+    """廉价 sanity 闸（Mac 可跑）。覆盖率 + opacity 防烟雾 + skip 计数。
+
+    opacity_floor 0.15：E2.7 烟雾态 dynamic gaussian opacity≈0.11，正常 AH
+    资产应远高于此 → median ≤ floor 判 fail（防烟雾回归）。
+    """
+    total = len(report)
+    skipped = [r for r in report if r.skipped]
+    replaced = [r for r in report if not r.skipped]
+    coverage = (len(replaced) / total) if total else 1.0
+    opacity = torch.sigmoid(dyn_node_after["density"].flatten())
+    opacity_median = float(opacity.median()) if opacity.numel() else 0.0
+    passed = (opacity_median > opacity_floor) and (len(replaced) > 0)
+    return {
+        "coverage": coverage,
+        "n_total": total,
+        "n_replaced": len(replaced),
+        "n_skipped": len(skipped),
+        "skipped_tracks": [r.track for r in skipped],
+        "opacity_median": opacity_median,
+        "passed": passed,
+    }
