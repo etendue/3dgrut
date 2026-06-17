@@ -12,9 +12,16 @@ from pathlib import Path
 
 import torch
 
-from threedgrut.layers.warmstart_metadata import AssetSpec
-from threedgrut.layers.warmstart_ply import AlignedAsset
-from threedgrut.layers.e25_inject import replace_tracks_in_dyn_node
+from threedgrut.layers.warmstart_metadata import AssetSpec, resolve_ply_path
+from threedgrut.layers.warmstart_ply import (
+    AlignedAsset,
+    apply_alignment,
+    asset_extent,
+    compute_axis_alignment,
+    load_warmstart_ply,
+    subsample_asset,
+)
+from threedgrut.layers.e25_inject import flip_forward_180, replace_tracks_in_dyn_node
 from threedgrut.layers.asset_bank import query_bank, BankMiss
 
 logger = logging.getLogger(__name__)
@@ -65,36 +72,55 @@ def assign_assets_to_tracks(
     return assign, report
 
 
-def _align_asset(spec: AssetSpec, bundle_root: Path, dims) -> AlignedAsset:
+def _align_asset(
+    spec: AssetSpec,
+    bundle_root: Path,
+    dims,
+    *,
+    max_pts: int | None = None,
+    flip_forward: bool = True,
+    generator=None,
+) -> AlignedAsset:
     """PLY → 填 recon live cuboid ``dims`` 的 AlignedAsset（含 180° yaw-flip）。
 
-    复用 e25_inject_ah_replace.py 的 align：load PLY → asset_extent → build
-    AlignmentTransform 填 cuboid size/center → flip_forward_180 → apply。
-    真实实现在 Task 5 从 E2.5 main 搬入（搬入后删 NotImplementedError）；Task 3
-    单测用 monkeypatch stub 隔离，不依赖真 PLY。
+    搬自 ``scripts/e25_inject_ah_replace.py`` 的 align 循环（A800/inceptio 已验证）：
+    load PLY → asset_extent → compute_axis_alignment 填 recon live cuboid
+    size/center → flip_forward_180（NCore cuboid forward 与 AH canonical 相反）→
+    apply_alignment。``dims`` 用 recon track 的 **live cuboid**，不是 AH metadata。
+    ``max_pts`` 给定时按 generator 子采样（控显存）；默认不丢点。
     """
-    raise NotImplementedError(
-        "搬入 scripts/e25_inject_ah_replace.py 的 align 调用（Task 5）"
-    )
+    ply = resolve_ply_path(bundle_root, spec)
+    asset = load_warmstart_ply(ply)
+    half, center = asset_extent(asset)
+    xf = compute_axis_alignment(spec.label_class, dims, half, center)
+    if flip_forward:
+        xf = flip_forward_180(xf)
+    aligned = apply_alignment(asset, xf)
+    if max_pts is not None:
+        aligned = subsample_asset(aligned, max_pts, generator=generator)
+    return aligned
 
 
 def replace_all_vehicle_tracks(
     ckpt: dict, *, bundle_root, bundle, recon, name_to_id, on_miss="global",
+    max_pts: int | None = None, seed: int = 0,
 ) -> tuple[dict, list[AssignRow]]:
     """全 vehicle track 批替换。``recon``: {track_name:(class,dims)}；
     ``name_to_id``: build_name_to_int_id(tracks)。返回 (ckpt, report)。
 
     复用 e25_inject.replace_tracks_in_dyn_node（已守护非目标 track + bg/road
-    字节不变）。非 vehicle track / skip 的 track 保持 recon 不动。
+    字节不变）。非 vehicle track / skip 的 track 保持 recon 不动。``max_pts`` 给定
+    时每 track 子采样到该上限（控显存，deterministic by ``seed``）。
     """
     assign, report = assign_assets_to_tracks(recon, bundle, on_miss=on_miss)
     dyn = ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]
+    gen = torch.Generator().manual_seed(seed) if max_pts is not None else None
     aligned_by_id: dict[int, AlignedAsset] = {}
     for track, asset_hash in assign.items():
         spec = bundle[asset_hash]
         dims = recon[track][1]
         aligned_by_id[int(name_to_id[track])] = _align_asset(
-            spec, Path(bundle_root), dims
+            spec, Path(bundle_root), dims, max_pts=max_pts, generator=gen
         )
     if aligned_by_id:
         ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = \
