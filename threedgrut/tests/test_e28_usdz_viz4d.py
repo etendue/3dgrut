@@ -90,6 +90,28 @@ def test_cuboid_ids_out_of_range_raises():
         cuboid_ids_to_track_ids(np.array([0, 5]), track_order=["9", "3"])
 
 
+def test_cuboid_ids_basis_matches_viz_keys_superset():
+    # REGRESSION (2026-06-17 大g viser catch): viz_4d.tracks carries MORE tids
+    # (deformable/static for wireframes) than the cuboid track_order. The slot
+    # basis MUST be sorted(viz keys), else gaussians get the wrong track's pose.
+    track_order = ["9", "3", "9"]                 # only cuboid (rigid) tids
+    viz_keys = ["1", "2", "3", "5", "9"]          # full viz_4d.tracks (superset)
+    track_ids, sorted_tids = cuboid_ids_to_track_ids(
+        np.array([0, 1, 2]), track_order, basis_tids=sorted(viz_keys)
+    )
+    assert sorted_tids == ["1", "2", "3", "5", "9"]
+    # cuboid idx0 "9"→slot4, idx1 "3"→slot2, idx2 "9"→slot4 (viz basis, NOT 0/1)
+    assert track_ids.tolist() == [4, 2, 4]
+    # name_to_id[tid] == sorted(viz keys).index(tid) — the populate_tracks contract
+    assert sorted_tids.index("9") == 4
+    assert sorted_tids.index("3") == 2
+
+
+def test_cuboid_basis_missing_tid_raises():
+    with pytest.raises(KeyError):
+        cuboid_ids_to_track_ids(np.array([0]), ["9"], basis_tids=["1", "2"])
+
+
 def test_apply_nre_to_world_translate_static_only():
     # 实测 9ae151dc：world_to_nre.translation=[-38,2.16,0.28] → translate=[+38,-2.16,-0.28]
     w2n = np.eye(4)

@@ -230,14 +230,34 @@ def build_viz4d_dict(
 # --------------------------------------------------------------------------- #
 # track_ids remap (cuboid_id → sorted-tid slot) — pure, numpy.
 # --------------------------------------------------------------------------- #
-def cuboid_ids_to_track_ids(cuboid_ids: np.ndarray, track_order: list) -> tuple[np.ndarray, list]:
+def cuboid_ids_to_track_ids(
+    cuboid_ids: np.ndarray, track_order: list, basis_tids: Optional[list] = None,
+) -> tuple[np.ndarray, list]:
     """Per-gaussian cuboid index → sorted-tid slot (populate_tracks convention).
 
     Returns ``(track_ids (N,) int64, sorted_tids)``. ``sorted_tids[slot]`` is the
     tid string; ``name_to_id[tid] = sorted_tids.index(tid)``.
+
+    **CRITICAL slot-basis invariant**: LayeredGaussians.``_transform_means_and_active``
+    maps ``track_ids`` slot → tid via ``sorted(tracks_poses.keys())`` (layered_model
+    docstring), where ``tracks_poses`` is whatever ``populate_tracks`` receives at
+    load (= ``ckpt['viz_4d']['tracks']``). So when ``viz_4d.tracks`` carries MORE
+    tids than the cuboid set (e.g. deformable/static tracks for wireframe display),
+    the gaussian slots MUST be computed against that full sorted basis, NOT
+    ``sorted(set(track_order))`` — otherwise every dynamic gaussian gets a different
+    track's pose (cars rendered at the wrong cuboid → "cuboid≠asset" 90°-ish skew,
+    2026-06-17 大g viser catch). Pass ``basis_tids=sorted(viz_4d.tracks.keys())``.
+    Default (``None``) keeps the legacy ``sorted(set(track_order))`` basis.
     """
-    sorted_tids = sorted(set(track_order))
-    cid_to_sorted = np.array([sorted_tids.index(t) for t in track_order], dtype=np.int64)
+    sorted_tids = list(basis_tids) if basis_tids is not None else sorted(set(track_order))
+    pos = {t: i for i, t in enumerate(sorted_tids)}
+    missing = [t for t in set(track_order) if t not in pos]
+    if missing:
+        raise KeyError(
+            f"track_order tids {missing[:5]} absent from basis_tids — viz_4d.tracks "
+            f"must include every cuboid tid (else its gaussians get no pose)."
+        )
+    cid_to_sorted = np.array([pos[t] for t in track_order], dtype=np.int64)
     cuboid_ids = np.asarray(cuboid_ids, dtype=np.int64)
     if cuboid_ids.size and int(cuboid_ids.max()) >= len(track_order):
         raise IndexError(
@@ -386,7 +406,14 @@ def convert_usdz_to_ckpt_with_tracks(
         cuboid_ids = (cuboid_ids.cpu().numpy() if torch.is_tensor(cuboid_ids)
                       else np.asarray(cuboid_ids))
         track_order = _track_order_from_usdz(usdz_path)
-        track_ids, sorted_tids = cuboid_ids_to_track_ids(cuboid_ids, track_order)
+        # Slot basis MUST match populate_tracks = sorted(viz_4d.tracks.keys()),
+        # NOT sorted(set(track_order)) — viz_4d carries all 179 sequence tids for
+        # wireframe display, so the gaussian slots index that full basis (else the
+        # AH car for tid A renders at tid B's pose → cuboid≠asset skew).
+        basis_tids = sorted(ckpt["viz_4d"]["tracks"].keys())
+        track_ids, sorted_tids = cuboid_ids_to_track_ids(
+            cuboid_ids, track_order, basis_tids=basis_tids
+        )
         dyn["track_ids"] = torch.as_tensor(track_ids, dtype=torch.long)
 
         present = {int(s) for s in np.unique(track_ids).tolist()}
