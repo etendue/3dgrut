@@ -26,7 +26,10 @@ from threedgrut.layers.asset_bank import query_bank, BankMiss
 
 logger = logging.getLogger(__name__)
 
-# 与 e25_inject_ah_replace._CAR_CLASS 对齐的 NCore autolabel vehicle 类。
+# 与 e25_inject_ah_replace._VEHICLE_CLASS_TOKENS 对齐的 NCore autolabel vehicle
+# 类标记。**子串**匹配（非精确）—— 真实 autolabel 含 ``heavy_truck`` /
+# ``pickup_truck`` 等复合类（E2.5 实测），精确匹配会漏替（E2.8 inceptio convert
+# 实测：dynamic_rigids 同时含 automobile + heavy_truck + person）。
 VEHICLE_CLASSES = frozenset({
     "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
 })
@@ -42,7 +45,9 @@ class AssignRow:
 
 
 def is_vehicle(label_class: str) -> bool:
-    return str(label_class).lower() in VEHICLE_CLASSES
+    """子串匹配（捕获 heavy_truck/pickup_truck 等复合类）；person/VRU/cyclist 不命中。"""
+    cls = str(label_class).lower()
+    return any(tok in cls for tok in VEHICLE_CLASSES)
 
 
 def assign_assets_to_tracks(
@@ -129,18 +134,32 @@ def replace_all_vehicle_tracks(
 
 
 def qa_sanity(dyn_node_after: dict, report: list[AssignRow],
-              *, opacity_floor: float = 0.15) -> dict:
-    """廉价 sanity 闸（Mac 可跑）。覆盖率 + opacity 防烟雾 + skip 计数。
+              *, opacity_floor: float = 0.02, replaced_slots=None) -> dict:
+    """廉价 sanity 闸（Mac 可跑）。覆盖率 + opacity 防退化 + skip 计数。
 
-    opacity_floor 0.15：E2.7 烟雾态 dynamic gaussian opacity≈0.11，正常 AH
-    资产应远高于此 → median ≤ floor 判 fail（防烟雾回归）。
+    opacity_floor 0.02（anti-degenerate）：E2.8 inceptio 实测——NRE 重建的 dynamic
+    gaussian per-gaussian opacity 中位数本就只有 ~0.08（recon 0.081 / AH 替换
+    0.103 / background 0.056；road 0.988）。plan 原设 0.15「防烟雾」是误标定：
+    per-gaussian opacity **无法**区分「0.11 烟雾」与正常值（两者重叠在 ~0.1）。
+    故 floor 降为只挡 **near-zero 退化注入**（convention bug → opacity≈0），真
+    「烟雾/弥散」感知问题交给 Task 6 的 FID + viser 目视。
+
+    ``replaced_slots`` 给定时 opacity 只统计**替换进来的 AH 粒子**（按 track_ids
+    掩码），不被未替换的 recon 行人粒子污染；缺省则统计整节点（back-compat）。
     """
     total = len(report)
     skipped = [r for r in report if r.skipped]
     replaced = [r for r in report if not r.skipped]
     coverage = (len(replaced) / total) if total else 1.0
-    opacity = torch.sigmoid(dyn_node_after["density"].flatten())
-    opacity_median = float(opacity.median()) if opacity.numel() else 0.0
+
+    op = torch.sigmoid(dyn_node_after["density"].flatten())
+    if replaced_slots is not None and "track_ids" in dyn_node_after:
+        tids = dyn_node_after["track_ids"].flatten()
+        slots = torch.as_tensor(sorted(int(s) for s in replaced_slots), dtype=tids.dtype)
+        mask = torch.isin(tids, slots) if slots.numel() else torch.zeros_like(tids, dtype=torch.bool)
+        op = op[mask]
+    opacity_median = float(op.median()) if op.numel() else 0.0
+
     passed = (opacity_median > opacity_floor) and (len(replaced) > 0)
     return {
         "coverage": coverage,
@@ -149,5 +168,7 @@ def qa_sanity(dyn_node_after: dict, report: list[AssignRow],
         "n_skipped": len(skipped),
         "skipped_tracks": [r.track for r in skipped],
         "opacity_median": opacity_median,
+        "opacity_floor": opacity_floor,
+        "opacity_scope": "replaced_only" if replaced_slots is not None else "whole_node",
         "passed": passed,
     }

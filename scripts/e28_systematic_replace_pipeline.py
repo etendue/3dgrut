@@ -85,7 +85,8 @@ def main(argv=None) -> int:
 
     # ⑤ QA sanity 闸 ------------------------------------------------------
     dyn = ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]
-    qa = qa_sanity(dyn, report)
+    replaced_slots = {name_to_id[r.track] for r in report if not r.skipped}
+    qa = qa_sanity(dyn, report, replaced_slots=replaced_slots)
     with open(out / "qa_sanity.json", "w") as f:
         json.dump(qa, f, indent=2)
     print(f"[e28] ⑤ QA sanity: coverage={qa['coverage']:.3f} "

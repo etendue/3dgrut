@@ -52,6 +52,18 @@ def test_vehicle_classes_cover_ncore_autolabels():
         assert c in VEHICLE_CLASSES
 
 
+def test_is_vehicle_substring_matches_compound_classes():
+    # 真实 NCore autolabel: dynamic_rigids 同时含 automobile + heavy_truck + person
+    # (E2.8 inceptio convert 实测)。子串匹配须命中复合 truck 类、放过行人/骑行。
+    from threedgrut.layers.e28_replace import is_vehicle
+    assert is_vehicle("heavy_truck") is True
+    assert is_vehicle("pickup_truck") is True
+    assert is_vehicle("automobile") is True
+    assert is_vehicle("person") is False
+    assert is_vehicle("VRU_pedestrians") is False
+    assert is_vehicle("cyclist") is False
+
+
 # ----------------------------------------------------------------------------
 # Task 3: replace_all_vehicle_tracks orchestration (guards bg/road/non-vehicle)
 # ----------------------------------------------------------------------------
