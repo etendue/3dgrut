@@ -46,6 +46,8 @@ def _parse_args(argv=None):
     ap.add_argument("--usdz", required=True, help="NRE training-checkpoint USDZ (last.usdz)")
     ap.add_argument("--asset_bank", required=True, help="dir with metadata.yaml + plys")
     ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--out_name", default="ckpt_replaced.pt",
+                    help="输出 ckpt 文件名（如 packed_ckpt.pt）")
     ap.add_argument("--on_miss", default="global", choices=["global", "skip"],
                     help="bank miss 策略：global=跨class最近 / skip=保留 recon")
     ap.add_argument("--primary_cam", default="camera_front_wide_120fov",
@@ -127,10 +129,10 @@ def main(argv=None) -> int:
         print(f"[e28]   recon 注入 {len(recon_placed)} {sorted(recon_placed)}"
               + (f"; recon_ckpt 也没有 {missing}（留空 cuboid）" if missing else ""))
 
-    torch.save(ckpt, out / "ckpt_replaced.pt")
+    torch.save(ckpt, out / a.out_name)
     with open(out / "replace_report.json", "w") as f:
         json.dump([asdict(r) for r in report], f, indent=2)
-    print(f"[e28]   wrote ckpt_replaced.pt + replace_report.json "
+    print(f"[e28]   wrote {a.out_name} + replace_report.json "
           f"(AH {sum(1 for r in report if not r.skipped)} + recon {len(recon_placed)} / "
           f"skipped {sum(1 for r in report if r.skipped)})")
 
