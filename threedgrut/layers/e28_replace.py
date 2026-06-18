@@ -77,6 +77,33 @@ def assign_assets_to_tracks(
     return assign, report
 
 
+def select_vehicle_tracks_to_place(
+    catalog: dict, *, min_active_frames: int = 20, max_dist_m: float = 40.0,
+) -> tuple[dict, dict]:
+    """E2.8 insert: pick which vehicle tracks get an AH car (replace ∪ insert).
+
+    ``catalog``: ``{tid: {class, dims, slot, active_frames, min_dist_to_ego,
+    present}}`` from ``build_vehicle_catalog``. **Present** tracks (already have
+    gaussians → replace) are always kept. **Gaussian-less** tracks are inserted
+    only if ``active_frames >= min_active_frames`` AND within ``max_dist_m`` of
+    the ego trajectory (active/nearby, 大g 2026-06-17) — drops distant /
+    blink-and-gone vehicles. Returns ``(recon {tid:(class,dims)}, name_to_id
+    {tid:slot})`` ready for :func:`replace_all_vehicle_tracks` (which treats an
+    empty-slot insert as a degenerate replace).
+    """
+    recon: dict = {}
+    name_to_id: dict = {}
+    for tid, info in catalog.items():
+        keep = info["present"] or (
+            info["active_frames"] >= min_active_frames
+            and info["min_dist_to_ego"] <= max_dist_m
+        )
+        if keep:
+            recon[tid] = (info["class"], tuple(info["dims"]))
+            name_to_id[tid] = info["slot"]
+    return recon, name_to_id
+
+
 def _align_asset(
     spec: AssetSpec,
     bundle_root: Path,

@@ -13,6 +13,7 @@ from threedgrut_playground.utils.nre_usdz_loader import TrackRaw
 from threedgrut_playground.utils.nre_usdz_viz4d import (
     RigInfo,
     apply_nre_to_world_translate,
+    build_vehicle_catalog,
     build_viz4d_dict,
     cuboid_ids_to_track_ids,
     parse_rig_trajectories,
@@ -110,6 +111,34 @@ def test_cuboid_ids_basis_matches_viz_keys_superset():
 def test_cuboid_basis_missing_tid_raises():
     with pytest.raises(KeyError):
         cuboid_ids_to_track_ids(np.array([0]), ["9"], basis_tids=["1", "2"])
+
+
+def test_build_vehicle_catalog_filters_class_and_computes_dist():
+    # ego trajectory along x = 0,1,2
+    ego = np.stack([np.eye(4) for _ in range(3)])
+    ego[:, 0, 3] = [0.0, 1.0, 2.0]
+
+    def trk(cls, tx):
+        poses = np.stack([np.eye(4) for _ in range(3)])
+        poses[:, 0, 3] = tx
+        return {"class": cls, "poses": poses,
+                "frame_info": np.array([True, True, True]),
+                "size": np.array([4.0, 2.0, 1.5])}
+
+    viz = {
+        "5": trk("automobile", [10.0, 10.0, 10.0]),  # far from ego (~8m)
+        "3": trk("automobile", [1.0, 1.0, 1.0]),      # on ego (~0m)
+        "9": trk("person", [1.0, 1.0, 1.0]),          # non-vehicle → excluded
+    }
+    cat = build_vehicle_catalog(viz, ["3", "5", "9"], present_slots={1}, ego_c2w=ego)
+    assert set(cat.keys()) == {"3", "5"}              # person excluded
+    assert cat["3"]["slot"] == 0 and cat["5"]["slot"] == 1
+    assert cat["5"]["present"] is True                # slot 1 ∈ present_slots
+    assert cat["3"]["present"] is False
+    assert cat["3"]["active_frames"] == 3
+    assert cat["3"]["min_dist_to_ego"] < 1.0          # sits on ego
+    assert cat["5"]["min_dist_to_ego"] > 7.0          # x=10 vs ego max x=2
+    assert cat["3"]["dims"] == (4.0, 2.0, 1.5)
 
 
 def test_apply_nre_to_world_translate_static_only():

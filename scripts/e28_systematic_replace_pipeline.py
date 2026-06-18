@@ -34,7 +34,9 @@ from pathlib import Path
 import torch
 
 from threedgrut.layers.warmstart_metadata import load_bundle_metadata
-from threedgrut.layers.e28_replace import replace_all_vehicle_tracks, qa_sanity
+from threedgrut.layers.e28_replace import (
+    replace_all_vehicle_tracks, qa_sanity, select_vehicle_tracks_to_place,
+)
 from threedgrut_playground.utils.nre_usdz_viz4d import convert_usdz_to_ckpt_with_tracks
 
 
@@ -50,6 +52,14 @@ def _parse_args(argv=None):
     ap.add_argument("--max_pts", type=int, default=None,
                     help="每 track AH 粒子子采样上限（控显存；默认不丢点）")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--no_insert", dest="insert", action="store_false",
+                    help="只 replace 有 gaussian 的 track；默认 insert: 给 active/附近的 "
+                         "无 gaussian vehicle cuboid 也放 AH 车")
+    ap.set_defaults(insert=True)
+    ap.add_argument("--insert_min_active_frames", type=int, default=20,
+                    help="insert 候选: track 至少活跃这么多帧（滤掉一闪而过）")
+    ap.add_argument("--insert_max_dist_m", type=float, default=40.0,
+                    help="insert 候选: track 到 ego 轨迹最近距离 ≤ 此值（只插附近）")
     return ap.parse_args(argv)
 
 
@@ -63,9 +73,25 @@ def main(argv=None) -> int:
     scene = convert_usdz_to_ckpt_with_tracks(
         a.usdz, primary_cam=a.primary_cam,
     )
-    ckpt, recon, name_to_id = scene.ckpt, scene.recon, scene.name_to_id
-    print(f"[e28]   seq={scene.sequence_id} primary_cam={scene.primary_cam} "
-          f"present_tracks={len(recon)}")
+    ckpt = scene.ckpt
+    if a.insert:
+        # replace ∪ insert: AH 车放到「有 gaussian 的」+「active/附近无 gaussian 的」
+        # 全部 vehicle cuboid track（NRE 只重建了部分车，其余只有 cuboid pose）。
+        recon, name_to_id = select_vehicle_tracks_to_place(
+            scene.vehicle_catalog,
+            min_active_frames=a.insert_min_active_frames,
+            max_dist_m=a.insert_max_dist_m,
+        )
+        n_present = sum(1 for t in recon if scene.vehicle_catalog[t]["present"])
+        n_insert = len(recon) - n_present
+        print(f"[e28]   seq={scene.sequence_id} primary_cam={scene.primary_cam} "
+              f"vehicle_catalog={len(scene.vehicle_catalog)} → place {len(recon)} "
+              f"(replace {n_present} + insert {n_insert}; "
+              f"active≥{a.insert_min_active_frames}f & ≤{a.insert_max_dist_m}m)")
+    else:
+        recon, name_to_id = scene.recon, scene.name_to_id
+        print(f"[e28]   seq={scene.sequence_id} primary_cam={scene.primary_cam} "
+              f"replace-only present_tracks={len(recon)}")
 
     # ② 配 + ③ 批注入 -----------------------------------------------------
     bundle = load_bundle_metadata(Path(a.asset_bank) / "metadata.yaml")

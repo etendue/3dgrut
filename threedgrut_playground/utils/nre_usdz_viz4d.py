@@ -312,6 +312,56 @@ def apply_nre_to_world_translate(
     return translate
 
 
+# E2.8 insert: NCore autolabel vehicle classes (substring match, ↔ e28_replace).
+_VEHICLE_CATALOG_TOKENS = (
+    "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
+)
+
+
+def _is_vehicle_class(cls) -> bool:
+    return any(tok in str(cls).lower() for tok in _VEHICLE_CATALOG_TOKENS)
+
+
+def build_vehicle_catalog(
+    viz_tracks: dict, sorted_tids: list, present_slots: set, ego_c2w,
+) -> dict:
+    """Catalog EVERY vehicle cuboid track (not just the ones with gaussians).
+
+    NRE only reconstructs dynamic_rigids gaussians for a handful of vehicles,
+    but ``viz_4d.tracks`` carries the cuboid pose+dims for ALL tracked vehicles
+    (e.g. 70 here vs 8 with gaussians). For a "every vehicle is a clean AH car"
+    scene, the driver inserts AH cars at the gaussian-less ones too — filtered
+    to active/nearby (大g 2026-06-17). Returns ``{tid: {class, dims, slot,
+    active_frames, min_dist_to_ego, present}}`` for vehicle tracks.
+    ``min_dist_to_ego``: min over active frames of distance to any ego pose.
+    """
+    ego_xyz = np.asarray(ego_c2w, dtype=np.float64)[:, :3, 3]  # (E, 3)
+    catalog: dict = {}
+    for tid, meta in viz_tracks.items():
+        if not _is_vehicle_class(meta.get("class")):
+            continue
+        slot = sorted_tids.index(tid)
+        poses = np.asarray(meta["poses"], dtype=np.float64)
+        fi = np.asarray(meta["frame_info"]).astype(bool)
+        active = int(fi.sum())
+        if active > 0 and ego_xyz.shape[0] > 0:
+            tpos = poses[fi][:, :3, 3]                                # (A, 3)
+            d = np.linalg.norm(tpos[:, None, :] - ego_xyz[None, :, :], axis=-1)
+            min_dist = float(d.min())
+        else:
+            min_dist = float("inf")
+        dims = tuple(float(x) for x in np.asarray(meta["size"]).flatten()[:3])
+        catalog[tid] = {
+            "class": str(meta.get("class")),
+            "dims": dims,
+            "slot": slot,
+            "active_frames": active,
+            "min_dist_to_ego": min_dist,
+            "present": slot in present_slots,
+        }
+    return catalog
+
+
 @dataclass
 class UsdzScene:
     """Output of :func:`convert_usdz_to_ckpt_with_tracks`."""
@@ -320,6 +370,7 @@ class UsdzScene:
     name_to_id: dict = field(default_factory=dict)  # {tid: sorted-tid slot int}
     primary_cam: str = ""
     sequence_id: str = ""
+    vehicle_catalog: dict = field(default_factory=dict)  # ALL vehicle tracks (insert)
 
 
 # --------------------------------------------------------------------------- #
@@ -430,12 +481,23 @@ def convert_usdz_to_ckpt_with_tracks(
             recon[tid] = (str(meta["class"]), dims)
             name_to_id[tid] = slot
 
+        # E2.8 insert: catalog ALL vehicle cuboid tracks (present + gaussian-less)
+        # so the driver can place AH cars at active/nearby vehicles without
+        # gaussians too (NRE only reconstructed 8/70 here).
+        catalog = build_vehicle_catalog(
+            ckpt["viz_4d"]["tracks"], sorted_tids, present,
+            ckpt["viz_4d"]["ego"]["poses_c2w"],
+        )
+    else:
+        catalog = {}
+
     return UsdzScene(
         ckpt=ckpt,
         recon=recon,
         name_to_id=name_to_id,
         primary_cam=resolved_cam,
         sequence_id=rig.sequence_id,
+        vehicle_catalog=catalog,
     )
 
 

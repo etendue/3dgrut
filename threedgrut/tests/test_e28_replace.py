@@ -127,3 +127,34 @@ def test_non_vehicle_track_particles_unchanged(monkeypatch):
     assert int((new["track_ids"] == 0).sum()) == 2
     assert int((new["track_ids"] == 1).sum()) == 2
     assert {r.track for r in report if not r.skipped} == {"0", "1"}
+
+
+# ----------------------------------------------------------------------------
+# E2.8 insert: select active/nearby vehicle tracks (replace ∪ insert)
+# ----------------------------------------------------------------------------
+from threedgrut.layers.e28_replace import select_vehicle_tracks_to_place
+
+
+def _cat(cls, slot, active, dist, present):
+    return {"class": cls, "dims": (4.0, 2.0, 1.5), "slot": slot,
+            "active_frames": active, "min_dist_to_ego": dist, "present": present}
+
+
+def test_select_present_always_kept_insert_filtered():
+    catalog = {
+        "p":     _cat("automobile", 1, 5, 999.0, True),    # present → kept (far+brief OK)
+        "near":  _cat("automobile", 2, 100, 10.0, False),  # insert: active+near → kept
+        "far":   _cat("automobile", 3, 100, 80.0, False),  # too far → drop
+        "brief": _cat("automobile", 4, 3, 10.0, False),    # too brief → drop
+    }
+    recon, name_to_id = select_vehicle_tracks_to_place(
+        catalog, min_active_frames=20, max_dist_m=40.0)
+    assert set(recon.keys()) == {"p", "near"}
+    assert name_to_id == {"p": 1, "near": 2}
+    assert recon["near"] == ("automobile", (4.0, 2.0, 1.5))
+
+
+def test_select_thresholds_tunable():
+    catalog = {"x": _cat("automobile", 0, 100, 80.0, False)}  # far
+    assert select_vehicle_tracks_to_place(catalog, max_dist_m=40.0)[0] == {}   # dropped
+    assert "x" in select_vehicle_tracks_to_place(catalog, max_dist_m=100.0)[0]  # kept
