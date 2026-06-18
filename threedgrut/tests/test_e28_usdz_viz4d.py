@@ -141,6 +141,22 @@ def test_build_vehicle_catalog_filters_class_and_computes_dist():
     assert cat["3"]["dims"] == (4.0, 2.0, 1.5)
 
 
+def test_add_sky_from_recon_carries_state_and_enables_layer():
+    from omegaconf import OmegaConf
+    from threedgrut_playground.utils.nre_usdz_viz4d import add_sky_from_recon
+
+    conf = OmegaConf.create({"layers": {"enabled": ["background", "road"]},
+                             "trainer": {"sky_backend": "cubemap"}})
+    ckpt = {"model": {"gaussians_nodes": {}}, "config": conf}
+    recon = {"model": {"sky_envmap_state": {"w": 1}}}
+    assert add_sky_from_recon(ckpt, recon) is True
+    assert "sky_envmap" in list(ckpt["config"].layers.enabled)
+    assert ckpt["config"].trainer.sky_backend == "mlp"        # cubemap→mlp (no nvdiffrast)
+    assert ckpt["model"]["sky_envmap_state"] == {"w": 1}
+    # recon without sky → no-op False
+    assert add_sky_from_recon({"model": {}, "config": conf}, {"model": {}}) is False
+
+
 def test_apply_nre_to_world_translate_static_only():
     # 实测 9ae151dc：world_to_nre.translation=[-38,2.16,0.28] → translate=[+38,-2.16,-0.28]
     w2n = np.eye(4)

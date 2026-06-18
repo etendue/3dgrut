@@ -501,6 +501,34 @@ def convert_usdz_to_ckpt_with_tracks(
     )
 
 
+def add_sky_from_recon(ckpt: dict, recon_ckpt: dict) -> bool:
+    """Cross-source the MLP sky_envmap from a sibling ckpt into a USDZ ckpt.
+
+    The NRE USDZ has no sky (``build_native_ckpt`` drops ``sky_envmap`` — its
+    cubemap backend needs nvdiffrast, absent on inceptio → uncovered pixels go
+    black). The NCore baseline trained ``sky_backend=mlp`` (an MLP, no
+    nvdiffrast) and ships ``model.sky_envmap_state``. Carry that state + enable
+    the ``sky_envmap`` layer + force ``sky_backend=mlp`` so the engine renders a
+    real sky for uncovered pixels. Returns True if a sky was added.
+    """
+    sky_state = (recon_ckpt.get("model", {}) or {}).get("sky_envmap_state")
+    if sky_state is None:
+        return False
+    from omegaconf import OmegaConf
+
+    ckpt["model"]["sky_envmap_state"] = sky_state
+    conf = ckpt.get("config")
+    if conf is not None:
+        OmegaConf.set_struct(conf, False)
+        enabled = list(conf.layers.enabled)
+        if "sky_envmap" not in enabled:
+            enabled.append("sky_envmap")
+            conf.layers.enabled = enabled
+        if hasattr(conf, "trainer") and hasattr(conf.trainer, "sky_backend"):
+            conf.trainer.sky_backend = "mlp"
+    return True
+
+
 def _ckpt_to_cpu(ckpt: dict) -> dict:
     """Move every gaussians_nodes tensor/Parameter to CPU (frozen-surgery side)."""
     for node in ckpt["model"]["gaussians_nodes"].values():

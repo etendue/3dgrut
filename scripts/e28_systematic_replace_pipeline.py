@@ -38,7 +38,9 @@ from threedgrut.layers.e28_replace import (
     replace_all_vehicle_tracks, qa_sanity, select_vehicle_tracks_to_place,
     split_vehicle_tracks_by_ah_match, inject_recon_tracks, keep_only_track_slots,
 )
-from threedgrut_playground.utils.nre_usdz_viz4d import convert_usdz_to_ckpt_with_tracks
+from threedgrut_playground.utils.nre_usdz_viz4d import (
+    convert_usdz_to_ckpt_with_tracks, add_sky_from_recon,
+)
 
 
 def _parse_args(argv=None):
@@ -71,6 +73,8 @@ def _parse_args(argv=None):
     ap.add_argument("--keep_nonvehicle", action="store_true",
                     help="保留非 vehicle(person/rider/stroller)原 NRE dynamic gaussians；"
                          "默认丢弃，dynamic_rigids 只留放置的 vehicle（各有 cuboid 框）")
+    ap.add_argument("--no_sky", action="store_true",
+                    help="不从 recon_ckpt 跨源 MLP sky_envmap（默认有 recon_ckpt 时加天空）")
     return ap.parse_args(argv)
 
 
@@ -123,14 +127,23 @@ def main(argv=None) -> int:
         name_to_id=name_to_id, on_miss=a.on_miss, max_pts=a.max_pts, seed=a.seed,
     )
 
-    if a.recon_ckpt and recon_tids:
-        print(f"[e28] ③b 跨源 recon 注入 (from {a.recon_ckpt})")
+    recon_ckpt = None
+    if a.recon_ckpt:
         recon_ckpt = torch.load(a.recon_ckpt, weights_only=False, map_location="cpu")
+    if recon_ckpt is not None and recon_tids:
+        print(f"[e28] ③b 跨源 recon 注入 (from {a.recon_ckpt})")
         ckpt, recon_placed = inject_recon_tracks(
             ckpt, recon_ckpt, recon_tids, name_to_id)
         missing = sorted(set(recon_tids) - set(recon_placed))
         print(f"[e28]   recon 注入 {len(recon_placed)} {sorted(recon_placed)}"
               + (f"; recon_ckpt 也没有 {missing}（留空 cuboid）" if missing else ""))
+
+    # ③c 跨源天空（MLP sky_envmap，无需 nvdiffrast）
+    if recon_ckpt is not None and not a.no_sky:
+        if add_sky_from_recon(ckpt, recon_ckpt):
+            print(f"[e28] ③c 跨源 MLP sky_envmap 已加（layers.enabled += sky_envmap）")
+        else:
+            print(f"[e28] ③c recon_ckpt 无 sky_envmap_state，跳过天空")
 
     # ④ 清理：默认丢弃非 vehicle(person等)原 NRE dynamic gaussians，只留放置的
     # vehicle 簇 → 每个 dynamic_rigids 簇都被自己的 cuboid 框住（大g bbox 检验）。
