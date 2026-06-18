@@ -166,8 +166,25 @@ def test_select_thresholds_tunable():
 # ----------------------------------------------------------------------------
 from threedgrut.layers.e28_replace import (
     _sorted_dims_ratio, split_vehicle_tracks_by_ah_match,
-    place_tracks_in_dyn_node, extract_recon_node_tensors,
+    place_tracks_in_dyn_node, extract_recon_node_tensors, keep_only_track_slots,
 )
+
+
+def test_keep_only_track_slots_drops_unlisted():
+    tids = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.int64)
+
+    def p(c):
+        return torch.nn.Parameter(torch.arange(6 * c, dtype=torch.float32).reshape(6, c))
+
+    dyn = {"positions": p(3), "rotation": p(4), "scale": p(3), "density": p(1),
+           "features_albedo": p(3), "features_specular": p(2),
+           "track_ids": tids, "n_active_features": 0}
+    new = keep_only_track_slots(dyn, {0, 2})              # drop slot 1
+    assert int((new["track_ids"] == 0).sum()) == 2
+    assert int((new["track_ids"] == 1).sum()) == 0        # dropped
+    assert int((new["track_ids"] == 2).sum()) == 2
+    assert new["positions"].shape[0] == 4
+    assert new["n_active_features"] == 0                   # metadata carried over
 
 
 def test_sorted_dims_ratio_orientation_agnostic():

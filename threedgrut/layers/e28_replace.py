@@ -289,6 +289,32 @@ def inject_recon_tracks(
     return ckpt, placed
 
 
+def keep_only_track_slots(dyn_node: dict, keep_slots) -> dict:
+    """Drop dynamic_rigids gaussians whose ``track_ids`` slot ∉ ``keep_slots``.
+
+    E2.8 clean scene (大g 2026-06-17 bbox test): NRE put some pedestrians in
+    dynamic_rigids as oversized smoky blobs (person cuboid 0.6 m but gaussian
+    span ~5 m); with vehicle-only cuboid display they render boxless = "asset
+    without bbox". Keeping only the placed vehicle slots leaves every cluster
+    boxed by its own vehicle cuboid. Non-particle metadata carried over.
+    """
+    track_ids = dyn_node["track_ids"]
+    keep = torch.isin(
+        track_ids,
+        torch.tensor(sorted(int(s) for s in keep_slots), dtype=track_ids.dtype),
+    )
+    new: dict = {}
+    for key in ("positions", "rotation", "scale", "density",
+                "features_albedo", "features_specular"):
+        new[key] = torch.nn.Parameter(
+            dyn_node[key][keep].contiguous(), requires_grad=False)
+    new["track_ids"] = track_ids[keep]
+    for k, v in dyn_node.items():
+        if k not in _DYN_PARTICLE_KEYS:
+            new[k] = v
+    return new
+
+
 def qa_sanity(dyn_node_after: dict, report: list[AssignRow],
               *, opacity_floor: float = 0.02, replaced_slots=None) -> dict:
     """廉价 sanity 闸（Mac 可跑）。覆盖率 + opacity 防退化 + skip 计数。

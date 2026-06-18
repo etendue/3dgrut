@@ -36,7 +36,7 @@ import torch
 from threedgrut.layers.warmstart_metadata import load_bundle_metadata
 from threedgrut.layers.e28_replace import (
     replace_all_vehicle_tracks, qa_sanity, select_vehicle_tracks_to_place,
-    split_vehicle_tracks_by_ah_match, inject_recon_tracks,
+    split_vehicle_tracks_by_ah_match, inject_recon_tracks, keep_only_track_slots,
 )
 from threedgrut_playground.utils.nre_usdz_viz4d import convert_usdz_to_ckpt_with_tracks
 
@@ -68,6 +68,9 @@ def _parse_args(argv=None):
                          "AH size 配不好的大车(bus/truck)从此抽真 recon gaussian 注入")
     ap.add_argument("--max_size_ratio", type=float, default=1.5,
                     help="AH 匹配 size 比上限；超过(如 bus 12.5m vs pickup 5.8m=2.16)→ recon")
+    ap.add_argument("--keep_nonvehicle", action="store_true",
+                    help="保留非 vehicle(person/rider/stroller)原 NRE dynamic gaussians；"
+                         "默认丢弃，dynamic_rigids 只留放置的 vehicle（各有 cuboid 框）")
     return ap.parse_args(argv)
 
 
@@ -128,6 +131,19 @@ def main(argv=None) -> int:
         missing = sorted(set(recon_tids) - set(recon_placed))
         print(f"[e28]   recon 注入 {len(recon_placed)} {sorted(recon_placed)}"
               + (f"; recon_ckpt 也没有 {missing}（留空 cuboid）" if missing else ""))
+
+    # ④ 清理：默认丢弃非 vehicle(person等)原 NRE dynamic gaussians，只留放置的
+    # vehicle 簇 → 每个 dynamic_rigids 簇都被自己的 cuboid 框住（大g bbox 检验）。
+    if not a.keep_nonvehicle:
+        placed_slots = {name_to_id[r.track] for r in report if not r.skipped}
+        placed_slots |= {name_to_id[t] for t in recon_placed if t in name_to_id}
+        dyn = ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]
+        n0 = dyn["positions"].shape[0]
+        ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = \
+            keep_only_track_slots(dyn, placed_slots)
+        n1 = ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]["positions"].shape[0]
+        print(f"[e28] ④ drop 非 vehicle dynamic gaussians: {n0}→{n1} "
+              f"(只留 {len(placed_slots)} 个 vehicle slot)")
 
     torch.save(ckpt, out / a.out_name)
     with open(out / "replace_report.json", "w") as f:
