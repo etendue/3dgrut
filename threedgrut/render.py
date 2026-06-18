@@ -77,6 +77,32 @@ def apply_dataset_cameras_override(conf, dataset_cameras) -> bool:
     return True
 
 
+def _override_conf_path(conf, path) -> bool:
+    """Apply the ``--path`` test-data override onto a ckpt-embedded conf.
+
+    ``from_checkpoint`` derives ``object_name = Path(conf.path).stem`` for the
+    run name BEFORE constructing the Renderer (whose __init__ also honours
+    ``path``). E2.8 packed/edited ckpts leave ``conf.path`` as OmegaConf MISSING
+    (``???``) — the dataset path is supplied only at render time — so reading it
+    raises MissingMandatoryValue. Applying the override here (struct-unlocked,
+    same pattern as :func:`apply_dataset_cameras_override`) makes
+    ``--path manifest.json`` work on a MISSING-path ckpt. No-op on empty path.
+
+    Returns True when an override was applied, False otherwise.
+    """
+    if not path:
+        return False
+    try:
+        from omegaconf import OmegaConf
+
+        if OmegaConf.is_config(conf):
+            OmegaConf.set_struct(conf, False)
+    except ImportError:  # plain-dict confs (tests)
+        pass
+    conf["path"] = path
+    return True
+
+
 class Renderer:
     def __init__(
         self,
@@ -213,6 +239,9 @@ class Renderer:
 
         conf = checkpoint["config"]
         # overrides
+        # Apply --path BEFORE deriving object_name below: packed/edited ckpts
+        # (E2.8) carry conf.path = MISSING, supplied only here at render time.
+        _override_conf_path(conf, path)
         if conf["render"]["method"] == "3dgrt":
             conf["render"]["particle_kernel_density_clamping"] = True
             conf["render"]["min_transmittance"] = 0.03

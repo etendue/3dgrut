@@ -445,6 +445,12 @@ flowchart TB
 | `configs/apps/ncore_3dgut_mcmc_v2_full.yaml` | T4.5 ✅ (4807951) |
 | `configs/apps/ncore_3dgut_mcmc_v2_sky.yaml` | T5.3 ✅ (Stage 5 Mac, 基于 v2_full + sky_envmap 层 + use_sky_envmap=true) |
 | `configs/apps/ncore_3dgut_mcmc_v2_full_exposure.yaml` | T6.2 ✅ (Stage 6 Mac, 基于 sky yaml + 5 相机环 + use_exposure=true) |
+| `threedgrut/layers/asset_bank.py` | **E2.8 ✅** (946147c) — bank 查询 `query_bank(bundle, class, dims, on_miss)`：同 class L2 最近 → 跨 class fallback → BankMiss；不消耗资产（区别 e25 bijection） |
+| `threedgrut/layers/e28_replace.py` | **E2.8 ✅** (60103e6/8dc4d0a/cd02856/05e8474/215a50e/e6d2e4e/09311b8/adc2a5c) — 全 vehicle 枚举+bank 分配 (`assign_assets_to_tracks`) + 批 align+替换 (`replace_all_vehicle_tracks` 复用 `replace_tracks_in_dyn_node` 守护) + replace+insert (`select_vehicle_tracks_to_place`) + size-gate 路由 (`split_vehicle_tracks_by_ah_match` ratio≤1.5 走 AH，超→跨源 recon) + 跨源注入 (`extract_recon_node_tensors`/`inject_recon_tracks`) + drop 非vehicle (`keep_only_track_slots`) + `place_tracks_in_dyn_node` + `qa_sanity`（覆盖率+防退化 opacity floor 0.02）；`is_vehicle` 子串匹配捕获 heavy_truck |
+| `threedgrut_playground/utils/nre_usdz_viz4d.py` | **E2.8 ✅** (321926f/05e8474/f0d9aca/b55ba3b) — USDZ(checkpoint.ckpt flavor)→可渲染 ckpt + viz_4d(torch tracks) + dyn track_ids + recon；`convert_usdz_to_ckpt_with_tracks` + `apply_nre_to_world_translate`(bg/road +translate≈+38m，ego/track 不变换) + `build_vehicle_catalog`(全 vehicle track + active 帧 + 到 ego 距离) + `add_sky_from_recon`(跨源 MLP 天空)；复用本分支 `build_native_ckpt` + 移植 fervent-knuth `parse_rig_trajectories`/`build_viz4d_dict` |
+| `scripts/e28_systematic_replace_pipeline.py` | **E2.8 ✅** (321926f/e27452d/09311b8/b55ba3b) — 编排 driver：USDZ拆→全替+插入→跨源 bus recon→drop 非vehicle→MLP 天空→QA sanity 一条龙（`--out_name`/`--recon_ckpt`/`--max_size_ratio`/`--no_sky` 等） |
+| `scripts/e28_quant_qa.py` + `threedgrut/render.py` `_override_conf_path` | **E2.8 Task6 ✅** — 定量 QA 编排（render novel dump→`eval_frames_dir.py` NTA-IoU+FID/KID→可选 harmonizer before/after→`qa_report.json`）；`_override_conf_path` 修 from_checkpoint 在 `--path` override 前读 conf.path 崩 packed_ckpt(MISSING) |
+| `threedgrut/tests/test_e28_{asset_bank,replace,qa_sanity,usdz_viz4d,quant_qa}.py` + `test_render_path_override.py` | **E2.8 ✅** — 35 e28 + 6 quant + 2 render 回归 = 43 全绿 (Mac CPU；inceptio 35 e28 绿) |
 | `threedgrut/tests/test_layered_gaussians.py` | T1.1 ✅ / T1.4 ✅ / T2.5 ✅ / T3.0 ✅ / T4.0 ✅ / T4.3 ✅ / T3.5.a ✅ (28 tests total) |
 | `threedgrut/tests/test_layer_spec_registry.py` | T1.4 ✅ (9 tests) |
 | `threedgrut/tests/test_layered_mcmc.py` | T2.1-T2.4 ✅ + T3.4 perturb mask 4 new tests (13 total) |
@@ -597,6 +603,13 @@ flowchart TB
 | **T6.1** invalid idx / num_camera=0 抛清晰异常 | T6.1 ✅ | `test_invalid_camera_idx_raises` + `test_constructor_rejects_zero_cameras` (Mac) |
 | **T6.2** exposure ckpt save/load state_dict roundtrip 字节一致 | T6.2 ✅ | `test_state_dict_roundtrip` (Mac, exposure_a/b float copy 验证) |
 | **T6.2** use_exposure=false 时 byte-identical with Stage 5 (no exposure_model attribute set) | T6.2 ✅ | trainer.exposure_model class default None; 全测试套件 123/123 PASS 维持 byte-identical |
+| **E2.8** 全替守护 bg/road/非 vehicle track 字节不变 (replace_all_vehicle_tracks 只动 vehicle track 粒子) | E2.8 ✅ | `test_non_vehicle_track_particles_unchanged` (ped/bg torch.equal before/after, inceptio) |
+| **E2.8** bank 查询不消耗资产 (同 dims 多次 query 返回同一 hash；一资产服务多 track) | E2.8 ✅ | `test_one_asset_reused_across_calls`；inceptio 实测 2 资产覆盖 8 车 |
+| **E2.8** is_vehicle 子串匹配捕获复合类 (heavy_truck/pickup_truck True；person/VRU/cyclist False) | E2.8 ✅ | `test_is_vehicle_substring_matches_compound_classes`（实数据修正） |
+| **E2.8** viz_4d tracks 存 torch tensor (engine/render populate_tracks auto-hook 需 .to()) | E2.8 ✅ | `test_build_viz4d_dict_timeline_and_tracks` (poses f32/frame_info bool)；viser 实测加载 179 tracks 不崩 |
+| **E2.8 slot-basis 铁律** dyn track_ids 的 slot→tid 走 `sorted(viz_4d.tracks.keys())` (layered_model.py:378)，**不是** `sorted(set(track_order))` —— viz_4d 带全部 179 tid、track_order 只是 cuboid 子集，不一致则每辆车套错 tid 的 pose | E2.8 ✅ (adc2a5c) | `test_e28_usdz_viz4d`；修最初「cuboid≠asset 90°」真凶（实测朝向 0.93~1.00） |
+| **E2.8 坐标约定** bg/road gaussians +translate (`-world_to_nre.translation`≈+38m)；ego(rig c2w)/track poses/dynamic_rigids **不变换**；跨源 recon 注入无 90° | E2.8 ✅ (f0d9aca/e6d2e4e) | 实测 ego vs baseline NCore 相机旋转差 0.0°、world_to_nre 旋转块=单位阵；baseline vs USDZ track pose 旋转差仅 0.4° |
+| **E2.8 Task7 bank-add 自动改路由** bank 加同尺寸资产 → `split_vehicle_tracks_by_ah_match` size ratio≤1.5 自动 recon→AH，driver 零改码 | E2.8 ✅ (Task7) | asset-harvester 收 bus/405(12.45m)+truck/165(8.0m) 入 bank 6→8 → 重跑 driver AH-match 20→21 / 跨源 recon 1→0、QA passed |
 | **T5.4 / T5.5** sky_envmap_state ckpt save→load 字节一致 (非粒子层走 state_dict() sibling key) | T5.4 ✅ | `test_sky_envmap_state_roundtrip_in_checkpoint` + `test_get_model_parameters_skips_non_particle_layers` (Mac) |
 | **T5.6 A800** Stage 5 出口 5k step PSNR ≥ 25.8 dB | T5.6 ✅ | A800 GPU1 实测: **26.167 dB** (+0.37 over 出口, -0.15 vs Stage 4 baseline 26.315), 943.5s, 5.30 it/s, sky_envmap=MLP backend (nvdiffrast 不可用回退) |
 | **T5.6 A800** ckpt 含 sky_envmap_state (layer0/1/2.weight+bias) 实际训练了 | T5.6 ✅ | layer0.weight norm=19.04 (zero-init=0 → 训练后明显非零) |
