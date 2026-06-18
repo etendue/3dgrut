@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """E2.8 Task 2/3 — vehicle track enumeration + bank assignment + replace orchestration."""
+import pytest
 from threedgrut.layers.warmstart_metadata import AssetSpec
 from threedgrut.layers.e28_replace import assign_assets_to_tracks, VEHICLE_CLASSES
 
@@ -158,3 +159,63 @@ def test_select_thresholds_tunable():
     catalog = {"x": _cat("automobile", 0, 100, 80.0, False)}  # far
     assert select_vehicle_tracks_to_place(catalog, max_dist_m=40.0)[0] == {}   # dropped
     assert "x" in select_vehicle_tracks_to_place(catalog, max_dist_m=100.0)[0]  # kept
+
+
+# ----------------------------------------------------------------------------
+# E2.8 cross-source recon fallback (bus/truck AH can't size-match → real recon)
+# ----------------------------------------------------------------------------
+from threedgrut.layers.e28_replace import (
+    _sorted_dims_ratio, split_vehicle_tracks_by_ah_match,
+    place_tracks_in_dyn_node, extract_recon_node_tensors,
+)
+
+
+def test_sorted_dims_ratio_orientation_agnostic():
+    assert _sorted_dims_ratio((12.5, 3.1, 3.5), (5.8, 2.25, 1.88)) > 2.0   # bus vs pickup
+    assert _sorted_dims_ratio((4.5, 1.8, 1.5), (5.76, 2.25, 1.88)) < 1.5   # car vs pickup
+    # dim order shuffled → same ratio (sorted internally)
+    assert _sorted_dims_ratio((1.5, 4.5, 1.8), (4.5, 1.8, 1.5)) == pytest.approx(1.0)
+
+
+def test_split_routes_oversized_to_recon():
+    bundle = {"pk": _spec("pk", "consumer_vehicles", (5.8, 2.25, 1.88))}
+    sel = {"car": ("automobile", (4.5, 1.8, 1.5)),
+           "bus": ("bus", (12.5, 3.1, 3.5))}
+    ah, recon_tids = split_vehicle_tracks_by_ah_match(sel, bundle, max_size_ratio=1.5)
+    assert set(ah.keys()) == {"car"}      # car within ratio → AH
+    assert recon_tids == ["bus"]          # bus too big → recon
+
+
+def test_place_tracks_insert_keeps_existing():
+    import pytest as _p
+    tids = torch.tensor([0, 0, 0], dtype=torch.int64)
+
+    def p(c):
+        return torch.nn.Parameter(torch.arange(3 * c, dtype=torch.float32).reshape(3, c))
+
+    dyn = {"positions": p(3), "rotation": p(4), "scale": p(3), "density": p(1),
+           "features_albedo": p(3), "features_specular": p(2),
+           "track_ids": tids, "n_active_features": 0}
+    before = dyn["positions"].detach().clone()
+    nt = {5: {"positions": torch.ones(2, 3), "rotation": torch.ones(2, 4),
+              "scale": torch.ones(2, 3), "density": torch.ones(2, 1),
+              "features_albedo": torch.ones(2, 3), "features_specular": torch.ones(2, 2)}}
+    new = place_tracks_in_dyn_node(dyn, nt)
+    assert int((new["track_ids"] == 0).sum()) == 3            # existing kept
+    assert int((new["track_ids"] == 5).sum()) == 2            # inserted
+    assert torch.equal(new["positions"][new["track_ids"] == 0], before)  # byte-identical
+
+
+def test_extract_recon_node_tensors_adjusts_spec_dim():
+    rtids = torch.tensor([0, 1, 1], dtype=torch.int64)
+
+    def rp(c, v):
+        return torch.full((3, c), float(v))
+
+    rdyn = {"positions": rp(3, 9), "rotation": rp(4, 9), "scale": rp(3, 9),
+            "density": rp(1, 9), "features_albedo": rp(3, 9),
+            "features_specular": rp(4, 9), "track_ids": rtids}
+    out = extract_recon_node_tensors(rdyn, ["a", "7"], {"7": 20}, spec_dim=2)
+    assert set(out.keys()) == {20}                            # tid 7 → usdz slot 20
+    assert out[20]["positions"].shape == (2, 3)              # track 7 = 2 particles
+    assert out[20]["features_specular"].shape == (2, 2)      # 4 → truncated to 2

@@ -160,6 +160,135 @@ def replace_all_vehicle_tracks(
     return ckpt, report
 
 
+# ---------------------------------------------------------------------------
+# E2.8 cross-source recon fallback (大g 2026-06-17): vehicles the AH bank can't
+# size-match (bus/heavy_truck) get their REAL recon gaussian from a sibling
+# checkpoint (NCore baseline ckpt has them; NRE USDZ didn't). Same clip → track
+# poses match (0.4°) → no frame correction (verified |axis·vel|=0.99).
+# ---------------------------------------------------------------------------
+_DYN_PARTICLE_KEYS = (
+    "positions", "rotation", "scale", "density",
+    "features_albedo", "features_specular", "track_ids",
+)
+
+
+def _sorted_dims_ratio(a, b) -> float:
+    """Orientation-agnostic size mismatch: max over sorted dims of the larger/
+    smaller ratio. bus(12.5,3.5,3.1) vs pickup(5.8,2.25,1.9) → 2.16."""
+    sa = sorted((float(x) for x in a), reverse=True)
+    sb = sorted((float(x) for x in b), reverse=True)
+    return max(max(x / max(y, 1e-6), y / max(x, 1e-6)) for x, y in zip(sa, sb))
+
+
+def split_vehicle_tracks_by_ah_match(
+    recon_sel: dict, bundle: dict, *,
+    max_size_ratio: float = 1.5, on_miss: str = "global",
+) -> tuple[dict, list[str]]:
+    """Route each selected vehicle track to AH vs cross-source recon by size.
+
+    A track goes to **recon** if its best bank match's :func:`_sorted_dims_ratio`
+    exceeds ``max_size_ratio`` (AH would be a stretched wrong vehicle, e.g. a
+    5.8 m pickup on a 12.5 m bus) or the bank has nothing. Returns
+    ``(ah_recon {tid:(class,dims)}, recon_tids [tid])``.
+    """
+    ah_recon: dict = {}
+    recon_tids: list[str] = []
+    for tid, (cls, dims) in recon_sel.items():
+        try:
+            h, _ = query_bank(bundle, str(cls), dims, on_miss=on_miss)
+        except BankMiss:
+            recon_tids.append(tid)
+            continue
+        if _sorted_dims_ratio(dims, bundle[h].cuboids_dims) <= max_size_ratio:
+            ah_recon[tid] = (cls, dims)
+        else:
+            recon_tids.append(tid)
+            logger.info("e28: track %r (%s, dims=%s) → recon (AH size mismatch)",
+                        tid, cls, tuple(round(float(x), 1) for x in dims))
+    return ah_recon, recon_tids
+
+
+def place_tracks_in_dyn_node(dyn_node: dict, node_tensors_by_id: dict) -> dict:
+    """Rebuild dynamic_rigids with pre-built per-track object-local tensors.
+
+    Source-agnostic sibling of :func:`e25_inject.replace_tracks_in_dyn_node`:
+    ``node_tensors_by_id`` = ``{int_slot: {positions, rotation, scale, density,
+    features_albedo, features_specular}}`` (already in the node's spec_dim).
+    Empty-slot ids insert, existing replace, untouched tracks byte-identical.
+    """
+    track_ids = dyn_node["track_ids"]
+    target_ids = sorted(int(t) for t in node_tensors_by_id)
+    keep = ~torch.isin(track_ids, torch.tensor(target_ids, dtype=track_ids.dtype))
+    new: dict = {}
+    for key in ("positions", "rotation", "scale", "density",
+                "features_albedo", "features_specular"):
+        kept = dyn_node[key][keep]
+        parts = [node_tensors_by_id[t][key] for t in target_ids]
+        new[key] = torch.nn.Parameter(
+            torch.cat([kept, *parts], dim=0), requires_grad=False)
+    ah_ids = [
+        torch.full((node_tensors_by_id[t]["positions"].shape[0],), t,
+                   dtype=track_ids.dtype)
+        for t in target_ids
+    ]
+    new["track_ids"] = torch.cat([track_ids[keep], *ah_ids], dim=0)
+    for k, v in dyn_node.items():
+        if k not in _DYN_PARTICLE_KEYS:
+            new[k] = v
+    return new
+
+
+def extract_recon_node_tensors(
+    recon_dyn: dict, recon_sorted_tids: list, tid_to_slot: dict, spec_dim: int,
+) -> dict:
+    """Pull object-local node tensors for ``tids`` from a recon ckpt's
+    dynamic_rigids, keyed by the TARGET (USDZ) slot. ``features_specular`` is
+    padded/truncated to ``spec_dim`` so it concats into the target node.
+    """
+    rtids = recon_dyn["track_ids"]
+    out: dict = {}
+    for tid, usdz_slot in tid_to_slot.items():
+        if tid not in recon_sorted_tids:
+            continue
+        mask = (rtids == recon_sorted_tids.index(tid))
+        n = int(mask.sum())
+        if n == 0:
+            continue
+        nt = {}
+        for key in ("positions", "rotation", "scale", "density", "features_albedo"):
+            nt[key] = recon_dyn[key][mask].detach().cpu().float().contiguous()
+        fs = recon_dyn["features_specular"][mask].detach().cpu().float()
+        if fs.shape[1] >= spec_dim:
+            fs = fs[:, :spec_dim]
+        else:
+            fs = torch.cat([fs, torch.zeros(n, spec_dim - fs.shape[1])], dim=1)
+        nt["features_specular"] = fs.contiguous()
+        out[int(usdz_slot)] = nt
+    return out
+
+
+def inject_recon_tracks(
+    ckpt: dict, recon_ckpt: dict, recon_tids: list, name_to_id: dict,
+) -> tuple[dict, list[str]]:
+    """Inject sibling-ckpt recon gaussians at the USDZ slots for ``recon_tids``.
+
+    For bus/truck the AH bank can't match: their object-local recon gaussians
+    live in ``recon_ckpt`` (same clip). Track poses match cross-source so no
+    frame fix is needed (verified). Returns ``(ckpt, placed_tids)``.
+    """
+    dyn = ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]
+    spec_dim = dyn["features_specular"].shape[1]
+    rdyn = recon_ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]
+    rsorted = sorted(recon_ckpt["viz_4d"]["tracks"].keys())
+    tid_to_slot = {tid: name_to_id[tid] for tid in recon_tids if tid in name_to_id}
+    node_tensors = extract_recon_node_tensors(rdyn, rsorted, tid_to_slot, spec_dim)
+    if node_tensors:
+        ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = \
+            place_tracks_in_dyn_node(dyn, node_tensors)
+    placed = [tid for tid, slot in tid_to_slot.items() if int(slot) in node_tensors]
+    return ckpt, placed
+
+
 def qa_sanity(dyn_node_after: dict, report: list[AssignRow],
               *, opacity_floor: float = 0.02, replaced_slots=None) -> dict:
     """廉价 sanity 闸（Mac 可跑）。覆盖率 + opacity 防退化 + skip 计数。

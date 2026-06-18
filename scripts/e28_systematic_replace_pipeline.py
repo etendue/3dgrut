@@ -36,6 +36,7 @@ import torch
 from threedgrut.layers.warmstart_metadata import load_bundle_metadata
 from threedgrut.layers.e28_replace import (
     replace_all_vehicle_tracks, qa_sanity, select_vehicle_tracks_to_place,
+    split_vehicle_tracks_by_ah_match, inject_recon_tracks,
 )
 from threedgrut_playground.utils.nre_usdz_viz4d import convert_usdz_to_ckpt_with_tracks
 
@@ -60,6 +61,11 @@ def _parse_args(argv=None):
                     help="insert 候选: track 至少活跃这么多帧（滤掉一闪而过）")
     ap.add_argument("--insert_max_dist_m", type=float, default=40.0,
                     help="insert 候选: track 到 ego 轨迹最近距离 ≤ 此值（只插附近）")
+    ap.add_argument("--recon_ckpt", default=None,
+                    help="跨源 recon fallback ckpt（如 NCore baseline ckpt_30000.pt）："
+                         "AH size 配不好的大车(bus/truck)从此抽真 recon gaussian 注入")
+    ap.add_argument("--max_size_ratio", type=float, default=1.5,
+                    help="AH 匹配 size 比上限；超过(如 bus 12.5m vs pickup 5.8m=2.16)→ recon")
     return ap.parse_args(argv)
 
 
@@ -95,19 +101,38 @@ def main(argv=None) -> int:
 
     # ② 配 + ③ 批注入 -----------------------------------------------------
     bundle = load_bundle_metadata(Path(a.asset_bank) / "metadata.yaml")
-    print(f"[e28] ② bank assets={len(bundle)} → ③ replace all vehicle tracks "
-          f"(on_miss={a.on_miss})")
+    recon_placed: list = []
+    if a.recon_ckpt:
+        # size-gate: AH 配不好的大车(bus/truck)走跨源 recon，其余走 AH。
+        ah_recon, recon_tids = split_vehicle_tracks_by_ah_match(
+            recon, bundle, max_size_ratio=a.max_size_ratio, on_miss=a.on_miss)
+        print(f"[e28] ② bank assets={len(bundle)} → AH-match {len(ah_recon)} + "
+              f"cross-source recon {len(recon_tids)} {recon_tids}")
+    else:
+        ah_recon, recon_tids = recon, []
+        print(f"[e28] ② bank assets={len(bundle)} → ③ replace/insert {len(ah_recon)} "
+              f"(on_miss={a.on_miss})")
+
     ckpt, report = replace_all_vehicle_tracks(
-        ckpt, bundle_root=a.asset_bank, bundle=bundle, recon=recon,
+        ckpt, bundle_root=a.asset_bank, bundle=bundle, recon=ah_recon,
         name_to_id=name_to_id, on_miss=a.on_miss, max_pts=a.max_pts, seed=a.seed,
     )
+
+    if a.recon_ckpt and recon_tids:
+        print(f"[e28] ③b 跨源 recon 注入 (from {a.recon_ckpt})")
+        recon_ckpt = torch.load(a.recon_ckpt, weights_only=False, map_location="cpu")
+        ckpt, recon_placed = inject_recon_tracks(
+            ckpt, recon_ckpt, recon_tids, name_to_id)
+        missing = sorted(set(recon_tids) - set(recon_placed))
+        print(f"[e28]   recon 注入 {len(recon_placed)} {sorted(recon_placed)}"
+              + (f"; recon_ckpt 也没有 {missing}（留空 cuboid）" if missing else ""))
 
     torch.save(ckpt, out / "ckpt_replaced.pt")
     with open(out / "replace_report.json", "w") as f:
         json.dump([asdict(r) for r in report], f, indent=2)
     print(f"[e28]   wrote ckpt_replaced.pt + replace_report.json "
-          f"({sum(1 for r in report if not r.skipped)} replaced / "
-          f"{sum(1 for r in report if r.skipped)} skipped)")
+          f"(AH {sum(1 for r in report if not r.skipped)} + recon {len(recon_placed)} / "
+          f"skipped {sum(1 for r in report if r.skipped)})")
 
     # ⑤ QA sanity 闸 ------------------------------------------------------
     dyn = ckpt["model"]["gaussians_nodes"]["dynamic_rigids"]
