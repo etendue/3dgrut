@@ -77,6 +77,19 @@ class LayerSpec:
     # Road layer uses 8.0 -- generous enough for elongated lane stripes
     # yet bounded enough to suppress hair-thin novel-view artifacts.
     anisotropy_ratio_max: float | None = None
+    # E3 road-freeze (NuRec port 2026-06-22): ABSOLUTE per-layer lr overrides.
+    # When not None, LayeredGaussians._apply_layer_lr_overrides sets that param
+    # group's lr to this absolute value (after MoG's ×scene_extent on positions)
+    # and drops any conf scheduler on it (else MoG.scheduler_step overwrites it
+    # every step — the silent no-op _apply_scale_lr_mult warns about). NuRec road
+    # recipe freezes geometry via positions 1e-6 / density·rotation·scale 1e-4,
+    # leaving features_albedo at normal lr so road only learns colour. None =
+    # leave that group untouched (default → byte-identical for non-road layers).
+    positions_lr: float | None = None
+    density_lr: float | None = None
+    rotation_lr: float | None = None
+    scale_lr: float | None = None
+    features_albedo_lr: float | None = None
     # T5.4: backend-specific knobs for non-particle layers. Currently used by
     # the sky_envmap layer to carry {"backend": "cubemap"|"mlp", "resolution":
     # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,

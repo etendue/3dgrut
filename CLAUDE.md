@@ -124,6 +124,12 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH && cd
 
 **长任务启动用「proven inline nohup」模式**（`ssh inceptio "... && nohup python train.py ... > log 2>&1 & echo PID \$!"`），inceptio ssh 偶发抖动（exit 255）；`setsid bash 脚本 & disown` 这种复杂形式在抖动下容易半路夭折，inline nohup + 末尾 `echo PID` 最稳。
 
+> ⚠️ **2026-06-22 实测补充（嵌套 driver 脚本场景，部分覆盖上面说法）**：跑「driver 脚本内部再起 train.py + eval」这类**嵌套长任务**时，上面的 inline nohup **会让 ssh 挂起超时 → exit 255 且任务没起来**（子进程继承 ssh 的 stdin/stdout fd，ssh 等 fd 关闭直到超时）。实测**唯一稳的启动式** ＝ `setsid` + 切断三个 fd + ssh `-n`：
+> ```bash
+> ssh -n inceptio 'cd ~/repo/3dgrut2-wt/<wt> && setsid bash scripts/<driver>.sh > /tmp/<run>.log 2>&1 < /dev/null & echo PID_$!'
+> ```
+> 四点缺一就 255/夭折：① `setsid` 脱离会话；② `< /dev/null` 切 stdin；③ `> log 2>&1` 切 stdout/err；④ ssh `-n`。**与上面「setsid 易夭折」旧说法相反**——旧说法对单条 `train.py` 成立，嵌套 driver 脚本必须 setsid。配套四个实测坑：① **高频 ssh 触发 sshd 限流**（连发多次全 255，单次冷却 ~30s 后恢复）→ ssh 之间留间隔、一次连接里做尽量多事；② **`pkill -9` 杀占大显存的进程会瞬时卡断当前 ssh**（255 真凶，反复踩）→ 别在启动命令里带 pkill，先单独清理或确认 GPU 空再启动；③ **`base64 -d` 内联传长脚本的命令易 255** → 传脚本走 **git**（`git push inceptio` + worktree `git reset --hard`）最稳，`scp` 次之；④ **`nvidia-smi` 偶发是 ssh 断点**，查 GPU/进程改用 `ps`/`pgrep`（注意 `pgrep -f` 会自匹配含关键字的 ssh 命令行本身，用 `[p]ython` 方括号技巧规避误报）。
+
 ### 🌐 访问外网（mihomo 代理）
 
 inceptio 直连外网受限；要拉 HF 模型 / pip / git clone 等联网操作需先起 mihomo 代理：

@@ -81,8 +81,17 @@ class LayeredMCMCStrategy(BaseStrategy):
     def _post_optimizer_step(
         self, step: int, scene_extent: float, train_dataset, batch=None, writer=None
     ) -> bool:
+        # E3 road-freeze (NuRec `strategy.exclude_layer_ids`): layers listed here
+        # are fully exempt from MCMC — no add/relocate/perturb/prune, so their
+        # particle set stays exactly as initialized. Default empty → baseline
+        # byte-identical. CLI: ++strategy.exclude_layer_ids=[road].
+        exclude = set(
+            getattr(getattr(self.conf, "strategy", None), "exclude_layer_ids", None) or []
+        )
         any_updated = False
         for name, sub in self.sub_strategies.items():
+            if name in exclude:
+                continue
             updated = sub._post_optimizer_step(
                 step, scene_extent, train_dataset, batch, writer
             )

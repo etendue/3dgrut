@@ -1384,6 +1384,7 @@ class LayeredGaussians(nn.Module):
             layer.setup_optimizer()
             layer.validate_fields()
             self._apply_scale_lr_mult(layer, spec)
+            self._apply_layer_lr_overrides(layer, spec)
 
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
@@ -1417,6 +1418,33 @@ class LayeredGaussians(nn.Module):
         for pg in layer.optimizer.param_groups:
             if pg["name"] == "scale":
                 pg["lr"] *= mult
+
+    def _apply_layer_lr_overrides(self, layer: MixtureOfGaussians, spec: LayerSpec) -> None:
+        """Set ABSOLUTE per-layer lr on geometry param groups (NuRec road-freeze).
+
+        Unlike _apply_scale_lr_mult (a multiplier on 'scale' only), this writes
+        an absolute lr onto positions/density/rotation/scale/features_albedo when
+        the matching ``spec.<name>_lr`` is not None, and DROPS any conf scheduler
+        on an overridden group. Dropping is essential: MoG.scheduler_step writes
+        ``schedulers[name](step)`` straight into the group lr every step, which
+        would silently overwrite the absolute value (the same trap guarded in
+        _apply_scale_lr_mult). Runs AFTER _apply_scale_lr_mult and after MoG's
+        positions×scene_extent, so an absolute positions_lr wins over both.
+        None field → leave that group as-is (default: byte-identical).
+        """
+        overrides = {
+            "positions": spec.positions_lr,
+            "density": spec.density_lr,
+            "rotation": spec.rotation_lr,
+            "scale": spec.scale_lr,
+            "features_albedo": spec.features_albedo_lr,
+        }
+        scheds = getattr(layer, "schedulers", {})
+        for pg in layer.optimizer.param_groups:
+            ov = overrides.get(pg["name"])
+            if ov is not None:
+                pg["lr"] = float(ov)
+                scheds.pop(pg["name"], None)  # else scheduler_step overwrites the absolute lr
 
     # ------------------------------------------------------------------ T4.5: populate tracks post-construct
     def populate_tracks(self, tracks: dict) -> None:
