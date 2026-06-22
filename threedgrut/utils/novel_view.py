@@ -52,6 +52,11 @@ LEGACY_NOVEL_AVG_MODES: Tuple[str, ...] = (
 NOVEL_VIEW_MODES: Tuple[str, ...] = LEGACY_NOVEL_AVG_MODES + (
     "lateral_3m",   # +3 m along camera right axis (E1.1 extrapolation gate)
     "lateral_6m",   # +6 m along camera right axis (E1.1 extrapolation gate)
+    # Road off-track rotation gate: 30°/60° (10° already in the legacy set).
+    # These extend the yaw sweep for the off-track KPI without touching the
+    # legacy avg anchor above.
+    "yaw_30deg",    # +30° rotation around camera up axis
+    "yaw_60deg",    # +60° rotation around camera up axis
 )
 
 
@@ -62,6 +67,17 @@ def _so3_around_axis(axis: np.ndarray, angle_rad: float) -> np.ndarray:
     x, y, z = axis
     K = np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]], dtype=np.float64)
     return np.eye(3, dtype=np.float64) + s * K + (1.0 - c) * (K @ K)
+
+
+def _yaw_deg_from_mode(mode: str) -> float:
+    """Parse ``'yaw_<N>deg'`` → ``float(N)``; raise on non-yaw mode names.
+
+    Lets yaw_5/10/30/60deg (and any future yaw_<N>deg) share one rotation
+    path instead of an if-ladder that hard-codes each angle.
+    """
+    if not (mode.startswith("yaw_") and mode.endswith("deg")):
+        raise ValueError(f"not a yaw mode: {mode!r}")
+    return float(mode[len("yaw_"):-len("deg")])
 
 
 def _to_numpy_44(c2w) -> np.ndarray:
@@ -99,15 +115,12 @@ def perturb_c2w(c2w, mode: str) -> np.ndarray:
         out[:3, 3] = m[:3, 3] + 3.0 * m[:3, 0]
     elif mode == "lateral_6m":
         out[:3, 3] = m[:3, 3] + 6.0 * m[:3, 0]
-    elif mode == "yaw_5deg":
-        # Camera up is -y in c2w convention; positive yaw_deg rotates camera
-        # CCW when viewed from above (world-up).
+    elif mode.startswith("yaw_"):
+        # Camera up is -y in c2w convention; positive yaw rotates camera CCW
+        # when viewed from above (world-up). Angle parsed from the mode name
+        # so yaw_5/10/30/60deg all share this single path.
         up = -m[:3, 1]
-        R = _so3_around_axis(up, np.deg2rad(5.0))
-        out[:3, :3] = R @ m[:3, :3]
-    elif mode == "yaw_10deg":
-        up = -m[:3, 1]
-        R = _so3_around_axis(up, np.deg2rad(10.0))
+        R = _so3_around_axis(up, np.deg2rad(_yaw_deg_from_mode(mode)))
         out[:3, :3] = R @ m[:3, :3]
     return out
 
@@ -135,11 +148,9 @@ def perturb_shutter_pair(
         new_end[:3, 3] = end[:3, 3] + delta
     else:  # yaw modes
         # Same yaw rotation around START frame's up axis applied to END.
+        # Angle parsed from the mode name (yaw_5/10/30/60deg share one path).
         up = -start[:3, 1]
-        if mode == "yaw_5deg":
-            R = _so3_around_axis(up, np.deg2rad(5.0))
-        else:  # yaw_10deg
-            R = _so3_around_axis(up, np.deg2rad(10.0))
+        R = _so3_around_axis(up, np.deg2rad(_yaw_deg_from_mode(mode)))
         new_end = end.copy()
         # Rotate both rotation and translation-from-start of end pose around
         # the start position so the shutter trajectory rotates rigidly.

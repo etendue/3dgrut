@@ -150,6 +150,14 @@ class Renderer:
         self.render_only = bool(render_only)
         # E2.1: restrict novel modes to lateral_3m + lateral_6m only.
         self.novel_only = bool(novel_only)
+        # Road off-track task: when true, render_all() restricts every model
+        # forward in the eval pass to the road particle layer (bg / dynamic-
+        # rigid / sky_envmap switched off via enabled_layer_names) so road_crop
+        # / lane / novel metrics measure the ROAD layer in isolation rather than
+        # bg over-rendering filling the road region. Hydra: ++render.road_only=true.
+        # enabled_layer_names is inference-only (never persisted) → checkpoint
+        # untouched; off by default → metrics.json byte-identical.
+        self.road_only = bool(self.conf.render.get("road_only", False))
         # T9.3 / V3-P1.c: BilateralGrid (or legacy ExposureModel) applied
         # AFTER model forward + post_processing, BEFORE metrics. Aligns the
         # eval-time pred_rgb with the train-time loss target (which goes
@@ -215,6 +223,7 @@ class Renderer:
         novel_save_n: int = 5,
         render_only: bool = False,
         novel_only: bool = False,
+        road_only: bool = False,
     ):
         """Loads checkpoint for test path.
         If path is stated, it will override the test path in checkpoint.
@@ -254,6 +263,11 @@ class Renderer:
         # V3-T15.2 Stage A.4: CLI --use-difix injection (same dict-style pattern).
         if use_difix:
             conf["render"]["use_difix"] = True
+        # Road off-track eval: inject road_only so __init__ restricts the eval
+        # pass to the road particle layer (bg/dynamic-rigid/sky off). Old ckpts
+        # lack this key, so inject here (same pattern as use_difix/eval_cameras).
+        if road_only:
+            conf["render"]["road_only"] = True
         # Phase 3 lane: inject dataset.load_lane_masks so a pre-trained baseline
         # ckpt (whose embedded conf predates lane) loads *.aux.lane.zarr.itar at
         # eval → render_all() emits mean_lane_*. Unlike conf.render (where
@@ -494,6 +508,26 @@ class Renderer:
     @torch.no_grad()
     def render_all(self):
         """Render all the images in the test dataset and log the metrics."""
+
+        # Road-only eval (off-track road KPI): restrict every model forward in
+        # this eval pass to the road particle layer so bg / dynamic-rigid /
+        # sky_envmap are switched off. road_crop / lane / novel metrics then
+        # measure the ROAD layer's own reconstruction instead of bg over-
+        # rendering filling the road region. Set once here → both the on-track
+        # and novel-view forwards in the loop below observe it.
+        if getattr(self, "road_only", False):
+            _road_layers = getattr(self.model, "layers", None)
+            if _road_layers is not None and "road" in _road_layers:
+                self.model.enabled_layer_names = {"road"}
+                logger.info(
+                    "[road-only eval] enabled_layer_names={'road'} — bg/"
+                    "dynamic-rigid/sky disabled for road-focused metrics."
+                )
+            else:
+                logger.warning(
+                    "[road-only eval] requested but model has no 'road' layer "
+                    "— falling back to full render."
+                )
 
         # Criterions that we log during training
         criterions = {"psnr": PeakSignalNoiseRatio(data_range=1).to("cuda")}
