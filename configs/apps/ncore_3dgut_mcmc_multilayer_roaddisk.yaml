@@ -1,0 +1,74 @@
+# @package _global_
+#
+# ===========================================================================
+#  E3.2.5 — 几何侧硬退化路面（reconstruction-studio ground-disk 实证路径）
+# ===========================================================================
+# 继承 multilayer（v3 baseline 字节等价扁平版），只在 road 层叠加「真·零厚度
+# 水平 disk」几何硬退化 bundle，几何侧根治 aperture problem（路面横移/旋转退化）。
+# 设计依据 spec:
+#   docs/superpowers/specs/2026-06-22-e325-recon-studio-ground-disk-geometry.md
+# 对标 recon-studio 产物 91,008 ground disk（厚 1µm / 法线 100% 竖直 / 点距
+# 10cm / 起伏 8mm），横移旋转稳达/超 NuRec。
+#
+# 四步 bundle（①②③ 同开同关 = 单变量；off 锚 = multilayer + 同口径 CLI）:
+#   ① init 提质   road_init_knn_k=5  — BEV 每格取 5 近邻 LiDAR-Z 中值滤离群尖刺
+#                 （legacy=1 最近单点带噪 → recon-studio 起伏 8mm 致密毯）。是
+#                 freeze 生效前提（spec §5: 冻结带噪 init 会重蹈 roadoff 覆辙）。
+#   ② 真薄盘      scale_z_max=0.001  — z 厚度 clamp 上界 5cm→1mm（每步 post-MCMC
+#                 强制）。不用 1µm（3DGUT 零厚度协方差 UT sigma 点数值风险，spec §6）。
+#                 anisotropy_ratio_max 不动：registry 8 下 z 仍被末尾 re-cap 回
+#                 1mm（caps 优先于 ratio，test_road_disk_clamp 钉死）。
+#   ③ 几何冻结    positions_lr=1e-6        — position 软冻结（lr 压低，留 init 残差微调）
+#                 freeze_rotation_grad=true — rotation 硬冻结：_post_backward 把 road
+#                 rotation grad 清零（杀梯度+Adam 动量），锁死单位四元数=法线竖直。
+#                 比 rotation_lr 强（1e-4 lr 仍 Adam 漂移 30k 步 → disc 歪，spec §5
+#                 点名 roadoff freeze 失败因）。
+#                 exclude_layer_ids=[road] — MCMC 整层豁免（no add/relocate/perturb/
+#                 prune），road 粒子集恒定（recon-studio「永不裁剪」对齐）。
+#                 注: 不设 scale_lr — z 厚度靠 ② clamp 锁死，xy 盘半径自由学习
+#                 （对齐 recon-studio「冻 z-scale 不冻 xy-scale」）。
+#   ④ 颜色 DC     无需配置 — multilayer 已 n_fourier_albedo_terms=1（DC-only），road
+#                 只学颜色（features_albedo 正常 lr，不冻）。
+#
+# A/B gate（inceptio depth-off num_workers=10；先 G1 数值 micro-spike 再 G2）:
+#   G1 500-step: total_loss 无 NaN/inf + road n_particles 不塌缩 + 无 CUDA illegal
+#                → 验 1mm 零厚度 disk 在 3DGUT 数值稳定，全绿才放行 G2。
+#   G2 6k A/B:   on=本 preset / off=multilayer（两边同 +sky_backend=mlp + depth-off
+#                CLI → 唯一差异是 road override）；横移 3m/6m；守护线 cc≥24.7 +
+#                interpolated grad_corr/class_psnr 不退；主判据 lane_grad_corr↑
+#                band_lpips↓ + road/normal_tilt_deg_p95<0.5°（验 rotation 锁死）。
+#
+# inceptio 启动模板（depth-off + nw=10 内存铁律；A/B 两边同口径）:
+#   on:  python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_roaddisk \
+#          n_iterations=6000 num_workers=10 \
+#          dataset.load_lidar_depth_map=false trainer.use_lidar_depth=false \
+#          path=~/work/data/<clip>/pai_<clip>.json out_dir=~/work/output \
+#          experiment_name=<name>_roaddisk_on
+#   off: python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+#          n_iterations=6000 num_workers=10 trainer.sky_backend=mlp \
+#          dataset.load_lidar_depth_map=false trainer.use_lidar_depth=false \
+#          path=... experiment_name=<name>_roaddisk_off
+# ===========================================================================
+
+defaults:
+  - ncore_3dgut_mcmc_multilayer
+  - _self_
+
+trainer:
+  # inceptio/A800 nvdiffrast 不可用 → pin mlp（同 poseopt preset）。A/B off run
+  # 须 CLI 加 trainer.sky_backend=mlp 对齐，保单变量（唯一差异是 road override）。
+  sky_backend: mlp
+
+# ─── E3.2.5 road 几何硬退化 bundle（deep-merge 进 multilayer.layers.overrides，
+#     dynamic_rigids override 保留）─────────────────────────────────────────
+layers:
+  overrides:
+    road:
+      road_init_knn_k: 5           # ① KNN 中值 init 提质
+      scale_z_max: 0.001           # ② 1mm 真薄盘（z clamp 上界）
+      positions_lr: 1.0e-6         # ③a position 软冻结
+      freeze_rotation_grad: true   # ③b rotation 硬冻结（法线锁）
+
+# ─── MCMC 整层豁免 road（deep-merge 进 multilayer.strategy，relocate 保留）───
+strategy:
+  exclude_layer_ids: [road]        # ③ road 粒子集恒定

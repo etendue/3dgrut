@@ -31,6 +31,7 @@ def init_road_layer(
     cut_range: float = 30.0,
     resolution: float = 0.05,
     max_n: int = 200_000,
+    knn_k: int = 1,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Generate per-particle init tensors for the road layer.
 
@@ -41,6 +42,11 @@ def init_road_layer(
         cut_range:      meters padded around ego XY extent for BEV bbox.
         resolution:     BEV grid cell size in meters.
         max_n:          cap on returned particle count.
+        knn_k:          # of nearest road points whose Z is medianed per grid
+                        cell. knn_k=1 (default) = legacy nearest-single-point
+                        (byte-identical to pre-E3.2.5). knn_k=5 (E3.2.5① on)
+                        takes a local median to reject LiDAR outlier spikes,
+                        approaching recon-studio's 8mm dense-disc init.
 
     Returns:
         positions:  [N, 3]  world frame, Z snapped to nearest road LiDAR Z
@@ -94,17 +100,25 @@ def init_road_layer(
     #    torch.cdist for small inputs / environments without scipy (Mac unit tests).
     #    Earlier torch.cdist(grid[200K], road_pts[629K]) was 500 GB host RAM →
     #    OOM kill on A800 (exit 137); cKDTree is the production path.
+    #    E3.2.5①: knn_k>1 medians Z over the k nearest road points to reject
+    #    LiDAR outlier spikes (recon-studio dense-disc init); knn_k=1 is the
+    #    legacy nearest-single-point path (byte-identical to pre-E3.2.5).
+    k = max(1, min(int(knn_k), road_points.shape[0]))
     try:
         from scipy.spatial import cKDTree
         rp_cpu = road_points[:, :2].detach().cpu().numpy()
         tree = cKDTree(rp_cpu)
         grid_cpu = grid_xy.detach().cpu().numpy()
-        _, nearest = tree.query(grid_cpu, k=1)
-        nearest_t = torch.from_numpy(nearest).to(device=road_points.device, dtype=torch.long)
+        _, nn_idx = tree.query(grid_cpu, k=k)  # [M] if k==1 else [M, k]
+        nn_idx_t = torch.from_numpy(nn_idx).to(device=road_points.device, dtype=torch.long)
     except ImportError:
         dists = torch.cdist(grid_xy.unsqueeze(0), road_points[:, :2].unsqueeze(0))[0]
-        nearest_t = dists.argmin(dim=1).to(torch.long)
-    grid_z = road_points[nearest_t, 2]
+        _, nn_idx_t = torch.topk(dists, k, largest=False, dim=1)  # [M, k]
+    if k == 1:
+        grid_z = road_points[nn_idx_t.reshape(-1), 2]  # legacy nearest single
+    else:
+        nn_idx_t = nn_idx_t.reshape(grid_xy.shape[0], k)
+        grid_z = torch.median(road_points[nn_idx_t, 2], dim=1).values
     positions = torch.cat([grid_xy, grid_z.unsqueeze(-1)], dim=-1)  # [N, 3]
 
     N = positions.shape[0]

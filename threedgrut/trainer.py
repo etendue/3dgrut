@@ -405,6 +405,7 @@ class Trainer3DGRUT:
                             r_pos, r_rot, r_sca, r_den, r_col = init_road_layer(
                                 road_pts, traj,
                                 max_n=road_spec.max_n_particles,
+                                knn_k=road_spec.road_init_knn_k,  # E3.2.5①
                             )
                             device = model.layers["road"].device
                             model.init_layer_from_points(

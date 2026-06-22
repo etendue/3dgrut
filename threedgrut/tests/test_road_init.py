@@ -12,7 +12,10 @@ from __future__ import annotations
 import math
 
 import torch
+from omegaconf import OmegaConf
 
+from threedgrut.layers.layer_spec import LayerSpec
+from threedgrut.layers.registry import specs_from_config
 from threedgrut.layers.road_init import init_road_layer
 
 
@@ -120,3 +123,110 @@ def test_road_init_z_follows_uneven_terrain():
     if near_zero.shape[0] > 0 and near_forty.shape[0] > 0:
         assert near_zero[:, 2].abs().mean().item() < 0.5
         assert (near_forty[:, 2].mean().item() - 4.0) < 1.0
+
+
+# ---------------------------------------------------------------------------
+# E3.2.5 ① — KNN-median Z snap (init 提质：从「最近单点」改局部 KNN 中值降噪).
+# 攻 spec §5「init 带噪」失败因，对齐 recon-studio 起伏 8mm 致密毯。
+# 默认 knn_k=1 保留 legacy「最近单点」行为（off baseline 字节等价）；
+# on run 显式传 knn_k=5 启用中值滤离群。
+# ---------------------------------------------------------------------------
+
+
+def _dense_flat_with_spikes() -> torch.Tensor:
+    """致密平地 Z=0 网格 + 确定性离群尖刺（每第 10 点 +0.3m）.
+
+    25×25=625 致密点，~62 个离群（10%）。x-major flatten 下 ``[::10]`` 的离群
+    在空间上对角稀疏分布，任一 BEV 格点的 5 近邻里离群是少数 → 中值可滤除，
+    而最近单点（k=1）会被尖刺污染。
+    """
+    span, step = 12.0, 1.0
+    xs = torch.arange(-span, span + step, step)
+    ys = torch.arange(-span, span + step, step)
+    gx, gy = torch.meshgrid(xs, ys, indexing="ij")
+    pts = torch.zeros(gx.numel(), 3)
+    pts[:, 0] = gx.flatten()
+    pts[:, 1] = gy.flatten()
+    pts[:, 2] = 0.0
+    pts[::10, 2] = 0.3  # deterministic outlier spikes
+    return pts
+
+
+def test_road_init_knn_median_rejects_outliers():
+    """E3.2.5①: knn_k=5 中值滤除 +0.3m 离群尖刺，grid Z 贴合真平面 Z=0."""
+    road_pts = _dense_flat_with_spikes()
+    traj = _ego_trajectory(n=10, length=20.0)
+    positions, _, _, _, _ = init_road_layer(
+        road_pts, traj, cut_range=2.0, resolution=1.0, max_n=5_000, knn_k=5
+    )
+    assert positions.shape[0] > 0
+    z_abs = positions[:, 2].abs()
+    assert z_abs.max().item() < 0.05, (
+        f"KNN median failed to reject spikes: max|Z|={z_abs.max().item()}"
+    )
+    rms = (z_abs ** 2).mean().sqrt().item()
+    assert rms < 0.02, f"KNN median residual RMS too high: {rms}"
+
+
+def test_road_init_knn_k1_is_legacy_nearest():
+    """E3.2.5①: knn_k=1 退化为 legacy 最近单点（守不变量）——会被离群污染.
+
+    这是 knn_k=5 的对照锚：同一带噪输入下 k=1 max|Z|→尖刺值，凸显中值价值。
+    """
+    road_pts = _dense_flat_with_spikes()
+    traj = _ego_trajectory(n=10, length=20.0)
+    positions, _, _, _, _ = init_road_layer(
+        road_pts, traj, cut_range=2.0, resolution=1.0, max_n=5_000, knn_k=1
+    )
+    assert positions.shape[0] > 0
+    # legacy 行为：grid 会吸到离群尖刺 → max|Z| 接近 0.3
+    assert positions[:, 2].abs().max().item() > 0.1, (
+        "knn_k=1 should reproduce legacy nearest-single-point (spike-polluted)"
+    )
+
+
+def test_road_init_knn_median_preserves_slope():
+    """E3.2.5①: KNN 中值不抹平真实坡度（只杀离群，不杀信号）."""
+    n = 200
+    road_pts = torch.zeros(n, 3)
+    road_pts[:, 0] = torch.linspace(-50, 50, n)
+    road_pts[:, 1] = (torch.arange(n) % 5 - 2).float() * 0.5  # 横向展开给 KNN 2D 邻域
+    road_pts[:, 2] = 0.1 * road_pts[:, 0]  # 10% grade
+    traj = _ego_trajectory(n=10, length=80.0)
+    positions, _, _, _, _ = init_road_layer(
+        road_pts, traj, cut_range=2.0, resolution=2.0, max_n=5_000, knn_k=5
+    )
+    near_zero = positions[positions[:, 0].abs() < 2.0]
+    near_forty = positions[(positions[:, 0] - 40.0).abs() < 2.0]
+    if near_zero.shape[0] > 0 and near_forty.shape[0] > 0:
+        assert near_zero[:, 2].abs().mean().item() < 0.5
+        assert abs(near_forty[:, 2].mean().item() - 4.0) < 1.0
+
+
+# ---------------------------------------------------------------------------
+# E3.2.5 ①-2 — config wiring: road_init_knn_k rides on LayerSpec so the CLI
+# form ++layers.overrides.road.road_init_knn_k=5 reaches init_road_layer via
+# trainer (same registry-override path as max_n_particles). Default 1 keeps the
+# off baseline (multilayer.yaml, no override) byte-identical.
+# ---------------------------------------------------------------------------
+
+
+def test_layerspec_road_init_knn_k_default_1():
+    """E3.2.5①: road_init_knn_k defaults 1 = legacy nearest-single-point."""
+    s = LayerSpec(name="road", layer_id=1, max_n_particles=200_000)
+    assert s.road_init_knn_k == 1
+
+
+def test_registry_routes_road_init_knn_k():
+    """E3.2.5①: ++layers.overrides.road.road_init_knn_k=5 lands on road spec only."""
+    conf = OmegaConf.create({
+        "layers": {
+            "enabled": ["background", "road"],
+            "overrides": {"road": {"road_init_knn_k": 5}},
+        }
+    })
+    specs = specs_from_config(conf)
+    road = next(s for s in specs if s.name == "road")
+    bg = next(s for s in specs if s.name == "background")
+    assert road.road_init_knn_k == 5
+    assert bg.road_init_knn_k == 1  # only road overridden
