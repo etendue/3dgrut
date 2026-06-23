@@ -90,6 +90,19 @@ class LayerSpec:
     rotation_lr: float | None = None
     scale_lr: float | None = None
     features_albedo_lr: float | None = None
+    # E3.2.5① (recon-studio ground-disk init, 2026-06-22): # of nearest road
+    # LiDAR points whose Z is medianed per BEV grid cell in road_init. Trainer
+    # passes this as init_road_layer(knn_k=...). 1 (default) = legacy
+    # nearest-single-point (byte-identical off baseline); 5 = on (median-reject
+    # LiDAR outlier spikes → ~8mm dense disc). Road-only knob; ignored elsewhere.
+    road_init_knn_k: int = 1
+    # E3.2.5③b (recon-studio zero_ground_gradients port, 2026-06-22): when True,
+    # LayeredMCMCStrategy._post_backward zeroes this layer's rotation grad after
+    # backward / before optimizer.step — killing both the update and the Adam
+    # momentum source so the identity-quat (normal-vertical) disc is truly
+    # locked. Stronger than rotation_lr (1e-4 lr still drifts via momentum over
+    # 30k steps). Default False → byte-identical no-op for every other layer.
+    freeze_rotation_grad: bool = False
     # T5.4: backend-specific knobs for non-particle layers. Currently used by
     # the sky_envmap layer to carry {"backend": "cubemap"|"mlp", "resolution":
     # int}. ``compare=False`` keeps LayerSpec hashable even though dict isn't,
