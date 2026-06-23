@@ -32,6 +32,10 @@ _EXTRA_OVERRIDE_KEYS: frozenset[str] = frozenset({
     "track_albedo_lr",         # V3-L8 optimizer LR
     "track_scale_lr",          # V3-L9 optimizer LR
     "n_fourier_albedo_terms",  # P1.3b 4D-SH time-varying albedo terms (int, default 1 = DC-only)
+    "bev_road_texture",        # E3.3 (bool) — road colour from a learnable BEV feature grid
+    "bev_cell_size",           # E3.3 (float, m) — BEV grid cell size
+    "bev_channels",            # E3.3 (int) — grid channels (3 = direct RGB)
+    "bev_lr",                  # E3.3 (float) — BEV grid Adam LR
 })
 
 

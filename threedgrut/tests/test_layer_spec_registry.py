@@ -174,6 +174,32 @@ def test_v3_extra_keys_routed_to_extra_dict():
     assert s.extra.get("n_fourier_albedo_terms") == 4  # P1.3b
 
 
+def test_e33_bev_keys_routed_to_extra_dict():
+    """E3.3: bev_road_texture / bev_cell_size / bev_channels / bev_lr are not
+    LayerSpec dataclass fields — they must land in ``road`` spec.extra so the
+    bevroad preset can flip the BEV road texture without a schema change."""
+    from threedgrut.layers.registry import specs_from_config
+    conf = OmegaConf.create({
+        "layers": {
+            "enabled": ["road"],
+            "overrides": {
+                "road": {
+                    "bev_road_texture": True,
+                    "bev_cell_size": 0.5,
+                    "bev_channels": 3,
+                    "bev_lr": 1.0e-3,
+                },
+            },
+        }
+    })
+    specs = specs_from_config(conf)
+    s = {sp.name: sp for sp in specs}["road"]
+    assert s.extra.get("bev_road_texture") is True
+    assert s.extra.get("bev_cell_size") == 0.5
+    assert s.extra.get("bev_channels") == 3
+    assert s.extra.get("bev_lr") == 1.0e-3
+
+
 def test_v3_extra_keys_default_off_when_absent():
     """No V3 overrides present → spec.extra is empty (or registry default
     only); the OFF code paths in dynamic_rigid_init / layered_model take

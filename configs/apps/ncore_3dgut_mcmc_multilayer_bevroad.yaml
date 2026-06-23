@@ -1,0 +1,59 @@
+# @package _global_
+#
+# ===========================================================================
+#  E3.3 — BEV 纹理平面化（road 颜色 pre-bake 自 learnable BEV feature grid）
+# ===========================================================================
+# 继承 multilayer（v3 baseline 字节等价扁平版），只在 road 层把颜色来源从
+# per-gaussian SH 改成「按 road 高斯 xy 双线性采样一个 learnable BEV feature
+# grid → 写回 SH DC band，features_specular 置零（DC-only）」。任何外推视角只是
+# 对同一张平面纹理的重采样 → 天然正确（参数化级根治 aperture problem）。pre-bake：
+# 颜色算在 Python 层（fused_view），CUDA 渲染 kernel 不改。
+# spec: docs/superpowers/specs/2026-06-16-e33-bev-road-planarization-spike.md
+#
+# ⚠ 前置认知（E3.2.6 结论，2026-06-23 大g）：takeover（调强 bg_road_penalty
+# λ0.4/z_band1.5）实测无法把路面车道线白条从 bg 拉进 road 层 → road 层 opacity
+# 仍弱（~0.014），路面渲染主要由 bg 兜底。本 spike 用 GPU 实测 BEV 纹理在 road
+# 弱的现状下能否独立改善 lateral lane（即颜色参数化是否绕过 road 层弱所有权）。
+#
+# off 锚 = multilayer + 同口径 CLI（唯一差异 = road BEV override）。
+#
+# A/B（inceptio depth-off num_workers=10；先 G1 数值 micro-spike 再 G2）:
+#   G1 500-step: total_loss 无 NaN/inf + road _road_bev_grid.grad 非零（grid 真
+#                被训练）+ 无 CUDA illegal → 全绿才放行 G2。
+#   G2 6k A/B:   on=本 preset / off=multilayer（两边同 +sky_backend=mlp + depth-off
+#                CLI → 唯一差异是 road BEV override）；横移 3m/6m；守护线 cc≥24.7 +
+#                interpolated grad_corr/class_psnr 不退；主判据 lane_grad_corr↑
+#                band_lpips↓。
+#
+# inceptio 启动模板（depth-off + nw=10 内存铁律；A/B 两边同口径）:
+#   on:  python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_bevroad \
+#          n_iterations=6000 num_workers=10 \
+#          dataset.load_lidar_depth_map=false trainer.use_lidar_depth=false \
+#          trainer.use_depth_prior=false \
+#          path=~/work/data/<clip>/pai_<clip>.json out_dir=~/work/output \
+#          experiment_name=<name>_bevroad_on
+#   off: python train.py --config-name apps/ncore_3dgut_mcmc_multilayer \
+#          n_iterations=6000 num_workers=10 trainer.sky_backend=mlp \
+#          dataset.load_lidar_depth_map=false trainer.use_lidar_depth=false \
+#          trainer.use_depth_prior=false \
+#          path=... experiment_name=<name>_bevroad_off
+# ===========================================================================
+
+defaults:
+  - ncore_3dgut_mcmc_multilayer
+  - _self_
+
+trainer:
+  # inceptio/A800 nvdiffrast 不可用 → pin mlp（同 roaddisk preset）。A/B off run
+  # 须 CLI 加 trainer.sky_backend=mlp 对齐，保单变量（唯一差异是 road BEV override）。
+  sky_backend: mlp
+
+# ─── E3.3 road BEV 纹理 bundle（deep-merge 进 multilayer.layers.overrides，
+#     dynamic_rigids override 保留）─────────────────────────────────────────
+layers:
+  overrides:
+    road:
+      bev_road_texture: true       # road 颜色 ← BEV grid 双线性采样（pre-bake）
+      bev_cell_size: 1.0           # BEV 格子 1m（对齐 road_region height field 约定）
+      bev_channels: 3              # C=3 直出 RGB（最简档，不引 tiny-MLP）
+      bev_lr: 2.5e-3               # grid Adam LR（features_albedo 级颜色 lr）
