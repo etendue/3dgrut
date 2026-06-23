@@ -30,11 +30,13 @@ def test_legacy_avg_modes_frozen_at_four():
     )
 
 
-def test_modes_constant_has_exactly_six_modes():
-    """E1.1: 新增 lateral_3m/6m 外推档；前 4 元素保持历史顺序。"""
+def test_modes_constant_has_all_eight_modes():
+    """E1.1 加 lateral_3m/6m 外推档 + PR #34 road off-track 加 yaw_30/60deg。
+    前 4 元素保持历史顺序（LEGACY avg 锚），随后是 E1.1 两档与 off-track 两档。"""
     assert NOVEL_VIEW_MODES == (
         "lateral_1m", "lateral_2m", "yaw_5deg", "yaw_10deg",
         "lateral_3m", "lateral_6m",
+        "yaw_30deg", "yaw_60deg",
     )
     assert NOVEL_VIEW_MODES[:4] == LEGACY_NOVEL_AVG_MODES
 

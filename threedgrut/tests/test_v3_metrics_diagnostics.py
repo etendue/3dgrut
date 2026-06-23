@@ -116,21 +116,26 @@ def test_v3_metrics_zero_init_yields_zero(real_conf):
 
 
 def test_v3_metrics_non_zero_values(real_conf):
-    """Inject known table values; verify the diagnostic formulas."""
+    """Inject known table values; verify the diagnostic formulas.
+
+    P1.3b: the albedo table is [K, 3, k] Fourier coefficients (k=1 default).
+    render.py's diagnostic (render.py:1496) is ``norm(dim=-1).mean()`` — norm
+    over the Fourier axis, then mean over K×3 — so for k=1 each entry's norm
+    is just |coef|.
+    """
     model = _make_model(real_conf, albedo=True, scale=True)
     with torch.no_grad():
-        # alice (track 0): albedo norm = sqrt(0.16 + 0.09 + 0.0) = 0.5
-        # bob   (track 1): albedo norm = sqrt(0.0 + 0.25 + 0.0) = 0.5
-        # → l2_mean = 0.5
+        # [K=2, 3, k=1]; norm over last(k) dim → |val| per (track, channel);
+        # mean over 2×3 = (0.4+0.3+0.0 + 0.0+0.5+0.0) / 6 = 0.2
         model._track_albedo_table.copy_(torch.tensor([
-            [0.4, 0.3, 0.0],
-            [0.0, 0.5, 0.0],
+            [[0.4], [0.3], [0.0]],
+            [[0.0], [0.5], [0.0]],
         ]))
         # log_scale = [0.2, -0.4] → mean = -0.1, std (unbiased) ≈ 0.4243
         model._track_log_scale_table.copy_(torch.tensor([[0.2], [-0.4]]))
 
     m = _compute_v3_metrics(model)
-    assert m["track_albedo_l2_mean"] == pytest.approx(0.5, abs=1e-5)
+    assert m["track_albedo_l2_mean"] == pytest.approx(0.2, abs=1e-5)
     assert m["track_log_scale_mean"] == pytest.approx(-0.1, abs=1e-5)
     # std unbiased: sqrt(((0.2-(-0.1))^2 + (-0.4-(-0.1))^2) / (2-1)) = sqrt(0.18) ≈ 0.4243
     assert m["track_log_scale_std"] == pytest.approx(0.4243, abs=1e-3)
