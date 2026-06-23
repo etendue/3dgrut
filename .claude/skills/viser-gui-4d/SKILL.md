@@ -65,7 +65,7 @@ extend / relaunch).
 
 ```bash
 ssh <host> "export PATH=<env-bin>:\$PATH && export CUDA_VISIBLE_DEVICES=0 \
-  && cd <repo> && rm -f /tmp/viser_<tag>.log \
+  && cd <repo> && export PYTHONPATH=<repo> && rm -f /tmp/viser_<tag>.log \
   && nohup timeout 3600 python threedgrut_playground/viser_gui_4d.py \
        --gs_object <ckpt.pt> --dataset_path <manifest.json> --port 8090 \
        --renderer 3dgut \
@@ -75,6 +75,11 @@ ssh <host> "export PATH=<env-bin>:\$PATH && export CUDA_VISIBLE_DEVICES=0 \
 > `--renderer 3dgut` shown above is for **A100/A800** (no RT cores). On **RTX/4090/H100**
 > drop the flag or use `--renderer 3dgrt` (OptiX, the default). See §2 — getting this
 > wrong segfaults the viewer at OptiX dlopen.
+
+> `export PYTHONPATH=<repo>` (set `<repo>` = the **worktree root**) is **mandatory in a
+> git worktree** — without it the `threedgrut_playground/` subdir script imports the
+> **main checkout's** stale `threedgrut`, which crashes loading ckpts that carry
+> worktree-only LayerSpec fields. Harmless on a non-worktree checkout. See Gotchas.
 
 **Several ckpts at once** (visual A/B): launch one per **distinct port** (8090, 8091, …),
 each with its own `/tmp/viser_<tag>.log`. They share GPU0 fine (mind the ~7.5 GB each).
@@ -125,6 +130,17 @@ a live viewer. Trust the port + GPU numbers over pgrep counts.
   the default is fine. The code documents this at `viser_gui_4d.py:1532` (`--renderer`
   choices) + the `--no_gaussian_render` help, but it's easy to miss — always set it
   explicitly per host.
+- **In a git worktree, launch with `PYTHONPATH=<worktree-root>` (import trap, 2026-06-23).**
+  The script lives in `threedgrut_playground/`, so `sys.path[0]` is that subdir and the
+  worktree root is off-path — `import threedgrut` falls through to the **main checkout**
+  (`~/repo/3dgrut2/threedgrut`), not the worktree code. A ckpt whose conf carries a
+  worktree-only LayerSpec field (e.g. E3.2.5 `road_init_knn_k` / `freeze_rotation_grad` /
+  `positions_lr`) then crashes at load: **`ValueError: Unknown LayerSpec field
+  'road_init_knn_k'`**. `train.py` is immune (it runs from the worktree root, so
+  `sys.path[0]` IS the worktree). Fix: `export PYTHONPATH=<worktree-abs-root>` (e.g.
+  `/home/inceptio/repo/3dgrut2-wt/e325`); verify with `python -c "import threedgrut;
+  print(threedgrut.__file__)"` flipping from the main checkout to the worktree path. Only
+  bites after a worktree schema change — old ckpts lack the new fields (first hit E3.2.6).
 - **sky_backend must match the ckpt.** Ckpts trained with `trainer.sky_backend=mlp`
   (the A800/inceptio default, nvdiffrast unavailable) load a `SkyEnvmapMLP`; the viewer
   auto-detects from the ckpt. A mismatch → state_dict shape error on first render. If
