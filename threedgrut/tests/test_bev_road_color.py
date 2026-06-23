@@ -39,8 +39,8 @@ def _flat_road_pts(n: int = 3) -> torch.Tensor:
 
 
 def _build_model(real_conf, *, bev: bool, cell_size: float = 1.0,
-                 n_channels: int = 3, road_colors=None, n: int = 3
-                 ) -> LayeredGaussians:
+                 n_channels: int = 3, road_colors=None, n: int = 3,
+                 setup_opt: bool = False) -> LayeredGaussians:
     extra: dict = {}
     if bev:
         extra["bev_road_texture"] = True
@@ -53,9 +53,9 @@ def _build_model(real_conf, *, bev: bool, cell_size: float = 1.0,
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_layer_from_points("background", torch.randn(5, 3),
-                                 setup_optimizer=False)
+                                 setup_optimizer=setup_opt)
     model.init_layer_from_points("road", _flat_road_pts(n),
-                                 colors=road_colors, setup_optimizer=False)
+                                 colors=road_colors, setup_optimizer=setup_opt)
     return model
 
 
@@ -149,3 +149,58 @@ def test_disabled_is_identity(real_conf):
     road_mask = model.get_layer_mask("road")
     assert torch.equal(fv["features_albedo"][road_mask], road.features_albedo)
     assert torch.equal(fv["features_specular"][road_mask], road.features_specular)
+
+
+# --- (i) optimizer wiring — without it the grid silently never trains --------
+def test_road_bev_optim_created_when_enabled(real_conf):
+    model = _build_model(real_conf, bev=True)
+    model.setup_optimizer()
+    assert hasattr(model, "_road_bev_optim")
+    params = [p for g in model._road_bev_optim.param_groups for p in g["params"]]
+    assert any(p is model._road_bev_grid for p in params)
+
+
+def test_no_road_bev_optim_when_disabled(real_conf):
+    model = _build_model(real_conf, bev=False)
+    model.setup_optimizer()
+    assert not hasattr(model, "_road_bev_optim")
+
+
+def test_road_bev_grid_in_fanned_optimizer_view(real_conf):
+    # trainer calls model.optimizer.step(); the grid must be reachable through
+    # the fanned-out view or the BEV texture silently never trains.
+    model = _build_model(real_conf, bev=True)
+    model.setup_optimizer()
+    all_params = [p for g in model.optimizer.param_groups for p in g["params"]]
+    assert any(p is model._road_bev_grid for p in all_params)
+
+
+def test_road_bev_grid_updated_after_optim_step(real_conf):
+    model = _build_model(real_conf, bev=True)
+    model.setup_optimizer()
+    model._road_bev_grid.data.uniform_(0.1, 0.9)
+    before = model._road_bev_grid.detach().clone()
+    fv = model.fused_view()
+    road_mask = model.get_layer_mask("road")
+    fv["features_albedo"][road_mask].sum().backward()
+    model.optimizer.step()
+    assert not torch.equal(model._road_bev_grid.detach(), before)
+
+
+# --- (j) ckpt round-trip — render.py eval loads the trained grid, not init ---
+def test_road_bev_ckpt_roundtrip(real_conf):
+    m1 = _build_model(real_conf, bev=True, setup_opt=True)
+    m1._road_bev_grid.data.uniform_(0.1, 0.9)  # simulate a "trained" grid
+    ckpt = m1.get_model_parameters()
+    assert "road_bev_state" in ckpt
+    # render.py path: a fresh model whose grid must be overwritten by the load
+    m2 = _build_model(real_conf, bev=True, setup_opt=True)
+    m2._road_bev_grid.data.zero_()
+    m2.init_from_checkpoint(ckpt, setup_optimizer=False)
+    assert torch.equal(m2._road_bev_grid.detach(), m1._road_bev_grid.detach())
+
+
+def test_road_bev_state_absent_when_disabled(real_conf):
+    m = _build_model(real_conf, bev=False, setup_opt=True)
+    ckpt = m.get_model_parameters()
+    assert "road_bev_state" not in ckpt

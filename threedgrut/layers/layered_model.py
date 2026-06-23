@@ -598,6 +598,21 @@ class LayeredGaussians(nn.Module):
         }
         if layered_track_state:
             out["layered_track_state"] = layered_track_state
+        # E3.3: persist the road BEV texture grid (+ meta + optimizer) so
+        # render.py's from_checkpoint eval loads the *trained* texture, not the
+        # init grid. Sibling key like track_optim_state → OFF runs add nothing.
+        grid = getattr(self, "_road_bev_grid", None)
+        if grid is not None:
+            bev_entry = {
+                "grid": grid.detach().cpu(),
+                "xy_min": self._road_bev_xy_min.detach().cpu(),
+                "cell_size": self._road_bev_cell_size,
+                "n_channels": self._road_bev_n_channels,
+            }
+            road_bev_opt = getattr(self, "_road_bev_optim", None)
+            if road_bev_opt is not None:
+                bev_entry["optimizer"] = road_bev_opt.state_dict()
+            out["road_bev_state"] = bev_entry
         return out
 
     def init_from_checkpoint(self, checkpoint: dict, setup_optimizer: bool = True):
@@ -710,6 +725,22 @@ class LayeredGaussians(nn.Module):
                             f"[ckpt] track_optim load_state_dict failed "
                             f"({type(e).__name__}: {e}); resetting to zero-init."
                         )
+
+            # E3.3: restore the road BEV texture grid. render.py's from_checkpoint
+            # dispatches per layer (no init_layer_from_points → no
+            # _register_road_bev_grid), so rebuild the Parameter + meta from the
+            # saved state here, else eval falls back to a fresh init grid.
+            road_bev_state = None
+            if (
+                "model" in checkpoint
+                and isinstance(checkpoint["model"], dict)
+                and "road_bev_state" in checkpoint["model"]
+            ):
+                road_bev_state = checkpoint["model"]["road_bev_state"]
+            elif "road_bev_state" in checkpoint:
+                road_bev_state = checkpoint["road_bev_state"]
+            if road_bev_state is not None:
+                self._restore_road_bev_grid(road_bev_state)
 
             # V3 Stage A: restore LayeredGaussians-level per-track state.
             # Must run AFTER the trainer has called populate_tracks() (it does
@@ -1740,6 +1771,47 @@ class LayeredGaussians(nn.Module):
             "n_channels": self._road_bev_n_channels,
         }
 
+    def _road_bev_lr(self) -> float:
+        """E3.3: BEV grid LR from road ``spec.extra['bev_lr']`` (default 2.5e-3,
+        the features_albedo-scale colour LR)."""
+        spec = next((s for s in self.specs if s.name == "road"), None)
+        if spec is None:
+            return 2.5e-3
+        extra = getattr(spec, "extra", {}) or {}
+        return float(extra.get("bev_lr", 2.5e-3))
+
+    def _maybe_setup_road_bev_optim(self) -> None:
+        """E3.3: attach a dedicated Adam for the road BEV grid when registered.
+        Without this the grid Parameter receives gradients (fused_view) but is
+        never stepped → the texture silently never trains. Idempotent (replaces
+        on re-setup, matching ``_maybe_setup_track_optim``)."""
+        grid = getattr(self, "_road_bev_grid", None)
+        if grid is None:
+            return
+        object.__setattr__(self, "_road_bev_optim", torch.optim.Adam([
+            {"params": [grid], "lr": self._road_bev_lr(), "name": "road_bev_grid"},
+        ]))
+
+    def _restore_road_bev_grid(self, state: dict) -> None:
+        """E3.3: rebuild ``_road_bev_grid`` Parameter + meta from a checkpoint's
+        ``road_bev_state``. render.py's from_checkpoint path dispatches per layer
+        (no ``init_layer_from_points`` → no ``_register_road_bev_grid``), so eval
+        would otherwise fall back to a fresh init grid, not the trained one."""
+        grid_t = state["grid"]
+        if not torch.is_tensor(grid_t):
+            grid_t = torch.as_tensor(grid_t)
+        xy_min = state["xy_min"]
+        if not torch.is_tensor(xy_min):
+            xy_min = torch.as_tensor(xy_min)
+        if hasattr(self, "_road_bev_grid"):
+            delattr(self, "_road_bev_grid")
+        if hasattr(self, "_road_bev_xy_min"):
+            delattr(self, "_road_bev_xy_min")
+        self.register_parameter("_road_bev_grid", nn.Parameter(grid_t.float()))
+        self.register_buffer("_road_bev_xy_min", xy_min.float(), persistent=True)
+        self._road_bev_cell_size = float(state["cell_size"])
+        self._road_bev_n_channels = int(state["n_channels"])
+
     # ------------------------------------------------------------------ T3.5.b trainer compat
     def build_acc(self, rebuild: bool = True) -> None:
         """Multi-layer: forward build_acc to every particle layer.
@@ -1805,6 +1877,7 @@ class LayeredGaussians(nn.Module):
         # gate); the trainer flips it on at global_step >= track_warmup_steps.
         # Until then this Adam runs but skips params with no grad — no cost.
         self._maybe_setup_track_optim()
+        self._maybe_setup_road_bev_optim()
         if state_dict is not None:
             logger.warning(
                 "LayeredGaussians.setup_optimizer: multi-layer mode ignores "
@@ -1832,6 +1905,9 @@ class LayeredGaussians(nn.Module):
         track_opt = getattr(self, "_track_optim", None)
         if track_opt is not None:
             extras.append(track_opt)
+        road_bev_opt = getattr(self, "_road_bev_optim", None)
+        if road_bev_opt is not None:
+            extras.append(road_bev_opt)
         return _LayeredOptimizerView(self.layers, extra_optimizers=extras)
 
     # ------------------------------------------------------------------ V3-L8/L9
