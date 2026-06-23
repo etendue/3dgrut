@@ -72,11 +72,11 @@ kanban
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
         [E2.7-C dyn features_albedo Fourier→SH 转换（E2.7-B 烟雾感 follow-up）]
-        [E3.3 BEV 纹理平面化（gate E1 锚）]
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
 
     "In Progress"
         [E0.6 官方编辑体验：run-book + 资产 + schema 全就绪，待 GPU 空档]
+        [E3.3 BEV 纹理平面化：Task 0/1 代码+单测 ✅ 2026-06-23（bev_texture + fused_view pre-bake，20 测全绿）；Task 2-3 训练待 E3.6 takeover 前置]
 
     "Blocked"
         [E3.1 ＝v3 P3.4 移交：空气区 penalty（gate E1.1 锚 ✅ + R9 PR24）]
@@ -138,7 +138,7 @@ kanban
 | **E3.1** | E3 | **空气区 penalty** = **v3 P3.4 移交**：路面上方 0.4m~上界悬浮 bg opacity penalty（cuboid actor 豁免），复用 V3-R2 基建 | v3 P3.4 | 1.5 | ⬜ | gate=E1.1 锚 + **R9（PR #24 去留先决）** |
 | **E3.2** | E3 | **road SH 降阶 DC-only（freeze 法）** = **v3 P3.5 移交**：砍 view-dependent 过拟合逃逸通道（路面近似 Lambertian） | v3 P3.5 | 1 | ⬜ | gate 同 E3.1 |
 | **E3.2.5** ★ | E3 | **几何侧硬退化路面（reconstruction-studio 实证路径）**：road 高斯压成真·零厚度水平 disk（z-scale→~1mm floor，非现状 5cm clamp）+ **强制单位旋转锁法线竖直** + position/z-scale/面内旋转梯度冻结 + 颜色保持 DC；前提=先把 road init 提质（LiDAR 累积测量点 / 局部 KNN 中值-平面拟合 Z，替代规则网格单点吸附）。**几何侧根治 aperture problem**，比 E3.3 BEV 纹理轻（纯参数/mask 级，不改渲染路径）。依据：reconstruction-studio 产物 91,008 ground disk（厚 1µm / 法线 100% 竖直 / 点距 10cm / 局部起伏 8mm）横移旋转稳达/超 NuRec；并解释 roadoff freeze 失败=init 不够+未锁法线+未真薄。spec [`2026-06-22-e325-recon-studio-ground-disk-geometry.md`](docs/superpowers/specs/2026-06-22-e325-recon-studio-ground-disk-geometry.md) | reconstruction-studio 交叉分析（2026-06-22 session）| 1.5 | ⬜ | gate=init 提质先行；E3.1 互补；E3.3 降为后备 |
-| **E3.3** ★ | E3 | **BEV 纹理平面化**（v4 backlog 转正）：road 颜色不再 per-gaussian SH，改 BEV feature grid/纹理图采样、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem；ExtraGS Road Surface Gaussians 同思路）；复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | v3 § 5 backlog「外推终极方向」 | 3 | ⬜ | gate=E1 锚 + E3.1/E3.2 结果（短刀够用则缓）。**【2026-06-22 out-of-plan /loop 反哺】road-freeze 控制变量实测证伪「光冻结几何」——冻结 noisy BEV-KNN init 反令 off-track grad_corr 全档变差 −0.05~0.10 → 坐实 ground-mesh init 是冻结生效的前提（高质量 init 才是第一性瓶颈）；per-layer lr 冻结 + MCMC 豁免机制已就位（PR #34），等本任务好 init 即可配套。详见 §5 Done Log** |
+| **E3.3** ★ | E3 | **BEV 纹理平面化**（v4 backlog 转正）：road 颜色不再 per-gaussian SH，改 BEV feature grid/纹理图采样、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem；ExtraGS Road Surface Gaussians 同思路）；复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | v3 § 5 backlog「外推终极方向」 | 3 | 🟡 | **Task 0/1（代码+单测）✅ 2026-06-23（Mac）**：新增 [`bev_texture.py`](threedgrut/model/bev_texture.py)（建 grid / 双线性采样 / RGB→SH DC，11 测）+ [`layered_model.py`](threedgrut/layers/layered_model.py) `fused_view` road 分支 pre-bake 覆盖 `features_albedo`、`features_specular` 置零（9 测）；OFF 字节等价、grad 回流 grid、CUDA kernel 不改；20 新测全绿 + 897 套件回归无破。**Task 2-3（训练验证）待 E3.6 takeover 前置**。gate=E1 锚 + E3.1/E3.2 结果（短刀够用则缓）。**【2026-06-22 out-of-plan /loop 反哺】road-freeze 控制变量实测证伪「光冻结几何」——冻结 noisy BEV-KNN init 反令 off-track grad_corr 全档变差 −0.05~0.10 → 坐实 ground-mesh init 是冻结生效的前提（高质量 init 才是第一性瓶颈）；per-layer lr 冻结 + MCMC 豁免机制已就位（PR #34），等本任务好 init 即可配套。详见 §5 Done Log** |
 | **E3.4** | E3 | （备选）**平面诱导 warp 伪横移一致性 loss**：训练时按路面平面 homography warp 伪横移视角做一致性约束 | v3 § 5 backlog 备选 | 1.5 | ⬜ | E3.3 的轻量替代/前菜 |
 | **E4.1** | E4 | （可选）**LiDAR 点云推理**：按 [`2026-06-10-lidar-pointcloud-from-gs.md`](docs/superpowers/plans/2026-06-10-lidar-pointcloud-from-gs.md) 执行（A0 gate：3DGUT ckpt 能否被 3DGRT 渲 → A1 射线表 → A2 range-L1/出 .ply）；外推的传感器维度（novel 轨迹渲 LiDAR），对标 NuRec LiDAR re-sim | docs/superpowers plan（未执行） | 2.5 | ⬜ | A0 NO-GO 则整线作废（plan 内置判据） |
 
@@ -149,7 +149,7 @@ kanban
 | **E0** ★ | NuRec 工具链复现立锚（**首要**） | 5/7 | ≥2 场景跑通 ✅ + NuRec 锚 ✅ + 配方 diff ✅ + **双向对照 ✅（E0.4 判别数字入 gap 表）** + difix-distill 增益锚 ✅α（E0.7：B 级 Fixer 蒸馏，车道线略好 / interpolated −0.5dB / β 定量待回填）+ 官方编辑能力清单（E0.6 🟡）+ 修复器代际 β' ✅（**2026-06-15 完成**：interpolated 三方 30.30/29.77/29.91，Harmonizer>Fixer 均低于 baseline−0.4；外推档第二层待排期） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | **5/5 ✅** | 3m/6m ✅ + NTA-IoU ✅ + FID/KID ✅ + held-out ✅（真 GT 差距 7.77 dB）+ gap 表收口 ✅（E1.5 重排：E3 先行） | interpolated 全指标不退（已验：avg Δ1.5e-5 / cc 25.79 / grad_corr 0.6931 三点零回归） | ✅ |
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 + viser USDZ 视觉对标 + dyn rigids 接线 + 系统性全替流水线 | 7/10（含 1 备选；E2.8 ✅ 全替+定量+建库） | 同左；**E2.8 ✅ 系统性全替（6 阶段）：USDZ拆→20 AH automobile 全替 + 1 跨源真 bus recon t405→drop 非vehicle→MLP 跨源天空→QA 闸 coverage=1.0 opacity_med 0.10 passed→viser+harmonizer K=4 目测干净（41 测绿：35 e28 + 6 quant；slot-basis/坐标两修）；定量 ✅（NTA 0.085 / novel FID 233；harmonizer before/after FID 233→208 −25、6m −43、「after<before」✅；bg 离轴退化主导、E3.5 floater-prune 续）、bus AH 收割 ✅（重跑 driver AH-match 21 / 跨源 recon 0）**；**E2.1 ✅ 离线 Harmonizer：FID −30%/KID −60%/NTA +35%**；**E2.5 ✅ 目测 spike：harmonizer 协调有效但有限（违和感降低、未完全自然）**；**E2.6 ✅ inceptio 目测通过（V=5 temporal）**；**E2.7 ✅ viser_gui_4d 加载 NVIDIA usdz：路面横向 3m/6m + 360° 不退化**；**E2.7-B ✅ dynamic_rigids 接线（cuboid wireframes + dyn gaussian 位置贴车随 timeline 动，commit 7e5edac；颜色烟雾感转 E2.7-C）**；E2.7-C ⬜ dyn features_albedo Fourier→SH | cc ≥ 24.7 / grad_corr 0.744 不退 | 🟡 |
-| **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | ⬜ |
+| **E3** | 表示侧外推强化（与 E2 互补） | 0/4（含 1 备选；E3.3 代码层 Task0/1 ✅） | 同 E2 验收口径；E3 减伪影产生、E2 修残余 | 同上 | 🟡 |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
 | **总计** | — | **10/23** | — | — | — |
 
@@ -314,6 +314,13 @@ flowchart TD
 - **v3 T15.2**：Fixer 一代已集成（[`correction/difix.py`](threedgrut/correction/difix.py)），E2.1 升级起点；Stage 15 全图蒸馏 +0.30 教训 → E2.2 改打外推档+病灶区。
 
 **新条目（v4 启动后填充，格式：日期 + commit + 实测数）**：
+
+- **2026-06-23 E3.3 BEV 纹理平面化 Task 0/1（代码+单测，本地 TDD，pre-bake 架构；分支 `claude/musing-herschel-d5e4c7`）**。大g 拍板「先落地代码+单测」——只做 spec Task 0/1（spec 自标的最大工程不确定项 kernel vs pre-bake），纯 Mac CPU TDD、不碰 GPU；训练验证（Task 2-3）留待 E3.6 takeover 前置。
+  - **架构决策＝pre-bake（CUDA kernel 不改）**：SH→RGB 在 CUDA kernel 内算、Mac `conftest.py` 把 tracer stub 成 MagicMock → kernel 路线无法本地 TDD；且 `dynamic_rigids` per-track 颜色早有同构先例（`fused_view` 里 `v = v + bias`）。故 road 颜色在 Python 层采 BEV grid → 写回 `features_albedo` DC band、`features_specular` 置零（自动满足 E3.2 DC-only），renderer kernel 零改动。
+  - **Task 0**（新 [`bev_texture.py`](threedgrut/model/bev_texture.py)）：3 纯函数 `build_bev_feature_grid` / `sample_bev_feature`（`F.grid_sample` 双线性，autograd）/ `bev_feature_to_sh_dc`，坐标约定逐字复用 `road_region.build_road_height_field`；11 单测含**轴序钉死**（road-x→H、road-y→W vs grid_sample 反序）+ `gradcheck`。
+  - **Task 1**（改 [`layered_model.py`](threedgrut/layers/layered_model.py)）：`fused_view` 加 road 分支（采 grid 覆盖 albedo / 置零 specular，rebind 非 in-place）+ `_register_road_bev_grid`（road `spec.extra['bev_road_texture']` 开关，默认 OFF）+ grid 建于 `init_layer_from_points('road')` 末尾（用 road 颜色均值 init 平滑接管）；9 单测含 **OFF 字节等价**（disabled_is_identity）+ grad 回流 grid + 不 mutate Parameter + specular 同宽。
+  - **测试**：20 新测全绿（11 Task0 + 9 Task1）；`threedgrut/tests/` 全套 **897 passed**（3 个 pre-existing fail 与本改无关：novel_view modes / v3_metrics / viser_gui_4d `_follow_camera_enabled`，已 git-stash 验证 baseline 同样 fail）。
+  - **边界**：未碰 GPU 训练 / E3.6 takeover / tiny-MLP（C=3 直出 RGB）/ 现有 road yaml 默认值（BEV 是 opt-in 新开关，OFF 时零 schema 变化 → 避开 R9）。完整 ckpt round-trip（元信息重建）留作 Task 1 收尾子步。
 
 - **2026-06-18 E2.8 流水线完成（6 阶段）+ Task 6 定量 QA（分支 `claude/sweet-engelbart-56e3da`，续 06-17 core）**。core（Tasks 0-5）后 9 个 follow-up commit 把流水线从「全替」推到最终 **6 阶段 single-clip scene factory** 并补定量验收。
   - **两条核心正确性修正**（最贵的两个 bug，已登记 v2_architecture §7 不变量）：① **坐标 +translate**（`f0d9aca`）：bg/road gaussians 在 NRE local frame 要 `+(-world_to_nre.translation)`≈+38m；ego(rig c2w)/track poses/dynamic_rigids **不变换**（实测 ego vs baseline NCore 相机旋转差 0.0°、world_to_nre 旋转块=单位阵）。② **slot-basis 铁律**（`adc2a5c`）：dyn `track_ids` 的 slot→tid 必须走 `sorted(viz_4d.tracks.keys())`（layered_model.py:378），不是 `sorted(set(track_order))`；viz_4d 带全部 179 tid、track_order 只是 cuboid 子集 → 两 basis 不一致让每辆车套**错 tid 的 pose**（=最初「cuboid≠asset 90°」真凶）。

@@ -1,7 +1,7 @@
 # E3.3 — BEV 纹理平面化（road 表示侧根治 spike）
 
 - **编号**：E3.3（v4 plan 已立，backlog 转正；本文为执行 spike 提纲）
-- **状态**：⬜ Spike 提纲（待排期）
+- **状态**：🟡 Task 0/1（BEV grid 模块 + 渲染路径接入，代码+单测）✅ 2026-06-23（Mac, pre-bake 架构，20 测全绿）；Task 2-4（spike/全量训练 + 文档）待 E3.6 takeover 前置
 - **一句话目标**：road 颜色从 per-gaussian SH 改为 **BEV feature grid / 纹理图采样**、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem），复刻 NuRec road off-track 不退化的能力。
 
 ---
@@ -54,9 +54,9 @@ E3.1/E3.2 是「短刀」（空气区 penalty + DC-only freeze，把退化曲线
 
 ## 5. TDD 任务拆解骨架
 
-- **Task 0**：BEV feature grid 模块（build / 双线性 sample / 梯度）单测，复用 `road_region.py` grid 约定。
-- **Task 1**：road 渲染颜色路径接 BEV grid（小 fixture，前向 + 反传梯度通），**先定 kernel vs pre-bake**。
-- **Task 2**：小网格短训 spike（inceptio）—— 训练稳定性 + interp 守护线。
+- **Task 0** ✅ 2026-06-23（Mac）：BEV feature grid 模块 [`bev_texture.py`](threedgrut/model/bev_texture.py)（build / 双线性 sample / RGB→SH DC），复用 `road_region.py` grid 约定；11 单测（轴序钉死 + gradcheck）全绿。
+- **Task 1** ✅ 2026-06-23（Mac）：road 渲染颜色路径接 BEV grid——**kernel vs pre-bake 定为 pre-bake**（Mac tracer 被 conftest stub 跑不了 kernel；复用 `dynamic_rigids` per-track bias 同构先例）。`fused_view` road 分支采 grid 覆盖 `features_albedo`、`features_specular` 置零；9 单测（OFF 字节等价 + grad 回流 grid + 不 mutate）全绿。
+- **Task 2**：小网格短训 spike（inceptio）—— 训练稳定性 + interp 守护线。**待 E3.6 road 层 takeover 前置**（本 spec §1.4）。
 - **Task 3**：全量训 + E1 外推指标（3m/6m lane grad_corr / band_psnr）。
 - **Task 4**：文档回填（plan §6 Done Log + arch 文件清单/不变量）。
 

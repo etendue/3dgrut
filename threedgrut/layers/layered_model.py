@@ -31,6 +31,11 @@ import torch
 import torch.nn as nn
 
 from threedgrut.layers.layer_spec import LayerSpec
+from threedgrut.model.bev_texture import (
+    build_bev_feature_grid,
+    sample_bev_feature,
+    bev_feature_to_sh_dc,
+)
 from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.model.track_albedo_fourier import (
     fourier_albedo_bias,
@@ -1025,6 +1030,12 @@ class LayeredGaussians(nn.Module):
                 getattr(self, "_track_log_scale_table", None)
                 if apply_dyn_bias else None
             )
+            # E3.3: road BEV texture grid (pre-bake colour) applies only to the
+            # road layer, and only when registered (spec.extra bev_road_texture).
+            apply_road_bev = (
+                spec.name == "road"
+                and getattr(self, "_road_bev_grid", None) is not None
+            )
             # P1.3b: resolve the current camera-frame index ``t`` and total
             # frame count ``N_t`` once, for the Fourier albedo evaluation.
             # Reuses the same pose-index resolution as the dynamic transform
@@ -1086,6 +1097,30 @@ class LayeredGaussians(nn.Module):
                             layer.track_ids.to(albedo_table.device)
                         ]
                     v = v + bias.to(v.device, v.dtype)
+                elif (
+                    n == "features_albedo"
+                    and apply_road_bev
+                    and v.shape[0] > 0
+                ):
+                    # E3.3: road colour from a learnable BEV feature grid
+                    # (pre-bake). Sample the grid at each road gaussian's XY and
+                    # write it into the DC SH band, replacing per-gaussian SH so
+                    # road colour is a planar 2D texture → any extrapolated view
+                    # is just a resample of the same plane (no aperture blow-up).
+                    bev = sample_bev_feature(
+                        layer.positions[:, :2].detach(),
+                        self._road_bev_struct(),
+                    )
+                    v = bev_feature_to_sh_dc(bev).to(v.device, v.dtype)
+                elif (
+                    n == "features_specular"
+                    and apply_road_bev
+                    and v.shape[0] > 0
+                ):
+                    # E3.3: DC-only — zero the road specular band. Keep its width
+                    # (the fused renderer requires a uniform specular width
+                    # across particle layers; see LayerSpec.sh_degree note).
+                    v = torch.zeros_like(v)
                 elif (
                     n == "scale"
                     and log_scale_table is not None
@@ -1389,6 +1424,13 @@ class LayeredGaussians(nn.Module):
         if track_ids is not None:
             layer.register_buffer("track_ids", track_ids.long(), persistent=True)
 
+        # E3.3: build the road BEV texture grid once the road layer's points
+        # (and colours) are materialised. No-op unless spec.extra enables it
+        # (bev_road_texture); colours seed the grid for a smooth takeover.
+        if layer_name == "road":
+            self._register_road_bev_grid(road_positions=positions,
+                                         road_colors=colors)
+
     def _apply_scale_lr_mult(self, layer: MixtureOfGaussians, spec: LayerSpec) -> None:
         """Multiply this layer's 'scale' param-group lr by ``spec.scale_lr_mult``.
 
@@ -1644,6 +1686,59 @@ class LayeredGaussians(nn.Module):
                                                  device=device))
             log_scale.requires_grad_(False)
             self.register_parameter("_track_log_scale_table", log_scale)
+
+    # ------------------------------------------------------------------ E3.3 road BEV texture
+    def _register_road_bev_grid(self, road_positions=None,
+                                road_colors=None) -> None:
+        """E3.3: register a learnable BEV feature grid for the road layer.
+
+        Idempotent. Gated by road ``spec.extra['bev_road_texture']`` (default
+        OFF → no Parameter added, byte-identical to pre-E3.3). When ON, build
+        the grid over the road XY extent (init at the road colour mean for a
+        smooth takeover) and register it as Parameter ``_road_bev_grid`` plus a
+        persistent ``_road_bev_xy_min`` buffer and scalar meta attrs. The
+        ``fused_view`` road branch samples it to override ``features_albedo``.
+        """
+        spec = next((s for s in self.specs if s.name == "road"), None)
+        if spec is None:
+            return
+        extra = getattr(spec, "extra", {}) or {}
+        if not extra.get("bev_road_texture"):
+            return  # OFF → byte-identical schema
+        if road_positions is None:
+            layer = self.layers.get("road")
+            if layer is None:
+                return
+            road_positions = layer.positions.detach()
+        cell_size = float(extra.get("bev_cell_size", 1.0))
+        n_channels = int(extra.get("bev_channels", 3))
+        struct = build_bev_feature_grid(
+            road_positions, cell_size=cell_size,
+            n_channels=n_channels, init_rgb=road_colors,
+        )
+        if hasattr(self, "_road_bev_grid"):
+            delattr(self, "_road_bev_grid")
+        if hasattr(self, "_road_bev_xy_min"):
+            delattr(self, "_road_bev_xy_min")
+        self.register_parameter("_road_bev_grid", struct["grid"])
+        self.register_buffer("_road_bev_xy_min", struct["xy_min"],
+                             persistent=True)
+        self._road_bev_cell_size = struct["cell_size"]
+        self._road_bev_n_channels = struct["n_channels"]
+
+    def _road_bev_struct(self) -> dict:
+        """Reassemble the grid_struct dict that ``bev_texture.sample_*`` expects
+        from the registered Parameter / buffer / meta attrs. H, W are read off
+        the grid shape so a checkpoint-loaded grid needs no extra metadata."""
+        grid = self._road_bev_grid
+        return {
+            "grid": grid,
+            "xy_min": self._road_bev_xy_min,
+            "cell_size": self._road_bev_cell_size,
+            "H": grid.shape[2],
+            "W": grid.shape[3],
+            "n_channels": self._road_bev_n_channels,
+        }
 
     # ------------------------------------------------------------------ T3.5.b trainer compat
     def build_acc(self, rebuild: bool = True) -> None:

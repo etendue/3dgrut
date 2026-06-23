@@ -427,6 +427,7 @@ flowchart TB
 | `threedgrut/model/layered_loss.py` | T3.4 ✅ (9077fd6, region-weighted L1 纯函数) |
 | `threedgrut/model/road_reg.py` | **V3-R1.2/1.3 ✅ (75ab6f9, clamp_layer_scales + compute_effective_rank_loss + compute_depth_tv_loss 纯函数)** —— road scale clamp（实测生效但 novel-view null）|
 | `threedgrut/model/road_region.py` | **V3-R2 ✅ (7bf4992, build_road_height_field + query_ground_z + compute_bg_road_opacity_penalty)** —— bg-in-road opacity penalty，**首个真正有效改动**：5k A/B 路面 bg 粒子 −86%、road opacity +28% 反超主导、cc_psnr_masked +0.65 dB；镜像 bg_cuboid_loss.py |
+| `threedgrut/model/bev_texture.py` | **E3.3 Task0 ✅ (2026-06-23, build_bev_feature_grid + sample_bev_feature[F.grid_sample 双线性] + bev_feature_to_sh_dc，纯函数)** —— road 颜色 BEV 平面纹理（pre-bake，外推天然正确）；坐标约定逐字复用 road_region；11 单测（轴序钉死 + gradcheck），test_bev_texture.py |
 | `threedgrut/model/pose_anchor.py` | **P1.2 ✅ (2026-06-06, compute_pose_boundary_loss 首/末活跃帧锚 GT + compute_pose_prior_loss 全帧软 L2，旋转矩阵 Frobenius²，纯函数)** —— 修 track-pose 漂移；30k A/B fix 三者最优 class25.07/cc26.06（−0.61 未在本配方复现）|
 | `threedgrut/model/track_albedo_fourier.py` | **P1.3b ✅ (2026-06-06, fourier_albedo_bias Σ f_i·cos(iπt/N_t) + upgrade_albedo_table ckpt 升降维，纯函数)** —— 4D-SH 时变 albedo；A/B k4 24.13 vs DC k1 24.20 **无增益**，default k1 关、gated 留未来 |
 | `threedgrut/model/plane_warp.py` | **E1.1 ✅ (2026-06-12, ftheta_project_points + build_plane_warp + warp_image 纯函数)** —— 平面诱导 warp 伪 GT：novel 像素射线↔road 高度场定点求交→FTheta 投回原相机；novel lane 指标内核（render.py + eval_frames_dir 共用） |
@@ -557,6 +558,8 @@ flowchart TB
 | `MCMCStrategy._get_add_cap()` 默认等于 conf 值 | T2.1 ✅ | `test_mcmc_get_add_cap_defaults_to_conf` (Mac, 62fc509) |
 | LayeredMCMC sub_strategies 仅含粒子层 | T2.2 ✅ | `test_layered_mcmc_holds_sub_strategy_per_particle_layer` (Mac, 7ad883b) |
 | LayeredMCMC 每层 cap = spec.max_n_particles | T2.2 ✅ | `test_layered_mcmc_sub_uses_per_layer_cap` (Mac, 7ad883b) |
+| **E3.3 road BEV 纹理 pre-bake**：road `spec.extra['bev_road_texture']` ON 时 `fused_view` road 切片 `features_albedo` = BEV grid 双线性采样→SH DC、`features_specular` 置零（DC-only），CUDA kernel 不改；grad 回流 grid Parameter、不 mutate 原 Parameter | E3.3 Task0/1 ✅ (2026-06-23, Mac) | `test_bev_road_color.py` 9 测 + `test_bev_texture.py` 11 测（轴序钉死 + gradcheck） |
+| **E3.3 OFF 字节等价**：`bev_road_texture` 默认 OFF → 不注册 `_road_bev_grid`、`fused_view` road 切片 ≡ 原 Parameter（现有 multilayer 训练零影响、避开 R9） | E3.3 Task1 ✅ (2026-06-23, Mac) | `test_disabled_is_identity` + `test_bev_grid_not_registered_when_disabled` |
 | LayeredMCMC 单层时 ≡ v1 MCMCStrategy (sub.model is layer MoG, 结构性) | T2.2 ✅ | `test_layered_mcmc_single_bg_uses_one_sub_strategy` (Mac, 7ad883b, renamed 04c9174) |
 | LayeredMCMC + v1 ckpt resume 端到端 byte-identical PSNR | Stage 2 出口 ✅ | A800 1k step 验证 24.123 dB（2026-05-18, df1e87d）；8 帧序列与 T1.2 baseline 完全一致 |
 | sub.model 与各层 MoG identity 绑定（跨层无迁移结构性保证） | T2.4 ✅ | `test_no_cross_layer_migration_structural` (Mac, 04c9174) |
