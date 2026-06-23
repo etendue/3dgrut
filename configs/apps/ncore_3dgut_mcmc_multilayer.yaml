@@ -88,6 +88,20 @@ layers:
       track_albedo_lr: 1.0e-5
       track_scale_lr: 1.0e-5
 
+    # ─── E3.2.5 几何侧硬退化路面 roaddisk bundle 转正 baseline（2026-06-23 大g）─
+    # 6k A/B 实测 on>off（cc +0.41 / lateral lane grad_corr +0.04~0.06 / freeze
+    # 铁证 rotation tilt 0°·z 1mm·N 恒定，recon-studio ground-disk 对齐）→ road
+    # 几何硬退化默认进 baseline。原 preset ncore_3dgut_mcmc_multilayer_roaddisk.yaml
+    # 降为冗余（baseline 已含同 bundle）。
+    # 注：takeover（bg_road_penalty 调强压 bg）三档 λ0.1/0.2/0.4 实测白条均没收回
+    # road 层 + 守护线 cc 噪声到负（λ0.2 退 −0.49）→ 不进 baseline，penalty 保持
+    # 下方 trainer.bg_road_penalty λ0.1/z_band0.4 现状。白条 bg→road 另立遗留任务。
+    road:
+      road_init_knn_k: 5           # ① KNN-k 中值 init 提质（滤离群尖刺，对齐 recon-studio 起伏 8mm 致密毯）
+      scale_z_max: 0.001           # ② 1mm 真薄盘（z 厚度 clamp 上界，覆盖 registry 默认 5cm）
+      positions_lr: 1.0e-6         # ③a position 软冻结
+      freeze_rotation_grad: true   # ③b rotation 硬冻结（layered_mcmc._post_backward grad-zero 锁法线竖直）
+
 # ─── 数据集 (T8.5.7 / V3-E4 切到对称 5-cam ring) ────────────────────────
 dataset:
   load_aux_masks: true   # T3.1.b: sseg + lidar-sseg readers (v2_road)
@@ -199,5 +213,9 @@ viz_4d:
 # ─── strategy 微调 (源自 v2_full_4dviz_dynfix.yaml) ─────────────────────
 # /strategy: layered_mcmc 已通过 defaults 加载, 此处只 override 单字段.
 strategy:
+  # E3.2.5 roaddisk 转正 baseline（2026-06-23）：road 层 MCMC 整层豁免（no add/
+  # relocate/perturb/prune），road 粒子集恒定，配合 position 软冻 + rotation 硬冻
+  # 锁死几何（recon-studio「永不裁剪」对齐）。
+  exclude_layer_ids: [road]
   relocate:
     max_relocation_fraction: 0.4   # dynfix: 90% 死时 dyn 不会瞬间团聚
