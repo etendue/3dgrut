@@ -89,6 +89,10 @@ def _bypass_init_viewer(viewer_cls, *, meta):
     viewer.meta = meta
     viewer._t_us_current = meta.t_us_first
     viewer._follow_ego_enabled = False
+    # VIZ.3 follow-camera fields that _on_time_change references; the real
+    # __init__ sets these (viser_gui_4d.py:117/120) but we bypass it here.
+    viewer._follow_camera_enabled = False
+    viewer._current_dropdown_cam = None
     viewer.h_ego_frustum = None
     # Fake server with mutable clients dict.
     fake_client = SimpleNamespace(camera=SimpleNamespace(
