@@ -72,7 +72,6 @@ kanban
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
         [E2.7-C dyn features_albedo Fourier→SH 转换（E2.7-B 烟雾感 follow-up）]
-        [E3.2.6 takeover 调强 spike（E3.2.5 viser follow-up）：车道线白条被 bg 抢→调强 bg_road_penalty λ0.4 z_band1.5 收回 road；driver 就位、gate E3.2.5 ✅]
         [E3.3 BEV 纹理平面化（gate E1 锚）]
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
 
@@ -84,6 +83,7 @@ kanban
         [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate 同 E3.1）]
 
     "Done"
+        [E3.2.6 takeover 调强 spike ✅ 否定 2026-06-23：B λ0.4/z1.5 vs A λ0.1 — viser 视觉白条没收回 road + 定量 cc 24.01→23.78（−0.23）/ lane −0.01 三条验收全否；机制＝冻结 road（MCMC 豁免）无 densify 接管力 + 粗网格 DC 表达不了细白条 → takeover 与几何冻结互斥，白条转 E3.3 BEV 纹理]
         [E3.2.5 几何硬退化 disk ✅ spike 2026-06-22→23：6k A/B on＞off（守护线 cc +0.41 / lateral lane grad_corr +0.04~0.06 / freeze 铁证 rot 0°·z 1mm·N 恒定）→ 反驳 roadoff「光冻结变差」；viser 视觉 on 斑马线分明、白条被 bg 抢→E3.2.6；30k 全量待排期]
         [E2.8 系统性 rigid 全替流水线 ✅ 2026-06-17→18 6 阶段：USDZ拆→全 active/附近 vehicle replace+insert（20 AH automobile + 1 跨源真 bus recon t405）→drop 非vehicle→MLP 跨源天空→QA 闸；端到端实测 coverage=1.0、opacity_med 0.10、QA passed、viser+harmonizer K=4 RTT~1s 0 OOM；slot-basis 铁律 adc2a5c + 坐标 +translate f0d9aca 两修；41 测全绿（35 e28 + 6 quant）；Task6 定量 raw ✅（NTA 0.085 / novel FID 233，bg 离轴涂抹主导、几何有效，harmonizer before/after ✅ FID 233→208 −25、6m −43）、Task7 bus AH 收割 ✅（asset-harvester 收 bus/405+truck/165 干净 AH 资产入 bank → 重跑 driver AH-match 21 / 跨源 recon 0、bus recon→AH 自动切、packed_ckpt_busah.pt）]
         [E2.5 编辑协调 spike ✅ 2026-06-17：AH 车 frozen 注入取代 recon 车 + viser+harmonizer 实时协调目测——harmonizer 协调有效但有限（违和感降低、优于无 harmonizer、未完全自然）；定量 NTA-IoU FID 跳过留 v5]
@@ -140,7 +140,7 @@ kanban
 | **E3.1** | E3 | **空气区 penalty** = **v3 P3.4 移交**：路面上方 0.4m~上界悬浮 bg opacity penalty（cuboid actor 豁免），复用 V3-R2 基建 | v3 P3.4 | 1.5 | ⬜ | gate=E1.1 锚 + **R9（PR #24 去留先决）** |
 | **E3.2** | E3 | **road SH 降阶 DC-only（freeze 法）** = **v3 P3.5 移交**：砍 view-dependent 过拟合逃逸通道（路面近似 Lambertian） | v3 P3.5 | 1 | ⬜ | gate 同 E3.1 |
 | **E3.2.5** ★ | E3 | **几何侧硬退化路面（reconstruction-studio 实证路径）**：road 高斯压成真·零厚度水平 disk（z-scale→~1mm floor，非现状 5cm clamp）+ **强制单位旋转锁法线竖直** + position/z-scale/面内旋转梯度冻结 + 颜色保持 DC；前提=先把 road init 提质（LiDAR 累积测量点 / 局部 KNN 中值-平面拟合 Z，替代规则网格单点吸附）。**几何侧根治 aperture problem**，比 E3.3 BEV 纹理轻（纯参数/mask 级，不改渲染路径）。依据：reconstruction-studio 产物 91,008 ground disk（厚 1µm / 法线 100% 竖直 / 点距 10cm / 局部起伏 8mm）横移旋转稳达/超 NuRec；并解释 roadoff freeze 失败=init 不够+未锁法线+未真薄。spec [`2026-06-22-e325-recon-studio-ground-disk-geometry.md`](docs/superpowers/specs/2026-06-22-e325-recon-studio-ground-disk-geometry.md) | reconstruction-studio 交叉分析（2026-06-22 session）| 1.5 | ✅ spike | **6k A/B ✅（代码 commit `2374161`）**：on（roaddisk）vs off（multilayer）inceptio depth-off 单变量 — 守护线 cc 24.01 vs 23.60（**+0.41 不退反升**）/ lateral lane grad_corr +0.057@3m +0.039@6m / band_lpips 降；freeze 铁证 rotation tilt 0°·z 1mm·N 200000 恒定（recon-studio 对齐）；viser 视觉确认 on 路面锐利斑马线分明；**反驳 roadoff「光冻结变差」**（补齐 init+薄盘+法线锁后冻结转改善）。30k 全量待排期；发现白条被 bg 抢 → E3.2.6 follow-up |
-| **E3.2.6** | E3 | **road-takeover 调强 spike**（E3.2.5 viser 视觉 follow-up）：roaddisk viser 对比发现车道线白条被 bg「抢走」（road-only 视图缺白条、开 bg 才补上 → 白条渲染权在 bg 不在 road）。调强现有 `bg_road_penalty`（λ 0.1→0.4 / z_band 0.4→1.5）跑 A/B，验证 takeover 够强能否把白条从 bg 收回 road。driver [`scripts/e325_takeover_ab.sh`](scripts/e325_takeover_ab.sh) 已就位；对照 `e325_g2_on`（λ0.1）。**E3.1（完整空气区 penalty）的轻量前菜** | E3.2.5 viser 视觉 follow-up（2026-06-23 大g） | 0.5 | ⬜ | gate=E3.2.5 ✅；验收=road-only 白条收回 road + lateral lane 不退 + 守护线 cc 别过压 |
+| **E3.2.6** | E3 | **road-takeover 调强 spike**（E3.2.5 viser 视觉 follow-up）：roaddisk viser 对比发现车道线白条被 bg「抢走」（road-only 视图缺白条、开 bg 才补上 → 白条渲染权在 bg 不在 road）。调强现有 `bg_road_penalty`（λ 0.1→0.4 / z_band 0.4→1.5）跑 A/B，验证 takeover 够强能否把白条从 bg 收回 road。driver [`scripts/e325_takeover_ab.sh`](scripts/e325_takeover_ab.sh) 已就位；对照 `e325_g2_on`（λ0.1）。**E3.1（完整空气区 penalty）的轻量前菜** | E3.2.5 viser 视觉 follow-up（2026-06-23 大g） | 0.5 | ✅ spike（否定）| gate=E3.2.5 ✅；**否定结论（2026-06-23，纯实验无新代码，driver 随 #35 入库）**：B（λ0.4/z1.5）vs A（λ0.1）6k — viser 视觉白条**没收回 road** + 定量 lane grad_corr −0.009@3m/−0.012@6m + 守护线 cc 24.01→23.78（−0.23 过压 bg），三条验收全否。机制＝roaddisk exclude_layer_ids=[road] MCMC 豁免 → road 无 densify 接管力 + 10cm 粗网格 DC 表达不了细白条 → takeover 与几何冻结**互斥**；白条所有权转 E3.3 BEV 纹理 |
 | **E3.3** ★ | E3 | **BEV 纹理平面化**（v4 backlog 转正）：road 颜色不再 per-gaussian SH，改 BEV feature grid/纹理图采样、真正贴在高度场平面 → **外推天然正确**（参数化级根治 aperture problem；ExtraGS Road Surface Gaussians 同思路）；复用 [`road_region.py`](threedgrut/model/road_region.py) BEV 网格基建 | v3 § 5 backlog「外推终极方向」 | 3 | ⬜ | gate=E1 锚 + E3.1/E3.2 结果（短刀够用则缓）。**【2026-06-22 out-of-plan /loop 反哺】road-freeze 控制变量实测证伪「光冻结几何」——冻结 noisy BEV-KNN init 反令 off-track grad_corr 全档变差 −0.05~0.10 → 坐实 ground-mesh init 是冻结生效的前提（高质量 init 才是第一性瓶颈）；per-layer lr 冻结 + MCMC 豁免机制已就位（PR #34），等本任务好 init 即可配套。详见 §5 Done Log** |
 | **E3.4** | E3 | （备选）**平面诱导 warp 伪横移一致性 loss**：训练时按路面平面 homography warp 伪横移视角做一致性约束 | v3 § 5 backlog 备选 | 1.5 | ⬜ | E3.3 的轻量替代/前菜 |
 | **E4.1** | E4 | （可选）**LiDAR 点云推理**：按 [`2026-06-10-lidar-pointcloud-from-gs.md`](docs/superpowers/plans/2026-06-10-lidar-pointcloud-from-gs.md) 执行（A0 gate：3DGUT ckpt 能否被 3DGRT 渲 → A1 射线表 → A2 range-L1/出 .ply）；外推的传感器维度（novel 轨迹渲 LiDAR），对标 NuRec LiDAR re-sim | docs/superpowers plan（未执行） | 2.5 | ⬜ | A0 NO-GO 则整线作废（plan 内置判据） |
@@ -152,9 +152,9 @@ kanban
 | **E0** ★ | NuRec 工具链复现立锚（**首要**） | 5/7 | ≥2 场景跑通 ✅ + NuRec 锚 ✅ + 配方 diff ✅ + **双向对照 ✅（E0.4 判别数字入 gap 表）** + difix-distill 增益锚 ✅α（E0.7：B 级 Fixer 蒸馏，车道线略好 / interpolated −0.5dB / β 定量待回填）+ 官方编辑能力清单（E0.6 🟡）+ 修复器代际 β' ✅（**2026-06-15 完成**：interpolated 三方 30.30/29.77/29.91，Harmonizer>Fixer 均低于 baseline−0.4；外推档第二层待排期） | — | 🟡 |
 | **E1** ★ | 外推测量门（gate 后续一切） | **5/5 ✅** | 3m/6m ✅ + NTA-IoU ✅ + FID/KID ✅ + held-out ✅（真 GT 差距 7.77 dB）+ gap 表收口 ✅（E1.5 重排：E3 先行） | interpolated 全指标不退（已验：avg Δ1.5e-5 / cc 25.79 / grad_corr 0.6931 三点零回归） | ✅ |
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 + viser USDZ 视觉对标 + dyn rigids 接线 + 系统性全替流水线 | 7/10（含 1 备选；E2.8 ✅ 全替+定量+建库） | 同左；**E2.8 ✅ 系统性全替（6 阶段）：USDZ拆→20 AH automobile 全替 + 1 跨源真 bus recon t405→drop 非vehicle→MLP 跨源天空→QA 闸 coverage=1.0 opacity_med 0.10 passed→viser+harmonizer K=4 目测干净（41 测绿：35 e28 + 6 quant；slot-basis/坐标两修）；定量 ✅（NTA 0.085 / novel FID 233；harmonizer before/after FID 233→208 −25、6m −43、「after<before」✅；bg 离轴退化主导、E3.5 floater-prune 续）、bus AH 收割 ✅（重跑 driver AH-match 21 / 跨源 recon 0）**；**E2.1 ✅ 离线 Harmonizer：FID −30%/KID −60%/NTA +35%**；**E2.5 ✅ 目测 spike：harmonizer 协调有效但有限（违和感降低、未完全自然）**；**E2.6 ✅ inceptio 目测通过（V=5 temporal）**；**E2.7 ✅ viser_gui_4d 加载 NVIDIA usdz：路面横向 3m/6m + 360° 不退化**；**E2.7-B ✅ dynamic_rigids 接线（cuboid wireframes + dyn gaussian 位置贴车随 timeline 动，commit 7e5edac；颜色烟雾感转 E2.7-C）**；E2.7-C ⬜ dyn features_albedo Fourier→SH | cc ≥ 24.7 / grad_corr 0.744 不退 | 🟡 |
-| **E3** | 表示侧外推强化（与 E2 互补） | 1/5（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余；**E3.2.5 ✅ spike 几何硬退化 disk：6k A/B on>off（cc +0.41 / lateral lane grad_corr +0.04~0.06 / freeze 铁证 rot 0°·z 1mm·N 恒定）→ 反驳 roadoff「光冻结变差」；viser 视觉确认 on 斑马线分明，发现白条被 bg 抢 → E3.2.6 takeover 调强 follow-up** | 同上 | 🟡 |
+| **E3** | 表示侧外推强化（与 E2 互补） | 2/6（含 1 备选） | 同 E2 验收口径；E3 减伪影产生、E2 修残余；**E3.2.5 ✅ spike 几何硬退化 disk：6k A/B on>off（cc +0.41 / lateral lane grad_corr +0.04~0.06 / freeze 铁证 rot 0°·z 1mm·N 恒定）→ 反驳 roadoff「光冻结变差」**；**E3.2.6 ✅ spike 否定 2026-06-23：takeover 调强 λ0.4/z1.5 vs λ0.1 — 视觉白条没收回 road + cc −0.23 / lane 略退，三条全否；机制＝冻结 road MCMC 豁免无 densify 接管力 → takeover 与几何冻结互斥，白条转 E3.3** | 同上 | 🟡 |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
-| **总计** | — | **11/24** | — | — | — |
+| **总计** | — | **12/25** | — | — | — |
 
 > **v4 gap 表（E0.4 + E1.5 回填，格式预置）**：
 > | 轴 | 3dgrut2 锚（E1） | NuRec 锚（E0.4） | 差距 | E2/E3 后 |
@@ -470,6 +470,14 @@ flowchart TD
   - **freeze/clamp 端到端铁证**（on ckpt 200000 road，`scripts/verify_road_freeze.py`）：rotation tilt-from-identity **mean/p95/max = 0.0°**（法线竖直锁死，Adam 零漂移 → 证 grad-zero 强于 lr 压）/ z-scale **max/p95/median = 1.00mm**（clamp）/ road **N=200000 恒定**（exclude 无 densify）→ 对齐 recon-studio 法线 100% 竖直 + 零厚度 + 永不裁剪。
   - **viser 视觉对标（大g 2026-06-23）**：on 路面锐利、斑马线分明（定性印证 grad_corr +0.057）；road-only vs +bg 对比发现**车道线白条部分被 bg「抢走」**（白条渲染权落 bg 层不在 road）→ road/bg 所有权耦合，是 E3.2.5 几何管不到的另一半 → 衍生 **E3.2.6**（takeover 调强 spike）/ E3.1（空气区 penalty）。
   - **核心结论**：正面反驳 roadoff「光冻结几何变差」（§5 2026-06-22 out-of-plan 条目：冻结 noisy init → off-track grad_corr 全档 −0.05~0.10）——补齐 init 提质（KNN 中值）+ 真薄盘（1mm）+ 法线锁（rotation 硬冻结）三前提后，road 冻结翻转为 lateral lane grad_corr +0.04~0.06。**几何侧硬退化方向坐实，6k spike 通过，30k 全量待排期**。
+
+- **2026-06-23 E3.2.6 完成（road-takeover 调强 spike，**否定结论**；纯实验无新代码——driver `scripts/e325_takeover_ab.sh` 已随 E3.2.5 #35（commit `2374161`/`e9b5c54`）入库；inceptio worktree e325，depth-off + nw=10，clip 9ae151dc）** — 验证调强 `bg_road_penalty`（λ 0.1→0.4 / z_band 0.4→1.5）能否把车道线白条从 bg 收回 road 层（E3.2.5 viser 发现白条被 bg 抢）。
+  - **A/B（6k spike，B=`e325_takeover` λ0.4/z1.5 vs A=`e325_g2_on` λ0.1/z0.4 复用 E3.2.5 ckpt，inceptio depth-off 同口径）**：lane grad_corr @3m **0.4224→0.4131（−0.009）** / @6m **0.3091→0.2968（−0.012）**；守护线 cc_psnr_masked **24.01→23.78（−0.23，过压 bg）**；class_psnr 21.62→21.67、band_lpips 持平。
+  - **viser 视觉（大g 2026-06-23，8090 端口）**：白条**仍没收回 road** → takeover 无效。
+  - **三条验收（白条收回 road / lateral lane 不退 / 守护线 cc 别过压）全否 → 调强 takeover 否定**。
+  - **机制（代码依据）**：`bg_road_penalty` 设计＝压 bg opacity → MCMC relocate → road 接管；但 E3.2.5 roaddisk `strategy.exclude_layer_ids=[road]` **MCMC 豁免 road** → road 粒子集恒定（N=200000）无 densify 能力「长出」白条粒子接管；且 road 10cm 粗网格 + per-gaussian DC 颜色表达不了细白条高频（白条宽≈网格距、被沥青色平均稀释）。**takeover（road 接管）与 E3.2.5 road 几何冻结本质互斥**——冻结换来几何外推稳定（E3.2.5 cc +0.41 / lane +0.04~0.06），代价是剥夺 road 接管白条能力。
+  - **结论 + 指向**：白条所有权是**参数化级问题** → E3.3 BEV 纹理（白条作高分辨率纹理图采样，非 per-gaussian DC），不是 opacity penalty 调强能解。E3.2.6 作为「E3.1 轻量前菜」给出否定 → 直接指向 E3.3。
+  - **附带工具链坑（viser worktree import，本次已绕过）**：`python threedgrut_playground/viser_gui_4d.py` 从子目录启动 → `sys.path[0]=playground/`、worktree 根不在 path → `import threedgrut` 落到主仓库 `~/repo/3dgrut2` 旧版（无 E3.2.5 LayerSpec 新字段 `road_init_knn_k`）→ 加载 roaddisk ckpt 报 `ValueError: Unknown LayerSpec field`。train.py 在 worktree 根跑无此问题。**修复＝启动加 `PYTHONPATH=<worktree根>`**。E2.7/E2.8 ckpt 无新字段故未暴露；建议回补 viser-gui-4d skill gotchas。
 
 ## 6. 文档关系速查
 
