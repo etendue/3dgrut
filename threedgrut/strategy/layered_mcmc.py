@@ -78,6 +78,35 @@ class LayeredMCMCStrategy(BaseStrategy):
         for sub in self.sub_strategies.values():
             sub.init_densification_buffer(checkpoint)
 
+    def _post_backward(
+        self, step: int, scene_extent: float, train_dataset, batch=None, writer=None
+    ) -> bool:
+        """E3.2.5③b: zero rotation grads for layers with freeze_rotation_grad.
+
+        Runs after loss.backward() and BEFORE optimizer.step()/zero_grad()
+        (trainer post_backward seam). Zeroing the grad here kills BOTH the
+        gradient step AND the Adam momentum source, truly locking the road
+        disc's identity-quat (normal vertical) — the recon-studio
+        ``zero_ground_gradients`` equivalent that lr-override alone cannot
+        achieve (a 1e-4 rotation lr still drifts via Adam momentum over 30k
+        steps; spec §5 lists "未锁法线 → disc tilts" as a roadoff-freeze
+        failure cause). Default (every spec freeze_rotation_grad=False) →
+        byte-identical no-op. Returns False (no scene-structure change).
+        """
+        layers = getattr(self.model, "layers", None)
+        if layers is None:
+            return False
+        for spec in self.specs:
+            if not getattr(spec, "freeze_rotation_grad", False):
+                continue
+            layer = layers.get(spec.name) if hasattr(layers, "get") else layers[spec.name]
+            if layer is None:
+                continue
+            rot = getattr(layer, "rotation", None)
+            if rot is not None and rot.grad is not None:
+                rot.grad.zero_()
+        return False
+
     def _post_optimizer_step(
         self, step: int, scene_extent: float, train_dataset, batch=None, writer=None
     ) -> bool:
