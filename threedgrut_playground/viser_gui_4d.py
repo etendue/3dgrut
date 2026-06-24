@@ -1702,6 +1702,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
             NCoreDataset(
                 datapath=str(dataset_path), split="train", device="cpu",
                 sample_full_image=True, camera_ids=None, load_aux_masks=False,
+                n_val_image_subsample=1,
             )
             all_cam_ids = ["camera_front_wide_120fov"]  # single-sensor clip
         except ValueError as err:
@@ -1716,6 +1717,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
             datapath=str(dataset_path), split="train", device="cpu",
             sample_full_image=True,
             camera_ids=all_cam_ids, load_aux_masks=False,
+            n_val_image_subsample=1,
         )
         out: dict[str, dict] = {}
         end_col = int(ncore.data.FrameTimepoint.END)
