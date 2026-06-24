@@ -1825,6 +1825,7 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
         train_ds = NCoreDataset(
             datapath=str(dataset_path), split="train", device="cpu",
             sample_full_image=True, camera_ids=None, load_aux_masks=False,
+            n_val_image_subsample=1,
         )
     except ValueError as _err:
         _msg = str(_err)
@@ -1836,7 +1837,7 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
         train_ds = NCoreDataset(
             datapath=str(dataset_path), split="train", device="cpu",
             sample_full_image=True, camera_ids=_all_cam_ids,
-            load_aux_masks=False,
+            load_aux_masks=False, n_val_image_subsample=1,
         )
     specs = specs_from_config(conf)
     model = LayeredGaussians(conf, specs=specs, scene_extent=1.0)
