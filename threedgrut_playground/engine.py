@@ -1124,9 +1124,19 @@ class Engine3DGRUT:
                     # raygen would hit. rays_dir comes from NCore SDK's
                     # rational distortion inverse (pre-computed at
                     # _load_multi_cam_poses time, matches training contract).
+                    # tracer.py __create_camera_parameters passes these dict
+                    # values STRAIGHT into
+                    # _3dgut_plugin.fromOpenCVPinholeCameraModelParameters,
+                    # whose pybind signature wants FixedSize Python sequences
+                    # (numpy arrays are accepted — cf. the intrinsics 4-tuple
+                    # branch that calls np.array(...)). CUDA tensors raise
+                    # ``TypeError: incompatible function arguments`` and crashed
+                    # the LayeredGaussians OpenCVPinhole render path on connect.
+                    # _load_multi_cam_poses already builds these as numpy; keep
+                    # them CPU/numpy here (only pull any torch tensor back).
                     opencv_pinhole_intrinsics_t = {
-                        k: (torch.as_tensor(v, device=rays_ori.device)
-                            if isinstance(v, np.ndarray) else v)
+                        k: (v.detach().cpu().numpy()
+                            if isinstance(v, torch.Tensor) else v)
                         for k, v in opencv_pinhole_intrinsics.items()
                     }
                     rays_dir_use = torch.from_numpy(opencv_pinhole_rays).to(

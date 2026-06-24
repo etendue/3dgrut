@@ -23,7 +23,11 @@
 > front_wide + Follow Ego 另一帧均清晰高速场景（远山/护栏/车道线/绿色指示牌可辨）。
 > 截图存 `/tmp/inc4cab_vis/fix_render_pass_idx12.png`、`v3_batch_idx12.png`。
 >
-> 下方 §6 路径 A（重训 multilayer）**未采用**——已证明真因与 ckpt 类型无关，重训修不到点子上。
+> 真因与 ckpt 类型无关（路径 A 不是修 bug 的手段）；但**应大g 要求后续仍重训了一个单 cam
+> multilayer**（为拿 `Gaussian Layers` 分层开关，非修 bug）：`use_layered_model: true`，
+> psnr_m **28.24**（≈ v1 的 28.44），首次加载触发**第二处 bug**——LayeredGaussians×OpenCVPinhole
+> 的 `fromOpenCVPinholeCameraModelParameters` CUDA-tensor TypeError，已修（opencv intrinsics
+> 保持 numpy）。详见 `inceptio_4cabad44_3dgrut_vs_nre.md` §7.1 / §7.2。
 
 ## 0. 起源 + 当前状态
 

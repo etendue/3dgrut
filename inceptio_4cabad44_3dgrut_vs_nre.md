@@ -174,7 +174,40 @@ Follow Ego 拖时间轴到 ~14s 另一帧同样清晰。对角 smear 在任意 p
 
 **附带纠正**：传 `--dataset_path` 时 viser **完整 GUI panel（Camera dropdown / Timeline /
 Follow Ego/Camera / Visibility）对 v1 MoG ckpt 也注册**（4D 元数据来自 dataset，与 ckpt
-类型无关）—— 旧"v1 MoG 无 GUI、只能看 eval PNG"的结论不成立。
+类型无关）—— 旧"v1 MoG 无 GUI、只能看 eval PNG"的结论不成立。但 **`Gaussian Layers`
+分层开关（background/road/sky_envmap）仅对 LayeredGaussians ckpt 注册**（`viser_gui_4d.py:445`），
+v1 MoG 单团高斯没有分层结构 → 没有那组开关。
+
+### 7.1 第二处 fix：LayeredGaussians × OpenCVPinhole 的 CUDA-tensor TypeError（2026-06-24）
+
+应大g 要求重训了一个**单 cam multilayer**（`use_layered_model: true`），让 viser 带分层开关。
+首次加载即崩：`tracer.py:449` 的 `_3dgut_plugin.fromOpenCVPinholeCameraModelParameters()`
+报 `TypeError: incompatible function arguments`——它的 pybind 签名要 **FixedSize Python 序列**
+（numpy 数组 OK，见 `__create_camera_parameters` 的 intrinsics 4-tuple fallback 分支用
+`np.array(...)`），但 `_trace_scene_mog` 的 opencv 分支把 intrinsics dict 值转成了 **CUDA
+tensors**（`torch.as_tensor(v, device=cuda)`）→ binding 拒绝。
+
+- **v1 MoG 没崩**：v1 `MixtureOfGaussians.forward` 不走这个 binding（直接用 rays_dir，忽略
+  intrinsics dict）；只有 LayeredGaussians 渲染路径（`layered_model.py:892 → tracer.py:308/449`）
+  把 batch 的 intrinsics dict 直喂 binding → 暴露此 bug。
+- **eval（render.py）没崩**：NCoreDataset 给 batch 的 intrinsics 是 numpy/CPU 格式。
+- **修复**：`_trace_scene_mog` 的 opencv intrinsics dict **保持 numpy（CPU 序列），不转 CUDA
+  tensor**（`_load_multi_cam_poses` 本来就是 numpy）。headless 验证：LayeredGaussians
+  `render_pass` non-black 1.00 无 TypeError；真 viser 清晰 + 分层开关（background/road/sky_envmap）
+  正常切换（大g 实测确认）。
+
+### 7.2 单 cam multilayer 训练结果（LayeredGaussians，带分层开关）
+
+| 配方 | config | n_cam | use_layered_model | mean PSNR | 视觉 | 分层开关 |
+|---|---|---|---|---|---|---|
+| 原单 cam（C） | `ncore_3dgut_mcmc` | 1 | false（v1 MoG） | 28.44 | ✅ 清晰 | ❌ 无 |
+| 新单 cam multilayer | `ncore_3dgut_mcmc_multilayer` | 1 | **true（LayeredGaussians）** | **psnr_m 28.24 / cc_psnr_m 28.07** | ✅ 清晰 | ✅ background/road/sky_envmap |
+
+- **单 cam multilayer 没垮**（28.24 ≈ v1 的 28.44，仅 -0.2 dB）→ 证实报告 §5 的 multilayer 20 dB
+  fail 是 **多 cam 特有**（MCMC 跨视角震荡），单 cam multilayer 完全可行。
+- 训练 30k / 2991s（~50min）/ 10 it/s / depth-off / num_workers=10；ckpt 854MB；
+  metrics.json 仍 0 bytes（`render.py:1447` 的 `json` UnboundLocalError，已知 bug，数字从 log 抽）。
+- ckpt：`inc4cab_3dgrut_singlecam_ml_out/inc4cab_singlecam_multilayer/…-2406_175135/ckpt_last.pt`
 
 ## 8. 复现命令
 
@@ -262,7 +295,8 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
 | `8d86961` | fix(viz_4d): `_load_metadata` fallback 加 `n_val_image_subsample=1` |
 | `1052015` | fix(viz_4d): `_load_multi_cam_poses` 加 `n_val_image_subsample=1` |
 | `7417636` | feat(viz_4d): OpenCVPinhole ray re-derivation（LayeredGaussians 分支；对 v1 MoG dead code，且含潜伏 `np` NameError） |
-| **本 fix** | fix(viz_4d): NCore 相机强制走 `_trace_scene_mog` batch 路径 + v1 MoG guard 放开 + 补 `import numpy as np`（§7，viser 现可清晰看 single-cam OpenCVPinhole ckpt） |
+| `612f75d` | fix(viz_4d): NCore 相机强制走 `_trace_scene_mog` batch 路径 + v1 MoG guard 放开 + 补 `import numpy as np`（§7，viser 现可清晰看 single-cam OpenCVPinhole ckpt） |
+| **本 fix** | fix(viz_4d): opencv intrinsics dict 保持 numpy 不转 CUDA tensor（§7.1，修 LayeredGaussians×OpenCVPinhole 的 `fromOpenCVPinholeCameraModelParameters` TypeError；单 cam multilayer ckpt 现可在 viser 清晰显示 + 分层开关） |
 
 commits 都在 branch `claude/awesome-haslett-0cc964` 上，已 push 到 inceptio remote。
 engine.py fix 已部署到 inceptio 主仓库 `~/repo/3dgrut2`（editable install 根，坑#1），
