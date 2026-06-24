@@ -135,15 +135,46 @@ C 直接逼近 NRE 28.99 dB。
 
 inceptio finalmask 是 **1918×1078**（非 1920×1080），ncore SDK 默认 n_val_image_subsample=4 触发 `1918 % 4 != 0` assert。两处 fallback 都加 `n_val_image_subsample=1`。
 
-## 7. viser_gui_4d 对 v1 MoG ckpt 的 GUI 限制
+## 7. viser_gui_4d 显示 OpenCVPinhole v1 MoG ckpt — 真根因 + 修复（2026-06-24 ✅ 已修）
 
-`viser_gui_4d.py` 注册 Camera dropdown / Frame slider / Follow Camera 等控件**仅对 LayeredGaussians ckpt**。`ncore_3dgut_mcmc.yaml` (single-cam) 训出来是 **v1 MixtureOfGaussians (no layers)**，T8.13-DIAG 显示：
-```
-scene_mog type: MixtureOfGaussians (v1 MixtureOfGaussians, no layers)
-viser checkboxes registered: []
-```
+**症状**：single-cam OpenCVPinhole v1 MoG ckpt（eval 28.44 dB 清晰）在 viser_gui_4d
+里渲成「对角黑/灰 smear + 一缕边缘 splat + 地平线倾斜」，完全看不到场景。
 
-→ 验证 single-cam ckpt 视觉只能看 **eval val PNG / mp4**（不能用 viser 交互看）。multilayer ckpt 触发完整 GUI panel 但渲染垃圾（PSNR 20）。
+**前一个 session 的误判**（已纠正）：以为是 ① distortion mismatch ② v1 MoG 不走
+LayeredGaussians 的 OpenCVPinhole fix 分支（"dead code"）。两者都只关「糊不糊」，
+**不解释「场景完全消失」**。
+
+**真根因（headless 二分实测坐实）**：
+
+| 渲染路径 | 喂进引擎的 ray | non-black | 结果 |
+|---|---|---|---|
+| eval（render.py）= `scene_mog(batch)` | NCore camera-space rays + `T_to_world=c2w` + intrinsics | 1.00 | ✅ 清晰 |
+| viser 实际路径 = `_render_playground_hybrid` / `scene_mog.trace()` | kaolin pinhole raygen **世界系** rays | 0.80 | ❌ smear |
+
+- kaolin `Camera.from_args(view_matrix=c2w)` 把传入矩阵当**世界→相机外参（w2c）**算
+  `cam_pos = -Rᵀt` + raygen 世界光线 → 对 NCore **Z-up / +Z-forward** 相机，
+  raygen 出来的 `rays_dir` 中心指**世界 +Y**（应为 +X 沿路），`rays_ori` 是 campos
+  的轴置换 → 光线偏 ~90° → 扫过 gaussian 隧道边缘 → 对角 smear。
+- eval / FTheta / OpenCVPinhole 的 **Batch 路径**绕开 raygen：用 `view_matrix()`(=c2w,
+  实测 `==c2w0` diff 0) 当 `T_to_world` + 自带 camera-space NCore rays → 对。
+- viser 默认走 `_render_playground_hybrid` 而非 `_trace_scene_mog`，因为 playground
+  **自动载 1 个 GLASS primitive** → `has_visible_objects()==True` → 走 hybrid（吃世界光线）。
+
+**修复（commit 见 §10，不重训，3 处改 `threedgrut_playground/engine.py`）**：
+1. `render_pass` dispatch：NCore 相机（ftheta/opencv intrinsics 在场）**强制走
+   `_trace_scene_mog` batch 路径**，绕开 GLASS-primitive 触发的 hybrid。
+2. `_trace_scene_mog` guard 放开：v1 MoG 在有 NCore intrinsics 时也走 Batch 构造
+   分支（原来只 LayeredGaussians 走）。
+3. `import numpy as np`：opencv 分支 `isinstance(v, np.ndarray)` 缺 numpy import
+   → `NameError`（前任 commit 7417636 引入的潜伏 bug，因分支一直 dead code 未暴露）。
+
+**验证**：headless `render_pass` non-black 0.80→1.00 + 清晰场景；真 viser（port 8091）
+Chrome 截图 frame0 front_wide 清晰高速场景（远山/护栏/车道线/绿色指示牌全可辨），
+Follow Ego 拖时间轴到 ~14s 另一帧同样清晰。对角 smear 在任意 pose 消失。
+
+**附带纠正**：传 `--dataset_path` 时 viser **完整 GUI panel（Camera dropdown / Timeline /
+Follow Ego/Camera / Visibility）对 v1 MoG ckpt 也注册**（4D 元数据来自 dataset，与 ckpt
+类型无关）—— 旧"v1 MoG 无 GUI、只能看 eval PNG"的结论不成立。
 
 ## 8. 复现命令
 
@@ -214,8 +245,9 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
 
 - **`render.py:1447` UnboundLocalError 'json'**：3 轮 3dgrut 训练 metrics.json 全 0 bytes（崩在 render_all 写盘瞬间，per-frame PSNR 从 log 抽）
 - **3dgrut multi-cam × OpenCVPinhole rational distortion fail mode**：本报告主结论。当前 workaround = 单 cam 训练
-- **viser_gui_4d 对 v1 MoG ckpt 几乎无 GUI panel**：只对 LayeredGaussians 提供完整 controls
+- ~~**viser_gui_4d 对 v1 MoG ckpt 几乎无 GUI panel / 看不到场景**~~ → **已修（§7）**：真根因是 kaolin raygen 世界光线对 NCore 相机偏 ~90° + 默认走 hybrid 而非 batch；fix 让 NCore 相机强制走 `_trace_scene_mog` batch 路径，viser 现可清晰交互查看。
 - **inceptio converter 没接 cuboids**：当前 `converter.py` 写 `store_observations([])`，需要走 thinkpad 最新版 (commit 526c5b5, 含 `obstacles.py` parse_ppn_fusion) 重转才有 cuboid
+- **viewer mesh 插入 over NCore backdrop 失效**：fix 让 NCore 相机绕开 `_render_playground_hybrid`（mesh 合成路径），所以 NCore ckpt 上插 glass-ball 等 primitive 不会合成进画面。NCore viewer 不用这功能，out of scope；如需，得让 hybrid 路径也接 NCore camera-space rays。
 
 ### Open questions (后续 deep investigation)
 
@@ -229,5 +261,9 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
 |---|---|
 | `8d86961` | fix(viz_4d): `_load_metadata` fallback 加 `n_val_image_subsample=1` |
 | `1052015` | fix(viz_4d): `_load_multi_cam_poses` 加 `n_val_image_subsample=1` |
+| `7417636` | feat(viz_4d): OpenCVPinhole ray re-derivation（LayeredGaussians 分支；对 v1 MoG dead code，且含潜伏 `np` NameError） |
+| **本 fix** | fix(viz_4d): NCore 相机强制走 `_trace_scene_mog` batch 路径 + v1 MoG guard 放开 + 补 `import numpy as np`（§7，viser 现可清晰看 single-cam OpenCVPinhole ckpt） |
 
-两 commit 都在 branch `claude/awesome-haslett-0cc964` 上，已 push 到 inceptio remote。
+commits 都在 branch `claude/awesome-haslett-0cc964` 上，已 push 到 inceptio remote。
+engine.py fix 已部署到 inceptio 主仓库 `~/repo/3dgrut2`（editable install 根，坑#1），
+备份 `/tmp/engine.py.preopcvfix.bak`。

@@ -5,6 +5,26 @@
 > Branch：`claude/awesome-haslett-0cc964`
 > 用户称呼："大g"
 
+> ## ✅ 已解决（2026-06-24，新 session）— **不重训（否定了路径 A）**
+>
+> **真根因不是前任以为的 distortion / ckpt 类型 dispatch，而是相机光线约定 + 渲染 dispatch**：
+> kaolin `Camera.from_args(view_matrix=c2w)` 的 raygen 把矩阵当 w2c 外参算，对 NCore
+> Z-up/+Z-forward 相机生成的**世界系光线偏 ~90°**（中心 ray 指世界 +Y 而非 +X 沿路）；
+> 且 viewer 默认走 `_render_playground_hybrid`（吃这把错光线），而非接 NCore intrinsics 的
+> `_trace_scene_mog` batch 路径——因为 playground 自动载 1 个 GLASS primitive 使
+> `has_visible_objects()==True`。eval（render.py）走 Batch 路径所以清晰。
+>
+> **修复（`threedgrut_playground/engine.py` 3 处，§详见 `inceptio_4cabad44_3dgrut_vs_nre.md` §7）**：
+> ① `render_pass` dispatch：NCore 相机强制走 `_trace_scene_mog` batch 路径；
+> ② `_trace_scene_mog` guard 放开，v1 MoG 有 NCore intrinsics 时也走 Batch；
+> ③ 补 `import numpy as np`（修前任 commit 7417636 潜伏的 `NameError`）。
+>
+> **验证**：headless `render_pass` non-black 0.80→1.00；真 viser（Chrome 截图）frame0
+> front_wide + Follow Ego 另一帧均清晰高速场景（远山/护栏/车道线/绿色指示牌可辨）。
+> 截图存 `/tmp/inc4cab_vis/fix_render_pass_idx12.png`、`v3_batch_idx12.png`。
+>
+> 下方 §6 路径 A（重训 multilayer）**未采用**——已证明真因与 ckpt 类型无关，重训修不到点子上。
+
 ## 0. 起源 + 当前状态
 
 之前 session 围绕 inceptio 4cabad44 finalmask clip 做 NRE vs 3dgrut 对照训练。NRE 跑出 28.99 dB；3dgrut **single-cam (front_wide_120fov only)** 跑出 **28.44 dB，eval val PNG 视觉清晰可辨**（远山+护栏+车道线+指示牌全在）。但**用 viser_gui_4d 看同一 ckpt 时画面糊到完全找不到场景**（大片黑 + ego frustum 矩形 overlay + 中央模糊 splat band）。

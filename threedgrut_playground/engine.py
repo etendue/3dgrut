@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import os
+import numpy as np
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -1058,7 +1059,27 @@ class Engine3DGRUT:
         # `len(self.tracks_poses) > 0` at layered_model.py:542), so removing
         # the guard is safe in both populated and empty states.
         # Anchor: obs 346 (Bug Root Cause Confirmed: tracks_poses Guard).
-        if isinstance(self.scene_mog, LayeredGaussians):
+        # E2.7-OPCV-v1MoG: route v1 MixtureOfGaussians through the SAME Batch
+        # path as LayeredGaussians WHEN NCore camera intrinsics (FTheta /
+        # OpenCVPinhole) are available. The plain
+        # ``scene_mog.trace(rays_o, rays_d)`` fallthrough at the bottom feeds
+        # kaolin's pinhole raygen WORLD-space rays; for NCore Z-up /
+        # +Z-forward cameras that ray convention is ~90° rotated (center
+        # rays_dir comes out world +Y, not +X down-road), so a single-cam
+        # OpenCVPinhole v1 ckpt renders as a diagonal black/grey smear in
+        # viser even though render.py eval (which uses the Batch + tracer
+        # projection) is sharp. The Batch path uses camera-space NCore rays +
+        # T_to_world=c2w + intrinsics_*CameraModelParameters, matching the
+        # training/eval contract. Headless-confirmed on inc4cab single-cam:
+        # batch-path non-black=1.00 sharp scene vs trace-path 0.80 smear.
+        # Plain pinhole (colmap) v1 ckpts have no NCore intrinsics here, so
+        # they keep the original scene_mog.trace fallthrough untouched.
+        _has_ncore_intrinsics = camera is not None and (
+            fisheye_intrinsics is not None
+            or (opencv_pinhole_intrinsics is not None
+                and opencv_pinhole_rays is not None)
+        )
+        if isinstance(self.scene_mog, LayeredGaussians) or _has_ncore_intrinsics:
             intrinsics = None
             ftheta_intrinsics_t = None
             opencv_pinhole_intrinsics_t = None
@@ -1216,8 +1237,27 @@ class Engine3DGRUT:
         rays = self.raygen(camera, use_spp=is_use_spp)
 
         if is_first_pass:
+            # E2.7-OPCV-v1MoG: NCore cameras (FTheta / OpenCVPinhole) MUST take
+            # the _trace_scene_mog backdrop path — it feeds camera-space NCore
+            # rays + T_to_world=c2w to the tracer's own projection. The
+            # _render_playground_hybrid path (taken by default because the
+            # playground auto-loads a GLASS primitive, so
+            # has_visible_objects() is True) renders the Gaussian backdrop from
+            # kaolin's pinhole raygen WORLD rays, whose convention is ~90°
+            # rotated for NCore Z-up / +Z-forward cameras (center ray comes out
+            # world +Y not +X), producing a diagonal black/grey smear. Mesh
+            # compositing over an NCore backdrop is out of scope; backdrop
+            # fidelity wins. Non-NCore (colmap) cameras keep the original
+            # primitives-based dispatch untouched.
+            _ncore_backdrop = camera is not None and (
+                fisheye_intrinsics is not None
+                or (opencv_pinhole_intrinsics is not None
+                    and opencv_pinhole_rays is not None)
+            )
             # Disable path tracer under certain settings, useful for comparing with the vanilla volumetric tracer
-            if not self.primitives.enabled or not self.primitives.has_visible_objects() or self.tracer is None:
+            if (_ncore_backdrop or not self.primitives.enabled
+                    or not self.primitives.has_visible_objects()
+                    or self.tracer is None):
                 if self.disable_gaussian_tracing:
                     rb = dict(
                         pred_rgb=torch.zeros_like(rays.rays_ori),
