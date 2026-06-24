@@ -1019,6 +1019,8 @@ class Engine3DGRUT:
     def _trace_scene_mog(self, rays_ori: torch.Tensor, rays_dir: torch.Tensor,
                          *, camera: Optional[Camera] = None,
                          fisheye_intrinsics: Optional[dict] = None,
+                         opencv_pinhole_intrinsics: Optional[dict] = None,
+                         opencv_pinhole_rays: Optional[np.ndarray] = None,
                          timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
         # LayeredGaussians with active dynamic tracks: route through forward()
         # so per-track SE(3) deformation runs against the supplied timestamp.
@@ -1059,6 +1061,7 @@ class Engine3DGRUT:
         if isinstance(self.scene_mog, LayeredGaussians):
             intrinsics = None
             ftheta_intrinsics_t = None
+            opencv_pinhole_intrinsics_t = None
             T_to_world = torch.eye(4, dtype=rays_ori.dtype, device=rays_ori.device)[None]
             rays_in_world = True
             rays_ori_use = rays_ori
@@ -1091,6 +1094,31 @@ class Engine3DGRUT:
                         c2w_t = c2w_t.unsqueeze(0)
                     T_to_world = c2w_t
                     rays_in_world = False
+                elif opencv_pinhole_intrinsics is not None and opencv_pinhole_rays is not None:
+                    # E2.7-OPCV (T8.13 sibling for OpenCVPinhole rational
+                    # distortion): defer projection to 3dgut UT rasterizer via
+                    # Batch.intrinsics_OpenCVPinholeCameraModelParameters
+                    # (tracer.py:449 真字典分支), bypassing the dummy 4-tuple
+                    # path (tracer.py:428 全 0 distortion) that kaolin pinhole
+                    # raygen would hit. rays_dir comes from NCore SDK's
+                    # rational distortion inverse (pre-computed at
+                    # _load_multi_cam_poses time, matches training contract).
+                    opencv_pinhole_intrinsics_t = {
+                        k: (torch.as_tensor(v, device=rays_ori.device)
+                            if isinstance(v, np.ndarray) else v)
+                        for k, v in opencv_pinhole_intrinsics.items()
+                    }
+                    rays_dir_use = torch.from_numpy(opencv_pinhole_rays).to(
+                        device=rays_ori.device, dtype=rays_ori.dtype
+                    ).unsqueeze(0)  # [1, H, W, 3]
+                    rays_ori_use = torch.zeros_like(rays_dir_use)
+                    c2w_t = camera.view_matrix().to(
+                        rays_ori.device, dtype=rays_ori.dtype
+                    )
+                    if c2w_t.ndim == 2:
+                        c2w_t = c2w_t.unsqueeze(0)
+                    T_to_world = c2w_t
+                    rays_in_world = False
                 else:
                     cx = float(camera.width) / 2.0 + float(camera.x0)
                     cy = float(camera.height) / 2.0 + float(camera.y0)
@@ -1116,6 +1144,7 @@ class Engine3DGRUT:
                 rays_in_world_space=rays_in_world,
                 intrinsics=intrinsics,
                 intrinsics_FThetaCameraModelParameters=ftheta_intrinsics_t,
+                intrinsics_OpenCVPinholeCameraModelParameters=opencv_pinhole_intrinsics_t,
                 timestamp_us=int(timestamp_us),
             )
             return self.scene_mog(batch, train=False)
@@ -1126,6 +1155,8 @@ class Engine3DGRUT:
     def render_pass(self, camera: Camera, is_first_pass: bool,
                     *, timestamp_us: int = -1,
                     fisheye_intrinsics: Optional[dict] = None,
+                    opencv_pinhole_intrinsics: Optional[dict] = None,
+                    opencv_pinhole_rays: Optional[np.ndarray] = None,
                     ) -> Dict[str, torch.Tensor]:
         """Renders a single frame pass from the provided camera view, with optional progressive effects.
         This method is designed for interactive/real-time rendering scenarios where frame rate is prioritized
@@ -1196,6 +1227,8 @@ class Engine3DGRUT:
                     rb = self._trace_scene_mog(
                         rays.rays_ori, rays.rays_dir, camera=camera,
                         fisheye_intrinsics=fisheye_intrinsics,
+                        opencv_pinhole_intrinsics=opencv_pinhole_intrinsics,
+                        opencv_pinhole_rays=opencv_pinhole_rays,
                         timestamp_us=timestamp_us,
                     )
             else:
