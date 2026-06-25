@@ -276,7 +276,7 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
 
 ### Known limitations
 
-- **`render.py:1447` UnboundLocalError 'json'**：3 轮 3dgrut 训练 metrics.json 全 0 bytes（崩在 render_all 写盘瞬间，per-frame PSNR 从 log 抽）
+- ~~**`render.py:1447` UnboundLocalError 'json'**：3 轮 3dgrut 训练 metrics.json 全 0 bytes~~ → **已修（2026-06-25）**：`render_all` 内 `if self.novel_view: import json` 的**函数级 import** 让整个 render_all 作用域的 `json` 变 local，novel_view=False 时该 import 不执行 → 末尾 `json.dump(metrics_json)` 的 `json` unbound。修法：删掉那句冗余局部 import（模块级 `import json` 已覆盖）。回归测试 `test_render_json_shadow.py`（`inspect.unwrap` 穿过 `@torch.no_grad()` 装饰器查 co_varnames）pin 住此 case。
 - **3dgrut multi-cam × OpenCVPinhole rational distortion fail mode**：本报告主结论。当前 workaround = 单 cam 训练
 - ~~**viser_gui_4d 对 v1 MoG ckpt 几乎无 GUI panel / 看不到场景**~~ → **已修（§7）**：真根因是 kaolin raygen 世界光线对 NCore 相机偏 ~90° + 默认走 hybrid 而非 batch；fix 让 NCore 相机强制走 `_trace_scene_mog` batch 路径，viser 现可清晰交互查看。
 - **inceptio converter 没接 cuboids**：当前 `converter.py` 写 `store_observations([])`，需要走 thinkpad 最新版 (commit 526c5b5, 含 `obstacles.py` parse_ppn_fusion) 重转才有 cuboid
