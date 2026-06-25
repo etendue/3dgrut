@@ -134,6 +134,28 @@ class Viser4DViewer:
             if metadata is not None and metadata.has_ftheta()
             else None
         )
+        # E2.7-OPCV: OpenCVPinhole rational distortion path — same T8.13 fix
+        # as FTheta. Active when ckpt camera is OpenCVPinhole and
+        # --initial_cam_id resolves to a cam with opencv_pinhole_dict in
+        # multi_cam_poses. Without this, kaolin's ideal-pinhole raygen
+        # samples a different angular cone than what the Gaussians learned
+        # under rational distortion → 渲染采样到空气 → 大片黑。
+        self.opencv_pinhole_intrinsics: Optional[dict] = None
+        self.opencv_pinhole_rays: Optional[np.ndarray] = None  # (H, W, 3)
+        self.opencv_pinhole_render_wh: Optional[tuple] = None
+        if (self.ftheta_intrinsics is None
+                and initial_cam_id is not None
+                and initial_cam_id in self._multi_cam_poses):
+            entry = self._multi_cam_poses[initial_cam_id]
+            opcv = entry.get("opencv_pinhole_dict")
+            opcv_rays = entry.get("opencv_pinhole_rays")
+            if opcv is not None and opcv_rays is not None:
+                self.opencv_pinhole_intrinsics = opcv
+                self.opencv_pinhole_rays = opcv_rays
+                self.opencv_pinhole_render_wh = entry.get("resolution")
+                print(f"[viz_4d] OpenCVPinhole rational ray path active for "
+                      f"cam '{initial_cam_id}', W×H={self.opencv_pinhole_render_wh}",
+                      flush=True)
         # B2: FTheta cuboid overlay path — projects cuboid/track/ego_traj
         # polylines through the same FTheta polynomial used by the backdrop
         # and alpha-blends them into the rendered image before
@@ -1368,6 +1390,8 @@ class Viser4DViewer:
         out = self.engine.render_pass(
             kaolin_camera, is_first_pass=True, timestamp_us=self._t_us_current,
             fisheye_intrinsics=self.ftheta_intrinsics,  # T8.13
+            opencv_pinhole_intrinsics=self.opencv_pinhole_intrinsics,  # E2.7-OPCV
+            opencv_pinhole_rays=self.opencv_pinhole_rays,  # E2.7-OPCV pre-computed
         )
         rgba = torch.cat([out["rgb"], out["opacity"]], dim=-1)
         rgba = torch.clamp(rgba, 0.0, 1.0)
@@ -1702,6 +1726,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
             NCoreDataset(
                 datapath=str(dataset_path), split="train", device="cpu",
                 sample_full_image=True, camera_ids=None, load_aux_masks=False,
+                n_val_image_subsample=1,
             )
             all_cam_ids = ["camera_front_wide_120fov"]  # single-sensor clip
         except ValueError as err:
@@ -1716,6 +1741,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
             datapath=str(dataset_path), split="train", device="cpu",
             sample_full_image=True,
             camera_ids=all_cam_ids, load_aux_masks=False,
+            n_val_image_subsample=1,
         )
         out: dict[str, dict] = {}
         end_col = int(ncore.data.FrameTimepoint.END)
@@ -1741,6 +1767,8 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
             # uses pinhole approx.
             cam_model = ds.sequence_camera_models[seq_id][cam_id]
             ftheta_dict = None
+            opencv_pinhole_dict = None
+            opencv_pinhole_rays = None  # (H, W, 3) camera-space rays for raygen
             fov_y_rad = 1.5708  # ~90°, generic default
             resolution = None
             try:
@@ -1748,7 +1776,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                 H = int(cam_model.resolution[1].item())
                 resolution = (W, H)
                 max_angle = getattr(cam_model, "max_angle", None)
-                if max_angle is not None and hasattr(cam_model, "get_parameters"):
+                if isinstance(cam_model, ncore.sensors.FThetaCameraModel):
                     p = cam_model.get_parameters()
                     ftheta_dict = {
                         "resolution":              np.asarray(p.resolution, dtype=np.int64),
@@ -1761,6 +1789,31 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                         "linear_cde":              np.asarray(p.linear_cde, dtype=np.float32),
                     }
                     fov_y_rad = 2.0 * float(max_angle)
+                elif isinstance(cam_model, ncore.sensors.OpenCVPinholeCameraModel):
+                    # E2.7-OPCV: same T8.13 fix as FTheta — bypass kaolin's
+                    # pinhole raygen; use NCore SDK's rational distortion
+                    # inverse to pre-compute camera-space rays that match the
+                    # training contract (datasetNcore.py:443/449).
+                    p = cam_model.get_parameters()
+                    opencv_pinhole_dict = {
+                        "resolution":         np.asarray(p.resolution, dtype=np.int64),
+                        "shutter_type":       p.shutter_type.name,
+                        "principal_point":    np.asarray(p.principal_point, dtype=np.float32),
+                        "focal_length":       np.asarray(p.focal_length, dtype=np.float32),
+                        "radial_coeffs":      np.asarray(p.radial_coeffs, dtype=np.float32),
+                        "tangential_coeffs":  np.asarray(p.tangential_coeffs, dtype=np.float32),
+                        "thin_prism_coeffs":  np.asarray(p.thin_prism_coeffs, dtype=np.float32),
+                    }
+                    xs = np.arange(W, dtype=np.int64)
+                    ys = np.arange(H, dtype=np.int64)
+                    px, py = np.meshgrid(xs, ys, indexing='xy')
+                    pixels = np.stack([px, py], axis=-1).reshape(-1, 2)
+                    rays = cam_model.pixels_to_camera_rays(pixels)
+                    rays = rays.detach().cpu().numpy() if hasattr(rays, "detach") else np.asarray(rays)
+                    opencv_pinhole_rays = rays.reshape(H, W, 3).astype(np.float32)
+                    fy = float(cam_model.focal_length[1])
+                    if fy > 0:
+                        fov_y_rad = 2.0 * float(np.arctan(0.5 * H / fy))
                 else:
                     fy = float(cam_model.focal_length[1])
                     if fy > 0:
@@ -1772,6 +1825,8 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                 "c2w": c2w_wg, "timestamps_us": ts,
                 "ftheta_dict": ftheta_dict, "resolution": resolution,
                 "fov_y_rad": fov_y_rad,
+                "opencv_pinhole_dict": opencv_pinhole_dict,
+                "opencv_pinhole_rays": opencv_pinhole_rays,
             }
             print(f"[viz_4d] cam {cam_id}: {c2w_wg.shape[0]} frames, "
                   f"FOV_y={np.rad2deg(fov_y_rad):.1f}°, "
@@ -1825,6 +1880,7 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
         train_ds = NCoreDataset(
             datapath=str(dataset_path), split="train", device="cpu",
             sample_full_image=True, camera_ids=None, load_aux_masks=False,
+            n_val_image_subsample=1,
         )
     except ValueError as _err:
         _msg = str(_err)
@@ -1836,7 +1892,7 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
         train_ds = NCoreDataset(
             datapath=str(dataset_path), split="train", device="cpu",
             sample_full_image=True, camera_ids=_all_cam_ids,
-            load_aux_masks=False,
+            load_aux_masks=False, n_val_image_subsample=1,
         )
     specs = specs_from_config(conf)
     model = LayeredGaussians(conf, specs=specs, scene_extent=1.0)

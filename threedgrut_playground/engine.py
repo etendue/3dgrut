@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import os
+import numpy as np
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -1019,6 +1020,8 @@ class Engine3DGRUT:
     def _trace_scene_mog(self, rays_ori: torch.Tensor, rays_dir: torch.Tensor,
                          *, camera: Optional[Camera] = None,
                          fisheye_intrinsics: Optional[dict] = None,
+                         opencv_pinhole_intrinsics: Optional[dict] = None,
+                         opencv_pinhole_rays: Optional[np.ndarray] = None,
                          timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
         # LayeredGaussians with active dynamic tracks: route through forward()
         # so per-track SE(3) deformation runs against the supplied timestamp.
@@ -1056,9 +1059,30 @@ class Engine3DGRUT:
         # `len(self.tracks_poses) > 0` at layered_model.py:542), so removing
         # the guard is safe in both populated and empty states.
         # Anchor: obs 346 (Bug Root Cause Confirmed: tracks_poses Guard).
-        if isinstance(self.scene_mog, LayeredGaussians):
+        # E2.7-OPCV-v1MoG: route v1 MixtureOfGaussians through the SAME Batch
+        # path as LayeredGaussians WHEN NCore camera intrinsics (FTheta /
+        # OpenCVPinhole) are available. The plain
+        # ``scene_mog.trace(rays_o, rays_d)`` fallthrough at the bottom feeds
+        # kaolin's pinhole raygen WORLD-space rays; for NCore Z-up /
+        # +Z-forward cameras that ray convention is ~90° rotated (center
+        # rays_dir comes out world +Y, not +X down-road), so a single-cam
+        # OpenCVPinhole v1 ckpt renders as a diagonal black/grey smear in
+        # viser even though render.py eval (which uses the Batch + tracer
+        # projection) is sharp. The Batch path uses camera-space NCore rays +
+        # T_to_world=c2w + intrinsics_*CameraModelParameters, matching the
+        # training/eval contract. Headless-confirmed on inc4cab single-cam:
+        # batch-path non-black=1.00 sharp scene vs trace-path 0.80 smear.
+        # Plain pinhole (colmap) v1 ckpts have no NCore intrinsics here, so
+        # they keep the original scene_mog.trace fallthrough untouched.
+        _has_ncore_intrinsics = camera is not None and (
+            fisheye_intrinsics is not None
+            or (opencv_pinhole_intrinsics is not None
+                and opencv_pinhole_rays is not None)
+        )
+        if isinstance(self.scene_mog, LayeredGaussians) or _has_ncore_intrinsics:
             intrinsics = None
             ftheta_intrinsics_t = None
+            opencv_pinhole_intrinsics_t = None
             T_to_world = torch.eye(4, dtype=rays_ori.dtype, device=rays_ori.device)[None]
             rays_in_world = True
             rays_ori_use = rays_ori
@@ -1091,6 +1115,41 @@ class Engine3DGRUT:
                         c2w_t = c2w_t.unsqueeze(0)
                     T_to_world = c2w_t
                     rays_in_world = False
+                elif opencv_pinhole_intrinsics is not None and opencv_pinhole_rays is not None:
+                    # E2.7-OPCV (T8.13 sibling for OpenCVPinhole rational
+                    # distortion): defer projection to 3dgut UT rasterizer via
+                    # Batch.intrinsics_OpenCVPinholeCameraModelParameters
+                    # (tracer.py:449 真字典分支), bypassing the dummy 4-tuple
+                    # path (tracer.py:428 全 0 distortion) that kaolin pinhole
+                    # raygen would hit. rays_dir comes from NCore SDK's
+                    # rational distortion inverse (pre-computed at
+                    # _load_multi_cam_poses time, matches training contract).
+                    # tracer.py __create_camera_parameters passes these dict
+                    # values STRAIGHT into
+                    # _3dgut_plugin.fromOpenCVPinholeCameraModelParameters,
+                    # whose pybind signature wants FixedSize Python sequences
+                    # (numpy arrays are accepted — cf. the intrinsics 4-tuple
+                    # branch that calls np.array(...)). CUDA tensors raise
+                    # ``TypeError: incompatible function arguments`` and crashed
+                    # the LayeredGaussians OpenCVPinhole render path on connect.
+                    # _load_multi_cam_poses already builds these as numpy; keep
+                    # them CPU/numpy here (only pull any torch tensor back).
+                    opencv_pinhole_intrinsics_t = {
+                        k: (v.detach().cpu().numpy()
+                            if isinstance(v, torch.Tensor) else v)
+                        for k, v in opencv_pinhole_intrinsics.items()
+                    }
+                    rays_dir_use = torch.from_numpy(opencv_pinhole_rays).to(
+                        device=rays_ori.device, dtype=rays_ori.dtype
+                    ).unsqueeze(0)  # [1, H, W, 3]
+                    rays_ori_use = torch.zeros_like(rays_dir_use)
+                    c2w_t = camera.view_matrix().to(
+                        rays_ori.device, dtype=rays_ori.dtype
+                    )
+                    if c2w_t.ndim == 2:
+                        c2w_t = c2w_t.unsqueeze(0)
+                    T_to_world = c2w_t
+                    rays_in_world = False
                 else:
                     cx = float(camera.width) / 2.0 + float(camera.x0)
                     cy = float(camera.height) / 2.0 + float(camera.y0)
@@ -1116,6 +1175,7 @@ class Engine3DGRUT:
                 rays_in_world_space=rays_in_world,
                 intrinsics=intrinsics,
                 intrinsics_FThetaCameraModelParameters=ftheta_intrinsics_t,
+                intrinsics_OpenCVPinholeCameraModelParameters=opencv_pinhole_intrinsics_t,
                 timestamp_us=int(timestamp_us),
             )
             return self.scene_mog(batch, train=False)
@@ -1126,6 +1186,8 @@ class Engine3DGRUT:
     def render_pass(self, camera: Camera, is_first_pass: bool,
                     *, timestamp_us: int = -1,
                     fisheye_intrinsics: Optional[dict] = None,
+                    opencv_pinhole_intrinsics: Optional[dict] = None,
+                    opencv_pinhole_rays: Optional[np.ndarray] = None,
                     ) -> Dict[str, torch.Tensor]:
         """Renders a single frame pass from the provided camera view, with optional progressive effects.
         This method is designed for interactive/real-time rendering scenarios where frame rate is prioritized
@@ -1185,8 +1247,27 @@ class Engine3DGRUT:
         rays = self.raygen(camera, use_spp=is_use_spp)
 
         if is_first_pass:
+            # E2.7-OPCV-v1MoG: NCore cameras (FTheta / OpenCVPinhole) MUST take
+            # the _trace_scene_mog backdrop path — it feeds camera-space NCore
+            # rays + T_to_world=c2w to the tracer's own projection. The
+            # _render_playground_hybrid path (taken by default because the
+            # playground auto-loads a GLASS primitive, so
+            # has_visible_objects() is True) renders the Gaussian backdrop from
+            # kaolin's pinhole raygen WORLD rays, whose convention is ~90°
+            # rotated for NCore Z-up / +Z-forward cameras (center ray comes out
+            # world +Y not +X), producing a diagonal black/grey smear. Mesh
+            # compositing over an NCore backdrop is out of scope; backdrop
+            # fidelity wins. Non-NCore (colmap) cameras keep the original
+            # primitives-based dispatch untouched.
+            _ncore_backdrop = camera is not None and (
+                fisheye_intrinsics is not None
+                or (opencv_pinhole_intrinsics is not None
+                    and opencv_pinhole_rays is not None)
+            )
             # Disable path tracer under certain settings, useful for comparing with the vanilla volumetric tracer
-            if not self.primitives.enabled or not self.primitives.has_visible_objects() or self.tracer is None:
+            if (_ncore_backdrop or not self.primitives.enabled
+                    or not self.primitives.has_visible_objects()
+                    or self.tracer is None):
                 if self.disable_gaussian_tracing:
                     rb = dict(
                         pred_rgb=torch.zeros_like(rays.rays_ori),
@@ -1196,6 +1277,8 @@ class Engine3DGRUT:
                     rb = self._trace_scene_mog(
                         rays.rays_ori, rays.rays_dir, camera=camera,
                         fisheye_intrinsics=fisheye_intrinsics,
+                        opencv_pinhole_intrinsics=opencv_pinhole_intrinsics,
+                        opencv_pinhole_rays=opencv_pinhole_rays,
                         timestamp_us=timestamp_us,
                     )
             else:
