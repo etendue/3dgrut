@@ -107,12 +107,18 @@ def main() -> int:
 
     print("\n=== STEP B: 写 2 条 obs（reference_frame_id='world'）===")
     out = UPath(args.out)
+    gmd = getattr(src, "generic_meta_data", {}) or {}
+    try:
+        _keys = list(gmd) if hasattr(gmd, "__iter__") else gmd
+        print(f"[gmd] source generic_meta_data = {_keys!r}")
+    except Exception:
+        print(f"[gmd] source generic_meta_data = {gmd!r}")
     try:
         w = SequenceComponentGroupsWriter(
             output_dir_path=out, store_base_name="autocuboids",
             sequence_id=seq_id, sequence_timestamp_interval_us=interval,
-            generic_meta_data={}, store_type="itar")
-        cw = w.register_component_writer(CuboidsComponent.Writer, "auto_v0", group_name=None)
+            generic_meta_data=gmd, store_type="itar")
+        cw = w.register_component_writer(CuboidsComponent.Writer, "auto_v0", group_name="auto_cuboids")
         obs = []
         for ts, cx in ((T0, 10.0), (T1, 11.0)):
             obs.append(nd.CuboidTrackObservation(
@@ -131,17 +137,31 @@ def main() -> int:
 
     print("\n=== STEP C: A1 append 读（决策 fork）===")
     branch = "B"
-    loader2 = None
+    rd = None
     try:
         rd = SequenceComponentGroupsReader([args.meta, *map(str, shard_paths)], open_consolidated=True)
-        loader2 = SequenceLoaderV4(
-            rd, poses_component_group_name="default",
-            intrinsics_component_group_name="default", masks_component_group_name="default")
-        print("[A1] PASS: reader append 成功 → Branch A")
+        print("[A1] PASS: reader append 构造成功 → Branch A")
         branch = "A"
     except Exception:
         print("[A1] FAIL: reader append 拒绝 → Branch B")
         traceback.print_exc()
+
+    loader2 = None
+    cub_group = "default"
+    if rd is not None:
+        try:
+            cub_keys = list(rd.open_component_readers(CuboidsComponent.Reader))
+            print(f"[groups] cuboids reader keys = {cub_keys}")
+            mine = [k for k in cub_keys if k != "default"]
+            cub_group = mine[0] if mine else "default"
+            print(f"[groups] 用 cuboids group = {cub_group!r} 读回我的 obs")
+            loader2 = SequenceLoaderV4(
+                rd, poses_component_group_name="default",
+                intrinsics_component_group_name="default", masks_component_group_name="default",
+                cuboids_component_group_name=cub_group)
+        except Exception:
+            print("[groups] loader2 构造失败:")
+            traceback.print_exc()
 
     print("\n=== STEP D: A5 standalone open ===")
     loader_s = None
