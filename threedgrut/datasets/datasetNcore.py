@@ -122,6 +122,11 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # loss. Default False → Stage 1-10 path byte-identical.
         load_depth_prior: bool = False,
         depth_prior_aux_root: Optional[str] = None,
+        # cuboid_autogen: 离线自动生成的车辆 cuboids shard（Branch A）。
+        # 默认 False → 现有读取链字节不变。
+        load_auto_cuboids: bool = False,
+        auto_cuboids_shard_path: Optional[str] = None,
+        auto_cuboids_instance_name: str = "auto_v0",
     ):
         super().__init__()
 
@@ -204,6 +209,11 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self.depth_prior_aux_root: Optional[str] = depth_prior_aux_root
         self._depth_prior_reader: Optional["DepthV2AuxReader"] = None
         self._depth_prior_reader_initialized: bool = False
+
+        # cuboid_autogen: 自动 cuboids shard（Branch A append + 显式 instance）
+        self.load_auto_cuboids: bool = load_auto_cuboids
+        self.auto_cuboids_shard_path: Optional[str] = auto_cuboids_shard_path
+        self.auto_cuboids_instance_name: str = auto_cuboids_instance_name
 
         self.split: str = split
 
@@ -311,13 +321,26 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # (A800 2026-05-19: KeyError: 'version'). Aux data is read separately
         # via direct IndexedTarStore opens (see aux_readers.py + the lazy
         # _ensure_aux_readers() init below).
-        sequence_loader = self.sequence_loaders[sequence_id] = ncore.data.v4.SequenceLoaderV4(
-            ncore.data.v4.SequenceComponentGroupsReader(
-                [self.sequence_meta_file_path], open_consolidated=self.open_consolidated
-            ),
+        # cuboid_autogen Branch A: 把官方 writer 产的 cuboids shard append 进
+        # SequenceComponentGroupsReader 的 store path 列表（O1 验证可行：shard 带 version
+        # 且 generic_meta_data 对齐源），并让 loader 显式读我们的 instance（避开源 GT 占用的
+        # "default"）。下游 get_cuboid_track_observations / tracks_loader / init 链字节不变。
+        # 注：与上面 aux.*.zarr.itar 不同 —— aux 是 nre-tools 产物缺 version 不可 append；
+        # cuboids shard 是官方 SequenceComponentGroupsWriter 产物，可 append。
+        _store_paths = [self.sequence_meta_file_path]
+        _loader_kwargs = dict(
             poses_component_group_name=self.poses_component_group,
             intrinsics_component_group_name=self.intrinsics_component_group,
             masks_component_group_name=self.masks_component_group,
+        )
+        if self.load_auto_cuboids and self.auto_cuboids_shard_path:
+            _store_paths.append(self.auto_cuboids_shard_path)
+            _loader_kwargs["cuboids_component_group_name"] = self.auto_cuboids_instance_name
+        sequence_loader = self.sequence_loaders[sequence_id] = ncore.data.v4.SequenceLoaderV4(
+            ncore.data.v4.SequenceComponentGroupsReader(
+                _store_paths, open_consolidated=self.open_consolidated
+            ),
+            **_loader_kwargs,
         )
 
         # Auto-detect _single_ sensors if not specified - sensors need to be specified explicitly
