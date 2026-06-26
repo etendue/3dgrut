@@ -42,15 +42,26 @@ def tracks_to_observations(tracks, track_ids, ref_frame_id, class_name,
 
 
 def write_cuboids_shard(observations, out_dir, store_base_name, seq_id, interval_us,
-                        store_type="itar"):
-    """官方 V4 writer 写独立 cuboids shard，返回 List[UPath]（O1 验过的 SDK 调用）。"""
+                        generic_meta_data, group_name="auto_cuboids",
+                        component_instance_name="default", store_type="itar"):
+    """官方 V4 writer 写独立 cuboids shard，返回 List[UPath]（O1 验过的三要素）。
+
+    O1 三要素（缺一 append 失败）：
+    - ``generic_meta_data``：须对齐源 store（传 ``loader.generic_meta_data``），否则
+      reader append 报 "Can't load component store with different generic meta-data"。
+    - ``group_name``：须独特非空，否则与源空 group 冲突 "Component group '' loaded multiple times"。
+    - ``component_instance_name``：cuboids reader 的 key。**目标 clip 无 GT 用 "default"**
+      → ``SequenceLoaderV4`` 默认读到、读取链零改；**9ae 等有 GT 的 clip 用别名**（如
+      "auto_v0"）避开 GT 占用的 "default"，验证时显式 ``cuboids_component_group_name`` 读回。
+    """
     from upath import UPath
     from ncore.data.v4 import CuboidsComponent, SequenceComponentGroupsWriter
 
     w = SequenceComponentGroupsWriter(
         output_dir_path=UPath(out_dir), store_base_name=store_base_name,
         sequence_id=seq_id, sequence_timestamp_interval_us=interval_us,
-        generic_meta_data={}, store_type=store_type)
-    cw = w.register_component_writer(CuboidsComponent.Writer, "auto_v0", group_name=None)
+        generic_meta_data=generic_meta_data, store_type=store_type)
+    cw = w.register_component_writer(
+        CuboidsComponent.Writer, component_instance_name, group_name=group_name)
     cw.store_observations(observations).finalize()
     return w.finalize()

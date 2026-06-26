@@ -48,14 +48,28 @@ import types
 from unittest.mock import MagicMock
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "inceptio: 需要 inceptio 真 ncore SDK + 数据的集成测试（Mac 自动 skip）",
+    )
+
+
 def _install_stubs() -> None:
     """Install sys.modules stubs for packages that require CUDA or ncore SDK."""
     import torch  # noqa: E402 — torch is available
 
-    # 1. ncore: NVIDIA-internal SDK
+    # 1. ncore: NVIDIA-internal SDK.
+    #    Mac (无 ncore) → import 失败 → stub MagicMock（CPU 测试行为不变）。
+    #    inceptio (有真 SDK) → import 成功 → 用真 SDK，供 @pytest.mark.inceptio 的
+    #    V4 cuboid 写读契约测试（test_v4_writer_roundtrip）跑真实 round-trip。
+    import importlib  # noqa: E402
     for name in ("ncore", "ncore.sensors", "ncore.data"):
         if name not in sys.modules:
-            sys.modules[name] = MagicMock()
+            try:
+                importlib.import_module(name)
+            except Exception:
+                sys.modules[name] = MagicMock()
 
     # 2. CUDA tracers
     for name in ("threedgrt_tracer", "threedgut_tracer"):
