@@ -1409,23 +1409,19 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         )
 
     # ---- T3.2.b: per-semantic-class LiDAR aggregators (v2 Stage 3 / 4 init) ----
-    def _get_semantic_lidar_points(
-        self, class_ids: frozenset[int],
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """Aggregate world-frame LiDAR points whose per-point lidar-sseg class
-        label is in ``class_ids``.
+    def _iter_semantic_lidar_frames(self, class_ids: frozenset[int]):
+        """逐帧 yield ``(source_id, ts_us, xyz_wg[M,3] np, labels[M] np int, color[M,3] np|None)``。
 
-        Uses ``LidarSsegAuxReader`` to read PNG-encoded per-point class arrays
-        from ``aux.lidar-sseg.zarr.itar`` (bypassing SequenceLoaderV4 which
-        cannot parse the aux store schema).
+        ``M`` = 该帧语义类 ∈ ``class_ids`` 的点数（已过滤）。world-frame（global）点。
+        供聚合 (``_get_semantic_lidar_points``) 与逐帧消费 (``cuboid_autogen.lidar_source``)
+        复用 —— 后者需保留 **frame 归属 + per-point class**（tracking 需要）。
 
-        Returns:
-            xyz:   ``[N, 3]`` world-frame points (CPU tensor).
-            color: ``[N, 3]`` per-point RGB or None when not stored.
+        读 PNG-encoded per-point class（``aux.lidar-sseg.zarr.itar``）经 ``LidarSsegAuxReader``
+        （bypass SequenceLoaderV4，其无法解析 aux store schema）。
         """
         if not self.load_aux_masks:
             raise RuntimeError(
-                "NCoreDataset._get_semantic_lidar_points requires "
+                "NCoreDataset._iter_semantic_lidar_frames requires "
                 "load_aux_masks=True; pass dataset.load_aux_masks=true "
                 "(Stage 3a aux generation must complete first)."
             )
@@ -1433,7 +1429,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self._ensure_aux_readers()
         if self._lidar_sseg_reader is None:
             raise RuntimeError(
-                "NCoreDataset._get_semantic_lidar_points: aux.lidar-sseg "
+                "NCoreDataset._iter_semantic_lidar_frames: aux.lidar-sseg "
                 "store missing; rerun nre-tools with --lidar-seg-camvis."
             )
         sequence_point_clouds_sources = self.sequence_point_clouds_sources[self.sequence_id]
@@ -1445,8 +1441,6 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         pose_graph = self.sequence_loaders[self.sequence_id].pose_graph
         class_tensor = torch.tensor(sorted(class_ids), dtype=torch.long)
 
-        xyz_list: list[torch.Tensor] = []
-        color_list: list[torch.Tensor] = []
         for source_id in sequence_point_clouds_source_ids:
             source = sequence_point_clouds_sources[source_id]
             cover = time_range.cover_range(source.pc_timestamps_us)
@@ -1472,23 +1466,37 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     + self.T_world_to_world_global[:3, 3:4]
                 ).T
 
-                labels = torch.from_numpy(labels_np.astype(np.int64))
-                mask = torch.isin(labels, class_tensor).numpy()
+                labels_i64 = labels_np.astype(np.int64)
+                mask = torch.isin(torch.from_numpy(labels_i64), class_tensor).numpy()
                 if not mask.any():
                     continue
 
-                xyz_list.append(to_torch(xyz_wg[mask], device="cpu"))
-
-                # Optional RGB color (T3.3 road_init currently uses neutral
-                # gray; T4.2 dyn_init could use it for albedo init).
+                # Optional RGB color (T3.3 road_init neutral gray; T4.2 dyn_init albedo).
                 color = None
                 if pc.has_attribute(self.lidar_color_generic_data_name):
                     color = pc.get_attribute(self.lidar_color_generic_data_name)
                 elif source.has_pc_generic_data(pc_idx, self.lidar_color_generic_data_name):
                     color = source.get_pc_generic_data(pc_idx, self.lidar_color_generic_data_name)
-                if color is not None:
-                    color_list.append(to_torch(np.asarray(color)[mask], device="cpu"))
+                color_m = np.asarray(color)[mask] if color is not None else None
 
+                yield source_id, ts_us, np.asarray(xyz_wg)[mask], labels_i64[mask], color_m
+
+    def _get_semantic_lidar_points(
+        self, class_ids: frozenset[int],
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Aggregate world-frame LiDAR points whose per-point lidar-sseg class
+        label is in ``class_ids`` （消费 ``_iter_semantic_lidar_frames``，DRY）。
+
+        Returns:
+            xyz:   ``[N, 3]`` world-frame points (CPU tensor).
+            color: ``[N, 3]`` per-point RGB or None when not stored.
+        """
+        xyz_list: list[torch.Tensor] = []
+        color_list: list[torch.Tensor] = []
+        for _sid, _ts, xyz_m, _labels_m, color_m in self._iter_semantic_lidar_frames(class_ids):
+            xyz_list.append(to_torch(xyz_m, device="cpu"))
+            if color_m is not None:
+                color_list.append(to_torch(color_m, device="cpu"))
         if not xyz_list:
             return torch.zeros(0, 3, dtype=torch.float32), None
         xyz = torch.cat(xyz_list, dim=0).to(torch.float32)
