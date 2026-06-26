@@ -149,7 +149,12 @@ class MCMCStrategy(BaseStrategy):
                 self.model.track_ids[dead_idxs] = self.model.track_ids[sampled_idxs]
 
         if self.conf.strategy.print_stats:
-            logger.info(f"Relocated {n_dead_gaussians} ({n_dead_gaussians / len(densities) * 100:.2f}%) gaussians")
+            # Guard div-by-zero: an empty particle layer (e.g. dynamic_rigids on a
+            # clip with no cuboid autolabels) has len(densities)==0, and the
+            # per-layer LayeredMCMC sub-strategy still runs relocate every step.
+            n_total = len(densities)
+            pct = (n_dead_gaussians / n_total * 100) if n_total else 0.0
+            logger.info(f"Relocated {n_dead_gaussians} ({pct:.2f}%) gaussians")
 
     def _get_add_cap(self) -> int:
         """Maximum total particle count for add_new_gaussians. Override in subclasses
@@ -200,8 +205,12 @@ class MCMCStrategy(BaseStrategy):
                 )
 
         if self.conf.strategy.print_stats:
+            # Guard div-by-zero: an empty particle layer has
+            # current_num_gaussians==0 (and num_gaussians_to_add==0), but the
+            # per-layer LayeredMCMC sub-strategy still runs add every step.
+            pct = (num_gaussians_to_add / current_num_gaussians * 100) if current_num_gaussians else 0.0
             logger.info(
-                f"Added {num_gaussians_to_add} ({num_gaussians_to_add / current_num_gaussians * 100:.2f}%) gaussians"
+                f"Added {num_gaussians_to_add} ({pct:.2f}%) gaussians"
             )
 
     @torch.no_grad()

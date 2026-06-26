@@ -467,6 +467,28 @@ class Trainer3DGRUT:
                                     "stays empty (this is OK for clips with no "
                                     "vehicles in the chosen duration_sec slice)."
                                 )
+                                # Even with zero tracks the enabled dynamic_rigids
+                                # layer MUST have its (empty) params on the compute
+                                # device. MoG.__init__ leaves its 0-row Parameters
+                                # on CPU (only the hardcoded layer.device says
+                                # "cuda"); the populated layers (background via
+                                # init_from_lidar, road via init_layer_from_points)
+                                # live on CUDA. Leaving dynamic_rigids on CPU makes
+                                # every cross-layer torch.cat — fused_view(),
+                                # get_density(), and the __getattr__ fused accessors
+                                # for model.positions/density/... — mix CPU+CUDA and
+                                # raise a device-mismatch RuntimeError at the first
+                                # training step (clips with no cuboid autolabels,
+                                # e.g. inceptio NCore). Route the empty case through
+                                # the same init path as the populated one so the
+                                # layer is device-/optimizer-/buffer-consistent.
+                                _dev = model.layers["dynamic_rigids"].device
+                                model.init_layer_from_points(
+                                    "dynamic_rigids",
+                                    torch.zeros((0, 3), dtype=torch.float32, device=_dev),
+                                    track_ids=torch.zeros((0,), dtype=torch.long, device=_dev),
+                                    setup_optimizer=True,
+                                )
                             else:
                                 model.populate_tracks(tracks)
                                 # Pull dyn LiDAR + filter per-cuboid → object-local

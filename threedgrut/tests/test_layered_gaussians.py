@@ -286,6 +286,70 @@ def test_fused_view_two_layers_concat_shape(real_conf):
     assert torch.equal(fused["positions"][100:], model.layers["road"].positions)
 
 
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="device-mismatch repro needs a real 2nd (CUDA) device; CPU-only "
+    "puts every layer on cpu so the cross-layer cat can never mismatch",
+)
+def test_empty_dynamic_rigids_layer_is_device_consistent(real_conf):
+    """Regression (inceptio 5cam crash, 2026-06-26).
+
+    A clip with NO cuboid autolabels (e.g. inceptio NCore) leaves the enabled
+    ``dynamic_rigids`` layer empty. ``MoG.__init__`` keeps its 0-row Parameters
+    on CPU (only the hardcoded ``layer.device`` says "cuda"), while the populated
+    ``background`` / ``road`` layers live on CUDA. If the empty layer is left on
+    CPU, every cross-layer ``torch.cat`` — ``fused_view()`` (first train step),
+    ``get_density()`` (MCMC / prune / opacity-reg), and the ``__getattr__`` fused
+    accessors for ``model.positions`` / ``density`` / ... — mixes CPU + CUDA and
+    raises ``RuntimeError: Expected all tensors to be on the same device``.
+
+    The trainer fix routes the empty case through ``init_layer_from_points`` so
+    the layer's params land on the compute device. This test pins both the bug
+    (mixed-device cat raises) and the fix (device-consistent → no raise).
+    """
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background",     layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road",           layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    dev = torch.device("cuda")
+
+    # Populate background + road on CUDA (mirrors the real trainer init path).
+    model.init_layer_from_points(
+        "background", torch.randn(100, 3, device=dev), setup_optimizer=False
+    )
+    model.init_layer_from_points(
+        "road", torch.randn(50, 3, device=dev), setup_optimizer=False
+    )
+
+    # --- pre-fix bug state: dynamic_rigids still at MoG.__init__ (CPU, 0 rows) ---
+    dyn = model.layers["dynamic_rigids"]
+    assert dyn.positions.shape[0] == 0
+    assert dyn.positions.device.type == "cpu"
+    with pytest.raises(RuntimeError, match="device"):
+        _ = model.get_density()
+
+    # --- fix: init the empty layer on the compute device (what the trainer does) ---
+    ldev = model.layers["dynamic_rigids"].device
+    model.init_layer_from_points(
+        "dynamic_rigids",
+        torch.zeros((0, 3), dtype=torch.float32, device=ldev),
+        track_ids=torch.zeros((0,), dtype=torch.long, device=ldev),
+        setup_optimizer=False,
+    )
+    assert model.layers["dynamic_rigids"].positions.device.type == "cuda"
+
+    # cross-layer reductions must no longer raise, and the empty layer
+    # contributes zero rows to the fused view (100 bg + 50 road + 0 dyn).
+    _ = model.get_density()
+    fused = model.fused_view()
+    assert fused["positions"].shape == (150, 3)
+    _ = model.positions  # __getattr__ fused param accessor
+
+
 def test_get_layer_mask_partitions_two_layers(real_conf):
     """T2.5: get_layer_mask returns a Bool[N_total] mask partitioning the two layers."""
     from threedgrut.layers.layered_model import LayeredGaussians
