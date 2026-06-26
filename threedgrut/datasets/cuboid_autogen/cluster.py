@@ -41,8 +41,9 @@ def canonicalize_yaw(yaw: float) -> float:
 def fit_oriented_box(xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray, float] | None:
     """拟合朝向框 → (center[3] 几何中心, dim[3]=(l,w,h) 全长, yaw)；<4 点返回 None。
 
-    BEV 上 PCA 取最大特征向量为 yaw，旋进 box 系取 min/max 得 extent 与几何中心
-    （非点云质心，对齐 init filter 的 ``|local| ≤ size/2`` 几何中心假设），旋回 world；
+    BEV 上用**最小面积包围矩形**（min-area rect，1° 暴力扫 mod π/2）定朝向 —— 比 PCA
+    对单边/L-shape LiDAR 车点鲁棒（O2：PCA 主轴对稀疏单边回波 yaw-MAE 差）。取矩形几何
+    中心（非点云质心，对齐 init filter 的 ``|local| ≤ size/2`` 假设），旋回 world；
     z 取 min/max 中点与高度。
     """
     if xyz.shape[0] < 4:
@@ -50,19 +51,27 @@ def fit_oriented_box(xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray, float] | 
     xy = xyz[:, :2].astype(np.float64)
     mean = xy.mean(0)
     centered = xy - mean
-    cov = np.cov(centered, rowvar=False)
-    evals, evecs = np.linalg.eigh(cov)
-    principal = evecs[:, int(np.argmax(evals))]          # 长轴方向
-    yaw = float(np.arctan2(principal[1], principal[0]))
-    c, s = np.cos(-yaw), np.sin(-yaw)
-    rot = centered @ np.array([[c, -s], [s, c]]).T        # 旋进 box 系
-    lo, hi = rot.min(0), rot.max(0)
-    extent = hi - lo                                       # (l, w)
-    center_box = (lo + hi) / 2.0                           # box 系几何中心
-    ci, si = np.cos(yaw), np.sin(yaw)
+    best = None
+    for k in range(90):  # mod π/2 足够（矩形 AABB 面积 π/2 周期）
+        a = k * (np.pi / 180.0)
+        c, s = np.cos(-a), np.sin(-a)
+        rot = centered @ np.array([[c, -s], [s, c]]).T
+        lo, hi = rot.min(0), rot.max(0)
+        ext = hi - lo
+        area = float(ext[0] * ext[1])
+        if best is None or area < best[0]:
+            best = (area, a, lo, hi)
+    _, ang, lo, hi = best
+    ext = hi - lo
+    center_box = (lo + hi) / 2.0
+    ci, si = np.cos(ang), np.sin(ang)
     center_xy = mean + center_box @ np.array([[ci, -si], [si, ci]]).T  # 旋回 world
+    if ext[0] >= ext[1]:                 # 长轴对齐 → yaw
+        l, w, yaw = float(ext[0]), float(ext[1]), ang
+    else:
+        l, w, yaw = float(ext[1]), float(ext[0]), ang + np.pi / 2.0
     z = xyz[:, 2]
     zmin, zmax = float(z.min()), float(z.max())
     center = np.array([center_xy[0], center_xy[1], (zmin + zmax) / 2.0], dtype=np.float64)
-    dim = np.array([float(extent[0]), float(extent[1]), zmax - zmin], dtype=np.float64)
+    dim = np.array([l, w, zmax - zmin], dtype=np.float64)
     return center, dim, canonicalize_yaw(yaw)
