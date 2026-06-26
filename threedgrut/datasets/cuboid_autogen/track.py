@@ -16,6 +16,7 @@ class Box:
     center: np.ndarray  # [3] world (x, y, z)
     dim: np.ndarray     # [3] (l, w, h) 全长
     yaw: float
+    cls: int = -1       # lidar-sseg numeric class (13/14/15)；-1=未知/插值帧
 
 
 @dataclass
@@ -93,6 +94,6 @@ def interpolate_gaps(track: Track, frame_timestamps_us, max_gap: int) -> Track:
         f = (ts - prev) / (nxt - prev)
         center = a.center + f * (b.center - a.center)
         yaw = a.yaw + f * wrap_to_pi(b.yaw - a.yaw)
-        out.append(Box(ts=ts, center=center, dim=a.dim.copy(), yaw=float(yaw)))
+        out.append(Box(ts=ts, center=center, dim=a.dim.copy(), yaw=float(yaw), cls=a.cls))
     out.sort(key=lambda x: x.ts)
     return Track(out)
