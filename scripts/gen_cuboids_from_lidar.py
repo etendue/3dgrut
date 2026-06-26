@@ -40,6 +40,9 @@ def main() -> int:
     ap.add_argument("--instance-name", default="auto_v0",
                     help="cuboids component instance name（读取时 cuboids_component_group_name）")
     ap.add_argument("--config-name", default="apps/ncore_3dgut_mcmc_multilayer")
+    ap.add_argument("--single-track", action="store_true",
+                    help="单目标模式: 场景已知单一主车, 每帧取点最多的 cluster 串成 1 条连续 "
+                         "trajectory(跨遮挡 gap 插值), 不做多目标关联/动静过滤")
     ap.add_argument("--validate-against-gt", action="store_true",
                     help="对比 GT cuboids 报告 precision/recall/BEV-IoU（Task 13）")
     args = ap.parse_args()
@@ -60,6 +63,7 @@ def main() -> int:
     from threedgrut.datasets.cuboid_autogen.lidar_source import iter_vehicle_lidar_frames
     from threedgrut.datasets.cuboid_autogen.track import (
         Box,
+        Track,
         aggregate_size,
         associate,
         interpolate_gaps,
@@ -79,35 +83,45 @@ def main() -> int:
     ds, _ = datasets.make(name=conf.dataset.type, config=conf, ray_jitter=None)
 
     # --- 1a→1c: 逐帧动态车辆点 → DBSCAN → 朝向框拟合 ---
-    boxes_by_ts: dict[int, list] = defaultdict(list)
+    boxes_by_ts: dict[int, list] = defaultdict(list)  # ts -> list[(Box, npts)]
+    all_ts: list[int] = []
     n_pts_total = 0
     for _sid, ts, xyz, labels in iter_vehicle_lidar_frames(ds):
+        all_ts.append(int(ts))
         n_pts_total += int(xyz.shape[0])
         lab = cluster_points(xyz, eps=args.eps, min_samples=args.min_samples)
         for cid in {int(c) for c in lab.tolist()}:
             if cid < 0:
                 continue
             m = lab == cid
-            if int(m.sum()) < args.min_cluster_pts:
+            npts = int(m.sum())
+            if npts < args.min_cluster_pts:
                 continue
             fit = fit_oriented_box(xyz[m])
             if fit is None:
                 continue
             center, dim, yaw = fit
             cls = int(np.bincount(labels[m], minlength=16).argmax())
-            boxes_by_ts[int(ts)].append(Box(ts=int(ts), center=center, dim=dim, yaw=yaw, cls=cls))
+            boxes_by_ts[int(ts)].append(
+                (Box(ts=int(ts), center=center, dim=dim, yaw=yaw, cls=cls), npts))
 
     frame_ts = sorted(boxes_by_ts)
-    per_frame_boxes = [boxes_by_ts[t] for t in frame_ts]
-    n_clusters = sum(len(b) for b in per_frame_boxes)
+    n_clusters = sum(len(b) for b in boxes_by_ts.values())
     print(f"[gen] {len(frame_ts)} 帧 / {n_clusters} clusters / {n_pts_total} vehicle pts", flush=True)
 
-    # --- 1d: tracking + 动静过滤 ---
-    tracks = associate(
-        per_frame_boxes, max_center_dist_m=args.max_center_dist,
-        max_yaw_diff_rad=args.max_yaw_diff, min_track_len=args.min_track_len)
-    tracks = [t for t in tracks if is_dynamic(t, min_speed_mps=args.min_speed)]
-    print(f"[gen] {len(tracks)} dynamic tracks (after static filter)", flush=True)
+    # --- 1d: tracking ---
+    if args.single_track:
+        # 单目标模式: 每帧取点最多的 cluster, 按 ts 串成 1 条连续 trajectory。
+        seq = [max(boxes_by_ts[t], key=lambda x: x[1])[0] for t in frame_ts]
+        tracks = [Track(seq)]
+        print(f"[gen] single-track: {len(frame_ts)} cluster 帧 → 1 track", flush=True)
+    else:
+        per_frame_boxes = [[b for b, _ in boxes_by_ts[t]] for t in frame_ts]
+        tracks = associate(
+            per_frame_boxes, max_center_dist_m=args.max_center_dist,
+            max_yaw_diff_rad=args.max_yaw_diff, min_track_len=args.min_track_len)
+        tracks = [t for t in tracks if is_dynamic(t, min_speed_mps=args.min_speed)]
+        print(f"[gen] {len(tracks)} dynamic tracks (after static filter)", flush=True)
 
     # --- 1e: 统一 size + majority class + 插值 → CuboidTrackObservation ---
     src = ds.sequence_loaders[ds.sequence_id]
@@ -121,7 +135,19 @@ def main() -> int:
         agg = aggregate_size(t)
         for b in t.boxes:
             b.dim = agg
-        t = interpolate_gaps(t, frame_ts, max_gap=args.max_gap)
+        t = interpolate_gaps(t, sorted(set(all_ts)), max_gap=args.max_gap)
+        if args.single_track and len(t.boxes) >= 3:
+            # 单车 demo（用户决策：position 主导）：中心轨迹移动平均平滑（消单边回波
+            # cluster 中心跳），朝向取平滑轨迹的运动方向（比单边 LiDAR 几何拟合稳得多）。
+            C = np.array([b.center for b in t.boxes])
+            n = len(t.boxes)
+            Cs = np.array([C[max(0, j - 2):min(n, j + 3)].mean(0) for j in range(n)])
+            for j, b in enumerate(t.boxes):
+                b.center = Cs[j]
+            for j, b in enumerate(t.boxes):
+                d = Cs[min(n - 1, j + 2)] - Cs[max(0, j - 2)]
+                if float(np.hypot(d[0], d[1])) > 1e-3:
+                    b.yaw = float(np.arctan2(d[1], d[0]))
         cls_ids = [b.cls for b in t.boxes if b.cls >= 0]
         cls_num = int(np.bincount(cls_ids, minlength=16).argmax()) if cls_ids else 13
         cls_name = map_class(cls_num) or "automobile"
