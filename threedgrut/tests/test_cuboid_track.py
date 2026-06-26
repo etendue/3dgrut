@@ -9,6 +9,7 @@ from threedgrut.datasets.cuboid_autogen.track import (
     Track,
     aggregate_size,
     associate,
+    interpolate_gaps,
     is_dynamic,
 )
 
@@ -59,3 +60,20 @@ def test_aggregate_size_p90():
     d = aggregate_size(t, q=90)
     expect = np.percentile(np.array([[4, 2, 1.5], [4.5, 2.1, 1.6], [5, 2.2, 1.7]]), 90, axis=0)
     np.testing.assert_allclose(d, expect, atol=1e-9)
+
+
+# ---------------- Task 6: interpolate_gaps ----------------
+
+def test_interpolate_single_gap():
+    t = Track([_b(0, 0.0, 0.0, yaw=0.0), _b(200_000, 2.0, 0.0, yaw=0.4)])  # 缺 100_000
+    out = interpolate_gaps(t, frame_timestamps_us=[0, 100_000, 200_000], max_gap=2)
+    assert len(out.boxes) == 3
+    mid = [b for b in out.boxes if b.ts == 100_000][0]
+    np.testing.assert_allclose(mid.center, [1.0, 0.0, 0.0], atol=1e-6)
+    assert abs(mid.yaw - 0.2) < 1e-6
+
+
+def test_no_extrapolation_beyond_ends():
+    t = Track([_b(100_000, 1.0, 0.0)])
+    out = interpolate_gaps(t, frame_timestamps_us=[0, 100_000, 200_000], max_gap=2)
+    assert [b.ts for b in out.boxes] == [100_000]  # 两端不外推

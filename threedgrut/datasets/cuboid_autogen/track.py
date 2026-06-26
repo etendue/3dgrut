@@ -64,3 +64,35 @@ def aggregate_size(track: Track, q: float = 90) -> np.ndarray:
     """track 内逐轴稳健尺寸聚合（默认 p90），保证框够大装下所有 member 点。"""
     dims = np.stack([b.dim for b in track.boxes], 0)
     return np.percentile(dims, q, axis=0)
+
+
+def interpolate_gaps(track: Track, frame_timestamps_us, max_gap: int) -> Track:
+    """短缺口线性插 center + lerp yaw，保证每相机帧有 obs；不外推 track 两端。
+
+    只在 [首obs_ts, 末obs_ts] 内、且缺口跨帧数 ≤ max_gap 时插值。
+    """
+    if len(track.boxes) < 2:
+        return track
+    by_ts = {b.ts: b for b in track.boxes}
+    ts_sorted = [int(t) for t in frame_timestamps_us]
+    obs_ts = sorted(by_ts)
+    lo, hi = obs_ts[0], obs_ts[-1]
+    out: list[Box] = []
+    for ts in ts_sorted:
+        if ts < lo or ts > hi:           # 两端不外推
+            continue
+        if ts in by_ts:
+            out.append(by_ts[ts])
+            continue
+        prev = max(t for t in obs_ts if t < ts)
+        nxt = min(t for t in obs_ts if t > ts)
+        gap = sum(1 for f in ts_sorted if prev < f < nxt)
+        if gap > max_gap:
+            continue
+        a, b = by_ts[prev], by_ts[nxt]
+        f = (ts - prev) / (nxt - prev)
+        center = a.center + f * (b.center - a.center)
+        yaw = a.yaw + f * wrap_to_pi(b.yaw - a.yaw)
+        out.append(Box(ts=ts, center=center, dim=a.dim.copy(), yaw=float(yaw)))
+    out.sort(key=lambda x: x.ts)
+    return Track(out)
