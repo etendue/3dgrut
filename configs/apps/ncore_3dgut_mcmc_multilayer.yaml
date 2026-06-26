@@ -217,5 +217,15 @@ strategy:
   # relocate/perturb/prune），road 粒子集恒定，配合 position 软冻 + rotation 硬冻
   # 锁死几何（recon-studio「永不裁剪」对齐）。
   exclude_layer_ids: [road]
+  # A1（2026-06-26）：硬挡 background 高斯进 road 薄板 — 每步把中心落在 road
+  # 表面 ±band_z 内、且在 road BEV footprint 上的 bg density 钳到 ~0，让冻结的
+  # road 层独占路面（修 road→background takeover）。默认 off = baseline 字节等价。
+  bg_road_slab_exclude:
+    enabled: false        # ★ A/B 开关（off = 当前 depth-off baseline）
+    band_z: 0.15          # m，排除薄板半厚
+    cell: 0.20            # m，road 高度场 BEV 网格
+    xy_dilate: 0.0        # 预留（A1 中 no-op）
+    mode: clamp           # clamp（prune 预留）
+    clamp_value: -50.0    # mode=clamp 时的 pre-sigmoid density 哨兵
   relocate:
     max_relocation_fraction: 0.4   # dynfix: 90% 死时 dyn 不会瞬间团聚

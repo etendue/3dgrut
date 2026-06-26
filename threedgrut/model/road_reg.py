@@ -17,6 +17,7 @@ Pure functions / no Trainer / no CUDA — safe to unit-test on Mac CPU.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -147,3 +148,73 @@ def compute_depth_tv_loss(
     num = diff_h.sum() + diff_v.sum()
     den = pair_h.sum() + pair_v.sum() + 1e-6
     return num / den
+
+
+# ---------------------------------------------------------------------------
+# A1: road-slab background exclusion (hard, gradient-free)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RoadBev:
+    """Cached BEV road-surface height field built from the (frozen) road layer.
+
+    ``height`` holds the mean road z per cell; ``mask`` marks cells with road
+    support. The road layer is ~frozen, so the caller builds this once and
+    reuses it every optimizer step.
+    """
+
+    origin: torch.Tensor  # [2] (min_x, min_y)
+    cell: float
+    height: torch.Tensor  # [H, W] mean road z per cell (0 where unsupported)
+    mask: torch.Tensor  # [H, W] bool, True where road support exists
+
+
+def build_road_bev_height(road_xyz: torch.Tensor, cell: float = 0.20) -> RoadBev:
+    """Build a BEV height grid from road-layer gaussian centers.
+
+    Each occupied cell stores the mean road z of the centers that fall in it.
+    """
+    xy = road_xyz[:, :2]
+    z = road_xyz[:, 2]
+    origin = xy.min(dim=0).values  # [2]
+    ij = torch.floor((xy - origin) / cell).long()  # [N, 2]
+    H = int(ij[:, 0].max().item()) + 1
+    W = int(ij[:, 1].max().item()) + 1
+    n_cells = H * W
+    if n_cells > 8_000_000:
+        # Defensive: a far road-position outlier would explode the grid and OOM.
+        # The road layer is frozen + LiDAR-init-bounded, so this should never
+        # fire; raise a clear error instead of a silent CUDA OOM if it does.
+        raise ValueError(
+            f"build_road_bev_height: BEV grid {H}x{W}={n_cells} cells too large "
+            f"(cell={cell} m); road positions likely contain an outlier."
+        )
+    flat = ij[:, 0] * W + ij[:, 1]
+    sum_z = torch.zeros(n_cells, device=z.device, dtype=z.dtype).scatter_add_(0, flat, z)
+    cnt = torch.zeros(n_cells, device=z.device, dtype=z.dtype).scatter_add_(
+        0, flat, torch.ones_like(z)
+    )
+    height = torch.where(
+        cnt > 0, sum_z / cnt.clamp(min=1.0), torch.zeros_like(sum_z)
+    ).reshape(H, W)
+    mask = (cnt > 0).reshape(H, W)
+    return RoadBev(origin=origin, cell=float(cell), height=height, mask=mask)
+
+
+def bg_in_road_slab_mask(
+    bg_xyz: torch.Tensor, bev: RoadBev, band_z: float = 0.15
+) -> torch.Tensor:
+    """Bool[M]: background centers inside the road footprint AND within +/-band_z
+    of that cell's road height. Centers outside the grid return False."""
+    H, W = bev.height.shape
+    xy = bg_xyz[:, :2]
+    z = bg_xyz[:, 2]
+    ij = torch.floor((xy - bev.origin) / bev.cell).long()
+    ix, iy = ij[:, 0], ij[:, 1]
+    in_bounds = (ix >= 0) & (ix < H) & (iy >= 0) & (iy < W)
+    ixc = ix.clamp(0, H - 1)
+    iyc = iy.clamp(0, W - 1)
+    cell_supported = bev.mask[ixc, iyc] & in_bounds
+    cell_z = bev.height[ixc, iyc]
+    return cell_supported & (torch.abs(z - cell_z) < band_z)
