@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from threedgrut.datasets.cuboid_autogen.track import Box, associate
+from threedgrut.datasets.cuboid_autogen.track import (
+    Box,
+    Track,
+    aggregate_size,
+    associate,
+    is_dynamic,
+)
 
 
 def _b(ts, cx, cy, yaw=0.0):
@@ -26,3 +32,30 @@ def test_associate_two_tracks_drops_noise():
     assert all(len(t.boxes) == 10 for t in tracks)
     ys = sorted(t.boxes[0].center[1] for t in tracks)
     assert abs(ys[0] - 0.0) < 1e-6 and abs(ys[1] - 8.0) < 1e-6  # 两轨迹不串
+
+
+# ---------------- Task 5: 动静过滤 + size 聚合 ----------------
+
+def test_static_track_filtered():
+    rng = np.random.default_rng(1)
+    t = Track([_b(k * 100_000, rng.normal(0, 0.05), 0.0) for k in range(11)])  # 1s 内抖动<0.3m
+    assert is_dynamic(t, min_speed_mps=0.5) is False
+
+
+def test_moving_track_kept():
+    t = Track([_b(k * 100_000, k * 0.5, 0.0) for k in range(11)])  # 1s 移 5m → 5 m/s
+    assert is_dynamic(t, min_speed_mps=0.5) is True
+
+
+def test_single_frame_is_static():
+    assert is_dynamic(Track([_b(0, 0, 0)]), min_speed_mps=0.5) is False
+
+
+def test_aggregate_size_p90():
+    t = Track([_b(0, 0, 0) for _ in range(3)])
+    t.boxes[0].dim = np.array([4.0, 2.0, 1.5])
+    t.boxes[1].dim = np.array([4.5, 2.1, 1.6])
+    t.boxes[2].dim = np.array([5.0, 2.2, 1.7])
+    d = aggregate_size(t, q=90)
+    expect = np.percentile(np.array([[4, 2, 1.5], [4.5, 2.1, 1.6], [5, 2.2, 1.7]]), 90, axis=0)
+    np.testing.assert_allclose(d, expect, atol=1e-9)

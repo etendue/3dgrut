@@ -44,3 +44,23 @@ def associate(per_frame_boxes, max_center_dist_m, max_yaw_diff_rad, min_track_le
             if j not in used:
                 active.append(Track([b]))
     return [t for t in active if len(t.boxes) >= min_track_len]
+
+
+def is_dynamic(track: Track, min_speed_mps: float) -> bool:
+    """速度基动静判定（位移/时长 > min_speed_mps）；<2 帧或 dt≤0 视为静止。
+
+    速度基(非绝对位移)避开 clip 时长依赖——慢车在短 slice 内位移小但仍是动态。
+    """
+    if len(track.boxes) < 2:
+        return False
+    disp = float(np.linalg.norm(track.boxes[-1].center[:2] - track.boxes[0].center[:2]))
+    dt_s = (track.boxes[-1].ts - track.boxes[0].ts) / 1e6
+    if dt_s <= 0:
+        return False
+    return (disp / dt_s) > min_speed_mps
+
+
+def aggregate_size(track: Track, q: float = 90) -> np.ndarray:
+    """track 内逐轴稳健尺寸聚合（默认 p90），保证框够大装下所有 member 点。"""
+    dims = np.stack([b.dim for b in track.boxes], 0)
+    return np.percentile(dims, q, axis=0)
