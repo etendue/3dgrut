@@ -21,9 +21,15 @@ _META = os.environ.get(
 
 @pytest.mark.skipif(not os.path.exists(_META), reason="9ae meta 不在(非 inceptio)")
 def test_iter_vehicle_lidar_frames_9ae():
+    import importlib
+    import sys
+
     import hydra
 
-    from threedgrut import datasets
+    # conftest 默认 stub threedgrut.datasets（避 Mac 的 cv2/ncore chain）；inceptio 依赖齐全，
+    # pop 掉 stub → import 真 __init__（含 datasets.make）。Mac 上本测试已 skip，不触发。
+    sys.modules.pop("threedgrut.datasets", None)
+    datasets = importlib.import_module("threedgrut.datasets")
     from threedgrut.datasets.cuboid_autogen.lidar_source import iter_vehicle_lidar_frames
 
     with hydra.initialize(config_path="../../configs", version_base=None):
@@ -33,9 +39,6 @@ def test_iter_vehicle_lidar_frames_9ae():
                 f"path={_META}",
                 "trainer.sky_backend=mlp",
                 "dataset.load_aux_masks=true",
-                "use_lidar_depth=false",
-                "use_depth_prior=false",
-                "load_lidar_depth_map=false",
             ],
         )
     ds, _ = datasets.make(name=conf.dataset.type, config=conf, ray_jitter=None)
