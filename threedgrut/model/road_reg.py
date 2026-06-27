@@ -218,3 +218,65 @@ def bg_in_road_slab_mask(
     cell_supported = bev.mask[ixc, iyc] & in_bounds
     cell_z = bev.height[ixc, iyc]
     return cell_supported & (torch.abs(z - cell_z) < band_z)
+
+
+# ---------------------------------------------------------------------------
+# A2: image-space road-mask projection test (catches floating bg the 3D slab
+# misses) — project bg centers into a training camera, test the road sseg-mask
+# at the projected pixel. numpy / camera-projector based (Mac/CPU testable).
+# ---------------------------------------------------------------------------
+
+
+def project_bg_road_hits(bg_xyz, T_c2w, intr_dict, model_type, road_mask):
+    """Bool[N]: background centers that, projected into this training camera,
+    are in front + on-image AND land on a road-mask pixel.
+
+    Args:
+        bg_xyz:     [N, 3] world-frame centers (np or torch -> np).
+        T_c2w:      [4, 4] camera->world (OpenCV/NCore convention).
+        intr_dict:  camera intrinsics dict (FTheta or OpenCVPinhole).
+        model_type: "ftheta" | "pinhole".
+        road_mask:  [H, W] float mask in {0,1} at render resolution.
+
+    Catches bg by WHERE IT PROJECTS, not its 3D height — so floating bg above
+    the road that paints the road from the training view is caught. ``visible``
+    from the projector already rejects behind-camera / beyond-FoV points.
+    """
+    import numpy as np
+
+    bg_xyz = np.asarray(bg_xyz, dtype=np.float64)
+    T_c2w = np.asarray(T_c2w, dtype=np.float64)
+    rm = np.asarray(road_mask)
+    while rm.ndim > 2:  # [B, H, W] (B=1) -> [H, W]
+        rm = rm[0]
+    Hm, Wm = int(rm.shape[0]), int(rm.shape[1])
+    N = bg_xyz.shape[0]
+    if N == 0:
+        return np.zeros((0,), dtype=bool)
+
+    if str(model_type) == "ftheta":
+        from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
+        # NCore T_to_world is already OpenCV convention -> identity flip (NOT the
+        # projector's viser default FLIP_VISER_TO_OPENCV).
+        proj = FthetaForwardProjector(intr_dict, world_to_camera_flip=np.eye(4))
+    else:
+        from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
+        proj = PinholeForwardProjector(intr_dict)  # default flip = I
+
+    uv, vis = proj.project_points(bg_xyz, T_c2w)  # uv [N,2], vis [N] bool
+    vis = np.asarray(vis, dtype=bool)
+    if uv.shape[0] != N:  # defensive: projector should return aligned [N,2]
+        return np.zeros((N,), dtype=bool)
+
+    # Scale projector pixel coords (intrinsics resolution) to road_mask res.
+    res = np.asarray(intr_dict["resolution"], dtype=np.float64).ravel()
+    Wi, Hi = float(res[0]), float(res[1])
+    u = uv[:, 0] * (Wm / Wi)
+    v = uv[:, 1] * (Hm / Hi)
+    ui = np.round(u).astype(np.int64)
+    vi = np.round(v).astype(np.int64)
+    inb = vis & (ui >= 0) & (ui < Wm) & (vi >= 0) & (vi < Hm)
+    uic = np.clip(ui, 0, Wm - 1)
+    vic = np.clip(vi, 0, Hm - 1)
+    on_road = rm[vic, uic] > 0.5
+    return inb & on_road

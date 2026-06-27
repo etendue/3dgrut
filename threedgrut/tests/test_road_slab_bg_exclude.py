@@ -64,3 +64,35 @@ def test_bg_road_slab_exclude_clamps_in_slab_only():
     strat2.conf = OmegaConf.create({"strategy": {"bg_road_slab_exclude": {"enabled": False}}})
     strat2._maybe_exclude_bg_from_road_slab()
     assert bool(torch.all(bg2.density == 0.0))
+
+
+def test_project_bg_road_hits_pinhole():
+    """A2 core (CPU/numpy): project bg centers into a pinhole training cam, hit
+    iff in-front + on-image + lands on a road-mask pixel. Pins the projection
+    convention + behind-camera + off-image rejection + mask sampling."""
+    import numpy as np
+    from threedgrut.model.road_reg import project_bg_road_hits
+
+    intr = {  # 640x480, fx=fy=500, principal (320,240), no distortion
+        "resolution":        np.array([640, 480], dtype=np.int64),
+        "principal_point":   np.array([320.0, 240.0], dtype=np.float64),
+        "focal_length":      np.array([500.0, 500.0], dtype=np.float64),
+        "radial_coeffs":     np.array([], dtype=np.float64),
+        "tangential_coeffs": np.array([], dtype=np.float64),
+    }
+    c2w = np.eye(4, dtype=np.float64)  # OpenCV: cam at origin, +Z forward, +Y down
+    rm = np.zeros((480, 640), dtype=np.float32)
+    rm[240:, :] = 1.0  # road = lower half (v >= 240)
+
+    pts = np.array([
+        [0.0,  1.0, 10.0],   # front, v=240+50=290 -> road -> HIT
+        [0.0, -1.0, 10.0],   # front, v=240-50=190 -> not road -> miss
+        [0.0,  1.0, -10.0],  # behind camera -> not visible -> miss
+        [100.0, 0.0, 1.0],   # front but u far off-image -> miss
+    ], dtype=np.float64)
+
+    hits = project_bg_road_hits(pts, c2w, intr, "pinhole", rm)
+    assert hits.tolist() == [True, False, False, False]
+
+    # empty input -> empty mask, no crash
+    assert project_bg_road_hits(np.zeros((0, 3)), c2w, intr, "pinhole", rm).shape == (0,)

@@ -221,11 +221,12 @@ strategy:
   # 表面 ±band_z 内、且在 road BEV footprint 上的 bg density 钳到 ~0，让冻结的
   # road 层独占路面（修 road→background takeover）。默认 off = baseline 字节等价。
   bg_road_slab_exclude:
-    enabled: false        # ★ A/B 开关（off = 当前 depth-off baseline）
-    band_z: 0.15          # m，排除薄板半厚
-    cell: 0.20            # m，road 高度场 BEV 网格
-    xy_dilate: 0.0        # 预留（A1 中 no-op）
-    mode: clamp           # clamp（prune 预留）
-    clamp_value: -50.0    # mode=clamp 时的 pre-sigmoid density 哨兵
+    enabled: false              # ★ A1 开关（3D 薄板；off = 当前 depth-off baseline）
+    band_z: 0.15                # m，排除薄板半厚
+    cell: 0.20                  # m，road 高度场 BEV 网格
+    xy_dilate: 0.0              # 预留（A1 中 no-op）
+    mode: clamp                 # clamp（prune 预留）
+    clamp_value: -50.0          # mode=clamp 时的 pre-sigmoid density 哨兵
+    projection_enabled: false   # ★ A2 开关（图像空间：投影 bg 到训练相机，命中 road mask 即钳；抓 A1 漏的漂浮 bg）
   relocate:
     max_relocation_fraction: 0.4   # dynfix: 90% 死时 dyn 不会瞬间团聚

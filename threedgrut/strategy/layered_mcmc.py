@@ -25,6 +25,7 @@ from threedgrut.model.road_reg import (
     clamp_layer_scales,
     build_road_bev_height,
     bg_in_road_slab_mask,
+    project_bg_road_hits,
 )
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.strategy.mcmc import MCMCStrategy
@@ -142,6 +143,10 @@ class LayeredMCMCStrategy(BaseStrategy):
         # A1 — hard-exclude background gaussians from the thin road slab so the
         # frozen road layer owns the road surface. No-op unless enabled.
         self._maybe_exclude_bg_from_road_slab()
+        # A2 — image-space variant: project bg centers into this training camera
+        # and clamp those landing on road-mask pixels (catches floating bg the
+        # 3D slab misses). No-op unless projection_enabled.
+        self._maybe_project_clamp_bg_density(batch)
         return any_updated
 
     def _maybe_clamp_dynamic_rigids(self) -> None:
@@ -266,6 +271,64 @@ class LayeredMCMCStrategy(BaseStrategy):
             return
         with torch.no_grad():
             bg.density[mask] = float(getattr(cfg, "clamp_value", -50.0))
+
+    def _maybe_project_clamp_bg_density(self, batch) -> None:
+        """A2: project background gaussian centers into the current training
+        camera and hard-clamp the opacity of those landing on road-mask pixels.
+        Catches floating bg above the road that the 3D slab (A1) misses (caught
+        by WHERE it projects, not its 3D height). Gradient-free, every step.
+        No-op unless ``strategy.bg_road_slab_exclude.projection_enabled`` is true.
+        """
+        strat = getattr(self.conf, "strategy", None)
+        cfg = getattr(strat, "bg_road_slab_exclude", None) if strat is not None else None
+        if cfg is None or not getattr(cfg, "projection_enabled", False):
+            return
+        if batch is None:
+            return
+        image_infos = getattr(batch, "image_infos", None)
+        road_mask_t = image_infos.get("road_mask") if isinstance(image_infos, dict) else None
+        T_to_world = getattr(batch, "T_to_world", None)
+        if road_mask_t is None or T_to_world is None:
+            return
+        layers = getattr(self.model, "layers", None)
+        if not layers or "background" not in layers:
+            return
+        bg = layers["background"]
+        if bg.positions.shape[0] == 0:
+            return
+
+        # Camera model: FTheta (PAI) or OpenCVPinhole (NCore inceptio).
+        ftheta = getattr(batch, "intrinsics_FThetaCameraModelParameters", None)
+        pinhole = getattr(batch, "intrinsics_OpenCVPinholeCameraModelParameters", None)
+        if ftheta is not None:
+            intr, model_type = ftheta, "ftheta"
+        elif pinhole is not None:
+            intr, model_type = pinhole, "pinhole"
+        else:
+            return
+        # Projectors expect numpy arrays in the dict; coerce any tensor values.
+        intr_np = {
+            k: (v.detach().cpu().numpy() if torch.is_tensor(v) else v)
+            for k, v in intr.items()
+        }
+
+        rm = road_mask_t.detach().cpu().numpy()
+        T_c2w = T_to_world[0].detach().cpu().numpy()
+        bg_xyz = bg.positions.detach().cpu().numpy()
+        hits = project_bg_road_hits(bg_xyz, T_c2w, intr_np, model_type, rm)
+
+        n_hit = int(hits.sum())
+        self._bg_proj_calls = getattr(self, "_bg_proj_calls", 0) + 1
+        if self._bg_proj_calls == 1 or self._bg_proj_calls % 500 == 0:
+            logger.info(
+                f"[A2] bg_road_proj_clamp: clamped {n_hit} background gaussians "
+                f"(call #{self._bg_proj_calls})"
+            )
+        if n_hit == 0:
+            return
+        hit_t = torch.from_numpy(hits).to(bg.density.device)
+        with torch.no_grad():
+            bg.density[hit_t] = float(getattr(cfg, "clamp_value", -50.0))
 
     def suspend(self) -> None:
         super().suspend()
