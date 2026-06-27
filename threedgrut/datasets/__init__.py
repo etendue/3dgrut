@@ -146,6 +146,9 @@ def make(name: str, config, ray_jitter):
                 lidar_depth_aux_root=config.dataset.get("lidar_depth_aux_root", None),  # T11.C1
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1
                 depth_prior_aux_root=config.dataset.get("depth_prior_aux_root", None),  # T11.D1
+                load_auto_cuboids=config.dataset.get("load_auto_cuboids", False),  # cuboid_autogen
+                auto_cuboids_shard_path=config.dataset.get("auto_cuboids_shard_path", None),
+                auto_cuboids_instance_name=config.dataset.get("auto_cuboids_instance_name", "auto_v0"),
             )
             # Validation uses same temporal window as training by default
             train_seek_offset = config.dataset.train.get("seek_offset_sec", 0.0)
@@ -187,6 +190,9 @@ def make(name: str, config, ray_jitter):
                 lidar_depth_aux_root=config.dataset.get("lidar_depth_aux_root", None),  # T11.C1 (val)
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1 (val)
                 depth_prior_aux_root=config.dataset.get("depth_prior_aux_root", None),  # T11.D1 (val)
+                load_auto_cuboids=config.dataset.get("load_auto_cuboids", False),  # cuboid_autogen (val)
+                auto_cuboids_shard_path=config.dataset.get("auto_cuboids_shard_path", None),
+                auto_cuboids_instance_name=config.dataset.get("auto_cuboids_instance_name", "auto_v0"),
             )
         case _:
             raise ValueError(

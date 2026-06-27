@@ -421,6 +421,13 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 - **asset-harvester-verify**：真实 NCore 端到端跑通，3 车+3 人各 ~99k 高斯，可运行性闸门已解。
 
 **新条目（本 plan 启动后填充）**：
+- **2026-06-26 [out-of-plan / superpowers] cuboid_autogen — 纯 LiDAR 自动生成车辆 cuboids → V4 shard → dynamic_rigids init**（独立 plan `docs/superpowers/plans/2026-06-25-lidar-cuboid-autogen.md`，分支 claude/beautiful-newton-fa35e1）：
+  - 新模块 `threedgrut/datasets/cuboid_autogen/`（labels / cluster=DBSCAN+min-area-rect 朝向框 / track=关联+动静+插值 / bev_metric / lidar_source / v4_writer）+ CLI `scripts/gen_cuboids_from_lidar.py` + GT 验证 `scripts/eval_cuboids_vs_gt.py`；`datasetNcore` Branch A 接线（`load_auto_cuboids` 开关，下游 get_cuboid_track_observations/tracks_loader/trainer/init 零改）。
+  - **O1 硬门**（inceptio 真 SDK）：官方 `SequenceComponentGroupsWriter` 写的 cuboids shard 可被 `SequenceComponentGroupsReader([meta,shard])` append 读回（三要素：generic_meta_data 对齐源 / 独特 group_name / instance_name；reference_frame_id="world" 字段保真）。
+  - **Mac 21 纯函数测试绿** + inceptio round-trip / 逐帧 LiDAR 源 / 接线 verify 全 PASS。
+  - **端到端实测**（9ae_consolidated）：CLI 184 帧 / 937 clusters / 456007 车辆点 → 36 动态 track / 467 obs → shard；接线 415 obs → load_tracks 30 tracks（cam_ts 50ms 匹配 + class 字符串两道静默失败防线通）→ init 70879 particles；**1k smoke** dynamic_rigids **94363 particles**（502072 动态点 × 36 cuboids），训练 1000 iter / 80.94s / 12.35 it/s 不崩。
+  - **GT 定量**（vs 13657 GT，BEV match center-dist≤2m）：precision 0.525 / center-err 1.30m / BEV-IoU 0.285 / **yaw-MAE 65°** / recall 0.049（auto 仅动态 vs GT 全部车）。
+  - **已知局限（O2 follow-up，已记 task chip）**：纯几何（PCA / min-area-rect 实测同）对单边/稀疏 LiDAR 车点 yaw 不可靠（~65°）→ L-shape fitting / 轨迹运动方向定 yaw / 车类先验尺寸定中心待做；cuboid 仅做 init、训练 pose_adjustment 修，但 yaw 65° 是不利起点。
 - **2026-06-04 Phase 0 per-class evaluator 落地 + baseline 实测**（A.1 / C / D）：
   - 新建 [`per_class_eval.py`](threedgrut/model/per_class_eval.py)（`compute_per_class_metrics` / `compute_lpips_in_mask`(GT-fill) / `class_mask_from_sseg`，纯张量、LPIPS 依赖注入、cv2/NCore-free）+ [`tests/test_per_class_eval.py`](threedgrut/tests/test_per_class_eval.py)（11 测试，Mac `.venv`/py3.12 全绿，跑法 `pytest ... --noconftest`）。
   - [`datasetNcore.py`](threedgrut/datasets/datasetNcore.py)：**根因修复**——sseg 原只在 **train 分支**（L935）加载，**val/test 分支（eval 真路径）从未加载**（与 lidar/depth 同款双路径坑，L1077-1084 注释已记载同类修复）；在 val 分支补 sseg 加载 + raw `semantic_sseg` 透传到 `image_infos`（render-res NEAREST resize）。
