@@ -271,8 +271,12 @@ def project_bg_road_hits(bg_xyz, T_c2w, intr_dict, model_type, road_mask):
     # Scale projector pixel coords (intrinsics resolution) to road_mask res.
     res = np.asarray(intr_dict["resolution"], dtype=np.float64).ravel()
     Wi, Hi = float(res[0]), float(res[1])
-    u = uv[:, 0] * (Wm / Wi)
-    v = uv[:, 1] * (Hm / Hi)
+    # project_points can emit NaN/inf uv for behind-camera / degenerate points
+    # (already flagged not-visible in `vis`); sanitize to an out-of-bounds
+    # sentinel before the int cast so it's masked by `inb` without a
+    # RuntimeWarning + garbage-int cast.
+    u = np.nan_to_num(uv[:, 0] * (Wm / Wi), nan=-1.0, posinf=-1.0, neginf=-1.0)
+    v = np.nan_to_num(uv[:, 1] * (Hm / Hi), nan=-1.0, posinf=-1.0, neginf=-1.0)
     ui = np.round(u).astype(np.int64)
     vi = np.round(v).astype(np.int64)
     inb = vis & (ui >= 0) & (ui < Wm) & (vi >= 0) & (vi < Hm)
