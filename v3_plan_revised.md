@@ -471,6 +471,14 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **指标双盲区坐实（P3.3 立项）**：`NOVEL_VIEW_MODES` 仅 lateral_1m/2m + yaw_5/10deg（**幅度盲区**——3m/6m 不在测量范围，P3.1-A「novel 0.5962 安全」仅 ≤2m 成立）+ 全图 LPIPS 沥青/bg 主导（**区域盲区**——lane 在 novel 下糊掉指标无反应，P0.3 沥青主导问题在 novel 轴重演）；B3 细长高斯（aniso 30）与外推目标张力未测（hair-thin artifact 经典来源，V3-R1.2 当年收紧正为此）→ P3.3 三方 ckpt A/B 直接回答。
   - **耦合现状量化（P3.4 立项）**：V3-R2 后路面区 bg 粒子 −86%，但 road 自身仅盖 68%、bg 替补 24%（Phase 2A）——残余耦合非纯寄生（bg 在补 road 的洞，硬切出洞 → P3.2 绑覆盖率，R10）；z_band=0.4m 窄带软驱逐，**0.4m 以上空气区悬浮 bg 零约束 = novel 鬼影主要来源**（两问题交汇点）。
   - **排期（分层）**：P3.3 测量门扩展（第 0 层先行，纯 eval；4 档 avg 口径不变保历史可比）→ P3.4 空气区 penalty + P3.5 road SH DC-only freeze 法（第 1 层短刀，gate=P3.3 锚；⚠️ **先定 PR #24 去留**防 road spec 漂移，R9）→ P3.2 绑 road 覆盖率补足（第 2 层）→ **BEV 纹理平面化入 v4 backlog**（第 3 层终极方向，§5）。看板 §1.1/1.2/1.3/1.4 + §2.3 诊断小节 + §4 R9/R10 同步更新（Phase 3 任务数 2/3→2/6，总计 6/19→6/22）。
+- **2026-06-27 road→bg takeover 攻破（A1+A2，= P3.4「空气区悬浮 bg」的硬实现）— ✅ 强验证**（commits `83aefb3` A-bugfix / `8b0fa92` A1 / `d269b3b` A2；9ae depth-off inceptio；报告 [docs/road_takeover_a1a2.md](docs/road_takeover_a1a2.md)）：
+  - **根因坐实**：fused 单 alpha 渲染无 per-pixel 层归属（`mask_field` 声明却从未被渲染消费）→ 高容量 bg 占路面外观；depth-off 下 bg 用**错误深度**画路面（漂浮在路面上方空气区）→ 训练视角合法、novel 横移/转动视差暴露 → 路面扭曲。**30k 解决不了**（架构竞争，非收敛；eff_rank 反 3k→30k 退化）。
+  - **A1（3D 薄板钳）便宜但不够**：只钳中心在 ±0.15m 薄板内的 bg；诊断 A1 ckpt 见 **~19.9 万 bg 漂浮在路面上方 0.15–2m（~7.4 万活跃）画白条**，A1 漏掉；加厚薄板会误删合法的路面上方物体（车/牌）。grad_corr +0.10 但 **band_psnr −1.5**、viser 白条仍在 bg。
+  - **A2（图像空间投影门控）= 解**：每步投 bg 中心到训练相机、查 `image_infos["road_mask"]`、命中 road 像素即硬钳 density（按「投到哪」抓漂浮 bg；road sseg 只含路面类，不误伤车/物体）。**无梯度（绕开 E3.2.6 软惩罚失败）+ 不改 CUDA**（tracer 冻结，per-pixel gate 不可行）。复用 per-step clamp 钩子 + `_project_cuboids_to_dyn_mask` 投影先例。
+  - **3k 单变量 A/B（off-track）全胜**：A1+A2 vs baseline → **lane_grad_corr +0.13 / lane_band_psnr +3.6 / cc_masked +0.09 / road_crop_psnr +2.0 / lpips −0.0035**，**6 档全档、结构+光度+守门全绿且反超 A1-only**。band_psnr 暴涨主因 = 清掉错误深度漂浮 bg → 路面几何归位、novel 不再扭曲（非「变灰」，feasibility 预测被推翻）。float 诊断：板内活跃 943→17、路面投影漂浮 −1.3 万、被赶 bg relocate 到 >2m。
+  - **viser 目视（大g）**：① 白条已转移到 **road 层**（takeover 修复）；② off-route 一致性提升；③ 白条锐度尚不够但**可接受、与训练时长相关**。
+  - **config**：`strategy.bg_road_slab_exclude.{enabled(A1), projection_enabled(A2)}` 默认 off（字节等价 baseline）。Mac/CPU 测试（pinhole 投影 + 钳逻辑）+ GPU smoke + 三方 metrics + viser 四重验证。
+  - **未决**：A1+A2 **30k 跑中**（验增益保持 + 锐度）；**B（road 外观容量）暂缓**（大g 判可接受）；A2 numpy 投影 ~25% slowdown（热则移 GPU）。
 
 ---
 
