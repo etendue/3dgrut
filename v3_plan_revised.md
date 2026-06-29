@@ -480,6 +480,12 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **config**：`strategy.bg_road_slab_exclude.{enabled(A1), projection_enabled(A2)}` 默认 off（字节等价 baseline）。Mac/CPU 测试（pinhole 投影 + 钳逻辑）+ GPU smoke + 三方 metrics + viser 四重验证。
   - **未决**：A1+A2 **30k 跑中**（验增益保持 + 锐度）；**B（road 外观容量）暂缓**（大g 判可接受）；A2 numpy 投影 ~25% slowdown（热则移 GPU）。
 
+- **2026-06-29 A1+A2 迁移 inceptio 确认（线路 B ✅）+ road warmup-then-freeze 立项（线路 A 🟡 30k 跑中）+ NaN 投影修复**（commits `f89d1a9` road-freeze / `da7c6fa` NaN-cast；两条线 subagent 并行）：
+  - **线路 B ✅ — A1+A2 迁移到 inceptio 4cabad44（OpenCVPinhole）确认**（原始目标闭合）：A1+A2 此前只在 9ae（PAI/FTheta）验证，本次在 inceptio 4cabad44（5cam 去 front_tele，OpenCVPinhole 模型）smoke 跑通——**`[A2] N=4823` bg 命中 road 投影钳、`[A1] N=356429` 薄板钳，无 crash**，`ckpt_last.pt` 写出，smoke PSNR 17–19 dB（frames 66–73）。证明 A2 的图像空间投影门控**对 pinhole / ftheta 两种相机模型都成立**（`project_bg_road_hits` 走 `PinholeForwardProjector` 分支），「PAI 优化的修复反馈回 inceptio 原始数据」这条路打通。
+  - **线路 A — road warmup-then-freeze（`strategy.road_freeze_iter`，默认 0=off）**：动机 = **30k A1+A2 不冻外观时 road novel-view 退化**（off-track：grad_corr 0.40→0.35、band_psnr 17.5→14.5、cc 掉；大g viser 目视「road 30k 比 3k 差、overall 30k 更好」）= **road 外观过拟合**（road 几何 frozen，但 albedo/density 仍可训→漂移）。修复 = `_post_backward` 在 `step >= road_freeze_iter` 后把 road 层全部 6 个可训参数（positions/rotation/scale/density/features_albedo/features_specular）的 `.grad` 清零 → warmup 阶段路面外观正常训、N 步后整体冻住，保住 3k 峰值的同时让 bg/车继续收敛到 30k。4 个 CPU 回归测试 pin 住（freeze 后全零 / freeze 前不动 / disabled no-op / key 缺失 no-op）。
+  - **NaN 投影修复（`da7c6fa`）**：A2 的 `project_bg_road_hits` 中 Ftheta/Pinhole 投影器对相机后方/退化点吐 NaN/inf UV，虽已被 `inb`（vis=False）屏蔽但 `np.round().astype(int64)` cast 仍触发 RuntimeWarning + 垃圾整数 → 加 `np.nan_to_num(..., nan=-1.0)` 哨兵值在 cast 前清洗。
+  - **🟡 跑中**：road-freeze 30k（A800 GPU1，`road_freeze_iter=5000`，9ae depth-off）。跑完比对三条：road off-track 是否 ≈ a1a2_3k 峰值（**保住**不退化）、是否 > a1a2_30k（不冻那版的退化）、overall 是否 ≈ 30k baseline → 验证 warmup-freeze 解「road vs overall」张力。**未达 metrics.json 实测前不标 ✅。**
+
 ---
 
 ## 7. 与旧 plan 的关系（traceability 速查）
