@@ -484,7 +484,14 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
   - **线路 B ✅ — A1+A2 迁移到 inceptio 4cabad44（OpenCVPinhole）确认**（原始目标闭合）：A1+A2 此前只在 9ae（PAI/FTheta）验证，本次在 inceptio 4cabad44（5cam 去 front_tele，OpenCVPinhole 模型）smoke 跑通——**`[A2] N=4823` bg 命中 road 投影钳、`[A1] N=356429` 薄板钳，无 crash**，`ckpt_last.pt` 写出，smoke PSNR 17–19 dB（frames 66–73）。证明 A2 的图像空间投影门控**对 pinhole / ftheta 两种相机模型都成立**（`project_bg_road_hits` 走 `PinholeForwardProjector` 分支），「PAI 优化的修复反馈回 inceptio 原始数据」这条路打通。
   - **线路 A — road warmup-then-freeze（`strategy.road_freeze_iter`，默认 0=off）**：动机 = **30k A1+A2 不冻外观时 road novel-view 退化**（off-track：grad_corr 0.40→0.35、band_psnr 17.5→14.5、cc 掉；大g viser 目视「road 30k 比 3k 差、overall 30k 更好」）= **road 外观过拟合**（road 几何 frozen，但 albedo/density 仍可训→漂移）。修复 = `_post_backward` 在 `step >= road_freeze_iter` 后把 road 层全部 6 个可训参数（positions/rotation/scale/density/features_albedo/features_specular）的 `.grad` 清零 → warmup 阶段路面外观正常训、N 步后整体冻住，保住 3k 峰值的同时让 bg/车继续收敛到 30k。4 个 CPU 回归测试 pin 住（freeze 后全零 / freeze 前不动 / disabled no-op / key 缺失 no-op）。
   - **NaN 投影修复（`da7c6fa`）**：A2 的 `project_bg_road_hits` 中 Ftheta/Pinhole 投影器对相机后方/退化点吐 NaN/inf UV，虽已被 `inb`（vis=False）屏蔽但 `np.round().astype(int64)` cast 仍触发 RuntimeWarning + 垃圾整数 → 加 `np.nan_to_num(..., nan=-1.0)` 哨兵值在 cast 前清洗。
-  - **🟡 跑中**：road-freeze 30k（A800 GPU1，`road_freeze_iter=5000`，9ae depth-off）。跑完比对三条：road off-track 是否 ≈ a1a2_3k 峰值（**保住**不退化）、是否 > a1a2_30k（不冻那版的退化）、overall 是否 ≈ 30k baseline → 验证 warmup-freeze 解「road vs overall」张力。**未达 metrics.json 实测前不标 ✅。**
+  - **❌ road-freeze 30k 阴性（A800，`road_freeze_iter=5000`，9ae depth-off，metrics 实测）**：freeze 机制证明无 bug（ckpt 逐字节 diff：6 个路面参数 7k↔30k 完全相同）。但 road_only lane（同 eval 脚本+lane mask，确定性三方）：a1a2_3k **0.4257** / a1a2_30k 不冻 **0.4100** / freeze-30k **0.4125** → **freeze ≈ 不冻、远低于 3k 峰值**，没保住。根因翻转：见下条 2026-06-30。
+
+- **2026-06-30 novel-view 路面退化根因定位 = 路面下方 bg「雾」垃圾 + A1-down 修复（commit `5660f15`，TDD 9/9）**：freeze 阴性触发系统化根因调查（ckpt 静态分析 + viser 目视，大g 复核确认）：
+  - **road_only eval 的盲区**：`road_only=True` 只渲 road 层（bg/dyn/sky 关），所以 freeze 三方数字（0.41~0.43）只反映 road 层自己外观过拟合，**温和**；而 viser full 渲染下大g 看到 30k 路面崩坏严重 → 二者矛盾 → 真凶在 **bg**，被 road_only 关掉了。
+  - **定位（diag 脚本，3k/7k/30k 轨迹）**：+z 朝上（bg 主体 z≈+5.4 在路面上方）。**路面下方（dz<0、over footprint）的 bg 是一团「雾→实心板」垃圾**：3k=4680 个近全透明雾（op 0.002、深 -3.3m、看不见）→ 30k=1960 个但 **166 个完全不透明大板（op≥0.99）、面积 28m²、上浮到路面下 -1.3m**，遮挡质量（Σop·area）**172→3151（18×）**。完美对应大g「3k 弱/无 → 30k 强」+「云状雾状、完全不是物体」。
+  - **机理**：路面下方 on-track 视角被不透明路面**全遮挡 → 零光度监督 → MCMC 往下倾倒高斯、优化器放任凝结**；novel/抬升视角路面挡不住 → 透出强白 wash。**A1 漏**（深 1-3m ≫ ±0.15m 薄板）；**A2 漏**（被遮挡、训练视角投不到 road_mask；最终 ckpt op=1.0 证明 A2 全程没钳过）。**A1/A2 修的是「bg 抢车道线几何」（3k 有效），与此独立的第二条病根。**
+  - **A1-down 修复**：路面底下无合法物体 → 钳「路面足迹下方半空间」全部 bg（`road_reg.bg_under_road_mask` + `_maybe_clamp_bg_under_road`，无梯度、每步、复用 A1 BEV）。config `strategy.bg_road_slab_exclude.{under_road_enabled,under_road_margin}` 默认 off=字节等价。Mac TDD 2 CPU 测试（几何+钳）9/9 绿。
+  - **🟡 待跑**：A1-down on（叠加 A1+A2）30k，验「清掉路面下雾 → novel 路面是否恢复 + 白 wash 是否消失」。**未实测前不标 ✅。**
 
 ---
 
