@@ -18,23 +18,23 @@ Claude 可以**直接通过 `ssh a800-x2` 访问 A800 GPU 主机**执行训练 /
 
 ### ⚠️ conda env 激活（每次 ssh 必须）
 
-**ssh non-interactive shell 不继承 conda PATH**——直接 `conda activate 3dgrut` 或 `python ...` 会报 `conda: command not found` / `python: command not found`。每个 `ssh a800-x2` 命令开头都必须先 source conda init：
+**ssh non-interactive shell 不继承 conda PATH**——直接 `conda activate 3dgrut2` 或 `python ...` 会报 `conda: command not found` / `python: command not found`。每个 `ssh a800-x2` 命令开头都必须先 source conda init：
 
 ```bash
-ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut && cd /root/work/yusun/repo/3dgrut && python -c "..." '
+ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut2 && cd /root/work/yusun/repo/3dgrut && python -c "..." '
 ```
 
 或一次性导 env PATH（跑训练 / pytest 推荐，让 slangc 等 env 内工具都可见）：
 
 ```bash
-ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH && cd /root/work/yusun/repo/3dgrut && python train.py ...'
+ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut2/bin:$PATH && cd /root/work/yusun/repo/3dgrut && python train.py ...'
 ```
 
 历史踩坑（v2_plan.md L950-955）：仅设 `CUDA_VISIBLE_DEVICES` 但不 source conda init 会触发 `FileNotFoundError: 'slangc'`（slangc 装在 env 内）。
 
-可用 conda envs（`conda info --envs`）：`base`（miniforge3）/ `3dgrut`（主开发环境）/ `drivestudio` / `j6`（~/.bashrc 默认）。
+可用 conda envs（`conda info --envs`，2026-06-30 实测）：`base`（miniforge3）/ **`3dgrut2`（主开发环境，跟 inceptio 同名；旧文档写的 `3dgrut` 已不存在 —— 用错名字会报 `python: command not found`）** / `j6`（~/.bashrc 默认）/ `cam-gs` / `Wan`。
 
-执行模式：用 `Bash` 工具单条 `ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut && ...'` 心跳；长任务（≥ 5 min）用 `run_in_background=true`，Claude 会被自动通知完成；用 `tee /tmp/<run>.log` 同步 grep "PSNR" / 错误。
+执行模式：用 `Bash` 工具单条 `ssh a800-x2 'source /root/miniforge3/etc/profile.d/conda.sh && conda activate 3dgrut2 && ...'` 心跳；长任务（≥ 5 min）用 `run_in_background=true`，Claude 会被自动通知完成；用 `tee /tmp/<run>.log` 同步 grep "PSNR" / 错误。
 
 **触发同步 plan/architecture 时机不变**：远程任务跑完后，把实际 per-class PSNR / LPIPS / commit hash / iter speed 等写回 [`v3_plan_revised.md`](v3_plan_revised.md) § 6 Done Log + [`v2_architecture.md`](v2_architecture.md) § 7 关键不变量。
 
@@ -343,7 +343,7 @@ echo y | /Users/etendue/repo/ncore/.venv/bin/vastai destroy instance <ID> \
 
 ```bash
 # A800 标准启动（sky_backend=mlp 必须，nvdiffrast 不可用）
-ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut/bin:$PATH \
+ssh a800-x2 'export PATH=/root/miniforge3/envs/3dgrut2/bin:$PATH \
   && export CUDA_VISIBLE_DEVICES=0 \
   && export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   && cd /root/work/yusun/repo/3dgrut \
