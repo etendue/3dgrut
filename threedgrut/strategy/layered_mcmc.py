@@ -21,7 +21,12 @@ from omegaconf import OmegaConf
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.model.bg_cuboid_loss import clamp_layer_positions_to_cuboids
-from threedgrut.model.road_reg import clamp_layer_scales
+from threedgrut.model.road_reg import (
+    clamp_layer_scales,
+    build_road_bev_height,
+    bg_in_road_slab_mask,
+    project_bg_road_hits,
+)
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.strategy.mcmc import MCMCStrategy
 from threedgrut.utils.logger import logger
@@ -41,6 +46,9 @@ class LayeredMCMCStrategy(BaseStrategy):
             sub = MCMCStrategy(sub_conf, model.layers[spec.name])
             self._install_perturb_mask(sub, spec)
             self.sub_strategies[spec.name] = sub
+        # A1: cached BEV road-height field for background-slab exclusion (built
+        # lazily on first use; road layer is ~frozen so it stays valid).
+        self._road_bev = None
         logger.info(
             f"LayeredMCMC: {len(self.sub_strategies)} sub-strategies for "
             f"layers {list(self.sub_strategies.keys())}"
@@ -132,6 +140,13 @@ class LayeredMCMCStrategy(BaseStrategy):
         # V3-R1.2 — road-layer scale clamp (XY/Z upper bound + anisotropy ratio).
         # No-op for layers whose LayerSpec leaves all 3 clamp fields None.
         self._maybe_clamp_road_scales()
+        # A1 — hard-exclude background gaussians from the thin road slab so the
+        # frozen road layer owns the road surface. No-op unless enabled.
+        self._maybe_exclude_bg_from_road_slab()
+        # A2 — image-space variant: project bg centers into this training camera
+        # and clamp those landing on road-mask pixels (catches floating bg the
+        # 3D slab misses). No-op unless projection_enabled.
+        self._maybe_project_clamp_bg_density(batch)
         return any_updated
 
     def _maybe_clamp_dynamic_rigids(self) -> None:
@@ -210,6 +225,110 @@ class LayeredMCMCStrategy(BaseStrategy):
             with torch.no_grad():
                 # copy_ (not .data=) bumps the param version so autograd/optimizer stay consistent
                 layer.scale.copy_(clamp_layer_scales(layer.scale.detach(), spec))
+
+    def _maybe_exclude_bg_from_road_slab(self) -> None:
+        """A1: hard-clamp opacity of background gaussians inside the road slab
+        to ~0 so the frozen road layer owns the road surface. Gradient-free,
+        runs every optimizer step. No-op unless
+        ``strategy.bg_road_slab_exclude.enabled`` is true.
+        """
+        strat = getattr(self.conf, "strategy", None)
+        cfg = getattr(strat, "bg_road_slab_exclude", None) if strat is not None else None
+        if cfg is None or not getattr(cfg, "enabled", False):
+            return
+        layers = getattr(self.model, "layers", None)
+        if not layers or "background" not in layers or "road" not in layers:
+            return
+        bg = layers["background"]
+        road = layers["road"]
+        if road.positions.shape[0] == 0 or bg.positions.shape[0] == 0:
+            return
+
+        mode = str(getattr(cfg, "mode", "clamp"))
+        if mode != "clamp":
+            raise NotImplementedError(
+                f"bg_road_slab_exclude.mode='{mode}' not implemented in A1 (use 'clamp')"
+            )
+
+        if getattr(self, "_road_bev", None) is None:
+            self._road_bev = build_road_bev_height(
+                road.positions.detach(), cell=float(getattr(cfg, "cell", 0.20))
+            )
+        mask = bg_in_road_slab_mask(
+            bg.positions.detach(), self._road_bev, band_z=float(getattr(cfg, "band_z", 0.15))
+        )
+        # Observability (review caveat): log how many bg gaussians are clamped so
+        # the A/B run shows the exclusion is firing (and not fighting photometric
+        # gradients). Throttled: first call + every 500th.
+        n_excl = int(mask.sum())
+        self._bg_excl_calls = getattr(self, "_bg_excl_calls", 0) + 1
+        if self._bg_excl_calls == 1 or self._bg_excl_calls % 500 == 0:
+            logger.info(
+                f"[A1] bg_road_slab_exclude: clamped {n_excl} background gaussians "
+                f"(call #{self._bg_excl_calls})"
+            )
+        if n_excl == 0:
+            return
+        with torch.no_grad():
+            bg.density[mask] = float(getattr(cfg, "clamp_value", -50.0))
+
+    def _maybe_project_clamp_bg_density(self, batch) -> None:
+        """A2: project background gaussian centers into the current training
+        camera and hard-clamp the opacity of those landing on road-mask pixels.
+        Catches floating bg above the road that the 3D slab (A1) misses (caught
+        by WHERE it projects, not its 3D height). Gradient-free, every step.
+        No-op unless ``strategy.bg_road_slab_exclude.projection_enabled`` is true.
+        """
+        strat = getattr(self.conf, "strategy", None)
+        cfg = getattr(strat, "bg_road_slab_exclude", None) if strat is not None else None
+        if cfg is None or not getattr(cfg, "projection_enabled", False):
+            return
+        if batch is None:
+            return
+        image_infos = getattr(batch, "image_infos", None)
+        road_mask_t = image_infos.get("road_mask") if isinstance(image_infos, dict) else None
+        T_to_world = getattr(batch, "T_to_world", None)
+        if road_mask_t is None or T_to_world is None:
+            return
+        layers = getattr(self.model, "layers", None)
+        if not layers or "background" not in layers:
+            return
+        bg = layers["background"]
+        if bg.positions.shape[0] == 0:
+            return
+
+        # Camera model: FTheta (PAI) or OpenCVPinhole (NCore inceptio).
+        ftheta = getattr(batch, "intrinsics_FThetaCameraModelParameters", None)
+        pinhole = getattr(batch, "intrinsics_OpenCVPinholeCameraModelParameters", None)
+        if ftheta is not None:
+            intr, model_type = ftheta, "ftheta"
+        elif pinhole is not None:
+            intr, model_type = pinhole, "pinhole"
+        else:
+            return
+        # Projectors expect numpy arrays in the dict; coerce any tensor values.
+        intr_np = {
+            k: (v.detach().cpu().numpy() if torch.is_tensor(v) else v)
+            for k, v in intr.items()
+        }
+
+        rm = road_mask_t.detach().cpu().numpy()
+        T_c2w = T_to_world[0].detach().cpu().numpy()
+        bg_xyz = bg.positions.detach().cpu().numpy()
+        hits = project_bg_road_hits(bg_xyz, T_c2w, intr_np, model_type, rm)
+
+        n_hit = int(hits.sum())
+        self._bg_proj_calls = getattr(self, "_bg_proj_calls", 0) + 1
+        if self._bg_proj_calls == 1 or self._bg_proj_calls % 500 == 0:
+            logger.info(
+                f"[A2] bg_road_proj_clamp: clamped {n_hit} background gaussians "
+                f"(call #{self._bg_proj_calls})"
+            )
+        if n_hit == 0:
+            return
+        hit_t = torch.from_numpy(hits).to(bg.density.device)
+        with torch.no_grad():
+            bg.density[hit_t] = float(getattr(cfg, "clamp_value", -50.0))
 
     def suspend(self) -> None:
         super().suspend()

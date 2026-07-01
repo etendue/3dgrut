@@ -38,6 +38,45 @@ def test_mcmc_get_add_cap_defaults_to_conf(real_conf):
     assert strat._get_add_cap() == real_conf.strategy.add.max_n_gaussians
 
 
+def test_relocate_and_add_handle_empty_layer_without_zerodiv(real_conf):
+    """Regression (inceptio 5cam crash #2, 2026-06-26).
+
+    LayeredMCMCStrategy runs one MCMCStrategy sub per particle layer. A clip with
+    no cuboid autolabels leaves dynamic_rigids empty (0 particles), so that sub's
+    ``model.get_density()`` is a 0-row tensor and ``model.num_gaussians == 0``.
+    The print_stats lines divided by the particle count —
+    ``n_dead / len(densities)`` (relocate) and
+    ``num_to_add / current_num_gaussians`` (add) — raising ZeroDivisionError and
+    crashing MCMC at the first densification step. Both divisions are now guarded.
+    """
+    import copy
+
+    import torch
+    from omegaconf import OmegaConf
+
+    from threedgrut.strategy.mcmc import MCMCStrategy
+
+    class _EmptyLayer:
+        """Minimal stand-in for an empty MoG particle layer."""
+
+        num_gaussians = 0
+
+        def get_density(self):  # 0-row density, as a never-populated layer has
+            return torch.zeros((0, 1))
+
+    conf = copy.deepcopy(real_conf)
+    OmegaConf.set_struct(conf, False)
+    conf.strategy.print_stats = True  # force the division branch to execute
+
+    strat = MCMCStrategy.__new__(MCMCStrategy)
+    strat.conf = conf
+    strat.model = _EmptyLayer()
+
+    # Pre-fix: each of these raised ZeroDivisionError on the print_stats line.
+    strat.relocate_gaussians()
+    strat.add_new_gaussians()
+
+
 
 
 # --- T2.2: LayeredMCMCStrategy sub-strategy array ---
