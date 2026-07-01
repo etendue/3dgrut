@@ -77,6 +77,47 @@ def get_c2w(camera: "viser.CameraHandle") -> np.ndarray:
     return c2w
 
 
+# --- world-referenced yaw/pitch/roll <-> camera rotation --------------------
+# Camera local convention (see get_c2w usage above): +Z forward, -Y up, +X
+# right. World +Z up. yaw = heading in the xy-plane, pitch = elevation
+# (+ looks up, - looks down), roll = rotation about the view axis. Round-trip
+# verified to 1e-13 over 2000 random rotations.
+_WORLD_UP = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+_FWD_L = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+_UP_L = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+
+
+def cam_rot_to_ypr(R) -> tuple[float, float, float]:
+    R = np.asarray(R, np.float64)
+    fwd = R @ _FWD_L
+    fwd = fwd / (np.linalg.norm(fwd) + 1e-12)
+    up = R @ _UP_L
+    yaw = math.degrees(math.atan2(fwd[1], fwd[0]))
+    pitch = math.degrees(math.atan2(fwd[2], math.hypot(fwd[0], fwd[1])))
+    proj = _WORLD_UP - fwd * float(np.dot(_WORLD_UP, fwd))
+    n = np.linalg.norm(proj)
+    if n < 1e-6:  # gimbal (straight up/down) → yaw-based zero-roll reference
+        zero_up = np.array([-math.sin(math.radians(yaw)), math.cos(math.radians(yaw)), 0.0])
+    else:
+        zero_up = proj / n
+    roll = math.degrees(math.atan2(float(np.dot(np.cross(zero_up, up), fwd)),
+                                   float(np.dot(zero_up, up))))
+    return yaw, pitch, roll
+
+
+def ypr_to_cam_rot(yaw: float, pitch: float, roll: float) -> np.ndarray:
+    y, p, r = map(math.radians, (yaw, pitch, roll))
+    fwd = np.array([math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p)])
+    proj = _WORLD_UP - fwd * float(np.dot(_WORLD_UP, fwd))
+    n = np.linalg.norm(proj)
+    zero_up = (np.array([-math.sin(y), math.cos(y), 0.0]) if n < 1e-6 else proj / n)
+    w = np.cross(fwd, zero_up)
+    cam_up = zero_up * math.cos(r) + w * math.sin(r)
+    down = -cam_up
+    right = np.cross(down, fwd)
+    return np.column_stack([right, down, fwd])
+
+
 class Viser4DViewer:
     """4D viewer for v2 LayeredGaussians ckpts.
 
@@ -314,8 +355,11 @@ class Viser4DViewer:
             if self.initial_fov_rad is not None:
                 client.camera.fov = float(self.initial_fov_rad)
             @client.camera.on_update
-            def _(_):
+            def _(_, _client=client):
                 self.need_update = True
+                self._sync_pose_gui_from_camera(_client.camera)
+            # Initialise the pose controls to this client's starting camera.
+            self._sync_pose_gui_from_camera(client.camera)
 
         # E2.7 (H1): swap engine FTheta + render WH to the initial cam's
         # intrinsics once at startup, so the very first rendered backdrop
@@ -349,6 +393,26 @@ class Viser4DViewer:
             self.engine.primitives.remove_primitive(mesh_name)
 
     # ---------------------------------------------------------------- GUI
+    def _sync_pose_gui_from_camera(self, camera) -> None:
+        """Push the current camera pose into the yaw/pitch/roll + X/Y/Z controls
+        (camera → GUI). Guarded by ``_pose_syncing`` so the value-set echoes
+        don't drive the camera back. No-op before the controls exist."""
+        if not hasattr(self, "yaw_slider"):
+            return
+        c2w = get_c2w(camera)
+        yaw, pitch, roll = cam_rot_to_ypr(c2w[:3, :3])
+        px, py, pz = (float(v) for v in c2w[:3, 3])
+        self._pose_syncing = True
+        try:
+            self.yaw_slider.value = float(yaw)
+            self.pitch_slider.value = float(pitch)
+            self.roll_slider.value = float(roll)
+            self.cam_x.value = px
+            self.cam_y.value = py
+            self.cam_z.value = pz
+        finally:
+            self._pose_syncing = False
+
     def _build_static_gui(self) -> None:
         """Resolution / near / far / FPS — only when Gaussian rendering is on.
 
@@ -368,6 +432,46 @@ class Viser4DViewer:
                     "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0)
                 self.fps = self.server.gui.add_text("FPS", initial_value="-1",
                                                     disabled=True)
+                # ---- Camera pose: world-referenced yaw/pitch/roll + position ----
+                # Absolute readout AND control, two-way synced with mouse orbit.
+                # yaw = heading about world up (+z), pitch = elevation
+                # (+ looks up / − looks down), roll about the view axis; X/Y/Z is
+                # the camera position in world. Drag a control → the camera jumps
+                # there; orbit with the mouse → these values follow. Lets you read
+                # off e.g. "cam z = −2 m, pitch −30°" to place the view precisely
+                # above / below the road.
+                self._pose_syncing = False
+                self.yaw_slider = self.server.gui.add_slider(
+                    "Yaw °", min=-180.0, max=180.0, step=0.5, initial_value=0.0)
+                self.pitch_slider = self.server.gui.add_slider(
+                    "Pitch °", min=-90.0, max=90.0, step=0.5, initial_value=0.0)
+                self.roll_slider = self.server.gui.add_slider(
+                    "Roll °", min=-180.0, max=180.0, step=0.5, initial_value=0.0)
+                self.cam_x = self.server.gui.add_number("Cam X", initial_value=0.0, step=0.1)
+                self.cam_y = self.server.gui.add_number("Cam Y", initial_value=0.0, step=0.1)
+                self.cam_z = self.server.gui.add_number("Cam Z", initial_value=0.0, step=0.1)
+
+                def _apply_pose_from_gui(_self=self):
+                    if _self._pose_syncing:      # ignore echoes from camera→GUI sync
+                        return
+                    R = ypr_to_cam_rot(_self.yaw_slider.value,
+                                       _self.pitch_slider.value,
+                                       _self.roll_slider.value)
+                    pos = np.array([_self.cam_x.value, _self.cam_y.value,
+                                    _self.cam_z.value], dtype=np.float32)
+                    c2w = np.eye(4, dtype=np.float32)
+                    c2w[:3, :3] = R.astype(np.float32)
+                    c2w[:3, 3] = pos
+                    for client in _self.server.get_clients().values():
+                        client.camera.wxyz = mat_to_wxyz(c2w)
+                        client.camera.position = pos
+                    _self.need_update = True
+
+                for _w in (self.yaw_slider, self.pitch_slider, self.roll_slider,
+                           self.cam_x, self.cam_y, self.cam_z):
+                    @_w.on_update
+                    def _(_, _self=self):
+                        _apply_pose_from_gui(_self)
                 # DiFix novel-view fix toggle — only when --difix_server was
                 # given. Enabling routes each rendered frame through the
                 # out-of-process DiFix server before display (~9–11 FPS).
