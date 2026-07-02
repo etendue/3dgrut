@@ -2260,12 +2260,16 @@ class Trainer3DGRUT:
             }
             _pred = outputs.get("pred_rgb") if isinstance(outputs, dict) else None
             _n_nan_pred = int(torch.isnan(_pred).sum()) if torch.is_tensor(_pred) else -1
+            _nan_px = (
+                torch.isnan(_pred).any(dim=-1).nonzero()[:8].tolist()
+                if torch.is_tensor(_pred) else []
+            )
             raise RuntimeError(
                 f"Non-finite total_loss at step {global_step}: "
                 f"camera_id={getattr(gpu_batch, 'camera_id', '?')} "
                 f"frame_idx={getattr(gpu_batch, 'frame_idx', '?')} "
                 f"timestamp_us={getattr(gpu_batch, 'timestamp_us', '?')} "
-                f"pred_rgb_nan={_n_nan_pred} losses={_terms}"
+                f"pred_rgb_nan={_n_nan_pred} nan_px(b,v,u)={_nan_px} losses={_terms}"
             )
 
         # Back-propagate the gradients and update the parameters
