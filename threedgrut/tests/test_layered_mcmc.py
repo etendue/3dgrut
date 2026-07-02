@@ -354,3 +354,31 @@ def test_make_sub_conf_does_not_mutate_parent(real_conf):
     sub = LayeredMCMCStrategy._make_sub_conf(real_conf, spec)
     assert sub.strategy.add.max_n_gaussians == 123_456
     assert real_conf.strategy.add.max_n_gaussians == original_cap
+
+
+def test_relocate_skips_when_layer_fully_dead(real_conf):
+    """Regression (inc_b6a9 6-cam R1 crash, 2026-07-02).
+
+    A layer whose particles are ALL at/below opacity_threshold has no alive
+    donors: ``alive_idxs`` is empty and ``torch.multinomial`` over the empty
+    probability tensor aborts with CUDA invalid-configuration (RuntimeError
+    on CPU). relocate_gaussians must skip (with a loud warning) instead.
+    """
+    import torch
+
+    from threedgrut.strategy.mcmc import MCMCStrategy
+
+    class _DeadLayer:
+        num_gaussians = 8
+
+        def get_density(self):  # all below any positive opacity threshold
+            return torch.zeros((8, 1))
+
+        def get_scale(self):  # must NOT be reached (guard returns first)
+            raise AssertionError("sample_new_gaussians must not run on a dead layer")
+
+    strat = MCMCStrategy.__new__(MCMCStrategy)
+    strat.conf = real_conf
+    strat.model = _DeadLayer()
+
+    strat.relocate_gaussians()  # pre-fix: crashed in _multinomial_sample

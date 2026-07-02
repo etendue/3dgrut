@@ -126,6 +126,21 @@ class MCMCStrategy(BaseStrategy):
                 dead_idxs = dead_idxs[perm[:cap]]
                 n_dead_gaussians = cap
 
+        # A1-guard: a fully-dead layer has no alive donors — multinomial over
+        # an empty probability tensor aborts with CUDA invalid-configuration
+        # (observed 2026-07-02 inc_b6a9 6-cam R1, layer collapsed by the first
+        # relocation step). Skip relocation and surface the collapse loudly;
+        # the layer size in the log identifies which layer it is.
+        if n_dead_gaussians and len(alive_idxs) == 0:
+            logger.warning(
+                f"[A1] relocate skipped: layer fully dead "
+                f"({n_dead_gaussians}/{len(densities)} particles at or below "
+                f"opacity_threshold={self.conf.strategy.opacity_threshold}) — "
+                f"no alive donors to sample from; layer will not recover via "
+                f"MCMC this step"
+            )
+            return
+
         if n_dead_gaussians:
             sampled_idxs, new_densities, new_scales = self.sample_new_gaussians(n_dead_gaussians, alive_idxs)
 
