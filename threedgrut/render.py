@@ -47,7 +47,7 @@ from threedgrut.utils.eval_metrics import (  # T11.F1 / E1.4
     rgb01_to_uint8_chw,
 )
 from threedgrut.utils.logger import logger
-from threedgrut.utils.misc import create_summary_writer
+from threedgrut.utils.misc import create_summary_writer, replace_nonfinite_pixels
 from threedgrut.utils.render import apply_post_processing
 
 
@@ -564,6 +564,7 @@ class Renderer:
         cc_psnr = []
         cc_ssim = []
         cc_lpips = []
+        nonfinite_pred_px_total = 0  # A1: renderer NaN px replaced with GT
         # V3-T15.2: DiFix post-process metrics. Populated only when
         # self.difix.enabled is True; otherwise the lists stay empty and
         # metrics.json gets no difix_* keys (byte-identical pre-T15.2).
@@ -783,6 +784,15 @@ class Renderer:
                     outputs["pred_rgb"] = self.exposure_model(
                         int(_cidx), outputs["pred_rgb"],
                     )
+
+            # A1-NaN containment (eval): isolated non-finite renderer pixels
+            # (per-pixel ray singularity, see v5 A1) would poison PSNR/LPIPS.
+            # Sanitize in place so every downstream consumer sees the clean
+            # tensor; total replaced px reported in metrics.json.
+            outputs["pred_rgb"], _n_bad_px = replace_nonfinite_pixels(
+                outputs["pred_rgb"], gpu_batch.rgb_gt,
+            )
+            nonfinite_pred_px_total += _n_bad_px
 
             pred_rgb_full = outputs["pred_rgb"]
             rgb_gt_full = gpu_batch.rgb_gt
@@ -1479,6 +1489,15 @@ class Renderer:
             logger.info(
                 f"[T11.F1] mean_lidar_psnr={metrics_json['mean_lidar_psnr']:.3f} dB"
                 f" over {len(lidar_psnrs)} frames"
+            )
+
+        # A1: renderer NaN px replaced with GT during eval — surface the count
+        # so a quality regression can't hide behind silent substitution.
+        if nonfinite_pred_px_total:
+            metrics_json["nonfinite_pred_px"] = int(nonfinite_pred_px_total)
+            logger.warning(
+                f"[A1] eval replaced {nonfinite_pred_px_total} non-finite pred "
+                f"px with GT across the run (renderer ray singularity)"
             )
 
         # V3-L5/L8/L9 — diagnostic fields. Written even when the toggles are

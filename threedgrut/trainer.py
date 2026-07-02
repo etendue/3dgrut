@@ -56,7 +56,12 @@ from threedgrut.optimizers import SelectiveAdam
 from threedgrut.render import Renderer
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.utils.logger import logger
-from threedgrut.utils.misc import check_step_condition, create_summary_writer, jet_map
+from threedgrut.utils.misc import (
+    check_step_condition,
+    create_summary_writer,
+    jet_map,
+    replace_nonfinite_pixels,
+)
 from threedgrut.utils.render import apply_post_processing
 from threedgrut.utils.timer import CudaTimer
 
@@ -984,6 +989,17 @@ class Trainer3DGRUT:
 
         rgb_gt = gpu_batch.rgb_gt
         rgb_pred = outputs["pred_rgb"]
+        # A1-NaN containment (eval side): isolated non-finite renderer pixels
+        # would turn PSNR NaN and crash torchmetrics LPIPS. No backward here,
+        # so GT substitution (zero-error pixel) is safe and negligible
+        # (~1 px / 2M px when it happens at all).
+        rgb_pred, _n_bad_px = replace_nonfinite_pixels(rgb_pred, rgb_gt)
+        if _n_bad_px and not getattr(self, "_nonfinite_eval_warned", False):
+            self._nonfinite_eval_warned = True
+            logger.warning(
+                f"[A1] eval: replaced {_n_bad_px} non-finite pred px with GT "
+                f"(camera={getattr(gpu_batch, 'camera_id', '?')})"
+            )
 
         psnr = self.criterions["psnr"]
         ssim = self.criterions["ssim"]
@@ -2229,6 +2245,39 @@ class Trainer3DGRUT:
                 outputs["pred_rgb"] = self.exposure_model(
                     gpu_batch.camera_idx, outputs["pred_rgb"]
                 )
+
+        # A1-NaN containment: the renderer can emit isolated non-finite pixels
+        # for specific rays (observed 2026-07-02 inc_b6a9 camera_left_wide_90fov:
+        # 1 NaN px/frame). A poisoned forward also poisons its backward
+        # jacobians (0·NaN=NaN survives any loss-side masking — pinned by
+        # test_nonfinite_guard), so the only safe training-side handling is to
+        # DROP the batch: no loss, no backward, no optimizer/MCMC this frame.
+        _pred_chk = outputs.get("pred_rgb") if isinstance(outputs, dict) else None
+        if torch.is_tensor(_pred_chk) and not bool(torch.isfinite(_pred_chk).all()):
+            _n_bad = int((~torch.isfinite(_pred_chk)).any(dim=-1).sum())
+            self._nonfinite_frames = getattr(self, "_nonfinite_frames", 0) + 1
+            # TEMP experiment toggle (A1 NaN investigation): "sanitize" keeps
+            # training on the frame with GT-substituted bad pixels to test
+            # whether the tracer's CUDA backward is safe under zero incoming
+            # grad at those pixels. Default remains the airtight "drop".
+            _policy = os.environ.get("NONFINITE_PRED_POLICY", "drop")
+            if self._nonfinite_frames <= 3 or self._nonfinite_frames % 200 == 0:
+                logger.warning(
+                    f"[A1] non-finite pred_rgb ({_n_bad} px) at step "
+                    f"{global_step}: camera={getattr(gpu_batch, 'camera_id', '?')} "
+                    f"ts={getattr(gpu_batch, 'timestamp_us', '?')} "
+                    f"policy={_policy} (total={self._nonfinite_frames})"
+                )
+            if _policy == "sanitize":
+                outputs["pred_rgb"], _ = replace_nonfinite_pixels(
+                    outputs["pred_rgb"], gpu_batch.rgb_gt,
+                )
+                if "rgb_sky" in outputs and torch.is_tensor(outputs["rgb_sky"]):
+                    outputs["rgb_sky"], _ = replace_nonfinite_pixels(
+                        outputs["rgb_sky"], gpu_batch.rgb_gt,
+                    )
+            else:
+                return
 
         # Compute the losses of a single batch
         with torch.cuda.nvtx.range(f"train_{global_step}_loss"):
