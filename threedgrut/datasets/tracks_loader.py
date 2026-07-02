@@ -141,6 +141,174 @@ def load_tracks_from_manifest(manifest_path: Union[str, Path]) -> Dict[str, dict
     return out
 
 
+def _rotmat_to_quat_wxyz(R: np.ndarray) -> np.ndarray:
+    """3x3 rotation matrix → unit quaternion (w, x, y, z), Shepperd's method.
+
+    Pure numpy (no scipy) to match the module convention; numerically stable
+    for all four trace regimes.
+    """
+    t = float(np.trace(R))
+    if t > 0.0:
+        s = float(np.sqrt(t + 1.0)) * 2.0
+        q = np.array([
+            0.25 * s,
+            (R[2, 1] - R[1, 2]) / s,
+            (R[0, 2] - R[2, 0]) / s,
+            (R[1, 0] - R[0, 1]) / s,
+        ])
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = float(np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])) * 2.0
+        q = np.array([
+            (R[2, 1] - R[1, 2]) / s,
+            0.25 * s,
+            (R[0, 1] + R[1, 0]) / s,
+            (R[0, 2] + R[2, 0]) / s,
+        ])
+    elif R[1, 1] > R[2, 2]:
+        s = float(np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])) * 2.0
+        q = np.array([
+            (R[0, 2] - R[2, 0]) / s,
+            (R[0, 1] + R[1, 0]) / s,
+            0.25 * s,
+            (R[1, 2] + R[2, 1]) / s,
+        ])
+    else:
+        s = float(np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])) * 2.0
+        q = np.array([
+            (R[1, 0] - R[0, 1]) / s,
+            (R[0, 2] + R[2, 0]) / s,
+            (R[1, 2] + R[2, 1]) / s,
+            0.25 * s,
+        ])
+    return q / np.linalg.norm(q)
+
+
+def _quat_wxyz_to_rotmat(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = (q / np.linalg.norm(q)).tolist()
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+    ], dtype=np.float64)
+
+
+def _slerp_wxyz(q0: np.ndarray, q1: np.ndarray, alpha: float) -> np.ndarray:
+    """Spherical lerp with double-cover fix (q ≡ −q → take the short arc)."""
+    q0 = q0 / np.linalg.norm(q0)
+    q1 = q1 / np.linalg.norm(q1)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    if dot > 0.9995:  # near-parallel: nlerp avoids sin(θ)→0 blow-up
+        out = (1.0 - alpha) * q0 + alpha * q1
+        return out / np.linalg.norm(out)
+    theta0 = float(np.arccos(np.clip(dot, -1.0, 1.0)))
+    s0 = np.sin((1.0 - alpha) * theta0) / np.sin(theta0)
+    s1 = np.sin(alpha * theta0) / np.sin(theta0)
+    return s0 * q0 + s1 * q1
+
+
+def interp_pose_to_ts(
+    obs_ts: np.ndarray,
+    obs_poses: np.ndarray,
+    query_ts: int,
+    max_extrapolation_us: int,
+) -> Optional[np.ndarray]:
+    """Interpolate an SE(3) observation trajectory to ``query_ts`` (A2).
+
+    Translation is lerped, rotation slerped between the two bracketing
+    observations. Queries outside ``[obs_ts[0], obs_ts[-1]]`` clamp to the
+    nearest endpoint pose when within ``max_extrapolation_us`` (constant
+    extrapolation — mirrors the old nearest-mode boundary semantics), else
+    return None (frame inactive).
+
+    Args:
+        obs_ts:    ``[N]`` int64 ascending observation timestamps (µs).
+        obs_poses: ``[N, 4, 4]`` world-frame SE(3) at each observation.
+        query_ts:  target timestamp (µs).
+        max_extrapolation_us: tolerance beyond the obs range.
+
+    Returns:
+        ``[4, 4]`` float64 pose, or None when out of range.
+    """
+    obs_ts = np.asarray(obs_ts, dtype=np.int64)
+    obs_poses = np.asarray(obs_poses, dtype=np.float64)
+    n = int(obs_ts.shape[0])
+    if n == 0:
+        return None
+    q = int(query_ts)
+    if q <= int(obs_ts[0]):
+        return obs_poses[0].copy() if int(obs_ts[0]) - q <= max_extrapolation_us else None
+    if q >= int(obs_ts[-1]):
+        return obs_poses[-1].copy() if q - int(obs_ts[-1]) <= max_extrapolation_us else None
+    j = int(np.searchsorted(obs_ts, q, side="left"))
+    if int(obs_ts[j]) == q:
+        return obs_poses[j].copy()
+    i = j - 1
+    t0, t1 = int(obs_ts[i]), int(obs_ts[j])
+    if t1 == t0:  # duplicate timestamps — degenerate bracket
+        return obs_poses[i].copy()
+    alpha = (q - t0) / (t1 - t0)
+    out = np.eye(4, dtype=np.float64)
+    out[:3, 3] = (1.0 - alpha) * obs_poses[i, :3, 3] + alpha * obs_poses[j, :3, 3]
+    q0 = _rotmat_to_quat_wxyz(obs_poses[i, :3, :3])
+    q1 = _rotmat_to_quat_wxyz(obs_poses[j, :3, :3])
+    out[:3, :3] = _quat_wxyz_to_rotmat(_slerp_wxyz(q0, q1, alpha))
+    return out
+
+
+# A2: config value (dataset.cuboid_ts_mode) → load_tracks pose_time_mode.
+CUBOID_TS_MODES: Dict[str, str] = {
+    "ref_nearest": "nearest",        # legacy: ref-camera END ts + nearest obs
+    "per_camera_interp": "interp",   # A2: union END ts + lerp/slerp refinement
+}
+
+
+def build_cuboid_frame_timeline_us(dataset, mode: str = "ref_nearest") -> np.ndarray:
+    """Camera END-timestamp timeline for cuboid pose population (A2).
+
+    ``ref_nearest``: the ref (first) camera's END timestamps — legacy behaviour,
+    byte-identical to the pre-A2 trainer block.
+    ``per_camera_interp``: sorted unique union of ALL training cameras' END
+    timestamps; with ``pose_time_mode="interp"`` each camera's batch then
+    resolves (via ``_resolve_pose_idx`` nearest-lookup) to a pose interpolated
+    for its own exposure time — eliminating the ~100ms cross-camera skew.
+
+    Both variants are filtered to the clip's active time window. Shared by
+    trainer.init_model and viz/inject so training and viz_4d agree.
+    """
+    import ncore.data as _nd
+
+    if mode not in CUBOID_TS_MODES:
+        raise ValueError(
+            f"build_cuboid_frame_timeline_us: unknown mode {mode!r} "
+            f"(expected one of {sorted(CUBOID_TS_MODES)})"
+        )
+    sid = dataset.sequence_id
+    if mode == "per_camera_interp":
+        arrays = [
+            np.asarray(
+                dataset.sequence_camera_sensors[sid][cam].frames_timestamps_us[
+                    :, _nd.FrameTimepoint.END
+                ],
+                dtype=np.int64,
+            )
+            for cam in dataset.camera_ids
+        ]
+        ts = np.unique(np.concatenate(arrays))
+    else:
+        ref_cam = dataset.camera_ids[0]
+        ts = np.asarray(
+            dataset.sequence_camera_sensors[sid][ref_cam].frames_timestamps_us[
+                :, _nd.FrameTimepoint.END
+            ]
+        )
+    time_range = dataset.time_range_us
+    in_window = np.array([int(t) in time_range for t in ts])
+    return ts[in_window]
+
+
 # Default classes to retain when building tracks from NCore cuboids.
 # v2 Stage 4 focuses on vehicle / large-rigid actors only (matches
 # dynamic_rigids layer scope). Pedestrians and animals are higher-order
@@ -156,6 +324,7 @@ def load_tracks_from_ncore_cuboids(
     *,
     class_filter: frozenset[str] = DEFAULT_VEHICLE_CLASSES,
     time_tolerance_us: int = 50_000,  # half typical 30fps frame interval (33ms)
+    pose_time_mode: str = "nearest",
 ) -> Dict[str, dict]:
     """T4.5: build instance_pts_dict from NCore manifest cuboid autolabels.
 
@@ -183,6 +352,12 @@ def load_tracks_from_ncore_cuboids(
         class_filter: which cuboid class_ids to keep. Default = vehicle classes.
         time_tolerance_us: max |ts_cuboid - ts_frame| to consider a match.
             50ms ≈ 1.5 × typical 30fps frame interval.
+        pose_time_mode: ``"nearest"`` (default — byte-identical legacy path:
+            snap each frame to the nearest obs) or ``"interp"`` (A2 — lerp/slerp
+            the obs trajectory to the exact frame timestamp; also transforms
+            each obs to world at its OWN timestamp instead of the frame's,
+            fixing the rig→world timing skew). ``time_tolerance_us`` doubles
+            as the max extrapolation beyond the obs range in interp mode.
 
     Returns:
         ``{track_id: {pts:None, colors:None, poses[F,4,4], size[3],
@@ -197,6 +372,11 @@ def load_tracks_from_ncore_cuboids(
             pose_graph. Manifest must be a NCore V4 sequence with cuboid
             autolabels (most production clips have these).
     """
+    if pose_time_mode not in ("nearest", "interp"):
+        raise ValueError(
+            f"load_tracks_from_ncore_cuboids: unknown pose_time_mode="
+            f"{pose_time_mode!r} (expected 'nearest' or 'interp')"
+        )
     pose_graph = loader.pose_graph
     F = camera_frame_timestamps_us.shape[0]
 
@@ -218,35 +398,64 @@ def load_tracks_from_ncore_cuboids(
         size_np: Optional[np.ndarray] = None
         class_id: str = obs_list[0].class_id
 
-        for fi, ts in enumerate(camera_frame_timestamps_us):
-            ts_int = int(ts)
-            # nearest obs by abs(ts_cuboid - ts_frame)
-            idx = int(np.argmin(np.abs(obs_ts - ts_int)))
-            if abs(int(obs_ts[idx]) - ts_int) > time_tolerance_us:
-                continue
-            obs = obs_list[idx]
-            # transform obs.bbox3 (rig frame) → world frame
-            try:
-                world_obs = obs.transform("world", ts_int, pose_graph)
-                bbox = world_obs.bbox3
-            except Exception:
-                # transform may fail at clip boundaries (pose_graph
-                # extrapolation gap); skip this frame.
-                continue
-            cx, cy, cz = bbox.centroid
-            # T8/B3 Phase E: decode bbox.rot as intrinsic XYZ Euler radians and
-            # populate the rotation block of the SE(3) pose. ``bbox.rot`` after
-            # ``obs.transform("world", ...)`` is the cuboid local frame's
-            # orientation in world frame, which is exactly what _transform_means
-            # consumes (``world = R @ local + t``).
-            rx, ry, rz = bbox.rot
-            pose = np.eye(4, dtype=np.float32)
-            pose[:3, :3] = euler_xyz_to_rotation_matrix(rx, ry, rz).astype(np.float32)
-            pose[:3, 3] = (cx, cy, cz)
-            poses_np[fi] = pose
-            frame_info_np[fi] = True
-            if size_np is None:
-                size_np = np.asarray(bbox.dim, dtype=np.float32)
+        if pose_time_mode == "interp":
+            # A2: decode every obs to a world SE(3) at its OWN timestamp, then
+            # lerp/slerp the trajectory to each camera frame timestamp.
+            world_ts: list = []
+            world_poses: list = []
+            for obs in obs_list:
+                try:
+                    world_obs = obs.transform("world", int(obs.timestamp_us), pose_graph)
+                    bbox = world_obs.bbox3
+                except Exception:
+                    continue  # pose_graph gap at clip boundary — drop this obs
+                rx, ry, rz = bbox.rot
+                pose = np.eye(4, dtype=np.float64)
+                pose[:3, :3] = euler_xyz_to_rotation_matrix(rx, ry, rz)
+                pose[:3, 3] = bbox.centroid
+                world_ts.append(int(obs.timestamp_us))
+                world_poses.append(pose)
+                if size_np is None:
+                    size_np = np.asarray(bbox.dim, dtype=np.float32)
+            if world_ts:
+                obs_ts_w = np.asarray(world_ts, dtype=np.int64)
+                poses_w = np.stack(world_poses)
+                for fi, ts in enumerate(camera_frame_timestamps_us):
+                    p = interp_pose_to_ts(obs_ts_w, poses_w, int(ts), time_tolerance_us)
+                    if p is None:
+                        continue
+                    poses_np[fi] = p.astype(np.float32)
+                    frame_info_np[fi] = True
+        else:
+            for fi, ts in enumerate(camera_frame_timestamps_us):
+                ts_int = int(ts)
+                # nearest obs by abs(ts_cuboid - ts_frame)
+                idx = int(np.argmin(np.abs(obs_ts - ts_int)))
+                if abs(int(obs_ts[idx]) - ts_int) > time_tolerance_us:
+                    continue
+                obs = obs_list[idx]
+                # transform obs.bbox3 (rig frame) → world frame
+                try:
+                    world_obs = obs.transform("world", ts_int, pose_graph)
+                    bbox = world_obs.bbox3
+                except Exception:
+                    # transform may fail at clip boundaries (pose_graph
+                    # extrapolation gap); skip this frame.
+                    continue
+                cx, cy, cz = bbox.centroid
+                # T8/B3 Phase E: decode bbox.rot as intrinsic XYZ Euler radians and
+                # populate the rotation block of the SE(3) pose. ``bbox.rot`` after
+                # ``obs.transform("world", ...)`` is the cuboid local frame's
+                # orientation in world frame, which is exactly what _transform_means
+                # consumes (``world = R @ local + t``).
+                rx, ry, rz = bbox.rot
+                pose = np.eye(4, dtype=np.float32)
+                pose[:3, :3] = euler_xyz_to_rotation_matrix(rx, ry, rz).astype(np.float32)
+                pose[:3, 3] = (cx, cy, cz)
+                poses_np[fi] = pose
+                frame_info_np[fi] = True
+                if size_np is None:
+                    size_np = np.asarray(bbox.dim, dtype=np.float32)
 
         if not frame_info_np.any():
             # Track has no observations within tolerance of any camera frame

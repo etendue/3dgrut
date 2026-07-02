@@ -428,8 +428,9 @@ class Trainer3DGRUT:
                         # Source tracks from NCore manifest cuboid autolabels
                         # (loader.get_cuboid_track_observations); no mock.
                         if "dynamic_rigids" in model.layers:
-                            import ncore.data as _nd
                             from threedgrut.datasets.tracks_loader import (
+                                CUBOID_TS_MODES,
+                                build_cuboid_frame_timeline_us,
                                 load_tracks_from_ncore_cuboids,
                             )
                             from threedgrut.layers.dynamic_rigid_init import (
@@ -438,30 +439,26 @@ class Trainer3DGRUT:
                             loader = train_dataset.sequence_loaders[
                                 train_dataset.sequence_id
                             ]
-                            # Reference camera (first) for frame timestamps;
-                            # cuboid_track_observations are sensor-agnostic so
-                            # any camera's END timestamps work as the canonical
-                            # timeline (matches sseg/lidar-sseg key convention).
-                            ref_cam = train_dataset.camera_ids[0]
-                            ref_sensor = train_dataset.sequence_camera_sensors[
-                                train_dataset.sequence_id
-                            ][ref_cam]
-                            cam_ts = ref_sensor.frames_timestamps_us[
-                                :, _nd.FrameTimepoint.END
-                            ]
-                            # Restrict to clip's active time window so we don't
-                            # iterate frames outside the duration_sec slice.
-                            time_range = train_dataset.time_range_us
-                            in_window = np.array([
-                                int(t) in time_range for t in cam_ts
-                            ])
-                            cam_ts_active = np.asarray(cam_ts)[in_window]
+                            # A2: timeline + pose matching mode. Default
+                            # "ref_nearest" = legacy ref-camera END ts +
+                            # nearest-obs snap (byte-identical);
+                            # "per_camera_interp" = union of all training
+                            # cameras' END ts + lerp/slerp pose refinement
+                            # (kills the ~100ms cross-camera cuboid skew).
+                            cuboid_ts_mode = str(getattr(
+                                self.conf.dataset, "cuboid_ts_mode", "ref_nearest",
+                            ))
+                            cam_ts_active = build_cuboid_frame_timeline_us(
+                                train_dataset, cuboid_ts_mode,
+                            )
                             tracks = load_tracks_from_ncore_cuboids(
                                 loader, cam_ts_active,
+                                pose_time_mode=CUBOID_TS_MODES[cuboid_ts_mode],
                             )
                             logger.info(
                                 f"🔆 NCore cuboids → {len(tracks)} dynamic_rigid "
-                                f"tracks (over {cam_ts_active.shape[0]} frames in window)"
+                                f"tracks (over {cam_ts_active.shape[0]} frames in "
+                                f"window, cuboid_ts_mode={cuboid_ts_mode})"
                             )
                             if not tracks:
                                 logger.warning(

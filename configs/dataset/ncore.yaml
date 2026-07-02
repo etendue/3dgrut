@@ -6,6 +6,13 @@ type: ncore
 #   camera_ids: [camera_front_wide_120fov, camera_cross_left_120fov, camera_cross_right_120fov]
 camera_ids: null  # Null = auto-select single camera sensor
 
+# A2 — cuboid pose ↔ camera frame time matching for dynamic_rigids tracks:
+#   ref_nearest       (default) ref-camera END timestamps + nearest-obs snap
+#                     (legacy, byte-identical to pre-A2 behaviour)
+#   per_camera_interp union of ALL training cameras' END timestamps + lerp/slerp
+#                     pose interpolation — removes the ~100ms cross-camera skew
+cuboid_ts_mode: ref_nearest
+
 # Point-cloud source IDs for initialization.
 # Accepts lidar IDs, radar IDs, or native point cloud IDs (e.g., "sfm_points").
 # null = auto-detect all available sources.

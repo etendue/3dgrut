@@ -60,27 +60,33 @@ def _extract_conf(ckpt: dict):
     return None
 
 
-def _populate_tracks_from_dataset(model, dataset) -> int:
+def _populate_tracks_from_dataset(
+    model, dataset, cuboid_ts_mode: str = "ref_nearest",
+) -> int:
     """Replicate ``Trainer.setup_training`` tracks loading (lines 380-447).
+
+    ``cuboid_ts_mode`` must match the training run's ``dataset.cuboid_ts_mode``
+    (A2) so the injected viz_4d timeline agrees with the ckpt's pose buffers.
 
     Returns number of tracks populated. Caller logs / raises as needed.
     """
     if "dynamic_rigids" not in getattr(model, "layers", {}):
         return 0
     try:
-        import ncore.data as _nd
+        import ncore.data  # noqa: F401
     except ImportError as e:
         raise RuntimeError(f"NCore SDK required for tracks loading: {e}")
-    from threedgrut.datasets.tracks_loader import load_tracks_from_ncore_cuboids
+    from threedgrut.datasets.tracks_loader import (
+        CUBOID_TS_MODES,
+        build_cuboid_frame_timeline_us,
+        load_tracks_from_ncore_cuboids,
+    )
 
     loader = dataset.sequence_loaders[dataset.sequence_id]
-    ref_cam = dataset.camera_ids[0]
-    ref_sensor = dataset.sequence_camera_sensors[dataset.sequence_id][ref_cam]
-    cam_ts = ref_sensor.frames_timestamps_us[:, _nd.FrameTimepoint.END]
-    time_range = dataset.time_range_us
-    in_window = np.array([int(t) in time_range for t in cam_ts])
-    cam_ts_active = np.asarray(cam_ts)[in_window]
-    tracks = load_tracks_from_ncore_cuboids(loader, cam_ts_active)
+    cam_ts_active = build_cuboid_frame_timeline_us(dataset, cuboid_ts_mode)
+    tracks = load_tracks_from_ncore_cuboids(
+        loader, cam_ts_active, pose_time_mode=CUBOID_TS_MODES[cuboid_ts_mode],
+    )
     if tracks:
         model.populate_tracks(tracks)
     return len(tracks)
@@ -157,8 +163,12 @@ def inject_viz_4d(ckpt_path: str, dataset_path: str | None,
     # Repopulate dynamic-rigid tracks from the NCore cuboid autolabels so
     # tracks_metadata (class, size) is filled — populate_tracks attaches it
     # to model.tracks_metadata, which extract_4d_metadata reads.
-    n_tracks = _populate_tracks_from_dataset(model, train_ds)
-    logger.info(f"[inject] populated {n_tracks} dynamic_rigid tracks")
+    _ts_mode = str(OmegaConf.select(conf, "dataset.cuboid_ts_mode") or "ref_nearest")
+    n_tracks = _populate_tracks_from_dataset(model, train_ds, _ts_mode)
+    logger.info(
+        f"[inject] populated {n_tracks} dynamic_rigid tracks "
+        f"(cuboid_ts_mode={_ts_mode})"
+    )
 
     # Build the viz_4d block.
     md = extract_4d_metadata(model, train_ds, conf)
