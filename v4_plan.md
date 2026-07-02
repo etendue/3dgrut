@@ -74,6 +74,8 @@ kanban
         [E2.7-C dyn features_albedo Fourier→SH 转换（E2.7-B 烟雾感 follow-up）]
         [E3.6 road/bg 所有权切分（白条 bg→road）：E3.2.6 takeover 三档否的根因升级——bg init 剔 road + road takeover 补足；spawn task_b0b9736d、gate baseline roaddisk ✅]
         [E4.1 LiDAR 点云推理（A0 gate，可选）]
+        [E5.1 road 相机选择修复（inc_b6a9 road 稀疏 follow-up）：3-cam 偏前向没含朝路面侧相机 → lidar-sseg 92.9% ignore、road 仅 0.3%；加 camera_left_wide_90fov/camera_right_wide_90fov 重训扩 road lidar-sseg 覆盖]
+        [E5.2 cuboid 时间戳对齐（inc_b6a9 dynamic 模糊 follow-up）：cross 相机 cuboid pose ~100ms 漂移 → 按 per-camera END 时间戳精化 cuboid pose 消抖]
 
     "In Progress"
         [E0.6 官方编辑体验：run-book + 资产 + schema 全就绪，待 GPU 空档]
@@ -83,6 +85,7 @@ kanban
         [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate 同 E3.1）]
 
     "Done"
+        [E5.0 inc_b6a9 新 clip onboarding ✅ 2026-07-02：12 相机含 2 鱼眼 ftheta，3-cam 完整 4 层 multilayer 30k（mean_psnr 21.04，inceptio depth-off 锚）；几何验证 pose/cuboids/transformation 正确；aux 多 container 并行 6×（5.8h→58min）；viser exposure bug 修复；road/dynamic 诊断喂 E5.1/E5.2]
         [E3.2.5 几何硬退化 disk ✅ → 默认进 baseline 2026-06-23：6k A/B on＞off（cc +0.41 / lateral lane grad_corr +0.04~0.06 / freeze 铁证 rot 0°·z 1mm·N 恒定）→ roaddisk bundle 写进 multilayer.yaml（大g 决策）；30k 全量待排期]
         [E3.3 BEV 纹理平面化 ⏭ 实测判负 2026-06-23：6k A/B BEV 全面略差（cc 23.49 vs 23.74·lane 6m 0.282 vs 0.307·road_crop 26.56 vs 27.35）+ viser 无改善白条仍 bg → road 弱所有权下颜色参数化无效（spec §1.4）；代码 PR #37 opt-in OFF 不进 main]
         [E3.2.6 takeover 调强 ⏭ 三档否 2026-06-23：bg_road_penalty λ0.1/0.2/0.4 白条均没收回 + cc 噪声到负（λ0.2 退 −0.49）；机制＝roaddisk MCMC 豁免无 densify 接管力 + 粗网格 DC 表达不了细白条 → takeover 与几何冻结互斥 →「压 bg」否定、不进 baseline；白条转 E3.6]
@@ -146,6 +149,8 @@ kanban
 | **E3.4** | E3 | （备选）**平面诱导 warp 伪横移一致性 loss**：训练时按路面平面 homography warp 伪横移视角做一致性约束 | v3 § 5 backlog 备选 | 1.5 | ⬜ | E3.3 的轻量替代/前菜 |
 | **E3.6** | E3 | **road/bg 所有权切分（白条 bg→road，E3.2.6 takeover 失败的根因升级）**：takeover 调强 bg_road_penalty 三档证伪「压 bg opacity」→ 改完整版：① bg init 源头剔 road 类点（[`datasetNcore.py`](threedgrut/datasets/datasetNcore.py) `_get_semantic_lidar_points` + trainer bg init）② road 层 takeover 补足（提 opacity/加密让 road 撑起白条）。spec [`2026-06-16-e36`](docs/superpowers/specs/2026-06-16-e36-road-bg-ownership-takeover-spike.md) | E3.2.6 三档否衍生（2026-06-23 大g）| 2 | ⬜ | gate=baseline roaddisk ✅；验收=删 road 白条消失 + bg 替补率 24%→<5% + 守护线 cc 不退；已 spawn task_b0b9736d |
 | **E4.1** | E4 | （可选）**LiDAR 点云推理**：按 [`2026-06-10-lidar-pointcloud-from-gs.md`](docs/superpowers/plans/2026-06-10-lidar-pointcloud-from-gs.md) 执行（A0 gate：3DGUT ckpt 能否被 3DGRT 渲 → A1 射线表 → A2 range-L1/出 .ply）；外推的传感器维度（novel 轨迹渲 LiDAR），对标 NuRec LiDAR re-sim | docs/superpowers plan（未执行） | 2.5 | ⬜ | A0 NO-GO 则整线作废（plan 内置判据） |
+| **E5.1** | E5 | **road 相机选择修复**（inc_b6a9 road 稀疏诊断 follow-up）：3-cam（front_wide/cross_left/cross_right）偏前向、没含朝路面侧相机 → lidar-sseg **92.9% ignore**、road+sidewalk 仅 **0.3%（21460 点）**。**加朝路面侧相机** `camera_left_wide_90fov`/`camera_right_wide_90fov`（+ 可选 `camera_back_rear_wide_90fov`）重训 → 验证 lidar-sseg road 点↑（21460→?）+ road 层非稀疏有色；备选＝解冻 road 学色 / 几何法（高度+平面拟合）挑地面点绕开 lidar-sseg 覆盖 | 新（2026-07-02 inc_b6a9 诊断）| 1 | ⬜ | 根因＝相机选择（大g 纠正：lidar 是 multi-lidar 聚合、有朝路面点）；inceptio depth-off |
+| **E5.2** | E5 | **cuboid 时间戳对齐**（inc_b6a9 dynamic 模糊 follow-up）：cross 相机 cuboid pose **~100ms 时间漂移**（cuboid autolabel ts vs 各相机帧 END ts 未逐相机对齐）→ dynamic 高斯抖动加剧模糊。[`tracks_loader.py`](threedgrut/datasets/tracks_loader.py) 按 per-camera END 时间戳精化 cuboid pose → 验证 dynamic 清晰度↑；配合 E5.1 多相机观测 | 新（2026-07-02 inc_b6a9 诊断）| 1 | ⬜ | 几何验证时 cross dt=100ms；dynamic 模糊主因仍是 3-cam 少视角 |
 
 ### 1.3 Phase 状态汇总 + v4 gap 表（E0/E1 回填）
 
@@ -156,7 +161,8 @@ kanban
 | **E2** | 生成修复链（NuRec 思路移植）+ 编辑协调 spike + viser temporal 后处理 + viser USDZ 视觉对标 + dyn rigids 接线 + 系统性全替流水线 | 7/10（含 1 备选；E2.8 ✅ 全替+定量+建库） | 同左；**E2.8 ✅ 系统性全替（6 阶段）：USDZ拆→20 AH automobile 全替 + 1 跨源真 bus recon t405→drop 非vehicle→MLP 跨源天空→QA 闸 coverage=1.0 opacity_med 0.10 passed→viser+harmonizer K=4 目测干净（41 测绿：35 e28 + 6 quant；slot-basis/坐标两修）；定量 ✅（NTA 0.085 / novel FID 233；harmonizer before/after FID 233→208 −25、6m −43、「after<before」✅；bg 离轴退化主导、E3.5 floater-prune 续）、bus AH 收割 ✅（重跑 driver AH-match 21 / 跨源 recon 0）**；**E2.1 ✅ 离线 Harmonizer：FID −30%/KID −60%/NTA +35%**；**E2.5 ✅ 目测 spike：harmonizer 协调有效但有限（违和感降低、未完全自然）**；**E2.6 ✅ inceptio 目测通过（V=5 temporal）**；**E2.7 ✅ viser_gui_4d 加载 NVIDIA usdz：路面横向 3m/6m + 360° 不退化**；**E2.7-B ✅ dynamic_rigids 接线（cuboid wireframes + dyn gaussian 位置贴车随 timeline 动，commit 7e5edac；颜色烟雾感转 E2.7-C）**；E2.7-C ⬜ dyn features_albedo Fourier→SH | cc ≥ 24.7 / grad_corr 0.744 不退 | 🟡 |
 | **E3** | 表示侧外推强化（与 E2 互补） | 3/6（含 1 备选） | 同 E2 验收口径；**E3.2.5 ✅ 几何硬退化 disk 默认进 baseline**（6k on>off cc +0.41 / lane +0.04~0.06 / freeze 铁证）→ roaddisk bundle 写进 multilayer.yaml（大g 决策）；**E3.2.6 ⏭ takeover 三档否**（λ0.1/0.2/0.4 白条没收回 + cc 噪声到负；机制＝roaddisk MCMC 豁免无 densify 接管力 + 粗网格 DC，与几何冻结互斥）；**E3.3 ⏭ BEV 纹理判负**（6k on<off 全面略差，road 弱所有权下颜色参数化无效，spec §1.4；代码 PR #37 opt-in OFF、不进 main）→ 白条转 **E3.6** 遗留（spawn task_b0b9736d） | 同上 | 🟡 |
 | **E4** | LiDAR 外推（可选） | 0/1 | A0 GO + range-L1 入档 | — | ⬜ |
-| **总计** | — | **13/26**（E3.6 白条遗留新增 + E3.3 判负） | — | — | — |
+| **E5** | inceptio 多相机新 clip（inc_b6a9）onboarding + road/dynamic 质量 | 0/2 | onboarding ✅（30k baseline mean_psnr 21.04，Done Log 2026-07-02）；**E5.1 road 相机选择** + **E5.2 cuboid 时间戳**待跑 | inceptio depth-off 锚（不跨机比 A800） | ⬜ |
+| **总计** | — | **13/28**（E5 新 clip 2 task 新增） | — | — | — |
 
 > **v4 gap 表（E0.4 + E1.5 回填，格式预置）**：
 > | 轴 | 3dgrut2 锚（E1） | NuRec 锚（E0.4） | 差距 | E2/E3 后 |
@@ -319,6 +325,13 @@ flowchart TD
 - **v3 T15.2**：Fixer 一代已集成（[`correction/difix.py`](threedgrut/correction/difix.py)），E2.1 升级起点；Stage 15 全图蒸馏 +0.30 教训 → E2.2 改打外推档+病灶区。
 
 **新条目（v4 启动后填充，格式：日期 + commit + 实测数）**：
+
+- **2026-07-02 新 inceptio 多相机 clip（`inc_b6a9ed61`，12 相机含 2 鱼眼 ftheta + cuboids）3-cam multilayer onboarding + aux 并行 6× + viser exposure 修复 + road/dynamic 质量诊断**（大g 新数据任务，分支 `claude/heuristic-meninsky-2d14ed`，未合 main）。
+  - **数据 + 几何验证 ✅**：thinkpad→inceptio 内网直传 4.5G；12 相机 camera model 全确认（`camera_front_fisheye`/`camera_back_rear_fisheye`＝**FTheta**，其余 10＝**OpenCVPinhole**，`datasetNcore` 原生支持混合自动路由，3-cam 目标全 pinhole）；训练前**无-ckpt** cuboid 几何验证（新 `scripts/validate_cuboid_pretrain.py`，复用 `load_tracks_from_ncore_cuboids`＋validate_cuboid_7cam 投影）→ front_wide（dt=0）wireframe 精确套车，**pose/cuboids/transformation 正确**。
+  - **aux 生成多 container 并行（5.8h→58min，6×）**：新 clip 无 aux，用已在 inceptio 的 `nvcr.io/nvidia/nre/nre-tools-ga` 容器 `ncore-aux-data` 生成 sseg/egomask/lidar-sseg/camvis。核心坑：lidar-seg 单核 Python（GIL）~105s/帧、`--parallel-mode` 只并行多 sensor（单 lidar 不拆帧）→ **手动 N 段 docker 并行**（`sensor-frames --start/stop-frame` 限帧 ＋ `--segmentation-backend=none` 复用全帧 sseg ＋ 硬链隔离目录 ＋ 合并 itar）；N=12 实测各段 ~34min、CPU 100%→1207%。合并工具新 `scripts/merge_lidar_aux.py`（通用 zarr itar 合并；坑＝camvis 是 `(N_pts,1)` 数组非 0-D PNG bytes，`create_dataset(shape=src.shape)` 别写死 `shape=()`）。runbook 入 CLAUDE.md。itar write-once＋中途 `docker stop` 会损坏（`invalid index header`），并发容器不能共享 clip 目录。
+  - **30k KPI（inceptio depth-off baseline 锚）**：完整 4 层 multilayer（bg 1M ＋ road 200k ＋ dynamic 50213/36 cuboids ＋ sky）；`mean_psnr 21.04 / cc_psnr 19.70 / ssim 0.578 / lpips 0.645 / road_crop 25.99`；per-cam front_wide 22.07 / cross_left 20.71 / cross_right 20.31（30k 50min@RTX4090，10 it/s）。⚠️ inceptio depth-off，与 A800 lidar-on 数字不可跨机比，须以此为 inceptio A/B 对照。
+  - **viser exposure bug 修复**（`threedgrut_playground/engine.py` ＋ `threedgrut/tests/test_engine_exposure.py` 3 passed）：viser 渲染只做 tonemap＋gamma、**不应用训练的 per-camera BilateralGrid exposure** → 显示 raw radiance → 过曝白茫茫（eval `render.py` 应用了 exposure 故正常，raw psnr 21 vs cc 19.7 差仅 1.34）。修＝`__init__` 从 ckpt `exposure_state` 加载 BilateralGrid ＋ render_pass/`_accumulate_to_buffer` **tonemap 前**应用（对齐 eval）；1x1x1 per-cam affine，novel-view 用 cam0。**另修 import 分裂**：viser 从 `threedgrut_playground/` 跑时 `sys.path[0]` 不含 worktree 根 → `import threedgrut` 落到 editable-install 主仓库旧 registry（撞 E3.2.5 新字段 `road_init_knn_k`）→ 启动须加 `PYTHONPATH=<worktree根>`。
+  - **road/dynamic 质量诊断（喂 E5 深耕）**：① **road 层稀疏无色** 根因＝**3-cam 偏前向、没含朝路面的侧相机** → lidar-sseg **92.9% ignore**（投影不到相机）、road＋sidewalk 仅 **0.3%（21460 点，vegetation 占 80.9%）** → road 层从稀疏点铺 ＋ E3.2.5 冻结（不训练）→ 无色。**大g 纠正：lidar 是 multi-lidar 聚合、有朝路面点，clip 有 `camera_left_wide_90fov`/`camera_right_wide_90fov` 朝路面可用**（→ E5.1）。② **dynamic rigid 模糊** 主因＝3-cam 每车少视角欠约束 ＋ 30k smoke；cuboid 部分相关＝cross 相机 cuboid pose ~100ms 时间漂移（→ E5.2）。
 
 - **2026-06-23（晚）road 外推三方收口：E3.2.5→baseline / E3.3 BEV 判负 / E3.2.6 takeover 三档否（大g 决策，baseline 改动同本 commit）**。承 E3.3 BEV spike 负结果 + E3.2.6 takeover 三档实测，大g 拍板 road 外推方向 + baseline 配方。
   - **E3.2.5 roaddisk 几何 bundle 默认进 baseline**（`configs/apps/ncore_3dgut_mcmc_multilayer.yaml`）：6k A/B on>off（cc 24.01 vs 23.60 **+0.41** / lateral lane grad_corr +0.057@3m +0.039@6m / freeze 铁证 rot 0°·z 1mm·N 恒定）→ multilayer.yaml 默认含 `road_init_knn_k=5` + `scale_z_max=0.001` + `positions_lr=1e-6` + `freeze_rotation_grad=true` + `strategy.exclude_layer_ids=[road]`（原 roaddisk preset 降冗余）。compose 验证 road override 生效 + 全套 919 测零回归 + takeover penalty 保持 λ0.1/z_band0.4 现状。

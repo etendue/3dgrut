@@ -209,6 +209,45 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
     experiment_name=smoke_test'
 ```
 
+### inceptio 无-aux NCore 数据：nre-tools 容器生成 aux（runbook + 坑，2026-07-01 实测）
+
+新 inceptio ncore clip（只有 `*.ncore4-*.zarr.itar` + manifest、**无 aux/**）直接跑 4 层 multilayer 会崩在 road/dynamic 层 init（`trainer.py` → `get_road_lidar_points`/`get_dynamic_lidar_points` → `datasetNcore._get_semantic_lidar_points` 需 `aux.sseg`/`aux.lidar-sseg`）。**background 单层不需 aux 可直接跑**（基础 config `apps/ncore_3dgut_mcmc`，验证 camera/pose/pipeline）；4 层 multilayer 必须先生成 aux。
+
+用**已在 inceptio 的 NGC 容器** `nvcr.io/nvidia/nre/nre-tools-ga:latest`（`docker images` 可见，docker 已登录 nvcr.io、`~/.ngc` 已配 apikey）。入口命令是 `ncore-aux-data`（**不带** `nre-tools` 前缀），**必须 `--gpus all`**（否则 `libcuda.so.1` 缺失 → 命令不注册）。**分两次跑**（见坑 1/2），`<D>` = 含 manifest+itar 的 clip 目录：
+
+```bash
+# run A：sseg + egomask（快 ~6min，多相机可 parallel），--no-lidar-seg-camvis 跳过慢的 lidar
+docker run --rm --gpus all -v <D>:/workdir/data -v ~/.cache/torch:/home/.cache/torch \
+  nvcr.io/nvidia/nre/nre-tools-ga:latest ncore-aux-data \
+  --dataset-path=/workdir/data/<seq_stem>.json --output-dir=/workdir/data \
+  --camera-id camera_front_wide_120fov --camera-id camera_cross_left_120fov --camera-id camera_cross_right_120fov \
+  --segmentation-backend=mask2former --ego-mask --no-lidar-seg-camvis \
+  --depth-backend=none --dinov2-backend=none --parallel-mode --workers-per-gpu=3 --zarr-store-type=itar --store-meta
+# run B：lidar-seg（慢 ~5.8h 单核），--segmentation-backend=none 复用 run A 的 sseg
+docker run --rm --gpus all -v <D>:/workdir/data -v ~/.cache/torch:/home/.cache/torch \
+  nvcr.io/nvidia/nre/nre-tools-ga:latest ncore-aux-data \
+  --dataset-path=/workdir/data/<seq_stem>.json --output-dir=/workdir/data \
+  --camera-id camera_front_wide_120fov --camera-id camera_cross_left_120fov --camera-id camera_cross_right_120fov \
+  --segmentation-backend=none --no-ego-mask --lidar-seg-camvis \
+  --depth-backend=none --dinov2-backend=none --num-threads=8 --zarr-store-type=itar --store-meta
+```
+
+产物 `<seq_stem>.aux.{sseg,egomask,lidar-sseg,lidar-camvis}.zarr.itar` 落 clip 目录（= manifest 同级，datasetNcore 期望位置），root-owned（inceptio user 可读，训练 OK）。sseg 类别 = Cityscapes-20（模型 `mask2former_dinov2_nv_private12k`，权重内置容器、**无需联网**），与现有 multilayer 配方（road={0,1}/sky=10/dynamic={11-18}）天然对齐。
+
+**四个实测坑（重踩浪费数小时，务必看）**：
+1. **itar 中途绝不能 `docker stop`**：`.zarr.itar` 是 write-once，tar index header 在**整个 run 结束时**才写。半途停会让已完成的 sseg.itar 损坏 → 复用报 `IndexedTarStore: invalid index header, can't load indexed tar file`。要么一次跑完，要么按上面分两次（run A 完整 finalize 后 run B 才能 `--segmentation-backend=none` 复用）。
+2. **lidar-seg 单核 ~105s/帧**（point-in-cameras + ensemble 是单线程 Python 逐点循环，GIL 锁死 1 核；GPU 0%、其余核闲、非 IO、内存充足——正是「哪都没饱和却很慢」）：串行 200 帧 ≈ 5.8h。`--lidar-seg-ensemble-cuda` 无效（瓶颈不在 ensemble），**容器内** `--parallel-mode --workers-per-gpu` 也无效（只并行**多 sensor**任务，单 lidar 的多帧不拆）。**解法 = 手动多 container 数据并行**（见下「⚡ lidar-seg 多 container 并行」小节，实测 12 段 5.8h→58min，6×，总 CPU 100%→1207%）。
+3. **sseg 快 lidar-seg 慢 → 分两次**（坑 2 的应对）：run A 的 `--parallel-mode --workers-per-gpu=N` 对多相机 sseg **有效**（N ≤ 相机数；mask2former 每 worker ~4-6GB 显存，24GB 卡取 N≤3-4）；run B 复用 sseg 只补 lidar-seg。
+4. **depth/dinov2 关掉提速**：depth-off 配方不需要，`--depth-backend=none --dinov2-backend=none` 省时间。
+
+**⚡ lidar-seg 多 container 并行（实测 5.8h→58min / 6×，2026-07-01）**：坑 2 的正解。lidar-seg 每帧独立 + 显存才 ~1GB/容器 + 20 核闲 19 个 → 手动起 N 个 docker 各切一段 lidar 帧并行（容器本身不支持，手动做）。四个关键点，缺一即崩：
+- **限帧**：`ncore-aux-data [aux-opts] sensor-frames --main-sensor-id lidar_top_360fov --start-frame X --stop-frame Y`。`sensor-frames` 子命令是「限帧范围 + 跑完整 aux」（不是切数据集）；start/stop 是 lidar 帧索引，stop 为 past-the-end（[X,Y)）。
+- **复用全帧 sseg**：段内只跑 lidar（`--segmentation-backend=none --no-ego-mask --lidar-seg-camvis`），复用 run A 的**全帧** sseg——lidar-seg 的 point-in-cameras 用 lidar 帧时间戳查 camera sseg，段内自生成的 sseg 覆盖不到 → `KeyError: semantic segmentation not found`。
+- **干净隔离**：每段一个独立目录（`ln -f <clip>/*.ncore4* $SEGi/` 硬链 raw + `cp` 全帧 `*.aux.sseg`/`*.aux.egomask` + manifest），output 各自目录。**绝不能共享 clip 目录**——并发容器互读对方半成品 itar 报 `invalid index header`。
+- **合并**：N 段各出 `lidar-sseg`（0-D `|S<n>` PNG bytes）+ `lidar-camvis`（`(N_pts,1)` uint8 **数组**）itar → 合并脚本遍历 `/aux/<comp>/<sensor>/<ts>` 汇所有帧到一新 itar：`create_dataset(ts, shape=src.shape, dtype=src.dtype)` + `ds[...]=src[...]`（**用 src.shape 通用处理，别写死 `shape=()`**——camvis 是数组，写死 0-D 会 `ValueError: setting array element with a sequence`）。
+
+N=12（≤20 核，~17 帧/段）实测各段 ~34min（12 段并行）、合并秒级、读回 200 帧正常 finalize → 串行 5.8h 降到 58min。全流程：run A 全帧 sseg+egomask（`--no-lidar-seg-camvis`，parallel N≤相机数）→ N 段并行 lidar-seg（限帧+复用 sseg+隔离）→ 合并 → multilayer 训练直接读。驱动 + 合并脚本模板见本次会话 scratchpad（`parallel_aux_train.sh` / `merge_lidar_aux.py`）。
+
 ## Vast.ai 远程执行环境（A800 占用时备用）
 
 A800 被其他任务占用时，**Claude 可以自行起 vast.ai RTX 4090 实例**跑 V3 smoke / KPI。整套流程已在 2026-05-27 V3-L5/L8/L9 任务中跑通（详见 [`v3_plan.md`](v3_plan.md)（冻结历史，仅证据参考）§ 5 Done Log "V3-L5 + V3-L8 + V3-L9" 条目）。
