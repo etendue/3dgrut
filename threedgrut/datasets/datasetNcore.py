@@ -57,6 +57,7 @@ from threedgrut.datasets.utils import (
     create_pixel_coords,
     get_center_and_diag,
     get_worker_id,
+    repair_nonfinite_rays,
 )
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import to_torch
@@ -450,6 +451,27 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     self.sequence_cameras_pixels_subsample[sequence_id][camera_id]
                 ).numpy()
             }
+
+            # A1 — rational-distortion pole guard: pixels_to_camera_rays can
+            # emit non-finite directions where the undistortion diverges
+            # (inc_b6a9 camera_left_wide_90fov: 1 px/frame at the pole radius
+            # → one NaN ray poisoned the whole model per training step).
+            # Repair the cached rays and flag those pixels ego-invalid so
+            # they never supervise training (see repair_nonfinite_rays).
+            _n_bad = repair_nonfinite_rays(
+                self.sequence_cameras_all_rays[sequence_id][camera_id],
+                camera_valid_pixels_ego_mask,
+            )
+            _n_bad_sub = repair_nonfinite_rays(
+                self.sequence_cameras_rays_subsample[sequence_id][camera_id], None,
+            )
+            if _n_bad or _n_bad_sub:
+                logger.warning(
+                    f"[A1] {camera_id}: repaired {_n_bad} non-finite camera "
+                    f"ray(s) (+{_n_bad_sub} in val subsample) and masked the "
+                    f"pixel(s) invalid — rational-distortion pole, see "
+                    f"repair_nonfinite_rays"
+                )
 
         # Pre-compute per-camera resolutions for the current split (used for GPU ray cache lookup)
         self._camera_resolutions: dict[str, tuple[int, int]] = {}

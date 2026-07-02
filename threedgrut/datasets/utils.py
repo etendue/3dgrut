@@ -624,3 +624,50 @@ def get_worker_id():
             return "main_process"
     except:
         return f"thread_{threading.get_ident()}"
+
+
+def repair_nonfinite_rays(rays: np.ndarray, valid_mask: np.ndarray | None) -> int:
+    """A1 — repair non-finite precomputed camera ray directions in place.
+
+    NCore ``pixels_to_camera_rays`` can emit non-finite directions where the
+    rational-model undistortion diverges (the denominator polynomial
+    1+k4·r²+k5·r⁴+k6·r⁶ can have a pole inside the image; first observed
+    2026-07-02 on inc_b6a9 camera_left_wide_90fov at px (1917, 1042)). A NaN
+    ray direction poisons the rendered pixel and, through the tracer's
+    backward, the whole model within one training step.
+
+    Repair: replace each bad direction with the nearest finite same-row
+    neighbour (geometrically closest available ray; the exact value is
+    irrelevant because the pixel is also flagged invalid), falling back to
+    +Z when the entire row is bad. When ``valid_mask`` ([H, W] bool) is
+    given, bad pixels are flagged False so they never supervise training —
+    same semantics as ego-masked pixels.
+
+    Args:
+        rays: ``[H, W, 3]`` or ``[N, 3]`` float array, modified in place.
+        valid_mask: optional ``[H, W]`` bool array, modified in place.
+
+    Returns:
+        Number of repaired rays.
+    """
+    flat_input = rays.ndim == 2
+    rays_hw = rays[None] if flat_input else rays
+    bad = ~np.isfinite(rays_hw).all(axis=-1)  # [H, W]
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return 0
+    fallback = np.array([0.0, 0.0, 1.0], dtype=rays_hw.dtype)
+    w = rays_hw.shape[1]
+    for v, u in zip(*np.nonzero(bad)):
+        repaired = None
+        for du in range(1, w):
+            for cand in (u - du, u + du):
+                if 0 <= cand < w and not bad[v, cand]:
+                    repaired = rays_hw[v, cand]
+                    break
+            if repaired is not None:
+                break
+        rays_hw[v, u] = fallback if repaired is None else repaired
+    if valid_mask is not None and not flat_input:
+        valid_mask[bad] = False
+    return n_bad
