@@ -2249,6 +2249,25 @@ class Trainer3DGRUT:
                 writer=self.tracking.writer,
             )
 
+        # A1-NaN sentinel: a non-finite loss poisons every parameter through
+        # Adam/MCMC within a step (observed 2026-07-02 inc_b6a9 6-cam: step-2
+        # NaN → ~99% of all geometry params NaN by iter 500, silent until
+        # test eval). Fail fast with the batch identity instead of training on.
+        if not bool(torch.isfinite(batch_losses["total_loss"])):
+            _terms = {
+                k: (float(v) if torch.is_tensor(v) and v.numel() == 1 else None)
+                for k, v in batch_losses.items()
+            }
+            _pred = outputs.get("pred_rgb") if isinstance(outputs, dict) else None
+            _n_nan_pred = int(torch.isnan(_pred).sum()) if torch.is_tensor(_pred) else -1
+            raise RuntimeError(
+                f"Non-finite total_loss at step {global_step}: "
+                f"camera_id={getattr(gpu_batch, 'camera_id', '?')} "
+                f"frame_idx={getattr(gpu_batch, 'frame_idx', '?')} "
+                f"timestamp_us={getattr(gpu_batch, 'timestamp_us', '?')} "
+                f"pred_rgb_nan={_n_nan_pred} losses={_terms}"
+            )
+
         # Back-propagate the gradients and update the parameters
         with torch.cuda.nvtx.range(f"train_{global_step}_bwd"):
             profilers["backward"].start()
