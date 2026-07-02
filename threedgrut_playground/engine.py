@@ -834,6 +834,34 @@ class Engine3DGRUT:
             self.tracer = Tracer(self.scene_mog.conf)
         self.device = self.scene_mog.device
 
+        # Per-camera BilateralGrid exposure (viser overexposure fix, 2026-07-02).
+        # Training used use_exposure=true; eval (render.py) applies it to pred_rgb,
+        # but this engine previously did only tonemap+gamma → showed raw radiance
+        # → overexposed/washed-out white. Load the grid from the ckpt and apply it
+        # in render_pass / _accumulate_to_buffer (before tonemap, matching eval).
+        # 1x1x1 grid = per-camera global color-affine; novel-view uses cam 0.
+        self.exposure_model = None
+        self.exposure_camera_idx = 0
+        if isinstance(gs_object, str) and gs_object.endswith(".pt"):
+            try:
+                _eck = torch.load(gs_object, map_location=self.device, weights_only=False)
+                if isinstance(_eck, dict) and "exposure_state" in _eck:
+                    from threedgrut.correction import BilateralGrid
+                    _ms = _eck["exposure_state"]["module"]
+                    if "grids" in _ms:
+                        _N, _tw, _Lz, _Ly, _Lx = _ms["grids"].shape
+                        self.exposure_model = BilateralGrid(
+                            num_camera=_N, grid_X=_Lx, grid_Y=_Ly, grid_W=_Lz,
+                        ).to(self.device)
+                        self.exposure_model.load_state_dict(_ms, strict=True)
+                        self.exposure_model.eval()
+                        print(f"[viz_4d] BilateralGrid exposure loaded: {_N} cams "
+                              f"grid={_Lx}x{_Ly}x{_Lz}; novel-view uses cam "
+                              f"{self.exposure_camera_idx}", flush=True)
+                del _eck
+            except Exception as _e:  # exposure is optional; never block rendering
+                print(f"[viz_4d] exposure load skipped: {_e}", flush=True)
+
         self.frame_id = 0
         """ Environment definitions, such as envmap, tonemapping used, and forced background color. """
         self.environment = Environment(envmap_assets_folder, device=self.device)
@@ -882,6 +910,9 @@ class Engine3DGRUT:
     def _accumulate_to_buffer(self, prev_frames, new_frame, num_frames_accumulated, gamma, batch_size=1):
         """Accumulate a new frame to the buffer, using the previous frames and the current frame."""
         prev_frames = torch.pow(prev_frames, gamma)
+        # Apply per-camera exposure before tonemap (DOF/SPP accumulation path).
+        if self.exposure_model is not None and self.exposure_camera_idx >= 0:
+            new_frame = self.exposure_model(self.exposure_camera_idx, new_frame)
         new_frame = self.environment.tonemap(new_frame)
         buffer = ((prev_frames * num_frames_accumulated) + new_frame) / (num_frames_accumulated + batch_size)
         buffer = torch.pow(buffer, 1.0 / gamma)
@@ -1285,6 +1316,9 @@ class Engine3DGRUT:
                 rb = self._render_playground_hybrid(rays.rays_ori, rays.rays_dir)
 
             rb = dict(rgb=rb["pred_rgb"], opacity=rb["pred_opacity"])
+            # Apply per-camera exposure before tonemap (matches eval render.py).
+            if self.exposure_model is not None and self.exposure_camera_idx >= 0:
+                rb["rgb"] = self.exposure_model(self.exposure_camera_idx, rb["rgb"])
             rb["rgb"] = self.environment.tonemap(rb["rgb"])
             rb["rgb"] = torch.pow(rb["rgb"], 1.0 / self.gamma_correction)
             rb["rgb"] = rb["rgb"].mean(dim=0).unsqueeze(0)
