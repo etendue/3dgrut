@@ -37,7 +37,10 @@ from threedgrut.model.bg_cuboid_loss import (
     compute_bg_cuboid_opacity_penalty,
     lambda_schedule,
 )
-from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
+from threedgrut.layers.dynamic_mask import (
+    project_cuboids_to_mask,
+    resolve_batch_cuboid_intrinsics,
+)
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
 from threedgrut.model.road_reg import compute_effective_rank_loss
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
@@ -1444,7 +1447,7 @@ class Trainer3DGRUT:
         learnable-pose mode ``model.tracks_poses`` (now an ``@property``)
         returns gradient-tracking tensors built from the per-track quat/trans
         Parameters; the caller of this method feeds those poses into two
-        regularization paths — ``_maybe_fill_cuboid_mask`` (FTheta cuboid
+        regularization paths — ``_maybe_fill_cuboid_mask`` (cuboid
         projection) and ``_compute_bg_cuboid_penalty_term`` (bg opacity
         penalty inside cuboids). If we let gradients flow back from those
         paths to the pose Parameters, the bg layer would "drag" cuboids
@@ -1483,10 +1486,15 @@ class Trainer3DGRUT:
         return poses, sizes
 
     def _maybe_fill_cuboid_mask(self, gpu_batch, trainer_conf) -> None:
-        """Project active cuboids → FTheta 2D mask → ``image_infos["dyn_mask_cuboid"]``.
+        """Project active cuboids → 2D mask → ``image_infos["dyn_mask_cuboid"]``.
 
         No-op when ``bg_dyn_cuboid_penalty.use_cuboid_mask=false``, when the
-        model has no tracks, or when the batch lacks ``intrinsics_FThetaCameraModelParameters``.
+        model has no tracks, or when the batch carries neither FTheta nor
+        OpenCVPinhole intrinsics. A5: the pinhole K path is now supported —
+        the historical T8/B3 column-smear (behind-camera corners clamping to
+        image edges) is fixed by z>0 corner filtering inside
+        ``project_cuboids_to_mask``; pinhole distortion coeffs are ignored,
+        acceptable at AABB granularity.
         """
         cfg = self._bg_cuboid_conf(trainer_conf)
         if not cfg["enabled"] or not cfg.get("use_cuboid_mask", True):
@@ -1494,11 +1502,10 @@ class Trainer3DGRUT:
         image_infos = getattr(gpu_batch, "image_infos", None)
         if image_infos is None:
             return
-        ftheta_params = getattr(gpu_batch, "intrinsics_FThetaCameraModelParameters", None)
-        if ftheta_params is None:
-            # T8/B3: only FTheta path implemented; pinhole AABB at ±90° clamps
-            # to image edges and would paint whole columns as dyn (defeats the
-            # mask). Quietly skip — sseg mask remains the fallback.
+        K, ftheta_params = resolve_batch_cuboid_intrinsics(gpu_batch)
+        if K is None and ftheta_params is None:
+            # No projectable intrinsics on this batch — sseg mask remains
+            # the fallback in compute_layered_l1_loss.
             return
         poses, sizes = self._gather_active_tracks_for_batch(gpu_batch)
         if poses is None:
@@ -1513,10 +1520,16 @@ class Trainer3DGRUT:
         W = int(gpu_batch.rgb_gt.shape[2])
         mask = project_cuboids_to_mask(
             poses, sizes,
-            K=None, T_world2cam=T_w2c, H=H, W=W,
+            K=K, T_world2cam=T_w2c, H=H, W=W,
             device=self.device,
             ftheta_params=ftheta_params,
         )
+        if K is not None and not getattr(self, "_pinhole_cuboid_mask_logged", False):
+            self._pinhole_cuboid_mask_logged = True
+            logger.info(
+                "[A5] dyn_mask_cuboid filled via OpenCVPinhole K "
+                f"(H={H}, W={W}, active_tracks={int(poses.shape[0])})"
+            )
         # compute_layered_l1_loss expects [B, H, W] float; we have [H, W] bool.
         image_infos["dyn_mask_cuboid"] = mask.to(dtype=torch.float32).unsqueeze(0)
 

@@ -25,6 +25,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threedgrut.datasets as datasets
+from threedgrut.layers.dynamic_mask import resolve_batch_cuboid_intrinsics
 from threedgrut.model.class_psnr import (
     collect_active_tracks_for_frame,
     compute_class_psnr,
@@ -961,12 +962,14 @@ class Renderer:
             # novel-view NTA-IoU (inside the loop below) and the interpolated
             # class_psnr / NTA-IoU block further down. Cuboids stay at their
             # world-frame GT pose for novel views (timestamp unchanged).
+            # A5: intrinsics dispatch now covers OpenCVPinhole (K) in addition
+            # to FTheta — pinhole clips (NCore inceptio) previously skipped
+            # class_psnr entirely, silently dropping the metrics.json fields.
             tp = getattr(self.model, "tracks_poses", None)
-            ftheta_params = getattr(
-                gpu_batch, "intrinsics_FThetaCameraModelParameters", None,
-            )
+            K_pin, ftheta_params = resolve_batch_cuboid_intrinsics(gpu_batch)
             active = []
-            if tp and ftheta_params is not None and hasattr(self.model, "_resolve_pose_idx"):
+            if tp and (ftheta_params is not None or K_pin is not None) \
+                    and hasattr(self.model, "_resolve_pose_idx"):
                 _pose_idx = self.model._resolve_pose_idx(
                     int(getattr(gpu_batch, "timestamp_us", -1)),
                     int(getattr(gpu_batch, "frame_idx", -1)) if int(getattr(gpu_batch, "frame_idx", -1)) >= 0 else None,
@@ -1083,8 +1086,8 @@ class Renderer:
 
             # T8/B3 Phase E.6 — per-cuboid class PSNR. Skipped when the model
             # has no dyn tracks loaded (single-bg / road-only multi-layer) OR
-            # the batch lacks FTheta intrinsics (current dyn projection only
-            # supports FTheta to match training-side cuboid mask path).
+            # the batch carries neither FTheta nor OpenCVPinhole intrinsics
+            # (A5: dispatch matches the training-side cuboid mask path).
             # (tracks resolved above, before the novel-view block — E1.2)
             if active:
                 T_w2c = torch.linalg.inv(gpu_batch.T_to_world[0])
@@ -1092,19 +1095,19 @@ class Renderer:
                 cp = compute_class_psnr(
                     pred_rgb_full, rgb_gt_full, mask,
                     active, T_world2cam=T_w2c, H=H_, W=W_,
-                    ftheta_params=ftheta_params,
+                    K=K_pin, ftheta_params=ftheta_params,
                 )
                 for r in cp["per_track"]:
                     r["frame"] = int(iteration)
                     class_psnr_records.append(r)
 
                 # E1.2 — interpolated-view NTA-IoU (same active/T_w2c as
-                # class_psnr; FTheta clip → K=None).
+                # class_psnr; exactly one of K / ftheta_params is set).
                 if _nta_detector is not None:
                     from threedgrut.model.nta_iou import compute_frame_nta_iou
                     nta = compute_frame_nta_iou(
                         pred_rgb_full[0], active, _nta_detector,
-                        K=None, ftheta_params=ftheta_params,
+                        K=K_pin, ftheta_params=ftheta_params,
                         T_w2c=T_w2c, H=H_, W=W_,
                     )
                     if nta is not None:
