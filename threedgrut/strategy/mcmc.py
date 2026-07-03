@@ -148,6 +148,7 @@ class MCMCStrategy(BaseStrategy):
         dead_idxs = torch.where(densities <= self.conf.strategy.opacity_threshold)[0]
         alive_idxs = torch.where(densities > self.conf.strategy.opacity_threshold)[0]
         n_dead_gaussians = len(dead_idxs)
+        n_dead_total = n_dead_gaussians  # pre-cap count, for truthful logging
 
         # Cap relocation to avoid super-dense clusters when a layer collapses
         # (e.g. dynamic_rigids at 90% dead → 630k particles crammed into 70k spots
@@ -166,9 +167,12 @@ class MCMCStrategy(BaseStrategy):
         # relocation step). Skip relocation and surface the collapse loudly;
         # the layer size in the log identifies which layer it is.
         if n_dead_gaussians and len(alive_idxs) == 0:
+            # NOTE: report the PRE-cap dead count — n_dead_gaussians may have
+            # been subsampled to max_relocation_fraction above, which reads
+            # misleadingly (e.g. "400000/1000000" when ALL 1M are dead).
             logger.warning(
                 f"[A1] relocate skipped: layer fully dead "
-                f"({n_dead_gaussians}/{len(densities)} particles at or below "
+                f"({n_dead_total}/{len(densities)} particles at or below "
                 f"opacity_threshold={self.conf.strategy.opacity_threshold}) — "
                 f"no alive donors to sample from; layer will not recover via "
                 f"MCMC this step"
