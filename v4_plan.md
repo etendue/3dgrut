@@ -6,6 +6,7 @@
 > - NuRec 工具链调研 [`~/repo/report/nvidia-nurec-extrapolation-analysis.md`](../report/nvidia-nurec-extrapolation-analysis.md)（修复器三代演进 / DiFix3D+ 量化证据 / held-out 协议 / license）
 > - 领域综述 [`~/repo/report/3d-4d-state-of-the-art-2025-2026.md`](../report/3d-4d-state-of-the-art-2025-2026.md)（外推 = 生成先验主战场；NTA-IoU/FID/KID 评测共识）
 > - 2026-06-11 外推诊断（aperture problem 根因 + 测量双盲区）：[`v3_plan_revised.md`](v3_plan_revised.md) § 2.3 / § 6 Done Log
+> - **2026-07-03 off-track 战役收敛（大g 拍板）**：**E2.2 定为战役主线 next-up**（A→B→C 优先序、无悔棋三件套、算力调度、决策门见 [`docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md`](docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md)）；E2.2 每档验收三读数（FID/KID + lane + interpolated 守护）与门 2 判据以战役 spec 为准；**表示侧新 spike 战役期冻结**（E3.3/E3.2.6/autogen 三连负教训）
 > **执行约定**：沿用 [`CLAUDE.md`](CLAUDE.md)（inceptio 首选 / depth-off+nw=10 铁律 / 文档同步纪律 / Mermaid 全角括号）；具体任务开工时按 superpowers 流程在 `docs/superpowers/plans/` 起 TDD 执行 plan。
 > **官方工具就绪**：NVIDIA nurec-skills 已装入本环境（`nre` / `ncore` / `asset-harvester` / `nurec-fixer` / `physical-ai-datasets` / `nurec-index`），E0 直接调用。
 
@@ -68,7 +69,7 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [E2.2 渐进外推蒸馏（核心移植）]
+        [E2.2 渐进外推蒸馏（核心移植）★★ 2026-07-03 战役主线 next-up·spec offtrack-campaign]
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
         [E2.7-C dyn features_albedo Fourier→SH 转换（E2.7-B 烟雾感 follow-up）]
