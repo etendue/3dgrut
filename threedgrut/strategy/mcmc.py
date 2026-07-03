@@ -31,6 +31,40 @@ from threedgrut.strategy.base import BaseStrategy
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import _multinomial_sample, check_step_condition
 
+
+@torch.no_grad()
+def _sanitize_relocation(
+    new_densities: torch.Tensor,   # [N, 1] kernel output (activated space)
+    new_scales: torch.Tensor,      # [N, 3] kernel output (activated space)
+    donor_densities: torch.Tensor,  # [N, 1] donor originals (activated space)
+    donor_scales: torch.Tensor,     # [N, 3] donor originals (activated space)
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    """A1 — contain non-finite/non-positive relocation-kernel outputs.
+
+    compute_relocation_tensor (MCMC Eq.9 binomial math) can emit NaN/Inf or
+    zero/negative densities/scales at opacity→1 boundaries. The log inverse
+    activations downstream turn those into NaN/-inf parameters, silently
+    poisoning the layer (observed inc_b6a9 6-cam R1 2026-07-02: 60% of
+    background densities NaN by ~3k steps; the poison never crosses the loss
+    so pred-based guards can't catch it). Any bad ROW (density or any scale
+    component non-finite or ≤0) falls back to the donor's original values —
+    relocation degenerates to a plain copy for that row.
+
+    Returns (densities, scales, n_bad_rows); inputs are not modified.
+    """
+    bad = (
+        ~torch.isfinite(new_densities).all(dim=-1)
+        | (new_densities <= 0).any(dim=-1)
+        | ~torch.isfinite(new_scales).all(dim=-1)
+        | (new_scales <= 0).any(dim=-1)
+    )  # [N]
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return new_densities, new_scales, 0
+    out_d = torch.where(bad.unsqueeze(-1), donor_densities, new_densities)
+    out_s = torch.where(bad.unsqueeze(-1), donor_scales, new_scales)
+    return out_d, out_s, n_bad
+
 _mcmc_plugin = None
 
 
@@ -273,13 +307,36 @@ class MCMCStrategy(BaseStrategy):
             (torch.bincount(sampled_idxs)[sampled_idxs] + 1).clamp_(min=1, max=self.conf.strategy.binom_n_max).int()
         )
 
+        # A1-guard (input): donor opacity can saturate to exactly 1.0 in
+        # float; the relocation kernel's (1-o) terms then divide by zero.
+        donor_densities = densities[sampled_idxs].clamp(
+            max=1.0 - torch.finfo(torch.float32).eps
+        )
+        donor_scales = scales[sampled_idxs]
+
         new_densities, new_scales = _mcmc_plugin.compute_relocation_tensor(
-            densities[sampled_idxs].contiguous(),
-            scales[sampled_idxs].contiguous(),
+            donor_densities.contiguous(),
+            donor_scales.contiguous(),
             ratios.contiguous(),
             self.binoms,
             self.conf.strategy.binom_n_max,
         )
+
+        # A1-guard (output): the kernel's Eq.9 binomial math can still emit
+        # non-finite / non-positive values at opacity boundaries; the log
+        # inverse activations below turn those into NaN/-inf PARAMETERS,
+        # silently poisoning the layer (inc_b6a9 6-cam R1: 60% of background
+        # densities NaN by ~3k steps — never crosses the loss, so the
+        # pred-based drop guard can't see it). Bad rows fall back to the
+        # donor's original values (plain copy semantics).
+        new_densities, new_scales, n_bad = _sanitize_relocation(
+            new_densities, new_scales, donor_densities, donor_scales,
+        )
+        if n_bad:
+            logger.warning(
+                f"[A1] relocation kernel emitted {n_bad}/{int(ratios.shape[0])} "
+                f"non-finite/non-positive rows — fell back to donor copy"
+            )
 
         new_densities = self.model.density_activation_inv(
             torch.clamp(
