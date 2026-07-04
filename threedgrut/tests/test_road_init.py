@@ -7,6 +7,7 @@ LayerSpec(road).scale_prior=(0.1, 0.1, 0.001).
 
 T3.3.b lands the implementation; these tests are the behavioral contract.
 """
+
 from __future__ import annotations
 
 import math
@@ -19,8 +20,7 @@ from threedgrut.layers.registry import specs_from_config
 from threedgrut.layers.road_init import init_road_layer
 
 
-def _flat_ground_lidar(n: int = 200, x_range: float = 50.0,
-                       y_range: float = 50.0) -> torch.Tensor:
+def _flat_ground_lidar(n: int = 200, x_range: float = 50.0, y_range: float = 50.0) -> torch.Tensor:
     """100×N synthetic 'flat ground' LiDAR points with Z=0."""
     pts = torch.zeros(n, 3)
     pts[:, 0] = (torch.rand(n) * 2 - 1) * x_range
@@ -42,9 +42,7 @@ def test_road_init_z_lock():
     """T3.3.a: mock 100 flat ground points Z=0 → init 后所有 Z 误差 < 0.05 m."""
     road_pts = _flat_ground_lidar(n=100)
     traj = _ego_trajectory(n=10, length=20.0)
-    positions, _, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=5.0, resolution=0.5, max_n=2_000
-    )
+    positions, _, _, _, _ = init_road_layer(road_pts, traj, cut_range=5.0, resolution=0.5, max_n=2_000)
     assert positions.shape[0] > 0, "should produce some BEV grid points"
     z_err = positions[:, 2].abs().max().item()
     assert z_err < 0.05, f"Z lock failed: max |Z| = {z_err}"
@@ -54,17 +52,15 @@ def test_road_init_scale_flat():
     """T3.3.a: scales.exp()[:, 2] < 0.005 (路面薄盘约束)."""
     road_pts = _flat_ground_lidar(n=50)
     traj = _ego_trajectory(n=5, length=10.0)
-    _, _, scales, _, _ = init_road_layer(
-        road_pts, traj, cut_range=2.0, resolution=0.5, max_n=200
-    )
+    _, _, scales, _, _ = init_road_layer(road_pts, traj, cut_range=2.0, resolution=0.5, max_n=200)
     assert scales.shape[0] > 0
     sz_max = scales[:, 2].exp().max().item()
     assert sz_max < 0.005, f"flat Z scale violated: max exp(sz) = {sz_max}"
     # XY scale 应该是 ~0.1 m（scale_prior 默认）
     sxy = scales[:, :2].exp()
-    assert (0.05 < sxy).all() and (sxy < 0.2).all(), (
-        f"XY scale out of range: min={sxy.min().item()}, max={sxy.max().item()}"
-    )
+    assert (0.05 < sxy).all() and (
+        sxy < 0.2
+    ).all(), f"XY scale out of range: min={sxy.min().item()}, max={sxy.max().item()}"
 
 
 def test_road_init_handles_empty_lidar():
@@ -86,21 +82,15 @@ def test_road_init_respects_max_n():
     road_pts = _flat_ground_lidar(n=500, x_range=100.0, y_range=100.0)
     traj = _ego_trajectory(n=20, length=200.0)
     # 100×100m + cut_range=20 → 140×140m BEV at res=0.5m → 78400 grid points
-    positions, _, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=20.0, resolution=0.5, max_n=1_000
-    )
-    assert positions.shape[0] <= 1_000, (
-        f"max_n cap violated: got {positions.shape[0]} > 1_000"
-    )
+    positions, _, _, _, _ = init_road_layer(road_pts, traj, cut_range=20.0, resolution=0.5, max_n=1_000)
+    assert positions.shape[0] <= 1_000, f"max_n cap violated: got {positions.shape[0]} > 1_000"
 
 
 def test_road_init_rotations_are_identity_quat():
     """T3.3.a: 默认 rotation = identity quat (1, 0, 0, 0) (wxyz convention)."""
     road_pts = _flat_ground_lidar(n=20)
     traj = _ego_trajectory(n=5, length=5.0)
-    _, rotations, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=2.0, resolution=1.0, max_n=100
-    )
+    _, rotations, _, _, _ = init_road_layer(road_pts, traj, cut_range=2.0, resolution=1.0, max_n=100)
     if rotations.shape[0] > 0:
         assert torch.allclose(rotations[:, 0], torch.ones(rotations.shape[0]))
         assert torch.allclose(rotations[:, 1:], torch.zeros(rotations.shape[0], 3))
@@ -114,9 +104,7 @@ def test_road_init_z_follows_uneven_terrain():
     road_pts[:, 0] = torch.linspace(-50, 50, n)
     road_pts[:, 2] = 0.1 * road_pts[:, 0]  # slope: 10% grade
     traj = _ego_trajectory(n=10, length=80.0)
-    positions, _, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=2.0, resolution=2.0, max_n=2_000
-    )
+    positions, _, _, _, _ = init_road_layer(road_pts, traj, cut_range=2.0, resolution=2.0, max_n=2_000)
     # 在 X≈0 附近的点 Z 应该 ≈0; 在 X≈40 附近 Z ≈4
     near_zero = positions[positions[:, 0].abs() < 2.0]
     near_forty = positions[(positions[:, 0] - 40.0).abs() < 2.0]
@@ -156,15 +144,11 @@ def test_road_init_knn_median_rejects_outliers():
     """E3.2.5①: knn_k=5 中值滤除 +0.3m 离群尖刺，grid Z 贴合真平面 Z=0."""
     road_pts = _dense_flat_with_spikes()
     traj = _ego_trajectory(n=10, length=20.0)
-    positions, _, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=2.0, resolution=1.0, max_n=5_000, knn_k=5
-    )
+    positions, _, _, _, _ = init_road_layer(road_pts, traj, cut_range=2.0, resolution=1.0, max_n=5_000, knn_k=5)
     assert positions.shape[0] > 0
     z_abs = positions[:, 2].abs()
-    assert z_abs.max().item() < 0.05, (
-        f"KNN median failed to reject spikes: max|Z|={z_abs.max().item()}"
-    )
-    rms = (z_abs ** 2).mean().sqrt().item()
+    assert z_abs.max().item() < 0.05, f"KNN median failed to reject spikes: max|Z|={z_abs.max().item()}"
+    rms = (z_abs**2).mean().sqrt().item()
     assert rms < 0.02, f"KNN median residual RMS too high: {rms}"
 
 
@@ -175,14 +159,12 @@ def test_road_init_knn_k1_is_legacy_nearest():
     """
     road_pts = _dense_flat_with_spikes()
     traj = _ego_trajectory(n=10, length=20.0)
-    positions, _, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=2.0, resolution=1.0, max_n=5_000, knn_k=1
-    )
+    positions, _, _, _, _ = init_road_layer(road_pts, traj, cut_range=2.0, resolution=1.0, max_n=5_000, knn_k=1)
     assert positions.shape[0] > 0
     # legacy 行为：grid 会吸到离群尖刺 → max|Z| 接近 0.3
-    assert positions[:, 2].abs().max().item() > 0.1, (
-        "knn_k=1 should reproduce legacy nearest-single-point (spike-polluted)"
-    )
+    assert (
+        positions[:, 2].abs().max().item() > 0.1
+    ), "knn_k=1 should reproduce legacy nearest-single-point (spike-polluted)"
 
 
 def test_road_init_knn_median_preserves_slope():
@@ -193,9 +175,7 @@ def test_road_init_knn_median_preserves_slope():
     road_pts[:, 1] = (torch.arange(n) % 5 - 2).float() * 0.5  # 横向展开给 KNN 2D 邻域
     road_pts[:, 2] = 0.1 * road_pts[:, 0]  # 10% grade
     traj = _ego_trajectory(n=10, length=80.0)
-    positions, _, _, _, _ = init_road_layer(
-        road_pts, traj, cut_range=2.0, resolution=2.0, max_n=5_000, knn_k=5
-    )
+    positions, _, _, _, _ = init_road_layer(road_pts, traj, cut_range=2.0, resolution=2.0, max_n=5_000, knn_k=5)
     near_zero = positions[positions[:, 0].abs() < 2.0]
     near_forty = positions[(positions[:, 0] - 40.0).abs() < 2.0]
     if near_zero.shape[0] > 0 and near_forty.shape[0] > 0:
@@ -219,12 +199,14 @@ def test_layerspec_road_init_knn_k_default_1():
 
 def test_registry_routes_road_init_knn_k():
     """E3.2.5①: ++layers.overrides.road.road_init_knn_k=5 lands on road spec only."""
-    conf = OmegaConf.create({
-        "layers": {
-            "enabled": ["background", "road"],
-            "overrides": {"road": {"road_init_knn_k": 5}},
+    conf = OmegaConf.create(
+        {
+            "layers": {
+                "enabled": ["background", "road"],
+                "overrides": {"road": {"road_init_knn_k": 5}},
+            }
         }
-    })
+    )
     specs = specs_from_config(conf)
     road = next(s for s in specs if s.name == "road")
     bg = next(s for s in specs if s.name == "background")

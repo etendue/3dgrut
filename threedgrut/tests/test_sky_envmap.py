@@ -5,6 +5,7 @@ The cubemap forward path needs nvdiffrast.torch; we conditionally skip it on
 Mac dev boxes where it is unavailable. Parameter-shape and import-error
 behaviour are still verified on CPU.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -18,11 +19,12 @@ import torch
 # ---------------------------------------------------------------------------
 def test_correction_package_exports():
     from threedgrut.correction import (
-        SkyEnvmapBase,
-        SkyEnvmapMLP,
-        SkyEnvmapCubemap,
         ExposureModel,
+        SkyEnvmapBase,
+        SkyEnvmapCubemap,
+        SkyEnvmapMLP,
     )
+
     assert issubclass(SkyEnvmapMLP, SkyEnvmapBase)
     assert issubclass(SkyEnvmapCubemap, SkyEnvmapBase)
     # ExposureModel is unrelated to SkyEnvmapBase but must be exported.
@@ -75,10 +77,7 @@ def test_mlp_grad_flows_to_params():
     v = torch.randn(16, 3, requires_grad=False)
     loss = m(v).sum()
     loss.backward()
-    grad_present = [
-        p.grad is not None and p.grad.abs().sum().item() > 0
-        for p in m.parameters()
-    ]
+    grad_present = [p.grad is not None and p.grad.abs().sum().item() > 0 for p in m.parameters()]
     assert all(grad_present), "all SkyEnvmapMLP params should receive gradient"
 
 

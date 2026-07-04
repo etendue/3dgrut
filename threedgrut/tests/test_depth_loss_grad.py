@@ -6,6 +6,7 @@ DepthV2 supervision uses to update Gaussian positions. If a future refactor
 detaches that grad chain, depth loss will silently become a no-op and Stage 11
 PSNR will not move.
 """
+
 import pytest
 import torch
 

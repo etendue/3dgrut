@@ -5,6 +5,7 @@ Viser 1.0 expects ``wxyz`` (w, x, y, z) quaternions. Our pose tensors are
 C2W [4, 4] matrices (camera-to-world). This file converts between the two
 without pulling scipy / kaolin into the viewer.
 """
+
 from __future__ import annotations
 
 import numpy as np

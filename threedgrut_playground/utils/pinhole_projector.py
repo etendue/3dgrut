@@ -20,6 +20,7 @@ ignored (rare on NCore v4 vehicle cameras); add it if a real camera needs it.
 
 Pure numpy; no torch, no viser, no kaolin — Mac-testable.
 """
+
 from __future__ import annotations
 
 from typing import Optional, Sequence
@@ -53,8 +54,7 @@ class PinholeForwardProjector:
         REQUIRED = {"resolution", "principal_point", "focal_length"}
         missing = REQUIRED - set(pinhole_dict.keys())
         if missing:
-            raise ValueError(
-                f"pinhole_dict missing required keys: {sorted(missing)}")
+            raise ValueError(f"pinhole_dict missing required keys: {sorted(missing)}")
 
         res = pinhole_dict["resolution"]
         self.width = int(res[0])
@@ -74,23 +74,20 @@ class PinholeForwardProjector:
             self.fx = float(fl_arr[0])
             self.fy = float(fl_arr[1])
 
-        self.radial_coeffs = np.asarray(
-            pinhole_dict.get("radial_coeffs", []), dtype=np.float64).ravel()
-        self.tangential_coeffs = np.asarray(
-            pinhole_dict.get("tangential_coeffs", []), dtype=np.float64).ravel()
+        self.radial_coeffs = np.asarray(pinhole_dict.get("radial_coeffs", []), dtype=np.float64).ravel()
+        self.tangential_coeffs = np.asarray(pinhole_dict.get("tangential_coeffs", []), dtype=np.float64).ravel()
 
         if world_to_camera_flip is None:
             world_to_camera_flip = np.eye(4)
         flip = np.asarray(world_to_camera_flip, dtype=np.float64)
         if flip.shape != (4, 4):
-            raise ValueError(
-                f"world_to_camera_flip must be (4, 4); got {flip.shape}")
+            raise ValueError(f"world_to_camera_flip must be (4, 4); got {flip.shape}")
         self._flip = flip
 
     def project_points(
         self,
-        points_world: np.ndarray,         # (N, 3)
-        c2w: np.ndarray,                  # (4, 4)
+        points_world: np.ndarray,  # (N, 3)
+        c2w: np.ndarray,  # (4, 4)
     ) -> tuple[np.ndarray, np.ndarray]:
         """3D world points → (uv: (N, 2) pixels, visible: (N,) bool).
 
@@ -106,8 +103,7 @@ class PinholeForwardProjector:
 
         N = pts.shape[0]
         if N == 0:
-            return (np.empty((0, 2), dtype=np.float64),
-                    np.empty((0,), dtype=bool))
+            return (np.empty((0, 2), dtype=np.float64), np.empty((0,), dtype=bool))
 
         c2w_cv = c2w_arr @ self._flip
         w2c = np.linalg.inv(c2w_cv)
@@ -134,12 +130,8 @@ class PinholeForwardProjector:
             if self.tangential_coeffs.size >= 2:
                 p1 = float(self.tangential_coeffs[0])
                 p2 = float(self.tangential_coeffs[1])
-                x_dist = (x_n * radial
-                          + 2.0 * p1 * x_n * y_n
-                          + p2 * (r2 + 2.0 * x_n * x_n))
-                y_dist = (y_n * radial
-                          + p1 * (r2 + 2.0 * y_n * y_n)
-                          + 2.0 * p2 * x_n * y_n)
+                x_dist = x_n * radial + 2.0 * p1 * x_n * y_n + p2 * (r2 + 2.0 * x_n * x_n)
+                y_dist = y_n * radial + p1 * (r2 + 2.0 * y_n * y_n) + 2.0 * p2 * x_n * y_n
             else:
                 x_dist = x_n * radial
                 y_dist = y_n * radial
@@ -198,9 +190,8 @@ class PinholeForwardProjector:
         cursor = 0
         for L in lengths:
             if L == 0:
-                out.append((np.empty((0, 2), dtype=np.float64),
-                            np.empty((0,), dtype=bool)))
+                out.append((np.empty((0, 2), dtype=np.float64), np.empty((0,), dtype=bool)))
                 continue
-            out.append((uv_all[cursor:cursor + L], vis_all[cursor:cursor + L]))
+            out.append((uv_all[cursor : cursor + L], vis_all[cursor : cursor + L]))
             cursor += L
         return out

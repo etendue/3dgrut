@@ -19,6 +19,7 @@ Then (host python is fine — pure json):
 VALIDATE: run with --list first to see the exact label strings present in the
 clip; the class buckets below are best-effort and may need a tweak per clip.
 """
+
 import argparse
 import json
 import os
@@ -49,9 +50,12 @@ def _extract_tracks(doc):
 
 
 def _edit(remove_ids):
-    return {"metadata": {"external_assets_metadata": []},
-            "replace": [], "remove": list(remove_ids),
-            "insert": {"asset_ids": [], "data": {}}}
+    return {
+        "metadata": {"external_assets_metadata": []},
+        "replace": [],
+        "remove": list(remove_ids),
+        "insert": {"asset_ids": [], "data": {}},
+    }
 
 
 def main():
@@ -65,6 +69,7 @@ def main():
     tracks = _extract_tracks(doc)
 
     from collections import Counter
+
     counts = Counter(c.lower() for _, c in tracks)
     print(f"=== {len(tracks)} tracks; class histogram ===")
     for c, n in counts.most_common():

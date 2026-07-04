@@ -11,6 +11,7 @@ pins:
   * ``load_tracks_from_ncore_cuboids`` writes a full SE(3) pose containing
     both centroid translation AND rotation derived from bbox.rot.
 """
+
 from __future__ import annotations
 
 import math
@@ -27,10 +28,10 @@ from threedgrut.datasets.tracks_loader import (
     load_tracks_from_ncore_cuboids,
 )
 
-
 # -----------------------------------------------------------------------------
 # euler_xyz_to_rotation_matrix
 # -----------------------------------------------------------------------------
+
 
 def test_euler_xyz_identity():
     R = euler_xyz_to_rotation_matrix(0.0, 0.0, 0.0)
@@ -43,8 +44,8 @@ def test_euler_xyz_yaw_90_degrees():
     expected = np.array(
         [
             [0.0, -1.0, 0.0],
-            [1.0,  0.0, 0.0],
-            [0.0,  0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
         ]
     )
     assert np.allclose(R, expected, atol=1e-10)
@@ -55,9 +56,9 @@ def test_euler_xyz_yaw_180_degrees():
     R = euler_xyz_to_rotation_matrix(0.0, 0.0, math.pi)
     expected = np.array(
         [
-            [-1.0,  0.0, 0.0],
-            [ 0.0, -1.0, 0.0],
-            [ 0.0,  0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
         ]
     )
     assert np.allclose(R, expected, atol=1e-10)
@@ -84,9 +85,9 @@ def test_euler_xyz_small_angles_skew_approximation():
     R = euler_xyz_to_rotation_matrix(rx, ry, rz)
     skew = np.array(
         [
-            [0.0,  -rz,   ry],
-            [ rz,  0.0,  -rx],
-            [-ry,  rx,   0.0],
+            [0.0, -rz, ry],
+            [rz, 0.0, -rx],
+            [-ry, rx, 0.0],
         ]
     )
     expected = np.eye(3) + skew
@@ -127,18 +128,18 @@ def test_euler_xyz_orthogonal_determinant_one():
         (0.01, -0.02, 3.1),  # NCore-like car yaw
     ]:
         R = euler_xyz_to_rotation_matrix(rx, ry, rz)
-        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10), \
-            f"R^T R != I for ({rx}, {ry}, {rz})"
-        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10), \
-            f"det(R) != 1 for ({rx}, {ry}, {rz})"
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-10), f"R^T R != I for ({rx}, {ry}, {rz})"
+        assert np.isclose(np.linalg.det(R), 1.0, atol=1e-10), f"det(R) != 1 for ({rx}, {ry}, {rz})"
 
 
 # -----------------------------------------------------------------------------
 # load_tracks_from_ncore_cuboids — Phase E.2 pose-with-rotation
 # -----------------------------------------------------------------------------
 
+
 class _FakeBBox3:
     """Mock NCore BBox3 (centroid + dim + rot tuple)."""
+
     def __init__(self, centroid, dim, rot):
         self.centroid = tuple(centroid)
         self.dim = tuple(dim)
@@ -188,8 +189,8 @@ def test_load_tracks_writes_rotation_into_pose():
     expected_R = np.array(
         [
             [0.0, -1.0, 0.0],
-            [1.0,  0.0, 0.0],
-            [0.0,  0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
         ]
     )
     assert np.allclose(pose[:3, :3], expected_R, atol=1e-5)
@@ -213,7 +214,9 @@ def test_load_tracks_filter_inactive_frame_keeps_identity():
     # cam_ts = [0us, 1Mus, 10Mus]; obs at 1Mus is in range, 0us and 10Mus are >50ms off
     ts = np.asarray([0, 1_000_000, 10_000_000], dtype=np.int64)
     out = load_tracks_from_ncore_cuboids(
-        _FakeLoader([obs]), ts, time_tolerance_us=50_000,
+        _FakeLoader([obs]),
+        ts,
+        time_tolerance_us=50_000,
     )
     poses = out["9"]["poses"].numpy()  # [3, 4, 4]
     active = out["9"]["frame_info"].numpy()
@@ -243,7 +246,8 @@ def test_load_tracks_class_filter():
     obs_car = _FakeObs("car1", "automobile", 0, bbox_car)
     obs_ped = _FakeObs("ped1", "person", 0, bbox_ped)
     out = load_tracks_from_ncore_cuboids(
-        _FakeLoader([obs_car, obs_ped]), np.asarray([0], dtype=np.int64),
+        _FakeLoader([obs_car, obs_ped]),
+        np.asarray([0], dtype=np.int64),
     )
     assert "car1" in out
     assert "ped1" not in out

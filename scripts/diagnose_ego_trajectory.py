@@ -31,6 +31,7 @@ Usage (Mac / CPU; no CUDA):
         --gs_object /path/to/ckpt_last.pt \\
         --out_dir /tmp/ego_diag
 """
+
 from __future__ import annotations
 
 import argparse
@@ -122,7 +123,7 @@ def _detect_problems(poses: np.ndarray, ts: np.ndarray, outlier_k: float) -> dic
     direction_outlier_idx: list[int] = []
     max_kink_deg = 0.0
     if xy.shape[0] >= 3:
-        seg = np.diff(xy, axis=0)             # (N-1, 2)
+        seg = np.diff(xy, axis=0)  # (N-1, 2)
         seg_len = np.linalg.norm(seg, axis=1)
         # Skip near-zero segments (stationary) when computing angles.
         moving = seg_len > 0.05
@@ -213,6 +214,7 @@ def _detect_problems(poses: np.ndarray, ts: np.ndarray, outlier_k: float) -> dic
 
 def _render_dxy_plot(report: dict, out_path: Path) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -226,10 +228,20 @@ def _render_dxy_plot(report: dict, out_path: Path) -> None:
 
     colors = ["#1A99FF" if i not in outliers else "#E60000" for i in range(n)]
     ax_dxy.bar(x, dxy, width=1.0, color=colors, edgecolor="none")
-    ax_dxy.axhline(report["dxy_median_m"], color="#00B050", linewidth=1.2,
-                   linestyle="--", label=f"median = {report['dxy_median_m']:.3f} m")
-    ax_dxy.axhline(report["dxy_threshold_m"], color="#E60000", linewidth=1.2,
-                   linestyle="--", label=f"outlier ≥ {report['dxy_threshold_m']:.3f} m")
+    ax_dxy.axhline(
+        report["dxy_median_m"],
+        color="#00B050",
+        linewidth=1.2,
+        linestyle="--",
+        label=f"median = {report['dxy_median_m']:.3f} m",
+    )
+    ax_dxy.axhline(
+        report["dxy_threshold_m"],
+        color="#E60000",
+        linewidth=1.2,
+        linestyle="--",
+        label=f"outlier ≥ {report['dxy_threshold_m']:.3f} m",
+    )
     ax_dxy.set_ylabel("|Δxy| (m)")
     ax_dxy.set_title(
         f"ego per-frame XY displacement  —  {n} edges  "
@@ -257,6 +269,7 @@ def _render_dxy_plot(report: dict, out_path: Path) -> None:
 
 def _render_xy_plot(report: dict, out_path: Path) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -265,31 +278,54 @@ def _render_xy_plot(report: dict, out_path: Path) -> None:
     identity = report["identity_pose_indices"]
 
     fig, ax = plt.subplots(figsize=(10, 10), dpi=100)
-    ax.plot(xy[:, 0], xy[:, 1], color="#1A99FF", linewidth=1.0, alpha=0.7,
-            label=f"ego trajectory ({xy.shape[0]} frames)")
+    ax.plot(
+        xy[:, 0], xy[:, 1], color="#1A99FF", linewidth=1.0, alpha=0.7, label=f"ego trajectory ({xy.shape[0]} frames)"
+    )
     ax.scatter(xy[:, 0], xy[:, 1], s=3, c="#1A99FF", alpha=0.6, zorder=3)
 
     if xy.shape[0] > 0:
-        ax.scatter([xy[0, 0]], [xy[0, 1]], s=80, c="#00B050",
-                   marker="o", edgecolors="black", linewidths=1.5,
-                   label="start", zorder=5)
-        ax.scatter([xy[-1, 0]], [xy[-1, 1]], s=80, c="#E60000",
-                   marker="s", edgecolors="black", linewidths=1.5,
-                   label="end", zorder=5)
+        ax.scatter(
+            [xy[0, 0]],
+            [xy[0, 1]],
+            s=80,
+            c="#00B050",
+            marker="o",
+            edgecolors="black",
+            linewidths=1.5,
+            label="start",
+            zorder=5,
+        )
+        ax.scatter(
+            [xy[-1, 0]],
+            [xy[-1, 1]],
+            s=80,
+            c="#E60000",
+            marker="s",
+            edgecolors="black",
+            linewidths=1.5,
+            label="end",
+            zorder=5,
+        )
 
     for i in outliers:
         a = xy[i]
         b = xy[i + 1]
-        ax.plot([a[0], b[0]], [a[1], b[1]], color="#E60000",
-                linewidth=2.5, alpha=0.85, zorder=4)
-        ax.scatter([a[0], b[0]], [a[1], b[1]], s=30, c="#E60000",
-                   edgecolors="black", linewidths=0.8, zorder=5)
+        ax.plot([a[0], b[0]], [a[1], b[1]], color="#E60000", linewidth=2.5, alpha=0.85, zorder=4)
+        ax.scatter([a[0], b[0]], [a[1], b[1]], s=30, c="#E60000", edgecolors="black", linewidths=0.8, zorder=5)
 
     if identity:
         idx = np.asarray(identity, dtype=np.int64)
-        ax.scatter(xy[idx, 0], xy[idx, 1], s=60, c="#FFCC00", marker="*",
-                   edgecolors="black", linewidths=0.8, zorder=6,
-                   label=f"identity pose ({len(identity)})")
+        ax.scatter(
+            xy[idx, 0],
+            xy[idx, 1],
+            s=60,
+            c="#FFCC00",
+            marker="*",
+            edgecolors="black",
+            linewidths=0.8,
+            zorder=6,
+            label=f"identity pose ({len(identity)})",
+        )
 
     ax.set_xlabel("world X (m)")
     ax.set_ylabel("world Y (m)")
@@ -305,8 +341,7 @@ def _render_xy_plot(report: dict, out_path: Path) -> None:
 
 def _print_summary(report: dict, extra: dict) -> None:
     print("=" * 72)
-    print(f"  ego trajectory diagnostic  —  seq={extra['sequence_id']}  "
-          f"schema_v{extra['schema_version']}")
+    print(f"  ego trajectory diagnostic  —  seq={extra['sequence_id']}  " f"schema_v{extra['schema_version']}")
     print("=" * 72)
     print(f"  primary_camera_id           : {extra['primary_camera_id']}")
     print(f"  has_ftheta_intrinsics       : {extra['has_ftheta_intrinsics']}")
@@ -314,20 +349,19 @@ def _print_summary(report: dict, extra: dict) -> None:
     print(f"  timestamps sorted (asc)     : {report['is_sorted']}")
     print(f"    negative-dt edges         : {report['n_negative_dt']}")
     print(f"    zero-dt edges             : {report['n_zero_dt']}")
-    print(f"  dxy mean / median / max     : "
-          f"{report['dxy_mean_m']:.3f} / {report['dxy_median_m']:.3f} / "
-          f"{report['dxy_max_m']:.3f} m")
+    print(
+        f"  dxy mean / median / max     : "
+        f"{report['dxy_mean_m']:.3f} / {report['dxy_median_m']:.3f} / "
+        f"{report['dxy_max_m']:.3f} m"
+    )
     print(f"  dt cadence bimodal          : {report.get('dt_bimodal', False)}")
-    print(f"  max direction-change kink   : "
-          f"{report.get('max_direction_kink_deg', 0.0):.1f}° "
-          f"(threshold 60°)")
+    print(f"  max direction-change kink   : " f"{report.get('max_direction_kink_deg', 0.0):.1f}° " f"(threshold 60°)")
     print(f"  kink-outlier count          : {len(report['outlier_jump_indices'])}")
     if report["outlier_jump_indices"]:
         head = report["outlier_jump_indices"][:10]
         suffix = " ..." if len(report["outlier_jump_indices"]) > 10 else ""
         print(f"    first outliers (i→i+1)    : {head}{suffix}")
-    print(f"  speed mean / max            : "
-          f"{report['speed_mean_mps']:.2f} / {report['speed_max_mps']:.2f} m/s")
+    print(f"  speed mean / max            : " f"{report['speed_mean_mps']:.2f} / {report['speed_max_mps']:.2f} m/s")
     print(f"  identity poses count        : {len(report['identity_pose_indices'])}")
     print(f"  NaN poses count             : {len(report['nan_pose_indices'])}")
     print(f"  non-det rotation count      : {len(report['nondet_rotation_indices'])}")
@@ -352,10 +386,7 @@ def _diagnose_hypotheses(report: dict, extra: dict) -> list[str]:
         )
         data_clean = False
     if report["n_zero_dt"] > 0:
-        hints.append(
-            "R1b — duplicate timestamps (Δt=0). Either dedupe or distinguish by "
-            "frame_idx in _extract_ego."
-        )
+        hints.append("R1b — duplicate timestamps (Δt=0). Either dedupe or distinguish by " "frame_idx in _extract_ego.")
         data_clean = False
     if report["identity_pose_indices"]:
         hints.append(
@@ -365,10 +396,7 @@ def _diagnose_hypotheses(report: dict, extra: dict) -> list[str]:
         )
         data_clean = False
     if report["nan_pose_indices"]:
-        hints.append(
-            f"R3b — {len(report['nan_pose_indices'])} NaN poses. Investigate "
-            "upstream NCore extractor."
-        )
+        hints.append(f"R3b — {len(report['nan_pose_indices'])} NaN poses. Investigate " "upstream NCore extractor.")
         data_clean = False
     if report.get("speed_max_mps", 0.0) > 35.0:
         hints.append(
@@ -432,8 +460,7 @@ def diagnose(args: argparse.Namespace) -> int:
 
     print(f"[ego-diag] loading ckpt → {ckpt_path}", flush=True)
     poses, ts, extra = _load_ego_block(ckpt_path)
-    print(f"[ego-diag] ego: N={poses.shape[0]}  primary_cam={extra['primary_camera_id']}",
-          flush=True)
+    print(f"[ego-diag] ego: N={poses.shape[0]}  primary_cam={extra['primary_camera_id']}", flush=True)
 
     report = _detect_problems(poses, ts, outlier_k=args.outlier_k)
     _print_summary(report, extra)
@@ -452,28 +479,23 @@ def diagnose(args: argparse.Namespace) -> int:
     print(f"[ego-diag] wrote {xy_png}", flush=True)
 
     json_out = {
-        **{k: v for k, v in report.items()
-           if k not in {"dxy", "dt_us", "speed_mps", "xy"}},
+        **{k: v for k, v in report.items() if k not in {"dxy", "dt_us", "speed_mps", "xy"}},
         "hypotheses": hints,
         "extra": extra,
         "ckpt": str(ckpt_path),
     }
     json_path = out_dir / "ego_traj_diag.json"
     with json_path.open("w") as fh:
-        json.dump(json_out, fh, indent=2,
-                  default=lambda o: o.item() if hasattr(o, "item") else o)
+        json.dump(json_out, fh, indent=2, default=lambda o: o.item() if hasattr(o, "item") else o)
     print(f"[ego-diag] wrote {json_path}", flush=True)
     return 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--gs_object", required=True, type=str,
-                        help="Path to v2 ckpt (.pt) with viz_4d.ego block.")
-    parser.add_argument("--out_dir", required=True, type=str,
-                        help="Output directory for PNGs + ego_traj_diag.json.")
-    parser.add_argument("--outlier_k", default=5.0, type=float,
-                        help="Outlier multiplier on median dxy (default 5×).")
+    parser.add_argument("--gs_object", required=True, type=str, help="Path to v2 ckpt (.pt) with viz_4d.ego block.")
+    parser.add_argument("--out_dir", required=True, type=str, help="Output directory for PNGs + ego_traj_diag.json.")
+    parser.add_argument("--outlier_k", default=5.0, type=float, help="Outlier multiplier on median dxy (default 5×).")
     args = parser.parse_args(argv)
     return diagnose(args)
 

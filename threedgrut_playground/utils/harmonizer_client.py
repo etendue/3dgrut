@@ -23,6 +23,7 @@ Temporal semantics:
   * After a successful round-trip, the *returned* (corrected) frame is appended
     to the deque — this is the Harmonizer convention (self-reference, not raw).
 """
+
 from __future__ import annotations
 
 import socket
@@ -45,9 +46,7 @@ class HarmonizerTemporalClient:
         timeout: socket connect/IO timeout in seconds.
     """
 
-    def __init__(
-        self, host: str, port: int, K: int = 4, timeout: float = 5.0
-    ) -> None:
+    def __init__(self, host: str, port: int, K: int = 4, timeout: float = 5.0) -> None:
         self.host = host
         self.port = int(port)
         self.K = int(K)
@@ -60,9 +59,7 @@ class HarmonizerTemporalClient:
         self._history: "deque[np.ndarray]" = deque(maxlen=self.K)
 
     @classmethod
-    def from_addr(
-        cls, addr: str, K: int = 4, timeout: float = 5.0
-    ) -> "HarmonizerTemporalClient":
+    def from_addr(cls, addr: str, K: int = 4, timeout: float = 5.0) -> "HarmonizerTemporalClient":
         """Build from a ``host:port`` string (e.g. ``"127.0.0.1:59490"``)."""
         host, port = addr.rsplit(":", 1)
         return cls(host, int(port), K=K, timeout=timeout)
@@ -78,9 +75,7 @@ class HarmonizerTemporalClient:
 
     def _connect(self) -> socket.socket:
         if self._sock is None:
-            s = socket.create_connection(
-                (self.host, self.port), timeout=self.timeout
-            )
+            s = socket.create_connection((self.host, self.port), timeout=self.timeout)
             s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self._sock = s
         return self._sock
@@ -146,8 +141,7 @@ class HarmonizerTemporalClient:
             self.healthy = False
             if not self._warned:
                 print(
-                    f"[Harmonizer] client error → falling back to raw frame "
-                    f"({self.host}:{self.port}): {exc}",
+                    f"[Harmonizer] client error → falling back to raw frame " f"({self.host}:{self.port}): {exc}",
                     flush=True,
                 )
                 self._warned = True

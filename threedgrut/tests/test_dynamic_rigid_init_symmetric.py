@@ -11,6 +11,7 @@ Coverage:
     (e) invalid ``symmetric_axis`` raises ValueError
     (f) empty track (no LiDAR inside cuboid) is robust to symmetric_axis
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,9 +23,12 @@ from threedgrut.layers.dynamic_rigid_init import init_dynamic_rigid_layer
 def _identity_track(F: int = 1, size=(4.0, 2.0, 1.5)) -> dict:
     eye = torch.eye(4).expand(F, 4, 4).clone()
     return {
-        "pts": None, "colors": None,
-        "poses": eye, "size": torch.tensor(list(size)),
-        "frame_info": torch.ones(F, dtype=torch.bool), "class": "vehicle",
+        "pts": None,
+        "colors": None,
+        "poses": eye,
+        "size": torch.tensor(list(size)),
+        "frame_info": torch.ones(F, dtype=torch.bool),
+        "class": "vehicle",
     }
 
 
@@ -34,15 +38,17 @@ def test_symmetric_axis_none_matches_baseline():
     pre-V3-L5 baseline call (no symmetric_axis kwarg)."""
     torch.manual_seed(0)
     tracks = {"v0": _identity_track()}
-    pts = torch.tensor([
-        [1.0, 0.5, 0.3], [-1.0, -0.5, -0.3], [1.5, 0.9, 0.7],
-        [0.0, 0.0, 0.0], [1.9, 0.5, -0.5],
-    ])
-    out_a = init_dynamic_rigid_layer(dict(tracks), pts.clone(),
-                                     max_pts_per_track=100)
-    out_b = init_dynamic_rigid_layer(dict(tracks), pts.clone(),
-                                     max_pts_per_track=100,
-                                     symmetric_axis=None)
+    pts = torch.tensor(
+        [
+            [1.0, 0.5, 0.3],
+            [-1.0, -0.5, -0.3],
+            [1.5, 0.9, 0.7],
+            [0.0, 0.0, 0.0],
+            [1.9, 0.5, -0.5],
+        ]
+    )
+    out_a = init_dynamic_rigid_layer(dict(tracks), pts.clone(), max_pts_per_track=100)
+    out_b = init_dynamic_rigid_layer(dict(tracks), pts.clone(), max_pts_per_track=100, symmetric_axis=None)
     assert torch.equal(out_a[0], out_b[0])
     assert torch.equal(out_a[1], out_b[1])
     assert out_a[2] == out_b[2]
@@ -54,16 +60,17 @@ def test_symmetric_axis_y_doubles_count_below_cap():
     baseline count."""
     tracks_base = {"v0": _identity_track()}
     tracks_sym = {"v0": _identity_track()}
-    pts = torch.tensor([
-        [1.0, 0.5, 0.3], [-1.0, -0.5, -0.3], [1.5, 0.9, 0.7],
-        [0.0, 0.4, 0.0], [1.9, 0.1, -0.5],
-    ])
-    pos_base, _, _ = init_dynamic_rigid_layer(
-        tracks_base, pts, max_pts_per_track=100
+    pts = torch.tensor(
+        [
+            [1.0, 0.5, 0.3],
+            [-1.0, -0.5, -0.3],
+            [1.5, 0.9, 0.7],
+            [0.0, 0.4, 0.0],
+            [1.9, 0.1, -0.5],
+        ]
     )
-    pos_sym, _, _ = init_dynamic_rigid_layer(
-        tracks_sym, pts, max_pts_per_track=100, symmetric_axis='Y'
-    )
+    pos_base, _, _ = init_dynamic_rigid_layer(tracks_base, pts, max_pts_per_track=100)
+    pos_sym, _, _ = init_dynamic_rigid_layer(tracks_sym, pts, max_pts_per_track=100, symmetric_axis="Y")
     # All 5 LiDAR points are inside the 4×2×1.5 cuboid → baseline = 5, sym = 10.
     assert pos_base.shape[0] == 5
     assert pos_sym.shape[0] == 10
@@ -76,14 +83,19 @@ def test_symmetric_axis_respects_max_pts_per_track():
     torch.manual_seed(0)
     tracks = {"v0": _identity_track()}
     # 8 LiDAR points all inside cuboid → 16 after Y-mirror, capped at 6.
-    pts = torch.tensor([
-        [0.5, 0.5, 0.3], [-0.5, -0.5, -0.3], [1.5, 0.9, 0.7],
-        [0.0, 0.4, 0.0], [1.9, 0.1, -0.5], [-1.9, -0.1, 0.5],
-        [0.3, 0.7, 0.2], [-0.3, -0.7, -0.2],
-    ])
-    pos, ids, _ = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=6, symmetric_axis='Y'
+    pts = torch.tensor(
+        [
+            [0.5, 0.5, 0.3],
+            [-0.5, -0.5, -0.3],
+            [1.5, 0.9, 0.7],
+            [0.0, 0.4, 0.0],
+            [1.9, 0.1, -0.5],
+            [-1.9, -0.1, 0.5],
+            [0.3, 0.7, 0.2],
+            [-0.3, -0.7, -0.2],
+        ]
     )
+    pos, ids, _ = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=6, symmetric_axis="Y")
     assert pos.shape[0] == 6
     assert ids.shape[0] == 6
 
@@ -95,14 +107,14 @@ def test_symmetric_axis_y_flips_y_coordinate():
     tracks = {"v0": _identity_track()}
     # All points have y>0 strictly so the baseline has zero y<=0 points,
     # and the mirror should add exactly those y<0 negated copies.
-    pts = torch.tensor([
-        [0.5, 0.3, 0.0],
-        [-0.5, 0.5, 0.1],
-        [1.0, 0.7, -0.2],
-    ])
-    pos, _, _ = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100, symmetric_axis='Y'
+    pts = torch.tensor(
+        [
+            [0.5, 0.3, 0.0],
+            [-0.5, 0.5, 0.1],
+            [1.0, 0.7, -0.2],
+        ]
     )
+    pos, _, _ = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100, symmetric_axis="Y")
     # 3 baseline + 3 mirrored = 6 rows. Sort by y so the test is stable
     # regardless of internal cat order.
     assert pos.shape[0] == 6
@@ -131,12 +143,14 @@ def test_symmetric_axis_empty_track_no_crash():
     cleanly (track_pts.shape[0] == 0 → no mirror, no crash)."""
     tracks = {"v0": _identity_track()}
     # All points outside the 4×2×1.5 cuboid
-    pts = torch.tensor([
-        [10.0, 0.0, 0.0], [-10.0, 0.0, 0.0], [0.0, 10.0, 0.0],
-    ])
-    pos, ids, names = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100, symmetric_axis='Y'
+    pts = torch.tensor(
+        [
+            [10.0, 0.0, 0.0],
+            [-10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+        ]
     )
+    pos, ids, names = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100, symmetric_axis="Y")
     assert pos.shape == (0, 3)
     assert ids.shape == (0,)
     assert names == ["v0"]
@@ -147,9 +161,7 @@ def test_symmetric_axis_empty_track_no_crash():
 def test_symmetric_axis_all_axes_flip_correct_coord(axis, col):
     tracks = {"v0": _identity_track()}
     pts = torch.tensor([[0.5, 0.3, 0.2]])  # 1 asymmetric point
-    pos, _, _ = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100, symmetric_axis=axis
-    )
+    pos, _, _ = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100, symmetric_axis=axis)
     assert pos.shape == (2, 3)
     # One row is the original (0.5, 0.3, 0.2); the other has `col` negated.
     sums = pos.sum(dim=0)

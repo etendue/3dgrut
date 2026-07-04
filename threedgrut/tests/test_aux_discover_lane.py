@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """discover_aux_path 对 lane 产物的 glob 行为（纯 pathlib，Mac 可测）。"""
+
 from __future__ import annotations
 
 import pytest

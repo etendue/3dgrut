@@ -26,6 +26,7 @@ Usage::
 The output dir holds one PNG per sample, plus a printed log line with
 the per-sample mean / max diff magnitude (pre-amplify).
 """
+
 import argparse
 import os
 import sys
@@ -37,8 +38,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from threedgrut.render import Renderer  # noqa: E402
 from threedgrut.layers.layered_model import LayeredGaussians  # noqa: E402
+from threedgrut.render import Renderer  # noqa: E402
 
 
 @torch.no_grad()
@@ -56,19 +57,24 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--checkpoint", required=True,
-                    help="path to ckpt_<iter>.pt with learnable_pose state")
-    ap.add_argument("--out-dir", required=True,
-                    help="output directory for triptych PNGs")
-    ap.add_argument("--num-samples", type=int, default=8,
-                    help="how many (cam, frame) samples to render (default: 8)")
-    ap.add_argument("--stride", type=int, default=0,
-                    help="dataloader stride between picked samples; "
-                         "0 → auto = max(1, n_total // num_samples) "
-                         "to spread samples evenly across the clip")
-    ap.add_argument("--diff-amplify", type=float, default=10.0,
-                    help="per-pixel abs-diff multiplier for visualization "
-                         "(default 10×; pre-amplify mean/max printed per sample)")
+    ap.add_argument("--checkpoint", required=True, help="path to ckpt_<iter>.pt with learnable_pose state")
+    ap.add_argument("--out-dir", required=True, help="output directory for triptych PNGs")
+    ap.add_argument("--num-samples", type=int, default=8, help="how many (cam, frame) samples to render (default: 8)")
+    ap.add_argument(
+        "--stride",
+        type=int,
+        default=0,
+        help="dataloader stride between picked samples; "
+        "0 → auto = max(1, n_total // num_samples) "
+        "to spread samples evenly across the clip",
+    )
+    ap.add_argument(
+        "--diff-amplify",
+        type=float,
+        default=10.0,
+        help="per-pixel abs-diff multiplier for visualization "
+        "(default 10×; pre-amplify mean/max printed per sample)",
+    )
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -84,20 +90,22 @@ def main() -> None:
     )
     model = renderer.model
     if not isinstance(model, LayeredGaussians):
-        print(f"ERROR: model is {type(model).__name__}, not LayeredGaussians — "
-              f"this script only works on multilayer ckpts.")
+        print(
+            f"ERROR: model is {type(model).__name__}, not LayeredGaussians — "
+            f"this script only works on multilayer ckpts."
+        )
         sys.exit(2)
     if not hasattr(model, "set_pose_source"):
-        print("ERROR: LayeredGaussians has no set_pose_source — "
-              "rebuild from a branch that contains V3 Stage D.2.")
+        print("ERROR: LayeredGaussians has no set_pose_source — " "rebuild from a branch that contains V3 Stage D.2.")
         sys.exit(2)
 
-    has_gt_buf = any(name.startswith("_track_pose_gt_")
-                     for name in model._buffers)
+    has_gt_buf = any(name.startswith("_track_pose_gt_") for name in model._buffers)
     if not has_gt_buf:
-        print("WARN: no _track_pose_gt_<tid> buffer registered — "
-              "the 'gt' route will fall through to the buffer/learned route, "
-              "yielding an all-zero diff. Continuing anyway.")
+        print(
+            "WARN: no _track_pose_gt_<tid> buffer registered — "
+            "the 'gt' route will fall through to the buffer/learned route, "
+            "yielding an all-zero diff. Continuing anyway."
+        )
 
     n_total = len(renderer.dataset)
     stride = args.stride if args.stride > 0 else max(1, n_total // max(args.num_samples, 1))
@@ -122,19 +130,21 @@ def main() -> None:
 
         gpu_batch = renderer.dataset.get_gpu_batch_with_intrinsics(batch)
 
-        img_learned = _render_with_source(model, gpu_batch, "learned")   # [H, W, 3]
-        img_gt      = _render_with_source(model, gpu_batch, "gt")         # [H, W, 3]
+        img_learned = _render_with_source(model, gpu_batch, "learned")  # [H, W, 3]
+        img_gt = _render_with_source(model, gpu_batch, "gt")  # [H, W, 3]
 
-        diff = (img_learned - img_gt).abs().mean(dim=-1, keepdim=True)    # [H, W, 1]
+        diff = (img_learned - img_gt).abs().mean(dim=-1, keepdim=True)  # [H, W, 1]
         diff_vis = (diff * args.diff_amplify).clamp(0, 1).expand(-1, -1, 3)
 
-        triptych = torch.cat([img_gt, img_learned, diff_vis], dim=1)       # [H, 3*W, 3]
+        triptych = torch.cat([img_gt, img_learned, diff_vis], dim=1)  # [H, 3*W, 3]
 
         fname = f"sample{n_done:02d}_batch{i:04d}_{cam_id}.png"
         out_path = os.path.join(args.out_dir, fname)
         tvu.save_image(triptych.permute(2, 0, 1), out_path)
-        print(f"  [{n_done + 1:>2}/{args.num_samples}] {fname}  "
-              f"diff mean={diff.mean().item():.5f}  max={diff.max().item():.5f}")
+        print(
+            f"  [{n_done + 1:>2}/{args.num_samples}] {fname}  "
+            f"diff mean={diff.mean().item():.5f}  max={diff.max().item():.5f}"
+        )
         n_done += 1
 
     # Restore default route so the renderer object is reusable.

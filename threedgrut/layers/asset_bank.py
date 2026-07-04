@@ -6,6 +6,7 @@
 fallback ladder：① 同 class L2 最近（level 0）② 跨 class 全局最近 + WARN（level
 1）③ on_miss='skip' 时抛 BankMiss 让调用方保留 recon（level 跳过，不 silent）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -52,6 +53,8 @@ def query_bank(
     best = min(bundle.values(), key=lambda s: (_l2(s.cuboids_dims, dims), s.asset_hash))
     logger.warning(
         "asset_bank: class %r absent; cross-class fallback → %r (%s)",
-        label_class, best.asset_hash, best.label_class,
+        label_class,
+        best.asset_hash,
+        best.label_class,
     )
     return best.asset_hash, 1

@@ -22,6 +22,7 @@ padding as holes.
 Pure function ``compute_bev_hole_stats`` takes plain numpy arrays so it unit
 tests on Mac with synthetic data — no ckpt / torch / GPU needed.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -105,9 +106,9 @@ class BevHoleStats:
 
 
 def compute_bev_hole_stats(
-    particle_xy: np.ndarray,       # [N, 2] world XY of road particles
+    particle_xy: np.ndarray,  # [N, 2] world XY of road particles
     particle_opacity: np.ndarray,  # [N]    in [0, 1] (post-sigmoid)
-    ego_xy: np.ndarray,            # [F, 2] world XY of ego trajectory
+    ego_xy: np.ndarray,  # [F, 2] world XY of ego trajectory
     *,
     cell_size: float = 0.5,
     corridor_half_width: float = 12.0,
@@ -122,8 +123,7 @@ def compute_bev_hole_stats(
     ego_xy = np.asarray(ego_xy, dtype=np.float64).reshape(-1, 2)
     if particle_xy.shape[0] != particle_opacity.shape[0]:
         raise ValueError(
-            f"particle_xy ({particle_xy.shape[0]}) and opacity "
-            f"({particle_opacity.shape[0]}) length mismatch"
+            f"particle_xy ({particle_xy.shape[0]}) and opacity " f"({particle_opacity.shape[0]}) length mismatch"
         )
     if particle_xy.shape[0] == 0 or ego_xy.shape[0] == 0:
         raise ValueError("need at least one particle and one ego sample")
@@ -158,10 +158,7 @@ def compute_bev_hole_stats(
     ncells = nx * ny
 
     # --- bin only particles inside the grid bbox (outside = beyond corridor) ---
-    in_box = (
-        (particle_xy[:, 0] >= x0) & (particle_xy[:, 0] < x1)
-        & (particle_xy[:, 1] >= y0) & (particle_xy[:, 1] < y1)
-    )
+    in_box = (particle_xy[:, 0] >= x0) & (particle_xy[:, 0] < x1) & (particle_xy[:, 1] >= y0) & (particle_xy[:, 1] < y1)
     bxy = particle_xy[in_box]
     bop = particle_opacity[in_box]
     ix = np.clip(((bxy[:, 0] - x0) / cell_size).astype(np.int64), 0, nx - 1)
@@ -176,9 +173,7 @@ def compute_bev_hole_stats(
     # --- corridor mask: cell center within corridor_half_width of ego polyline ---
     cell_ix = np.arange(ncells) // ny
     cell_iy = np.arange(ncells) % ny
-    centers = np.stack(
-        [x0 + (cell_ix + 0.5) * cell_size, y0 + (cell_iy + 0.5) * cell_size], axis=-1
-    )
+    centers = np.stack([x0 + (cell_ix + 0.5) * cell_size, y0 + (cell_iy + 0.5) * cell_size], axis=-1)
     ego_dist = _nearest_ego_distance(centers, ego_xy)
     corridor = ego_dist <= corridor_half_width  # [ncells] bool
 

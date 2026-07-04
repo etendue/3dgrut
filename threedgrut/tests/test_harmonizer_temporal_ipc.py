@@ -14,6 +14,7 @@ on a Mac.
 Run:
     pytest threedgrut/tests/test_harmonizer_temporal_ipc.py -v
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -24,13 +25,8 @@ import time
 import numpy as np
 import pytest
 
-from threedgrut_playground.utils.difix_protocol import (
-    pack_frame,
-    read_frame,
-)
-from threedgrut_playground.utils.harmonizer_client import (
-    HarmonizerTemporalClient,
-)
+from threedgrut_playground.utils.difix_protocol import pack_frame, read_frame
+from threedgrut_playground.utils.harmonizer_client import HarmonizerTemporalClient
 from threedgrut_playground.utils.harmonizer_protocol import (
     HEADER_SIZE,
     MAGIC,
@@ -480,9 +476,7 @@ def test_server_make_transform_shape_contract():
         def to(self, *a, **k):
             return self
 
-    transform = make_harmonizer_temporal_transform(
-        _IdentityModel(), device="cpu", model_res=(8, 12)
-    )
+    transform = make_harmonizer_temporal_transform(_IdentityModel(), device="cpu", model_res=(8, 12))
     curr = _rand_img(7, 11, seed=1)
     hist = [_rand_img(7, 11, seed=2), _rand_img(7, 11, seed=3)]
     out = transform(curr, hist)

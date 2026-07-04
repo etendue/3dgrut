@@ -27,6 +27,7 @@ Background (C1 audit, 2026-06-01):
 These guards parse source statically (ast / substring) where possible, so they
 run on Mac CPU with no torch/CUDA. The numeric tests use pure-torch CPU tensors.
 """
+
 from __future__ import annotations
 
 import ast
@@ -98,17 +99,13 @@ def _compute_lidar_psnr_calls(py_path: Path) -> list[ast.Call]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             fn = node.func
-            name = fn.id if isinstance(fn, ast.Name) else (
-                fn.attr if isinstance(fn, ast.Attribute) else None
-            )
+            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
             if name == "compute_lidar_psnr":
                 calls.append(node)
     return calls
 
 
-@pytest.mark.parametrize(
-    "rel_path", ["threedgrut/render.py", "threedgrut/trainer.py"]
-)
+@pytest.mark.parametrize("rel_path", ["threedgrut/render.py", "threedgrut/trainer.py"])
 def test_eval_call_sites_omit_max_depth(rel_path: str):
     """Both eval paths must call compute_lidar_psnr WITHOUT a max_depth arg.
 
@@ -151,9 +148,9 @@ def test_lidar_dump_stays_ray_depth():
         "dump_lidar_depth_map no longer uses np.linalg.norm — ray-depth "
         "(‖cam_pts‖) is the invariant that matches tracer pred_dist."
     )
-    assert "ray-depth" in src and "not z-depth" in src, (
-        "ray-depth-vs-z-depth contract comment dropped from dump_lidar_depth_map."
-    )
+    assert (
+        "ray-depth" in src and "not z-depth" in src
+    ), "ray-depth-vs-z-depth contract comment dropped from dump_lidar_depth_map."
 
 
 def test_depthv2_dump_documents_z_vs_ray_mismatch():

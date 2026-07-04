@@ -12,6 +12,7 @@ camera_idx; overriding the camera set scrambles that mapping, so callers
 must drop the exposure model whenever the override is active — held-out
 numbers are read from the cc_* (per-frame affine) metrics instead.
 """
+
 from __future__ import annotations
 
 from omegaconf import OmegaConf

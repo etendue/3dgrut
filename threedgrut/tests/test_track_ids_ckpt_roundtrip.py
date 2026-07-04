@@ -13,6 +13,7 @@ Tests pin three properties:
      int64 buffer on the corresponding MoG layer.
   3. The roundtrip is shape-/dtype-stable (torch.save + torch.load).
 """
+
 from __future__ import annotations
 
 import os
@@ -24,9 +25,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.layers.registry import specs_from_config
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +40,7 @@ def _with_dyn_layer(conf):
     """Return a conf identical to base but with ['background','dynamic_rigids']
     enabled — registry.specs_from_config reads this list."""
     from copy import deepcopy
+
     c = deepcopy(conf)
     c.layers = {"enabled": ["background", "dynamic_rigids"]}
     return c
@@ -56,7 +56,10 @@ def _seed_dyn_layer(model: LayeredGaussians, n: int = 20) -> torch.Tensor:
     positions = torch.randn(n, 3) * 0.1
     track_ids = torch.tensor([i % 4 for i in range(n)], dtype=torch.int64)
     model.init_layer_from_points(
-        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+        "dynamic_rigids",
+        positions,
+        track_ids=track_ids,
+        setup_optimizer=False,
     )
     # Attach test-only optimizers across all layers so get_model_parameters
     # passes the "optimizer is not None" assertion in MoG.
@@ -68,6 +71,7 @@ def _seed_dyn_layer(model: LayeredGaussians, n: int = 20) -> torch.Tensor:
 # save side
 # -----------------------------------------------------------------------------
 
+
 def test_get_model_parameters_includes_track_ids_for_dyn_layer(real_conf):
     conf = _with_dyn_layer(real_conf)
     model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
@@ -76,8 +80,7 @@ def test_get_model_parameters_includes_track_ids_for_dyn_layer(real_conf):
     params = model.get_model_parameters()
     nodes = params["gaussians_nodes"]
     assert "dynamic_rigids" in nodes
-    assert "track_ids" in nodes["dynamic_rigids"], \
-        "dynamic_rigids node must carry track_ids on save"
+    assert "track_ids" in nodes["dynamic_rigids"], "dynamic_rigids node must carry track_ids on save"
     saved = nodes["dynamic_rigids"]["track_ids"]
     assert saved.dtype == torch.int64
     assert torch.equal(saved.cpu(), expected_ids.cpu())
@@ -100,6 +103,7 @@ def test_get_model_parameters_omits_track_ids_when_layer_has_none(real_conf):
 # -----------------------------------------------------------------------------
 # load side
 # -----------------------------------------------------------------------------
+
 
 def test_init_from_checkpoint_restores_track_ids(real_conf):
     conf = _with_dyn_layer(real_conf)
@@ -142,7 +146,9 @@ def test_init_from_checkpoint_no_track_ids_key_does_not_attach_buffer(real_conf)
     # Build both layers WITHOUT a track_ids buffer (v1-shaped state).
     model.init_layer_from_points("background", torch.randn(4, 3) * 0.1, setup_optimizer=False)
     model.init_layer_from_points(
-        "dynamic_rigids", torch.randn(8, 3) * 0.1, setup_optimizer=False,
+        "dynamic_rigids",
+        torch.randn(8, 3) * 0.1,
+        setup_optimizer=False,
     )
     model.setup_optimizer_for_test()
     assert not hasattr(model.layers["dynamic_rigids"], "track_ids")
@@ -176,17 +182,18 @@ def test_state_dict_persistence_drives_full_module_save(real_conf):
     expected_ids = _seed_dyn_layer(model, n=12)
     sd = model.state_dict()
     assert "layers.dynamic_rigids.track_ids" in sd
-    assert torch.equal(sd["layers.dynamic_rigids.track_ids"].cpu(),
-                       expected_ids.cpu())
+    assert torch.equal(sd["layers.dynamic_rigids.track_ids"].cpu(), expected_ids.cpu())
 
 
 # -----------------------------------------------------------------------------
 # V3-L8/L9: per-track albedo / log-scale ckpt roundtrip
 # -----------------------------------------------------------------------------
 
+
 def _with_dyn_v3_layer(conf, *, albedo: bool = True, scale: bool = True):
     """Same as ``_with_dyn_layer`` but also flips V3-L8/L9 extras on."""
     from copy import deepcopy
+
     c = deepcopy(conf)
     overrides = {}
     if albedo:
@@ -215,7 +222,10 @@ def _seed_dyn_v3_layer(model, *, n: int = 20):
     track_ids = torch.tensor([i % 2 for i in range(n)], dtype=torch.int64)
     positions = torch.randn(n, 3) * 0.1
     model.init_layer_from_points(
-        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+        "dynamic_rigids",
+        positions,
+        track_ids=track_ids,
+        setup_optimizer=False,
     )
     model.setup_optimizer_for_test()
     return tracks
@@ -255,8 +265,7 @@ def test_v3_tables_roundtrip_via_torch_save_load(real_conf, tmp_path):
     # Write non-zero values so the assertion catches identity-init false positives.
     with torch.no_grad():
         # P1.3b: albedo table is [K, 3, k]; default k=1 → unsqueeze the DC term.
-        model_a._track_albedo_table.copy_(torch.tensor([[0.1, 0.2, 0.3],
-                                                        [-0.1, -0.2, -0.3]]).unsqueeze(-1))
+        model_a._track_albedo_table.copy_(torch.tensor([[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]]).unsqueeze(-1))
         model_a._track_log_scale_table.copy_(torch.tensor([[0.4], [-0.4]]))
     expected_albedo = model_a._track_albedo_table.detach().clone()
     expected_log_scale = model_a._track_log_scale_table.detach().clone()
@@ -269,10 +278,8 @@ def test_v3_tables_roundtrip_via_torch_save_load(real_conf, tmp_path):
     _seed_dyn_v3_layer(model_b, n=12)  # registers fresh zero-init tables
     model_b.init_from_checkpoint(ckpt, setup_optimizer=False)
 
-    assert torch.allclose(model_b._track_albedo_table.detach().cpu(),
-                          expected_albedo.cpu())
-    assert torch.allclose(model_b._track_log_scale_table.detach().cpu(),
-                          expected_log_scale.cpu())
+    assert torch.allclose(model_b._track_albedo_table.detach().cpu(), expected_albedo.cpu())
+    assert torch.allclose(model_b._track_log_scale_table.detach().cpu(), expected_log_scale.cpu())
 
 
 def test_v3_ckpt_load_into_off_config_is_safe(real_conf):
@@ -286,10 +293,11 @@ def test_v3_ckpt_load_into_off_config_is_safe(real_conf):
 
     model_off = LayeredGaussians(conf_off, specs=specs_from_config(conf_off), scene_extent=10.0)
     # No populate_tracks → no V3 tables. Loading shouldn't attach them either.
-    model_off.init_layer_from_points("background", torch.randn(2, 3),
-                                      setup_optimizer=False)
+    model_off.init_layer_from_points("background", torch.randn(2, 3), setup_optimizer=False)
     model_off.init_layer_from_points(
-        "dynamic_rigids", torch.randn(8, 3), setup_optimizer=False,
+        "dynamic_rigids",
+        torch.randn(8, 3),
+        setup_optimizer=False,
     )
     model_off.setup_optimizer_for_test()
     model_off.init_from_checkpoint(ckpt, setup_optimizer=False)

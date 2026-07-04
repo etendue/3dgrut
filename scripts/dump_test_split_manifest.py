@@ -13,6 +13,7 @@ Run on a machine with the NCore clip (inceptio; dataset is CUDA-backed):
     python scripts/dump_test_split_manifest.py \
         --checkpoint <ckpt.pt> --path <pai_*.json> --output manifest.json
 """
+
 from __future__ import annotations
 
 import os as _os
@@ -57,16 +58,18 @@ def main():
         gpu_batch = dataset.get_gpu_batch_with_intrinsics(batch)
         T = gpu_batch.T_to_world
         Te = getattr(gpu_batch, "T_to_world_end", T)
-        entries.append({
-            "iteration": it,
-            "camera_id": getattr(gpu_batch, "camera_id", None),
-            "frame_idx": int(getattr(gpu_batch, "frame_idx", -1)),
-            "timestamp_us": int(getattr(gpu_batch, "timestamp_us", -1)),
-            "c2w_start": T[0].detach().cpu().numpy().tolist(),
-            "c2w_end": Te[0].detach().cpu().numpy().tolist(),
-            "H": int(gpu_batch.rgb_gt.shape[1]),
-            "W": int(gpu_batch.rgb_gt.shape[2]),
-        })
+        entries.append(
+            {
+                "iteration": it,
+                "camera_id": getattr(gpu_batch, "camera_id", None),
+                "frame_idx": int(getattr(gpu_batch, "frame_idx", -1)),
+                "timestamp_us": int(getattr(gpu_batch, "timestamp_us", -1)),
+                "c2w_start": T[0].detach().cpu().numpy().tolist(),
+                "c2w_end": Te[0].detach().cpu().numpy().tolist(),
+                "H": int(gpu_batch.rgb_gt.shape[1]),
+                "W": int(gpu_batch.rgb_gt.shape[2]),
+            }
+        )
 
     header = {
         "checkpoint": args.checkpoint,

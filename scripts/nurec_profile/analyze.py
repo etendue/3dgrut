@@ -19,6 +19,7 @@ The per-frame timing field name is discovered (any numeric key containing
 'ms'/'time'/'render'/'latency'). VALIDATE the picked field on inceptio against
 one real metrics file (printed in --debug) — schemas vary by NRE version.
 """
+
 import argparse
 import glob
 import json
@@ -32,8 +33,7 @@ def _load_records(path):
     """Yield dict records from a dir of *.json / a .jsonl / a single .json."""
     files = []
     if os.path.isdir(path):
-        files = sorted(glob.glob(os.path.join(path, "*.json")) +
-                       glob.glob(os.path.join(path, "*.jsonl")))
+        files = sorted(glob.glob(os.path.join(path, "*.json")) + glob.glob(os.path.join(path, "*.jsonl")))
     elif os.path.exists(path):
         files = [path]
     for f in files:
@@ -68,7 +68,7 @@ def _pick_field(records):
     for k, vals in cand.items():
         if len(vals) < 2:
             continue
-        spread = (max(vals) - min(vals))
+        spread = max(vals) - min(vals)
         score = (spread, len(vals))
         if best is None or score > best:
             best, best_key = score, k
@@ -88,8 +88,10 @@ def summarize(path, debug=False):
         return None
     key, cand = _pick_field(records)
     if debug:
-        print(f"[debug] {path}: {len(records)} records; timing candidates: "
-              + ", ".join(f"{k}(n={len(v)})" for k, v in cand.items()))
+        print(
+            f"[debug] {path}: {len(records)} records; timing candidates: "
+            + ", ".join(f"{k}(n={len(v)})" for k, v in cand.items())
+        )
         print(f"[debug] sample record: {json.dumps(records[0])[:300]}")
     if not key:
         return None
@@ -99,8 +101,7 @@ def summarize(path, debug=False):
         return None
     vals.sort()
     p95 = vals[min(len(vals) - 1, int(round(0.95 * (len(vals) - 1))))]
-    return {"field": key, "n": len(vals), "median": statistics.median(vals),
-            "p95": p95, "mean": statistics.fmean(vals)}
+    return {"field": key, "n": len(vals), "median": statistics.median(vals), "p95": p95, "mean": statistics.fmean(vals)}
 
 
 def main():
@@ -122,8 +123,10 @@ def main():
     if args.baseline and rows.get(args.baseline):
         base_med = rows[args.baseline]["median"]
 
-    lines = ["| 变体 | n_gaussians | median ms/帧 | p95 | mean | Δ vs base | 占比% | n帧 | field |",
-             "|---|---|---|---|---|---|---|---|---|"]
+    lines = [
+        "| 变体 | n_gaussians | median ms/帧 | p95 | mean | Δ vs base | 占比% | n帧 | field |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
     for label, s in rows.items():
         if not s:
             lines.append(f"| {label} | {counts.get(label,'?')} | (no timing parsed) | | | | | | |")
@@ -133,8 +136,10 @@ def main():
             d = base_med - s["median"]
             delta = f"{d:+.2f}"
             pct = f"{100*d/base_med:+.1f}" if base_med else ""
-        lines.append(f"| {label} | {counts.get(label,'?')} | {s['median']:.2f} | {s['p95']:.2f} | "
-                     f"{s['mean']:.2f} | {delta} | {pct} | {s['n']} | {s['field']} |")
+        lines.append(
+            f"| {label} | {counts.get(label,'?')} | {s['median']:.2f} | {s['p95']:.2f} | "
+            f"{s['mean']:.2f} | {delta} | {pct} | {s['n']} | {s['field']} |"
+        )
 
     table = "\n".join(lines)
     print(table)

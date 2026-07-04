@@ -7,6 +7,7 @@ exists on LayerSpec and round-trips through the dataclass / yaml config, but
 init_layer_from_points always uses layer.max_n_features (the global degree)
 so that the fused-view renderer's uniform-width invariant is preserved.
 """
+
 from __future__ import annotations
 
 import os
@@ -52,23 +53,24 @@ def test_specs_from_config_can_override_sh_degree():
     """yaml override (layers.overrides.road.sh_degree) reaches the spec — the
     only production path for changing the registry default."""
     from omegaconf import OmegaConf
+
     from threedgrut.layers.registry import specs_from_config
 
-    conf = OmegaConf.create({
-        "layers": {
-            "enabled": ["road"],
-            "overrides": {"road": {"sh_degree": 3}},
+    conf = OmegaConf.create(
+        {
+            "layers": {
+                "enabled": ["road"],
+                "overrides": {"road": {"sh_degree": 3}},
+            }
         }
-    })
+    )
     specs = specs_from_config(conf)
     assert specs[0].sh_degree == 3
 
 
 # ----------------------------------------------------------------------- conf
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -97,10 +99,10 @@ def test_init_layer_from_points_road_uses_global_sh_degree(real_conf):
     width 45, zero+freeze road's order>=2 coefficients) and is currently unused
     by init_layer_from_points.
     """
+    from omegaconf import OmegaConf
+
     from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.registry import specs_from_config
-
-    from omegaconf import OmegaConf
 
     # Override enabled layers to just road for this test
     conf = OmegaConf.merge(
@@ -129,9 +131,10 @@ def test_init_layer_from_points_road_uses_global_sh_degree(real_conf):
 def test_init_layer_from_points_background_uses_global_sh_degree(real_conf):
     """V3-R1.1 companion: background layer (spec.sh_degree=None) inherits global
     conf.model.progressive_training.max_n_features (degree 3 → dim 45)."""
+    from omegaconf import OmegaConf
+
     from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.registry import specs_from_config
-    from omegaconf import OmegaConf
 
     conf = OmegaConf.merge(
         real_conf,

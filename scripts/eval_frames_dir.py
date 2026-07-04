@@ -22,6 +22,7 @@ default; ``--frames-map map.json`` ({"<camera_id>:<frame_idx>": "relpath"})
 overrides. A missing prediction is a HARD error — silent misalignment would
 poison the anchor.
 """
+
 from __future__ import annotations
 
 import os as _os
@@ -58,7 +59,9 @@ DEFAULT_LANE_EVAL_CAMERAS = ("camera_front_wide_120fov",)
 
 
 def resolve_pred_path(
-    frames_dir: str, camera_id: str, frame_idx: int,
+    frames_dir: str,
+    camera_id: str,
+    frame_idx: int,
     frames_map: Optional[Dict[str, str]] = None,
     timestamp_us: Optional[int] = None,
 ) -> str:
@@ -89,7 +92,7 @@ def _load_pred(path: str, device) -> torch.Tensor:
             f"refusing to continue (E0.4 anchor integrity)"
         )
     img = torchvision.io.read_image(path).float().div(255.0)  # [C,H,W]
-    return img[:3].permute(1, 2, 0).to(device)                # [H,W,3]
+    return img[:3].permute(1, 2, 0).to(device)  # [H,W,3]
 
 
 def _psnr(pred: torch.Tensor, gt: torch.Tensor) -> float:
@@ -134,7 +137,7 @@ def evaluate_frames(
     specs = {**DEFAULT_ACTOR_CLASS_SPECS, "road_crop": ROAD_CLASS_IDS}
 
     for batch in batches:
-        gt = batch.rgb_gt[0]                                   # [H,W,3]
+        gt = batch.rgb_gt[0]  # [H,W,3]
         device = gt.device
         cam = getattr(batch, "camera_id", None)
         fi = int(getattr(batch, "frame_idx", -1))
@@ -145,16 +148,16 @@ def evaluate_frames(
             continue
         pred = _load_pred(
             resolve_pred_path(
-                frames_dir, cam, fi, frames_map,
+                frames_dir,
+                cam,
+                fi,
+                frames_map,
                 timestamp_us=int(getattr(batch, "timestamp_us", -1)),
             ),
             device,
         )
         if pred.shape != gt.shape:
-            raise ValueError(
-                f"pred/gt shape mismatch at {cam}:{fi}: "
-                f"{tuple(pred.shape)} vs {tuple(gt.shape)}"
-            )
+            raise ValueError(f"pred/gt shape mismatch at {cam}:{fi}: " f"{tuple(pred.shape)} vs {tuple(gt.shape)}")
         ftheta = getattr(batch, "intrinsics_FThetaCameraModelParameters", None)
         infos = getattr(batch, "image_infos", None) or {}
         H, W = int(gt.shape[0]), int(gt.shape[1])
@@ -162,12 +165,14 @@ def evaluate_frames(
         if fid_kid and fid_pair is None:
             from torchmetrics.image.fid import FrechetInceptionDistance
             from torchmetrics.image.kid import KernelInceptionDistance
+
             fid_pair = {
                 "fid": FrechetInceptionDistance(feature=2048).to(device),
                 "kid": KernelInceptionDistance(subset_size=2).to(device),
             }
         if fid_pair is not None:
             from threedgrut.utils.eval_metrics import rgb01_to_uint8_chw
+
             fid_pair["fid"].update(rgb01_to_uint8_chw(gt.unsqueeze(0)), real=True)
             fid_pair["kid"].update(rgb01_to_uint8_chw(gt.unsqueeze(0)), real=True)
             fid_pair["fid"].update(rgb01_to_uint8_chw(pred.unsqueeze(0)), real=False)
@@ -179,6 +184,7 @@ def evaluate_frames(
             psnr_l.append(_psnr(pred, gt))
             if ssim_fn is None:
                 from torchmetrics.image import StructuralSimilarityIndexMeasure
+
                 ssim_fn = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
             p4 = pred.permute(2, 0, 1).unsqueeze(0)
             g4 = gt.permute(2, 0, 1).unsqueeze(0)
@@ -192,7 +198,11 @@ def evaluate_frames(
             if sseg is not None:
                 sseg_one = sseg[0] if sseg.dim() == 3 else sseg
                 pcm = compute_per_class_metrics(
-                    pred, gt, sseg_one, specs, lpips_fn=lpips_fn,
+                    pred,
+                    gt,
+                    sseg_one,
+                    specs,
+                    lpips_fn=lpips_fn,
                 )
                 for name, d in pcm.items():
                     if d["psnr"] is not None:
@@ -204,8 +214,12 @@ def evaluate_frames(
             if lane is not None and cam in lane_eval_cameras:
                 lane_one = lane[0] if lane.dim() == 3 else lane
                 lm = compute_lane_metrics(
-                    pred, gt, lane_one, LANE_CLASS_IDS,
-                    band_px=lane_band_px, lpips_fn=lpips_fn,
+                    pred,
+                    gt,
+                    lane_one,
+                    LANE_CLASS_IDS,
+                    band_px=lane_band_px,
+                    lpips_fn=lpips_fn,
                 )
                 for k in LANE_METRIC_KEYS:
                     if lm[k] is not None:
@@ -216,40 +230,59 @@ def evaluate_frames(
                 active = tracks_provider(batch)
                 if active:
                     from threedgrut.model.nta_iou import compute_frame_nta_iou
+
                     T_w2c = torch.linalg.inv(batch.T_to_world[0])
                     nta = compute_frame_nta_iou(
-                        pred, active, detector, K=None, ftheta_params=ftheta,
-                        T_w2c=T_w2c, H=H, W=W,
+                        pred,
+                        active,
+                        detector,
+                        K=None,
+                        ftheta_params=ftheta,
+                        T_w2c=T_w2c,
+                        H=H,
+                        W=W,
                     )
                     if nta is not None:
                         nta_records.append(nta)
         else:
             # novel mode: pred was rendered at the PERTURBED pose; pixel-GT
             # metrics are undefined. Plane-warp lane + NTA at perturbed pose.
-            c2w_novel = torch.from_numpy(
-                perturb_c2w(batch.T_to_world[0].cpu(), mode)
-            ).to(device=device, dtype=torch.float32)
+            c2w_novel = torch.from_numpy(perturb_c2w(batch.T_to_world[0].cpu(), mode)).to(
+                device=device, dtype=torch.float32
+            )
 
             lane = infos.get("semantic_lane_sseg")
             if (
-                lane is not None and cam in lane_eval_cameras
+                lane is not None
+                and cam in lane_eval_cameras
                 and ftheta is not None
                 and (height_field is not None or ground_z is not None)
                 and not getattr(batch, "rays_in_world_space", False)
             ):
                 lane_one = lane[0] if lane.dim() == 3 else lane
                 grid, valid = build_plane_warp(
-                    batch.rays_dir[0], c2w_novel,
-                    batch.T_to_world[0].to(torch.float32), ftheta,
-                    height_field=height_field, z0_fallback=ground_z,
+                    batch.rays_dir[0],
+                    c2w_novel,
+                    batch.T_to_world[0].to(torch.float32),
+                    ftheta,
+                    height_field=height_field,
+                    z0_fallback=ground_z,
                 )
                 gt_warp = warp_image(gt.float(), grid, valid)
                 lane_warp = warp_image(
-                    lane_one.unsqueeze(-1).float(), grid, valid, mode="nearest",
+                    lane_one.unsqueeze(-1).float(),
+                    grid,
+                    valid,
+                    mode="nearest",
                 )[..., 0].long()
                 lm = compute_lane_metrics(
-                    pred, gt_warp, lane_warp, LANE_CLASS_IDS,
-                    band_px=lane_band_px, restrict_mask=valid, lpips_fn=lpips_fn,
+                    pred,
+                    gt_warp,
+                    lane_warp,
+                    LANE_CLASS_IDS,
+                    band_px=lane_band_px,
+                    restrict_mask=valid,
+                    lpips_fn=lpips_fn,
                 )
                 for k in LANE_METRIC_KEYS:
                     if lm[k] is not None:
@@ -261,9 +294,16 @@ def evaluate_frames(
                 active = tracks_provider(batch)
                 if active:
                     from threedgrut.model.nta_iou import compute_frame_nta_iou
+
                     nta = compute_frame_nta_iou(
-                        pred, active, detector, K=None, ftheta_params=ftheta,
-                        T_w2c=torch.linalg.inv(c2w_novel), H=H, W=W,
+                        pred,
+                        active,
+                        detector,
+                        K=None,
+                        ftheta_params=ftheta,
+                        T_w2c=torch.linalg.inv(c2w_novel),
+                        H=H,
+                        W=W,
                     )
                     if nta is not None:
                         nta_records.append(nta)
@@ -289,9 +329,7 @@ def evaluate_frames(
                 out[f"mean_{k}"] = float(np.mean(v)) if v else None
             out["lane_n_records"] = lane_frames
         if nta_records:
-            out["mean_nta_iou"] = float(
-                np.mean([r["mean_nta_iou"] for r in nta_records])
-            )
+            out["mean_nta_iou"] = float(np.mean([r["mean_nta_iou"] for r in nta_records]))
             out["nta_iou_n_frames"] = len(nta_records)
     else:
         if lane_frames:
@@ -299,24 +337,24 @@ def evaluate_frames(
                 v = lane_acc.get(k, [])
                 out[f"mean_novel_{k}_{mode}"] = float(np.mean(v)) if v else None
             out[f"novel_lane_n_records_{mode}"] = lane_frames
-            out[f"novel_lane_warp_valid_ratio_{mode}"] = float(
-                np.mean(warp_valid_ratio)
-            )
+            out[f"novel_lane_warp_valid_ratio_{mode}"] = float(np.mean(warp_valid_ratio))
         if nta_records:
-            out[f"mean_novel_nta_iou_{mode}"] = float(
-                np.mean([r["mean_nta_iou"] for r in nta_records])
-            )
+            out[f"mean_novel_nta_iou_{mode}"] = float(np.mean([r["mean_nta_iou"] for r in nta_records]))
             out[f"novel_nta_iou_n_frames_{mode}"] = len(nta_records)
 
     if fid_pair is not None and n_real >= 2:
         from threedgrut.utils.eval_metrics import kid_subset_size
+
         if not is_novel:
             k_fid, k_kid, k_kid_std = (
-                "mean_render_fid", "mean_render_kid", "mean_render_kid_std",
+                "mean_render_fid",
+                "mean_render_kid",
+                "mean_render_kid_std",
             )
         else:  # plan §6 naming: metric before mode
             k_fid, k_kid, k_kid_std = (
-                f"mean_novel_fid_{mode}", f"mean_novel_kid_{mode}",
+                f"mean_novel_fid_{mode}",
+                f"mean_novel_kid_{mode}",
                 f"mean_novel_kid_std_{mode}",
             )
         try:
@@ -380,12 +418,14 @@ def _build_tracks_provider(ckpt):
             if size is None:  # array truthiness is ambiguous — no `or` chain
                 size = tr.get("dims", tr.get("cuboid_dims"))
             size = torch.as_tensor(size)
-            active.append({
-                "id": tid,
-                "class": str(tr.get("class", "unknown")),
-                "pose": poses[idx].float(),
-                "size": size.flatten()[:3].float(),
-            })
+            active.append(
+                {
+                    "id": tid,
+                    "class": str(tr.get("class", "unknown")),
+                    "pose": poses[idx].float(),
+                    "size": size.flatten()[:3].float(),
+                }
+            )
         return active
 
     return provider
@@ -393,28 +433,31 @@ def _build_tracks_provider(ckpt):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", required=True,
-                    help="project ckpt — conf/test split/tracks/road source")
+    ap.add_argument("--checkpoint", required=True, help="project ckpt — conf/test split/tracks/road source")
     ap.add_argument("--path", default="")
     ap.add_argument("--frames-dir", required=True)
     ap.add_argument("--frames-map", default="")
-    ap.add_argument("--mode", default="interpolated",
-                    choices=["interpolated", "lateral_1m", "lateral_2m",
-                             "lateral_3m", "lateral_6m"])
+    ap.add_argument(
+        "--mode",
+        default="interpolated",
+        choices=["interpolated", "lateral_1m", "lateral_2m", "lateral_3m", "lateral_6m"],
+    )
     ap.add_argument("--lane", action="store_true", help="load lane masks")
     ap.add_argument("--nta-iou", action="store_true")
     ap.add_argument("--kid", action="store_true", help="FID/KID vs GT dist")
     ap.add_argument("--lpips", action="store_true")
-    ap.add_argument("--ground-z", type=float, default=None,
-                    help="constant ground plane fallback (no road layer)")
-    ap.add_argument("--cameras", default="",
-                    help="comma list; restrict eval to these camera_ids "
-                         "(lateral rig-offset passes: front camera only)")
+    ap.add_argument("--ground-z", type=float, default=None, help="constant ground plane fallback (no road layer)")
+    ap.add_argument(
+        "--cameras",
+        default="",
+        help="comma list; restrict eval to these camera_ids " "(lateral rig-offset passes: front camera only)",
+    )
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
 
-    import threedgrut.datasets as datasets
     from omegaconf import OmegaConf
+
+    import threedgrut.datasets as datasets
     from threedgrut.datasets.utils import configure_dataloader_for_platform
 
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -427,10 +470,8 @@ def main():
 
     dataset = datasets.make_test(name=conf.dataset.type, config=conf)
     dataloader = torch.utils.data.DataLoader(
-        dataset, **configure_dataloader_for_platform(
-            {"num_workers": 0, "batch_size": 1, "shuffle": False,
-             "collate_fn": None}
-        ),
+        dataset,
+        **configure_dataloader_for_platform({"num_workers": 0, "batch_size": 1, "shuffle": False, "collate_fn": None}),
     )
 
     def batches():
@@ -440,13 +481,16 @@ def main():
     lpips_fn = None
     if args.lpips:
         from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+
         lpips_fn = LearnedPerceptualImagePatchSimilarity(
-            net_type="alex", normalize=True,
+            net_type="alex",
+            normalize=True,
         ).to("cuda")
 
     detector = tracks_provider = None
     if args.nta_iou:
         from threedgrut.model.vehicle_detector import get_vehicle_detector
+
         detector = get_vehicle_detector(device="cuda")
         tracks_provider = _build_tracks_provider(ckpt)
         if tracks_provider is None:
@@ -458,16 +502,16 @@ def main():
         road_pos = _road_positions_from_ckpt(ckpt)
         if road_pos is not None and road_pos.numel() > 0:
             from threedgrut.model.road_region import build_road_height_field
+
             height_field = build_road_height_field(
-                road_pos.float().to("cuda"), cell_size=1.0,
+                road_pos.float().to("cuda"),
+                cell_size=1.0,
             )
-            print(f"[eval_frames_dir] height field from ckpt road layer: "
-                  f"{int(height_field['occupied'].sum())} cells")
+            print(
+                f"[eval_frames_dir] height field from ckpt road layer: " f"{int(height_field['occupied'].sum())} cells"
+            )
         elif args.ground_z is None:
-            raise SystemExit(
-                "novel mode needs a road height field (layered ckpt) or "
-                "--ground-z"
-            )
+            raise SystemExit("novel mode needs a road height field (layered ckpt) or " "--ground-z")
 
     frames_map = None
     if args.frames_map:
@@ -475,10 +519,16 @@ def main():
             frames_map = json.load(f)
 
     out = evaluate_frames(
-        batches(), frames_dir=args.frames_dir, frames_map=frames_map,
-        mode=args.mode, lpips_fn=lpips_fn, detector=detector,
-        tracks_provider=tracks_provider, height_field=height_field,
-        ground_z=args.ground_z, fid_kid=args.kid,
+        batches(),
+        frames_dir=args.frames_dir,
+        frames_map=frames_map,
+        mode=args.mode,
+        lpips_fn=lpips_fn,
+        detector=detector,
+        tracks_provider=tracks_provider,
+        height_field=height_field,
+        ground_z=args.ground_z,
+        fid_kid=args.kid,
         cameras=[c.strip() for c in args.cameras.split(",") if c.strip()] or None,
     )
     with open(args.output, "w") as f:

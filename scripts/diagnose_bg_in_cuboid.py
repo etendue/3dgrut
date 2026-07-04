@@ -34,6 +34,7 @@ Output JSON schema:
         ],
     }
 """
+
 from __future__ import annotations
 
 import argparse
@@ -96,13 +97,15 @@ def count_world_positions_in_any_active_cuboid(
         for tid in sorted(tracks.keys()):
             info = tracks[tid]
             active = info["active"].to(torch.bool)
-            records.append({
-                "track_id": str(tid),
-                "size": info["size"].detach().cpu().tolist(),
-                "n_active_frames": int(active.sum().item()),
-                "n_frames_sampled": 0,
-                "n_inside_any_sampled_frame": 0,
-            })
+            records.append(
+                {
+                    "track_id": str(tid),
+                    "size": info["size"].detach().cpu().tolist(),
+                    "n_active_frames": int(active.sum().item()),
+                    "n_frames_sampled": 0,
+                    "n_inside_any_sampled_frame": 0,
+                }
+            )
         return any_inside, records
 
     ones = torch.ones(N, 1, dtype=dtype, device=device)
@@ -111,26 +114,28 @@ def count_world_positions_in_any_active_cuboid(
     for tid in sorted(tracks.keys()):
         info = tracks[tid]
         active = info["active"].to(torch.bool)
-        poses = info["poses"].to(dtype=dtype, device=device)            # [F,4,4]
-        size_half = info["size"].to(dtype=dtype, device=device) / 2.0   # [3]
+        poses = info["poses"].to(dtype=dtype, device=device)  # [F,4,4]
+        size_half = info["size"].to(dtype=dtype, device=device) / 2.0  # [3]
 
         sample_idx = _select_sample_frames(active, max_frames_per_track)
         per_track_inside = torch.zeros(N, dtype=torch.bool, device=device)
         for fi in sample_idx.tolist():
             pose = poses[fi]
             pose_inv = torch.linalg.inv(pose)
-            local = (pose_inv @ pts_h.T).T[:, :3]                       # [N,3]
+            local = (pose_inv @ pts_h.T).T[:, :3]  # [N,3]
             inside = (local.abs() <= size_half).all(dim=-1)
             per_track_inside |= inside
 
         any_inside |= per_track_inside
-        records.append({
-            "track_id": str(tid),
-            "size": info["size"].detach().cpu().tolist(),
-            "n_active_frames": int(active.sum().item()),
-            "n_frames_sampled": int(sample_idx.numel()),
-            "n_inside_any_sampled_frame": int(per_track_inside.sum().item()),
-        })
+        records.append(
+            {
+                "track_id": str(tid),
+                "size": info["size"].detach().cpu().tolist(),
+                "n_active_frames": int(active.sum().item()),
+                "n_frames_sampled": int(sample_idx.numel()),
+                "n_inside_any_sampled_frame": int(per_track_inside.sum().item()),
+            }
+        )
     return any_inside, records
 
 
@@ -165,6 +170,7 @@ def count_local_positions_outside_own_cuboid(
 
 # ----- ckpt loader (ported from engine.py:1305-1351, CPU-safe) ------------
 
+
 def _load_layered_model_from_ckpt(ckpt_path: Path):
     """Load LayeredGaussians + populate tracks on CPU. Returns (model, ckpt).
 
@@ -186,13 +192,10 @@ def _load_layered_model_from_ckpt(ckpt_path: Path):
                 break
     if conf is None:
         raise RuntimeError(
-            "ckpt has no 'config' nor per-layer 'config' fallback — "
-            "diagnostic requires a v2 LayeredGaussians ckpt."
+            "ckpt has no 'config' nor per-layer 'config' fallback — " "diagnostic requires a v2 LayeredGaussians ckpt."
         )
     if not bool(conf.get("use_layered_model", False)):
-        raise RuntimeError(
-            "ckpt is not a v2 LayeredGaussians ckpt (use_layered_model=false)."
-        )
+        raise RuntimeError("ckpt is not a v2 LayeredGaussians ckpt (use_layered_model=false).")
 
     specs = specs_from_config(conf)
     scene_extent = float(ckpt.get("model", {}).get("scene_extent", 1.0))
@@ -202,8 +205,7 @@ def _load_layered_model_from_ckpt(ckpt_path: Path):
     viz_4d = ckpt.get("viz_4d")
     if not isinstance(viz_4d, dict) or "tracks" not in viz_4d:
         raise RuntimeError(
-            "ckpt has no viz_4d.tracks block — re-run with an injected ckpt "
-            "(see threedgrut.viz.inject)."
+            "ckpt has no viz_4d.tracks block — re-run with an injected ckpt " "(see threedgrut.viz.inject)."
         )
     tracks_dict = viz_4d["tracks"]
     shared_ts = viz_4d.get("tracks_camera_timestamps_us")
@@ -243,16 +245,11 @@ def _format_console(report: dict) -> str:
     for name, total in report["per_layer_total"].items():
         inside = report["per_layer_inside_any_cuboid"][name]
         pct = report["per_layer_inside_pct"][name]
-        lines.append(
-            f"    {name:<{name_w}}  total={total:>10d}   "
-            f"inside={inside:>10d}   pct={pct:>6.2f}%"
-        )
+        lines.append(f"    {name:<{name_w}}  total={total:>10d}   " f"inside={inside:>10d}   pct={pct:>6.2f}%")
     dyn_out = report.get("dynamic_rigids_outside_own_cuboid_pct")
     if dyn_out is not None:
         lines.append("")
-        lines.append(
-            f"  dynamic_rigids particles OUTSIDE own cuboid : {dyn_out:.3f}%"
-        )
+        lines.append(f"  dynamic_rigids particles OUTSIDE own cuboid : {dyn_out:.3f}%")
     lines.append("")
     lines.append("  top-10 tracks by background-inside count:")
     by_bg = sorted(
@@ -276,8 +273,7 @@ def _format_console(report: dict) -> str:
 def diagnose(ckpt_path: Path, max_frames: int) -> dict:
     model, _ckpt = _load_layered_model_from_ckpt(ckpt_path)
     tracks = _tracks_view_from_model(model)
-    print(f"[diag] populated {len(tracks)} tracks; layers={list(model.layers.keys())}",
-          flush=True)
+    print(f"[diag] populated {len(tracks)} tracks; layers={list(model.layers.keys())}", flush=True)
 
     per_layer_total: Dict[str, int] = {}
     per_layer_inside: Dict[str, int] = {}
@@ -300,20 +296,23 @@ def diagnose(ckpt_path: Path, max_frames: int) -> dict:
             continue
 
         any_inside, records = count_world_positions_in_any_active_cuboid(
-            positions, tracks, max_frames_per_track=max_frames,
+            positions,
+            tracks,
+            max_frames_per_track=max_frames,
         )
         n_inside = int(any_inside.sum().item())
         per_layer_inside[spec.name] = n_inside
-        per_layer_inside_pct[spec.name] = (
-            100.0 * n_inside / positions.shape[0] if positions.shape[0] else 0.0
-        )
+        per_layer_inside_pct[spec.name] = 100.0 * n_inside / positions.shape[0] if positions.shape[0] else 0.0
         for rec in records:
-            entry = per_track_acc.setdefault(rec["track_id"], {
-                "track_id": rec["track_id"],
-                "size": rec["size"],
-                "n_active_frames": rec["n_active_frames"],
-                "n_frames_sampled": rec["n_frames_sampled"],
-            })
+            entry = per_track_acc.setdefault(
+                rec["track_id"],
+                {
+                    "track_id": rec["track_id"],
+                    "size": rec["size"],
+                    "n_active_frames": rec["n_active_frames"],
+                    "n_frames_sampled": rec["n_frames_sampled"],
+                },
+            )
             entry[f"{spec.name}_inside"] = rec["n_inside_any_sampled_frame"]
 
     dyn_outside_pct: Optional[float] = None
@@ -323,12 +322,12 @@ def diagnose(ckpt_path: Path, max_frames: int) -> dict:
         if track_ids_buf is not None and dyn_layer.positions.numel() > 0:
             track_keys_sorted = sorted(tracks.keys())
             bad = count_local_positions_outside_own_cuboid(
-                dyn_layer.positions.detach(), track_ids_buf, track_keys_sorted, tracks,
+                dyn_layer.positions.detach(),
+                track_ids_buf,
+                track_keys_sorted,
+                tracks,
             )
-            dyn_outside_pct = (
-                100.0 * bad / dyn_layer.positions.shape[0]
-                if dyn_layer.positions.shape[0] else 0.0
-            )
+            dyn_outside_pct = 100.0 * bad / dyn_layer.positions.shape[0] if dyn_layer.positions.shape[0] else 0.0
 
     report = {
         "ckpt": str(ckpt_path),
@@ -347,8 +346,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--ckpt", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
-    p.add_argument("--max_frames", type=int, default=5,
-                   help="evenly-spaced active frames sampled per track (default 5)")
+    p.add_argument(
+        "--max_frames", type=int, default=5, help="evenly-spaced active frames sampled per track (default 5)"
+    )
     args = p.parse_args(argv)
 
     if not args.ckpt.exists():

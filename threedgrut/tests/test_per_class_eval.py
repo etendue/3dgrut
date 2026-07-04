@@ -5,6 +5,7 @@ Pure-tensor functions; mockable on Mac without renderer, NCore, cv2 or
 torchmetrics (LPIPS is dependency-injected so a fake stands in). Mirrors the
 test style of test_class_psnr.py.
 """
+
 from __future__ import annotations
 
 import math
@@ -19,10 +20,10 @@ from threedgrut.model.per_class_eval import (
     compute_per_class_metrics,
 )
 
-
 # -----------------------------------------------------------------------------
 # class_mask_from_sseg
 # -----------------------------------------------------------------------------
+
 
 def test_class_mask_selects_only_given_id():
     sseg = torch.tensor([[11, 12, 0], [18, 2, 11]])
@@ -46,6 +47,7 @@ def test_class_mask_accepts_float_sseg():
 # -----------------------------------------------------------------------------
 # compute_per_class_metrics — PSNR
 # -----------------------------------------------------------------------------
+
 
 def test_per_class_psnr_known_value_for_present_class():
     """diff² = 0.01 inside person mask → PSNR = -10·log10(0.01) = 20 dB."""
@@ -78,8 +80,8 @@ def test_per_class_only_mask_region_counted():
     H = W = 64
     gt = torch.zeros(H, W, 3)
     pred = torch.zeros(H, W, 3)
-    pred[:32] = 0.1   # person region: diff² = 0.01 → 20 dB
-    pred[32:] = 1.0   # would dominate the global average if not masked
+    pred[:32] = 0.1  # person region: diff² = 0.01 → 20 dB
+    pred[32:] = 1.0  # would dominate the global average if not masked
     sseg = torch.zeros(H, W, dtype=torch.long)
     sseg[:32] = 11
     out = compute_per_class_metrics(pred, gt, sseg, {"person": (11,)})
@@ -89,6 +91,7 @@ def test_per_class_only_mask_region_counted():
 # -----------------------------------------------------------------------------
 # compute_lpips_in_mask — GT-fill (fake lpips injected)
 # -----------------------------------------------------------------------------
+
 
 def _fake_lpips(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Stand-in matching torchmetrics' call signature: a, b are [1,3,H,W];
@@ -132,14 +135,15 @@ def test_lpips_gtfill_zeroes_outside_mask_contribution():
 # compute_per_class_metrics — full spec set (P0.2 actors + P0.3 road)
 # -----------------------------------------------------------------------------
 
+
 def test_per_class_metrics_all_specs_with_lpips():
     H = W = 64
     gt = torch.zeros(H, W, 3)
     pred = torch.full((H, W, 3), 0.1)
     sseg = torch.zeros(H, W, dtype=torch.long)
-    sseg[:20] = 11    # person
+    sseg[:20] = 11  # person
     sseg[20:40] = 12  # rider
-    sseg[40:] = 0     # road
+    sseg[40:] = 0  # road
     specs = {**DEFAULT_ACTOR_CLASS_SPECS, "road_crop": ROAD_CLASS_IDS}
     out = compute_per_class_metrics(pred, gt, sseg, specs, lpips_fn=_fake_lpips)
     assert set(out.keys()) == {"person", "rider", "bicycle", "road_crop"}
@@ -229,7 +233,7 @@ def test_grad_corr_orthogonal_edges_below_one():
     （非退化，证明不是恒返回 1.0 / None）。"""
     H = W = 32
     gt = torch.zeros(H, W, 3)
-    gt[:, 16:] = 1.0   # 竖直边缘
+    gt[:, 16:] = 1.0  # 竖直边缘
     pred = torch.zeros(H, W, 3)
     pred[16:, :] = 1.0  # 水平边缘
     mask = torch.ones(H, W, dtype=torch.bool)
@@ -247,8 +251,12 @@ from threedgrut.model.per_class_eval import (  # noqa: E402
 )
 
 _LANE_KEYS = {
-    "lane_band_lpips", "lane_band_psnr", "lane_raw_psnr",
-    "lane_grad_corr", "lane_n_pixels", "lane_band_n_pixels",
+    "lane_band_lpips",
+    "lane_band_psnr",
+    "lane_raw_psnr",
+    "lane_grad_corr",
+    "lane_n_pixels",
+    "lane_band_n_pixels",
 }
 
 
@@ -258,8 +266,7 @@ def test_lane_metrics_dict_keys_exact():
     pred = torch.full((H, W, 3), 0.1)
     lane = torch.zeros(H, W, dtype=torch.long)
     lane[30, :] = LANE_CLASS_IDS[0]  # 一条 1px 横线
-    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS,
-                               band_px=8, lpips_fn=_fake_lpips)
+    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS, band_px=8, lpips_fn=_fake_lpips)
     assert set(out.keys()) == _LANE_KEYS
 
 
@@ -271,8 +278,7 @@ def test_lane_thin_mask_band_is_meaningful():
     pred = torch.full((H, W, 3), 0.3)
     lane = torch.zeros(H, W, dtype=torch.long)
     lane[30, :] = LANE_CLASS_IDS[0]  # 64 px raw
-    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS,
-                               band_px=8, lpips_fn=_fake_lpips)
+    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS, band_px=8, lpips_fn=_fake_lpips)
     assert out["lane_n_pixels"] == 64
     assert out["lane_band_n_pixels"] > 64 * 5  # 膨胀显著放大
     assert out["lane_band_lpips"] is not None
@@ -284,8 +290,7 @@ def test_lane_absent_returns_none_metrics():
     gt = torch.zeros(H, W, 3)
     pred = torch.full((H, W, 3), 0.1)
     lane = torch.zeros(H, W, dtype=torch.long)  # 无 lane 像素
-    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS,
-                               band_px=8, lpips_fn=_fake_lpips)
+    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS, band_px=8, lpips_fn=_fake_lpips)
     assert out["lane_n_pixels"] == 0
     assert out["lane_band_n_pixels"] == 0
     assert out["lane_band_lpips"] is None
@@ -303,8 +308,7 @@ def test_lane_restrict_mask_limits_region():
     lane[30, :] = LANE_CLASS_IDS[0]  # 满宽 64 px
     restrict = torch.zeros(H, W, dtype=torch.bool)
     restrict[:, :32] = True  # 左半
-    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS, band_px=0,
-                               restrict_mask=restrict, lpips_fn=_fake_lpips)
+    out = compute_lane_metrics(pred, gt, lane, LANE_CLASS_IDS, band_px=0, restrict_mask=restrict, lpips_fn=_fake_lpips)
     assert out["lane_n_pixels"] == 32
 
 

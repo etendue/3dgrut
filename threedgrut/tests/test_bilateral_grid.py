@@ -11,6 +11,7 @@ Replaces test_exposure.py once trainer wiring migrates; keeps key invariants:
 - tv_loss == 0 at 1x1x1 identity init
 - 1x1x1 fast path == general grid_sample path (math equivalence)
 """
+
 from __future__ import annotations
 
 import pytest
@@ -133,15 +134,11 @@ def test_fast_path_matches_grid_sample_for_constant_grid():
     bg_fast = BilateralGrid(num_camera=1, grid_X=1, grid_Y=1, grid_W=1)
     bg_general = BilateralGrid(num_camera=1, grid_X=2, grid_Y=2, grid_W=2)
     # Make the fast-path voxel non-identity, and replicate across general grid.
-    perturbed_affine = torch.tensor(
-        [[1.2, 0.1, -0.05, 0.02], [0.0, 0.9, 0.05, -0.01], [-0.03, 0.04, 1.1, 0.03]]
-    )
+    perturbed_affine = torch.tensor([[1.2, 0.1, -0.05, 0.02], [0.0, 0.9, 0.05, -0.01], [-0.03, 0.04, 1.1, 0.03]])
     with torch.no_grad():
         bg_fast.grids[0, :, 0, 0, 0] = perturbed_affine.reshape(12)
         # Replicate the same affine across every voxel of the 2x2x2 grid.
-        bg_general.grids[0] = (
-            perturbed_affine.reshape(12, 1, 1, 1).expand(12, 2, 2, 2).contiguous()
-        )
+        bg_general.grids[0] = perturbed_affine.reshape(12, 1, 1, 1).expand(12, 2, 2, 2).contiguous()
 
     img = torch.rand(6, 6, 3)
     out_fast = bg_fast(0, img)
@@ -152,9 +149,7 @@ def test_fast_path_matches_grid_sample_for_constant_grid():
 
 def test_color_affine_transform_identity():
     """color_affine_transform with identity affine returns rgb unchanged."""
-    identity = torch.tensor(
-        [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0]]
-    )
+    identity = torch.tensor([[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0]])
     rgb = torch.tensor([0.3, 0.7, 0.2])
     out = color_affine_transform(identity, rgb)
     assert torch.allclose(out, rgb, atol=1e-7)
@@ -167,6 +162,7 @@ def test_total_variation_loss_zero_uniform():
 
 
 # T9.2: optimizer + scheduler + 2-stage freeze tests --------------------------
+
 
 def test_t9_2_adamw_with_weight_decay_constructs():
     """AdamW accepts weight_decay=1e-4; loop runs without crash."""
@@ -204,10 +200,7 @@ def test_t9_2_adamw_decay_negligible_at_identity_init_zero_grad():
         optim.step()
         optim.zero_grad()
     drift = (bg.grids - initial).abs().max().item()
-    assert drift < 0.001, (
-        f"AdamW decay drift {drift} too large; "
-        f"expected ~1e-5 (= 100 * lr * wd) at identity init"
-    )
+    assert drift < 0.001, f"AdamW decay drift {drift} too large; " f"expected ~1e-5 (= 100 * lr * wd) at identity init"
 
 
 def _drive_optim_step(optim):
@@ -233,9 +226,7 @@ def test_t9_2_cosine_annealing_lr_decreases():
     for _ in range(50):
         sched.step()
     lr_mid = optim.param_groups[0]["lr"]
-    assert abs(lr_mid - 0.5 * lr0) < 1e-5, (
-        f"midway lr {lr_mid} != 0.5 * {lr0}"
-    )
+    assert abs(lr_mid - 0.5 * lr0) < 1e-5, f"midway lr {lr_mid} != 0.5 * {lr0}"
     # Step to end → lr ~ 0
     for _ in range(50):
         sched.step()
@@ -257,18 +248,14 @@ def test_t9_2_freeze_skips_optimizer_step():
         loss.backward()
         # NO optim.step() here — simulate freeze.
         optim.zero_grad(set_to_none=True)
-    assert torch.equal(bg.grids, initial), (
-        "frozen optimizer must not change parameters"
-    )
+    assert torch.equal(bg.grids, initial), "frozen optimizer must not change parameters"
     # Now unfreeze: step once with new gradient → params change.
     out = bg(0, img)
     loss = out.sum()
     loss.backward()
     optim.step()
     optim.zero_grad()
-    assert not torch.equal(bg.grids, initial), (
-        "after unfreeze + step(), parameters must update"
-    )
+    assert not torch.equal(bg.grids, initial), "after unfreeze + step(), parameters must update"
 
 
 def test_t9_2_scheduler_state_dict_roundtrip():
@@ -301,8 +288,7 @@ def test_t9_2_scheduler_state_dict_roundtrip():
     # Verify scheduler internal state matches post-load.
     for key in ("last_epoch", "_step_count", "T_max", "eta_min", "base_lrs"):
         assert sched1.state_dict()[key] == sched2.state_dict()[key], (
-            f"sched state key {key!r} did not roundtrip: "
-            f"{sched1.state_dict()[key]} vs {sched2.state_dict()[key]}"
+            f"sched state key {key!r} did not roundtrip: " f"{sched1.state_dict()[key]} vs {sched2.state_dict()[key]}"
         )
     # _last_lr is a list of floats; compare elementwise.
     for a, b in zip(sched1.state_dict()["_last_lr"], sched2.state_dict()["_last_lr"]):

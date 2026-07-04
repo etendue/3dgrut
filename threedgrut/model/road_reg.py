@@ -14,6 +14,7 @@ lane-marking blur and deformation under novel-view perturbation:
 
 Pure functions / no Trainer / no CUDA — safe to unit-test on Mac CPU.
 """
+
 from __future__ import annotations
 
 import math
@@ -49,11 +50,7 @@ def clamp_layer_scales(scale_log: torch.Tensor, spec: LayerSpec) -> torch.Tensor
           anisotropy step ensures the physical thin-disc bound always wins.
         - All three clamps are applied in order: XY/Z caps -> ratio -> XY/Z caps.
     """
-    if (
-        spec.scale_xy_max is None
-        and spec.scale_z_max is None
-        and spec.anisotropy_ratio_max is None
-    ):
+    if spec.scale_xy_max is None and spec.scale_z_max is None and spec.anisotropy_ratio_max is None:
         return scale_log
 
     out = scale_log.clone()
@@ -192,19 +189,13 @@ def build_road_bev_height(road_xyz: torch.Tensor, cell: float = 0.20) -> RoadBev
         )
     flat = ij[:, 0] * W + ij[:, 1]
     sum_z = torch.zeros(n_cells, device=z.device, dtype=z.dtype).scatter_add_(0, flat, z)
-    cnt = torch.zeros(n_cells, device=z.device, dtype=z.dtype).scatter_add_(
-        0, flat, torch.ones_like(z)
-    )
-    height = torch.where(
-        cnt > 0, sum_z / cnt.clamp(min=1.0), torch.zeros_like(sum_z)
-    ).reshape(H, W)
+    cnt = torch.zeros(n_cells, device=z.device, dtype=z.dtype).scatter_add_(0, flat, torch.ones_like(z))
+    height = torch.where(cnt > 0, sum_z / cnt.clamp(min=1.0), torch.zeros_like(sum_z)).reshape(H, W)
     mask = (cnt > 0).reshape(H, W)
     return RoadBev(origin=origin, cell=float(cell), height=height, mask=mask)
 
 
-def bg_in_road_slab_mask(
-    bg_xyz: torch.Tensor, bev: RoadBev, band_z: float = 0.15
-) -> torch.Tensor:
+def bg_in_road_slab_mask(bg_xyz: torch.Tensor, bev: RoadBev, band_z: float = 0.15) -> torch.Tensor:
     """Bool[M]: background centers inside the road footprint AND within +/-band_z
     of that cell's road height. Centers outside the grid return False."""
     H, W = bev.height.shape
@@ -256,11 +247,15 @@ def project_bg_road_hits(bg_xyz, T_c2w, intr_dict, model_type, road_mask):
 
     if str(model_type) == "ftheta":
         from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
+
         # NCore T_to_world is already OpenCV convention -> identity flip (NOT the
         # projector's viser default FLIP_VISER_TO_OPENCV).
         proj = FthetaForwardProjector(intr_dict, world_to_camera_flip=np.eye(4))
     else:
-        from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
+        from threedgrut_playground.utils.pinhole_projector import (
+            PinholeForwardProjector,
+        )
+
         proj = PinholeForwardProjector(intr_dict)  # default flip = I
 
     uv, vis = proj.project_points(bg_xyz, T_c2w)  # uv [N,2], vis [N] bool

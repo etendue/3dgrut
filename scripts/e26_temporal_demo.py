@@ -38,6 +38,7 @@ embedded timestamp when present, so the temporal client feeds a genuinely
 continuous sequence (a discontinuous order would poison its history). The
 script asserts monotonic timestamps if it can extract them.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,9 +71,7 @@ def _recvall(s: socket.socket, n: int) -> bytes:
     return b
 
 
-def harmonizer_fix_nontemporal(
-    img_hw3: torch.Tensor, host: str, port: int
-) -> torch.Tensor:
+def harmonizer_fix_nontemporal(img_hw3: torch.Tensor, host: str, port: int) -> torch.Tensor:
     """Single-frame Harmonizer fix (V=1). Mirrors E2.1's protocol exactly.
 
     ``img_hw3``: (H,W,3) float[0,1] CPU -> repaired (H,W,3) float[0,1] CPU.
@@ -114,9 +113,7 @@ def color_transfer(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     ts = tgt.reshape(-1, 1, 3).std(0, keepdim=True)
     lab = (src - sm) * (ts / (ss + 1e-8)) + tm
     lab = lab.clamp(-128, 127)
-    return (
-        kornia.color.lab_to_rgb(lab.permute(2, 0, 1)).permute(1, 2, 0).clamp(0, 1)
-    )
+    return kornia.color.lab_to_rgb(lab.permute(2, 0, 1)).permute(1, 2, 0).clamp(0, 1)
 
 
 def _load_img(path: str) -> torch.Tensor:
@@ -157,9 +154,8 @@ def fix_sequence(
 ) -> None:
     """Run one mode's frames through both Harmonizer paths, write three columns."""
     import numpy as np
-    from threedgrut_playground.utils.harmonizer_client import (
-        HarmonizerTemporalClient,
-    )
+
+    from threedgrut_playground.utils.harmonizer_client import HarmonizerTemporalClient
 
     src_root = os.path.join(raw_dir, mode)
     if not os.path.isdir(src_root):
@@ -180,10 +176,7 @@ def fix_sequence(
     if not os.path.lexists(raw_link):
         os.symlink(os.path.abspath(src_root), raw_link)
 
-    temporal_client = (
-        HarmonizerTemporalClient(temporal_host, temporal_port, K=K)
-        if do_temporal else None
-    )
+    temporal_client = HarmonizerTemporalClient(temporal_host, temporal_port, K=K) if do_temporal else None
 
     for i, key in enumerate(keys):
         rel = fmap[key]
@@ -193,16 +186,12 @@ def fix_sequence(
 
         # ---- nontemporal (V=1) ----
         if do_nontemporal:
-            fixed_nt = harmonizer_fix_nontemporal(
-                raw_t, nontemporal_host, nontemporal_port
-            )
+            fixed_nt = harmonizer_fix_nontemporal(raw_t, nontemporal_host, nontemporal_port)
             if do_color_transfer:
                 fixed_nt = color_transfer(fixed_nt, raw_t)
             dst = os.path.join(nt_root, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            torchvision.utils.save_image(
-                fixed_nt.permute(2, 0, 1).clamp(0, 1), dst
-            )
+            torchvision.utils.save_image(fixed_nt.permute(2, 0, 1).clamp(0, 1), dst)
 
         # ---- temporal (V=1+K) ----
         if do_temporal:
@@ -212,17 +201,12 @@ def fix_sequence(
                 out_t = color_transfer(out_t, raw_t)
             dst = os.path.join(t_root, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            torchvision.utils.save_image(
-                out_t.permute(2, 0, 1).clamp(0, 1), dst
-            )
+            torchvision.utils.save_image(out_t.permute(2, 0, 1).clamp(0, 1), dst)
 
         if (i + 1) % 25 == 0 or i == 0:
-            hist_depth = (
-                temporal_client.history_depth if temporal_client else 0
-            )
+            hist_depth = temporal_client.history_depth if temporal_client else 0
             print(
-                f"[{mode}] {i + 1}/{len(keys)} "
-                f"(temporal history depth {hist_depth}/{K})",
+                f"[{mode}] {i + 1}/{len(keys)} " f"(temporal history depth {hist_depth}/{K})",
                 flush=True,
             )
 
@@ -236,37 +220,37 @@ def fix_sequence(
             )
     if temporal_client is not None:
         temporal_client.close()
-    print(f"[{mode}] done -> {out_dir}/{mode}/{{raw,nontemporal_fixed,"
-          f"temporal_fixed}}", flush=True)
+    print(f"[{mode}] done -> {out_dir}/{mode}/{{raw,nontemporal_fixed," f"temporal_fixed}}", flush=True)
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="E2.6 temporal vs nontemporal Harmonizer de-flicker demo"
-    )
+    ap = argparse.ArgumentParser(description="E2.6 temporal vs nontemporal Harmonizer de-flicker demo")
     ap.add_argument(
-        "--raw-dir", required=True,
+        "--raw-dir",
+        required=True,
         help="<.../ours_N>/ours : the render.py --render-only output root "
-             "(contains <mode>/frames_map.json + frames).",
+        "(contains <mode>/frames_map.json + frames).",
     )
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--mode", default="interp",
-                    help="subdir under raw-dir (default: interp = continuous "
-                         "eval sequence). Use a lateral_* mode only if you "
-                         "want to compare on extrapolation frames.")
+    ap.add_argument(
+        "--mode",
+        default="interp",
+        help="subdir under raw-dir (default: interp = continuous "
+        "eval sequence). Use a lateral_* mode only if you "
+        "want to compare on extrapolation frames.",
+    )
     ap.add_argument("--nontemporal-host", default="127.0.0.1")
     ap.add_argument("--nontemporal-port", type=int, default=59489)
     ap.add_argument("--temporal-host", default="127.0.0.1")
     ap.add_argument("--temporal-port", type=int, default=59490)
-    ap.add_argument("--K", type=int, default=4,
-                    help="temporal history depth (default 4, paper default)")
-    ap.add_argument("--no-color-transfer", action="store_true",
-                    help="skip Reinhard color_transfer (fixed->raw). ")
-    ap.add_argument("--skip-nontemporal", action="store_true",
-                    help="only run the temporal column (nontemporal already "
-                         "exists from a prior E2.1 run).")
-    ap.add_argument("--skip-temporal", action="store_true",
-                    help="only run the nontemporal column.")
+    ap.add_argument("--K", type=int, default=4, help="temporal history depth (default 4, paper default)")
+    ap.add_argument("--no-color-transfer", action="store_true", help="skip Reinhard color_transfer (fixed->raw). ")
+    ap.add_argument(
+        "--skip-nontemporal",
+        action="store_true",
+        help="only run the temporal column (nontemporal already " "exists from a prior E2.1 run).",
+    )
+    ap.add_argument("--skip-temporal", action="store_true", help="only run the nontemporal column.")
     a = ap.parse_args()
 
     fix_sequence(

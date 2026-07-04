@@ -8,6 +8,7 @@ Usage:
 
 Measures pure render FPS at the given resolution, no viser server needed.
 """
+
 import argparse
 import math
 import os
@@ -20,6 +21,7 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from kaolin.render.camera import Camera
+
 from threedgrut_playground.engine import Engine3DGRUT
 
 

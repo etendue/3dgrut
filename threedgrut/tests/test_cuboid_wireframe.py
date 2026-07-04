@@ -1,4 +1,5 @@
 """Task E contract tests — UNIT_CUBE_EDGES + cuboid_world_edges."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -62,11 +63,11 @@ def test_world_edges_size_scale():
     # Bounding extent should be [-1, 1]×[-0.5, 0.5]×[-1.5, 1.5].
     pts = out.reshape(-1, 3)
     np.testing.assert_allclose(pts[:, 0].min(), -1.0, atol=1e-6)
-    np.testing.assert_allclose(pts[:, 0].max(),  1.0, atol=1e-6)
+    np.testing.assert_allclose(pts[:, 0].max(), 1.0, atol=1e-6)
     np.testing.assert_allclose(pts[:, 1].min(), -0.5, atol=1e-6)
-    np.testing.assert_allclose(pts[:, 1].max(),  0.5, atol=1e-6)
+    np.testing.assert_allclose(pts[:, 1].max(), 0.5, atol=1e-6)
     np.testing.assert_allclose(pts[:, 2].min(), -1.5, atol=1e-6)
-    np.testing.assert_allclose(pts[:, 2].max(),  1.5, atol=1e-6)
+    np.testing.assert_allclose(pts[:, 2].max(), 1.5, atol=1e-6)
 
 
 def test_world_edges_rotation_z90():

@@ -6,6 +6,7 @@ and the per-LiDAR-point semantic filter idea without requiring any NCore SDK
 or A800-generated aux itar files. Integration verification is deferred to
 T3.1.b / T3.2.b A800 smoke.
 """
+
 from __future__ import annotations
 
 import torch
@@ -24,9 +25,9 @@ def _make_sseg_image(H: int = 8, W: int = 8) -> torch.Tensor:
     TL = sky (16 px), TR = road (16 px), BL = dynamic (16 px), BR = other (16 px).
     """
     img = torch.full((H, W), 99, dtype=torch.long)  # 99 = "other / unmapped"
-    img[:H // 2, :W // 2] = SKY_CLASS_ID
-    img[:H // 2, W // 2:] = next(iter(ROAD_CLASS_IDS))
-    img[H // 2:, :W // 2] = next(iter(DYNAMIC_CLASS_IDS))
+    img[: H // 2, : W // 2] = SKY_CLASS_ID
+    img[: H // 2, W // 2 :] = next(iter(ROAD_CLASS_IDS))
+    img[H // 2 :, : W // 2] = next(iter(DYNAMIC_CLASS_IDS))
     return img
 
 
@@ -40,9 +41,7 @@ def test_sky_road_dyn_masks_are_disjoint_partition():
     dyn = torch.isin(sseg, torch.tensor(list(DYNAMIC_CLASS_IDS))).float()
 
     # disjoint: 每个像素属于至多一类
-    assert torch.all((sky + road + dyn) <= 1.0), (
-        f"masks overlap: max sum = {(sky + road + dyn).max().item()}"
-    )
+    assert torch.all((sky + road + dyn) <= 1.0), f"masks overlap: max sum = {(sky + road + dyn).max().item()}"
     # 每区 4*4 = 16 px
     assert sky.sum().item() == 16
     assert road.sum().item() == 16
@@ -73,8 +72,7 @@ def test_sky_class_id_is_singular():
 
 
 # --- T3.2.a: road / dynamic LiDAR semantic filtering mock ---
-def _filter_pts_by_label(pts: torch.Tensor, labels: torch.Tensor,
-                         target_ids: frozenset[int]) -> torch.Tensor:
+def _filter_pts_by_label(pts: torch.Tensor, labels: torch.Tensor, target_ids: frozenset[int]) -> torch.Tensor:
     """Reference filter logic: keep pts whose label ∈ target_ids.
 
     T3.2.b will live-implement this inside NCoreDataset.get_road_lidar_points()
@@ -90,7 +88,7 @@ def test_road_lidar_points_filter_keeps_only_road_class():
     pts = torch.randn(100, 3)
     labels = torch.zeros(100, dtype=torch.long)
     labels[:50] = next(iter(ROAD_CLASS_IDS))  # road
-    labels[50:] = 99                            # other
+    labels[50:] = 99  # other
     road_pts = _filter_pts_by_label(pts, labels, ROAD_CLASS_IDS)
     assert road_pts.shape == (50, 3)
     # identity: 前 50 个原始 pts 应原样保留（顺序不变，因为 isin mask 保序）
@@ -101,10 +99,7 @@ def test_dynamic_lidar_points_filter_keeps_all_dyn_classes():
     """T3.2.a: 每个 dyn class 各 10 点 → 总共 80 个 (8 class * 10)，全部保留。"""
     n_per_class = 10
     pts_list = [torch.randn(n_per_class, 3) for _ in DYNAMIC_CLASS_IDS]
-    labels_list = [
-        torch.full((n_per_class,), cid, dtype=torch.long)
-        for cid in DYNAMIC_CLASS_IDS
-    ]
+    labels_list = [torch.full((n_per_class,), cid, dtype=torch.long) for cid in DYNAMIC_CLASS_IDS]
     pts = torch.cat(pts_list + [torch.randn(20, 3)])  # +20 noise (label 99)
     labels = torch.cat(labels_list + [torch.full((20,), 99, dtype=torch.long)])
     dyn_pts = _filter_pts_by_label(pts, labels, DYNAMIC_CLASS_IDS)

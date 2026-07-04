@@ -17,6 +17,7 @@ Raw uint8 (not JPEG) is deliberate: it avoids a second lossy compression on top
 of the Gaussian render *and* the encode/decode latency, and a ~2 MB frame over
 loopback costs only a few ms. All integers are big-endian via ``struct``.
 """
+
 from __future__ import annotations
 
 import socket
@@ -61,9 +62,7 @@ def recvall(conn: socket.socket, n: int) -> bytes:
     while len(buf) < n:
         chunk = conn.recv(n - len(buf))
         if not chunk:
-            raise ConnectionError(
-                f"socket closed mid-frame: got {len(buf)}/{n} bytes"
-            )
+            raise ConnectionError(f"socket closed mid-frame: got {len(buf)}/{n} bytes")
         buf.extend(chunk)
     return bytes(buf)
 

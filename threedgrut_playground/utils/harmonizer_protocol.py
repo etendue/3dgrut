@@ -29,6 +29,7 @@ The server replies with exactly one frame (the corrected current frame) using
 ``difix_protocol``'s ``DFX1`` single-frame reply format — so the return path is
 shared with the existing DiFix client plumbing.
 """
+
 from __future__ import annotations
 
 import socket
@@ -43,15 +44,10 @@ _HEADER = struct.Struct(">4sIIII")
 HEADER_SIZE: int = _HEADER.size  # 20
 
 # Reuse the single-frame DFX1 reply codec for the server's return path.
-from .difix_protocol import (  # noqa: E402 — re-export for callers
-    pack_frame,
-    read_frame,
-)
+from .difix_protocol import pack_frame, read_frame  # noqa: E402 — re-export for callers
 
 
-def pack_temporal(
-    curr: np.ndarray, history: "list[np.ndarray]", K: int
-) -> bytes:
+def pack_temporal(curr: np.ndarray, history: "list[np.ndarray]", K: int) -> bytes:
     """Serialize a temporal request: ``curr`` + the last ``history`` frames.
 
     Args:
@@ -79,10 +75,7 @@ def pack_temporal(
     tail = list(history[-k_in:]) if k_in else []
     for i, h in enumerate(tail):
         if h.shape != curr.shape or h.dtype != np.uint8:
-            raise ValueError(
-                f"history[-{i+1}] shape/dtype {h.shape}/{h.dtype} != curr "
-                f"{curr.shape}/uint8"
-            )
+            raise ValueError(f"history[-{i+1}] shape/dtype {h.shape}/{h.dtype} != curr " f"{curr.shape}/uint8")
 
     h, w, c = curr.shape
     parts = [_HEADER.pack(MAGIC, h, w, c, k_in)]
@@ -102,9 +95,7 @@ def recvall(conn: socket.socket, n: int) -> bytes:
     while len(buf) < n:
         chunk = conn.recv(n - len(buf))
         if not chunk:
-            raise ConnectionError(
-                f"socket closed mid-request: got {len(buf)}/{n} bytes"
-            )
+            raise ConnectionError(f"socket closed mid-request: got {len(buf)}/{n} bytes")
         buf.extend(chunk)
     return bytes(buf)
 
@@ -126,9 +117,7 @@ def read_temporal(conn: socket.socket) -> "tuple[np.ndarray, list[np.ndarray]]":
         raise ValueError(f"bad temporal magic {magic!r} (expected {MAGIC!r})")
     body = recvall(conn, (1 + k_in) * h * w * c)
     frames = [
-        np.frombuffer(
-            body[i * h * w * c:(i + 1) * h * w * c], dtype=np.uint8
-        ).reshape(h, w, c)
+        np.frombuffer(body[i * h * w * c : (i + 1) * h * w * c], dtype=np.uint8).reshape(h, w, c)
         for i in range(1 + k_in)
     ]
     return frames[0], frames[1:]

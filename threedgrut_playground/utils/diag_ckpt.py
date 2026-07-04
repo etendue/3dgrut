@@ -11,6 +11,7 @@ and ``LayeredGaussians.get_model_parameters`` (T8/B3 Phase E.4).
 For cuboid poses + sizes + activity, callers use ``FourDMetadata.from_ckpt``
 directly (already pure-CPU).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -42,14 +43,11 @@ def load_ckpt_cpu(ckpt_path: Path) -> dict:
                 break
     if conf is None:
         raise RuntimeError(
-            "ckpt has no 'config' nor per-layer 'config' fallback — "
-            "diagnostic requires a v2 LayeredGaussians ckpt."
+            "ckpt has no 'config' nor per-layer 'config' fallback — " "diagnostic requires a v2 LayeredGaussians ckpt."
         )
     use_layered = bool(conf.get("use_layered_model", False))
     if not use_layered:
-        raise RuntimeError(
-            "ckpt is not a v2 LayeredGaussians ckpt (use_layered_model=false)."
-        )
+        raise RuntimeError("ckpt is not a v2 LayeredGaussians ckpt (use_layered_model=false).")
     return ckpt
 
 

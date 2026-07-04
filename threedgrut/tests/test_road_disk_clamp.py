@@ -16,6 +16,7 @@ to keep; if it fails, the preset must set ``anisotropy_ratio_max=null``.
 
 Pure CPU (clamp_layer_scales is torch-only, no CUDA / Trainer).
 """
+
 from __future__ import annotations
 
 import math
@@ -28,22 +29,16 @@ from threedgrut.model.road_reg import clamp_layer_scales
 
 def test_clamp_z_floor_1mm():
     """z-scale above 1mm is clamped down to the 1mm floor."""
-    spec = LayerSpec(name="road", layer_id=1, max_n_particles=10,
-                     scale_z_max=0.001)
+    spec = LayerSpec(name="road", layer_id=1, max_n_particles=10, scale_z_max=0.001)
     scale_log = torch.full((20, 3), math.log(0.05))  # 5cm on every axis
     out = clamp_layer_scales(scale_log, spec)
-    assert out[:, 2].exp().max().item() <= 0.001 + 1e-9, (
-        f"z not clamped to 1mm: max={out[:, 2].exp().max().item()}"
-    )
+    assert out[:, 2].exp().max().item() <= 0.001 + 1e-9, f"z not clamped to 1mm: max={out[:, 2].exp().max().item()}"
 
 
 def test_clamp_1mm_keeps_xy():
     """1mm z floor does not shrink the in-plane (XY) extent."""
-    spec = LayerSpec(name="road", layer_id=1, max_n_particles=10,
-                     scale_xy_max=0.3, scale_z_max=0.001)
-    scale_log = torch.tensor(
-        [[math.log(0.2), math.log(0.2), math.log(0.05)]] * 10
-    )
+    spec = LayerSpec(name="road", layer_id=1, max_n_particles=10, scale_xy_max=0.3, scale_z_max=0.001)
+    scale_log = torch.tensor([[math.log(0.2), math.log(0.2), math.log(0.05)]] * 10)
     out = clamp_layer_scales(scale_log, spec)
     assert out[:, 2].exp().max().item() <= 0.001 + 1e-9  # z → 1mm
     # XY 0.2m < 0.3m cap → untouched
@@ -60,15 +55,16 @@ def test_clamp_anisotropy_vs_1mm_zfloor():
     re-thicken the disc → preset need not disable anisotropy.
     """
     spec = LayerSpec(
-        name="road", layer_id=1, max_n_particles=10,
-        scale_xy_max=0.3, scale_z_max=0.001, anisotropy_ratio_max=8.0,
+        name="road",
+        layer_id=1,
+        max_n_particles=10,
+        scale_xy_max=0.3,
+        scale_z_max=0.001,
+        anisotropy_ratio_max=8.0,
     )
-    scale_log = torch.tensor(
-        [[math.log(0.3), math.log(0.3), math.log(0.05)]] * 10
-    )
+    scale_log = torch.tensor([[math.log(0.3), math.log(0.3), math.log(0.05)]] * 10)
     out = clamp_layer_scales(scale_log, spec)
     z_mm = out[:, 2].exp().max().item() * 1000.0
     assert z_mm <= 1.0 + 1e-6, (
-        f"1mm z floor breached by anisotropy re-thickening: {z_mm}mm "
-        f"(preset must set anisotropy_ratio_max=null)"
+        f"1mm z floor breached by anisotropy re-thickening: {z_mm}mm " f"(preset must set anisotropy_ratio_max=null)"
     )

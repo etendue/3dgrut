@@ -10,6 +10,7 @@ The render.py eval loop block computes 4 fields from the model state:
 This test exercises the same arithmetic on a synthetic LayeredGaussians so
 we don't need to run a full A800 eval to know the formulas are correct.
 """
+
 from __future__ import annotations
 
 import os
@@ -21,9 +22,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -32,8 +31,7 @@ def real_conf():
         return compose(config_name="apps/ncore_3dgut_mcmc")
 
 
-def _make_model(real_conf, *, albedo: bool, scale: bool,
-                symmetric_axis=None) -> LayeredGaussians:
+def _make_model(real_conf, *, albedo: bool, scale: bool, symmetric_axis=None) -> LayeredGaussians:
     extra = {}
     if symmetric_axis is not None:
         extra["symmetric_axis"] = symmetric_axis
@@ -43,16 +41,16 @@ def _make_model(real_conf, *, albedo: bool, scale: bool,
         extra["optimize_track_scale"] = True
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000,
-                  scale_prior=(0.05, 0.05, 0.05), extra=extra),
+        LayerSpec(
+            name="dynamic_rigids", layer_id=2, max_n_particles=200_000, scale_prior=(0.05, 0.05, 0.05), extra=extra
+        ),
     ]
     eye = torch.eye(4).expand(5, 4, 4).clone()
     tracks = {
         "alice": {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool)},
-        "bob":   {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool)},
+        "bob": {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool)},
     }
-    return LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
-                            tracks=tracks)
+    return LayeredGaussians(real_conf, specs=specs, scene_extent=10.0, tracks=tracks)
 
 
 def _compute_v3_metrics(model) -> dict:
@@ -68,17 +66,10 @@ def _compute_v3_metrics(model) -> dict:
             sym_axis_val = (getattr(dyn, "extra", {}) or {}).get("symmetric_axis")
     return {
         "symmetric_axis": sym_axis_val,
-        "track_albedo_l2_mean": (
-            float(albedo_t.detach().norm(dim=-1).mean().cpu())
-            if albedo_t is not None else None
-        ),
-        "track_log_scale_mean": (
-            float(log_scale_t.detach().mean().cpu())
-            if log_scale_t is not None else None
-        ),
+        "track_albedo_l2_mean": (float(albedo_t.detach().norm(dim=-1).mean().cpu()) if albedo_t is not None else None),
+        "track_log_scale_mean": (float(log_scale_t.detach().mean().cpu()) if log_scale_t is not None else None),
         "track_log_scale_std": (
-            float(log_scale_t.detach().std().cpu())
-            if log_scale_t is not None and log_scale_t.numel() > 1 else None
+            float(log_scale_t.detach().std().cpu()) if log_scale_t is not None and log_scale_t.numel() > 1 else None
         ),
     }
 
@@ -127,10 +118,14 @@ def test_v3_metrics_non_zero_values(real_conf):
     with torch.no_grad():
         # [K=2, 3, k=1]; norm over last(k) dim → |val| per (track, channel);
         # mean over 2×3 = (0.4+0.3+0.0 + 0.0+0.5+0.0) / 6 = 0.2
-        model._track_albedo_table.copy_(torch.tensor([
-            [[0.4], [0.3], [0.0]],
-            [[0.0], [0.5], [0.0]],
-        ]))
+        model._track_albedo_table.copy_(
+            torch.tensor(
+                [
+                    [[0.4], [0.3], [0.0]],
+                    [[0.0], [0.5], [0.0]],
+                ]
+            )
+        )
         # log_scale = [0.2, -0.4] → mean = -0.1, std (unbiased) ≈ 0.4243
         model._track_log_scale_table.copy_(torch.tensor([[0.2], [-0.4]]))
 
@@ -148,15 +143,15 @@ def test_v3_metrics_single_track_log_scale_std_is_none(real_conf):
     extra = {"optimize_track_scale": True}
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000,
-                  scale_prior=(0.05, 0.05, 0.05), extra=extra),
+        LayerSpec(
+            name="dynamic_rigids", layer_id=2, max_n_particles=200_000, scale_prior=(0.05, 0.05, 0.05), extra=extra
+        ),
     ]
     eye = torch.eye(4).expand(3, 4, 4).clone()
     tracks = {
         "solo": {"poses": eye.clone(), "active": torch.ones(3, dtype=torch.bool)},
     }
-    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0, tracks=tracks)
     m = _compute_v3_metrics(model)
     assert m["track_log_scale_std"] is None
     assert m["track_log_scale_mean"] == pytest.approx(0.0)

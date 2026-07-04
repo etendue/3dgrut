@@ -17,6 +17,7 @@ Usage (ThinkPad with conda env 3dgrut2 active):
 Dependencies: numpy + torch + (project-local) viz4d_metadata + cuboid.
 No CUDA needed; ckpt loads to CPU.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,6 @@ sys.path.insert(0, str(_REPO_ROOT))
 from threedgrut_playground.utils.cuboid import cuboid_world_edges
 from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 
-
 # ----- Candidate combinations ---------------------------------------------
 # Standard OpenGL→OpenCV axis flip: c2w_cv = c2w_gl @ diag([1, -1, -1, 1])
 # Reason: OpenGL camera convention is +Y up, +Z backward (camera looks at -Z);
@@ -42,7 +42,7 @@ from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 # vectors in world frame, so right-multiplying by diag([1,-1,-1,1]) flips
 # the Y and Z basis columns to convert between conventions.
 FLIP_GL_TO_CV_RIGHT = np.diag([1.0, -1.0, -1.0, 1.0])
-FLIP_GL_TO_CV_LEFT  = FLIP_GL_TO_CV_RIGHT  # identity in left-mul slot (would flip world Y/Z, almost certainly wrong)
+FLIP_GL_TO_CV_LEFT = FLIP_GL_TO_CV_RIGHT  # identity in left-mul slot (would flip world Y/Z, almost certainly wrong)
 
 CANDIDATES = [
     # (name, c2w_transform_callable, poly_eval_callable)
@@ -83,8 +83,8 @@ def _horner_ascending(poly: np.ndarray, x: np.ndarray) -> np.ndarray:
 
 
 def _project_one(
-    points_world: np.ndarray,        # (N, 3)
-    c2w_transformed: np.ndarray,     # (4, 4) — already in OpenCV convention
+    points_world: np.ndarray,  # (N, 3)
+    c2w_transformed: np.ndarray,  # (4, 4) — already in OpenCV convention
     ftheta_dict: dict,
     poly_fn,
 ):
@@ -95,7 +95,7 @@ def _project_one(
     p_cam = (w2c @ p_h.T).T[:, :3]
 
     x, y, z = p_cam[:, 0], p_cam[:, 1], p_cam[:, 2]
-    r_xy = np.sqrt(x ** 2 + y ** 2)
+    r_xy = np.sqrt(x**2 + y**2)
     angle = np.arctan2(r_xy, z)  # ∈ [0, π]
 
     poly = np.asarray(ftheta_dict["angle_to_pixeldist_poly"], dtype=np.float64)
@@ -121,7 +121,8 @@ def _project_one(
         np.stack([u, v], axis=-1),
         visible,
         {
-            "z_min": float(z.min()), "z_max": float(z.max()),
+            "z_min": float(z.min()),
+            "z_max": float(z.max()),
             "angle_min_deg": float(np.degrees(angle.min())),
             "angle_max_deg": float(np.degrees(angle.max())),
             "max_angle_deg": float(np.degrees(max_angle)),
@@ -137,8 +138,7 @@ def _project_one(
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", required=True, type=Path)
-    ap.add_argument("--out-json", type=Path, default=None,
-                    help="Optional: also dump full results to JSON")
+    ap.add_argument("--out-json", type=Path, default=None, help="Optional: also dump full results to JSON")
     args = ap.parse_args()
 
     print(f"[probe] loading ckpt: {args.ckpt}")
@@ -160,12 +160,18 @@ def main():
     print(f"[probe] FTheta keys:    {sorted(ftheta.keys())}")
     print(f"[probe] FTheta resolution: {list(ftheta['resolution'])}")
     print(f"[probe] FTheta principal_point: {list(ftheta['principal_point'])}")
-    print(f"[probe] FTheta max_angle: {float(ftheta['max_angle']):.4f} rad "
-          f"= {np.degrees(float(ftheta['max_angle'])):.1f} deg half-FOV")
-    print(f"[probe] FTheta angle_to_pixeldist_poly: "
-          f"{np.asarray(ftheta['angle_to_pixeldist_poly'], dtype=np.float64).tolist()}")
-    print(f"[probe] FTheta pixeldist_to_angle_poly: "
-          f"{np.asarray(ftheta['pixeldist_to_angle_poly'], dtype=np.float64).tolist()}")
+    print(
+        f"[probe] FTheta max_angle: {float(ftheta['max_angle']):.4f} rad "
+        f"= {np.degrees(float(ftheta['max_angle'])):.1f} deg half-FOV"
+    )
+    print(
+        f"[probe] FTheta angle_to_pixeldist_poly: "
+        f"{np.asarray(ftheta['angle_to_pixeldist_poly'], dtype=np.float64).tolist()}"
+    )
+    print(
+        f"[probe] FTheta pixeldist_to_angle_poly: "
+        f"{np.asarray(ftheta['pixeldist_to_angle_poly'], dtype=np.float64).tolist()}"
+    )
     print(f"[probe] FTheta linear_cde: {list(ftheta['linear_cde'])}")
 
     # Find first active track at frame_idx = 0
@@ -175,8 +181,8 @@ def main():
         return 1
     tid = active[0]
     tdata = meta.tracks[tid]
-    pose = tdata["poses"][0]      # (4, 4)
-    size = tdata["size"]          # (3,)
+    pose = tdata["poses"][0]  # (4, 4)
+    size = tdata["size"]  # (3,)
     klass = tdata["class"]
     print(f"\n[probe] picked cuboid: tid={tid}  class={klass}")
     print(f"[probe] cuboid pose t = {pose[:3, 3].tolist()}")
@@ -190,34 +196,38 @@ def main():
 
     # Ego pose at frame 0 (use ego_poses_c2w[0])
     c2w_gl = meta.ego_poses_c2w[0].astype(np.float64)
-    print(f"\n[probe] ego pose[0] (viser/OpenGL convention) translation = "
-          f"{c2w_gl[:3, 3].tolist()}")
+    print(f"\n[probe] ego pose[0] (viser/OpenGL convention) translation = " f"{c2w_gl[:3, 3].tolist()}")
 
     results = {}
     for name, c2w_fn, poly_fn in CANDIDATES:
         c2w_cv = c2w_fn(c2w_gl)
         uv, visible, dbg = _project_one(points_world, c2w_cv, ftheta, poly_fn)
         print(f"\n=== Candidate: {name} ===")
-        print(f"  cam-frame z range: [{dbg['z_min']:+.2f}, {dbg['z_max']:+.2f}]"
-              f"  (n_z_pos={dbg['n_z_pos']}/24)")
-        print(f"  ray angle:         [{dbg['angle_min_deg']:.1f}°, "
-              f"{dbg['angle_max_deg']:.1f}°]   max_angle={dbg['max_angle_deg']:.1f}°"
-              f"   (n_in_fov={dbg['n_in_fov']}/24)")
-        print(f"  pixels in image:   n_in_bound={dbg['n_in_bound']}/24"
-              f"   (W,H={dbg['resolution_WH']})")
+        print(f"  cam-frame z range: [{dbg['z_min']:+.2f}, {dbg['z_max']:+.2f}]" f"  (n_z_pos={dbg['n_z_pos']}/24)")
+        print(
+            f"  ray angle:         [{dbg['angle_min_deg']:.1f}°, "
+            f"{dbg['angle_max_deg']:.1f}°]   max_angle={dbg['max_angle_deg']:.1f}°"
+            f"   (n_in_fov={dbg['n_in_fov']}/24)"
+        )
+        print(f"  pixels in image:   n_in_bound={dbg['n_in_bound']}/24" f"   (W,H={dbg['resolution_WH']})")
         print(f"  total visible:     {dbg['n_visible']}/24")
         # Identify bottom vs top vertices by world z to confirm Y-axis orientation.
         # In OpenCV image convention: +V_pixel points down → bottom vertices
         # (low world z, assuming roughly level ego) should have LARGER v.
         bottom_idx = points_world[:, 2] < points_world[:, 2].mean()
         v_bottom = uv[bottom_idx, 1]
-        v_top    = uv[~bottom_idx, 1]
-        print(f"  bottom verts (low world-z) v range: "
-              f"[{v_bottom.min():.1f}, {v_bottom.max():.1f}] mean={v_bottom.mean():.1f}")
-        print(f"  top    verts (high world-z) v range: "
-              f"[{v_top.min():.1f}, {v_top.max():.1f}] mean={v_top.mean():.1f}")
-        print(f"  Δv (bottom - top) mean: {v_bottom.mean() - v_top.mean():+.1f}  "
-              f"(positive → OpenCV convention: bottom below top)")
+        v_top = uv[~bottom_idx, 1]
+        print(
+            f"  bottom verts (low world-z) v range: "
+            f"[{v_bottom.min():.1f}, {v_bottom.max():.1f}] mean={v_bottom.mean():.1f}"
+        )
+        print(
+            f"  top    verts (high world-z) v range: " f"[{v_top.min():.1f}, {v_top.max():.1f}] mean={v_top.mean():.1f}"
+        )
+        print(
+            f"  Δv (bottom - top) mean: {v_bottom.mean() - v_top.mean():+.1f}  "
+            f"(positive → OpenCV convention: bottom below top)"
+        )
         print(f"  visibility mask:   {visible.astype(int).tolist()}")
         print(f"  full (u, v) per vertex:")
         for i in range(uv.shape[0]):
@@ -227,7 +237,7 @@ def main():
             "uv": uv.tolist(),
             "visible": visible.astype(int).tolist(),
             "v_bottom_mean": float(v_bottom.mean()),
-            "v_top_mean":    float(v_top.mean()),
+            "v_top_mean": float(v_top.mean()),
             "delta_v_bottom_minus_top": float(v_bottom.mean() - v_top.mean()),
             **dbg,
         }
@@ -251,20 +261,26 @@ def main():
             raise TypeError(f"unhashable {type(o)}")
 
         with open(args.out_json, "w") as f:
-            json.dump({
-                "ckpt": str(args.ckpt),
-                "ftheta_resolution": [int(x) for x in ftheta["resolution"]],
-                "ftheta_principal_point": [float(x) for x in ftheta["principal_point"]],
-                "ftheta_max_angle_rad": float(ftheta["max_angle"]),
-                "ftheta_angle_to_pixeldist_poly": np.asarray(
-                    ftheta["angle_to_pixeldist_poly"], dtype=np.float64).tolist(),
-                "cuboid_tid": tid,
-                "cuboid_class": klass,
-                "cuboid_pose_translation": [float(x) for x in pose[:3, 3].tolist()],
-                "cuboid_size": [float(x) for x in size.tolist()],
-                "ego_pose_translation": [float(x) for x in c2w_gl[:3, 3].tolist()],
-                "candidates": results,
-            }, f, indent=2, default=_jsonable)
+            json.dump(
+                {
+                    "ckpt": str(args.ckpt),
+                    "ftheta_resolution": [int(x) for x in ftheta["resolution"]],
+                    "ftheta_principal_point": [float(x) for x in ftheta["principal_point"]],
+                    "ftheta_max_angle_rad": float(ftheta["max_angle"]),
+                    "ftheta_angle_to_pixeldist_poly": np.asarray(
+                        ftheta["angle_to_pixeldist_poly"], dtype=np.float64
+                    ).tolist(),
+                    "cuboid_tid": tid,
+                    "cuboid_class": klass,
+                    "cuboid_pose_translation": [float(x) for x in pose[:3, 3].tolist()],
+                    "cuboid_size": [float(x) for x in size.tolist()],
+                    "ego_pose_translation": [float(x) for x in c2w_gl[:3, 3].tolist()],
+                    "candidates": results,
+                },
+                f,
+                indent=2,
+                default=_jsonable,
+            )
         print(f"\n[probe] wrote {args.out_json}")
 
     return 0

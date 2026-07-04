@@ -36,6 +36,7 @@ After 1k training::
         --ckpt /path/to/ckpt_last.pt \\
         --output_dir /tmp/E10_frame0_after_1k
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,13 +50,12 @@ import torch
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-# PIL for image draw overlays
-from PIL import Image, ImageDraw
-
 # Hydra config compose
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+# PIL for image draw overlays
+from PIL import Image, ImageDraw
 
 _CONFIG_DIR = str(_REPO_ROOT / "configs")
 
@@ -64,9 +64,15 @@ _CONFIG_DIR = str(_REPO_ROOT / "configs")
 # helpers
 # -----------------------------------------------------------------------------
 
-def _draw_dots(im: Image.Image, uv: np.ndarray, visible: np.ndarray,
-               color: tuple[int, int, int], radius: int = 2,
-               subsample: int = -1) -> None:
+
+def _draw_dots(
+    im: Image.Image,
+    uv: np.ndarray,
+    visible: np.ndarray,
+    color: tuple[int, int, int],
+    radius: int = 2,
+    subsample: int = -1,
+) -> None:
     """Overlay dots at (u, v) pixel coords where visible == True. Mutates ``im``."""
     draw = ImageDraw.Draw(im)
     if subsample > 0 and uv.shape[0] > subsample:
@@ -76,13 +82,14 @@ def _draw_dots(im: Image.Image, uv: np.ndarray, visible: np.ndarray,
     for (u, v), vis in zip(uv, visible):
         if not vis:
             continue
-        x = int(round(float(u))); y = int(round(float(v)))
-        draw.ellipse([x - radius, y - radius, x + radius, y + radius],
-                     fill=color, outline=None)
+        x = int(round(float(u)))
+        y = int(round(float(v)))
+        draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill=color, outline=None)
 
 
-def _draw_polyline(im: Image.Image, uv: np.ndarray, visible: np.ndarray,
-                   color: tuple[int, int, int], width: int = 2) -> None:
+def _draw_polyline(
+    im: Image.Image, uv: np.ndarray, visible: np.ndarray, color: tuple[int, int, int], width: int = 2
+) -> None:
     """Overlay a polyline; skips segments where either endpoint is invisible."""
     draw = ImageDraw.Draw(im)
     for i in range(uv.shape[0] - 1):
@@ -93,8 +100,7 @@ def _draw_polyline(im: Image.Image, uv: np.ndarray, visible: np.ndarray,
         draw.line([(x0, y0), (x1, y1)], fill=color, width=width)
 
 
-def _draw_mask_overlay(im: Image.Image, mask: np.ndarray,
-                       color: tuple[int, int, int], alpha: float = 0.4) -> None:
+def _draw_mask_overlay(im: Image.Image, mask: np.ndarray, color: tuple[int, int, int], alpha: float = 0.4) -> None:
     """Tint pixels where ``mask > 0.5`` with ``color`` at the given alpha."""
     arr = np.array(im, dtype=np.float32)
     mask_bool = mask > 0.5
@@ -114,20 +120,27 @@ def _gt_image_to_pil(rgb_gt: torch.Tensor) -> Image.Image:
 # main
 # -----------------------------------------------------------------------------
 
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--config_name", required=True, type=str,
-                   help="Hydra config name, e.g. apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix")
-    p.add_argument("--path", required=True, type=str,
-                   help="dataset manifest path (overrides conf.path)")
-    p.add_argument("--frame_idx", type=int, default=0,
-                   help="frame index to render against (default 0)")
+    p.add_argument(
+        "--config_name",
+        required=True,
+        type=str,
+        help="Hydra config name, e.g. apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix",
+    )
+    p.add_argument("--path", required=True, type=str, help="dataset manifest path (overrides conf.path)")
+    p.add_argument("--frame_idx", type=int, default=0, help="frame index to render against (default 0)")
     p.add_argument("--output_dir", required=True, type=Path)
-    p.add_argument("--ckpt", type=str, default=None,
-                   help="optional ckpt to load instead of fresh init "
-                        "(post-training validation)")
-    p.add_argument("--bg_subsample", type=int, default=5000,
-                   help="random subsample of bg dots to overlay (default 5000)")
+    p.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="optional ckpt to load instead of fresh init " "(post-training validation)",
+    )
+    p.add_argument(
+        "--bg_subsample", type=int, default=5000, help="random subsample of bg dots to overlay (default 5000)"
+    )
     args = p.parse_args(argv)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -143,6 +156,7 @@ def main(argv=None) -> int:
     # NCore-specific kwargs: load_aux_masks, val_frame_interval, downsample,
     # cam/lidar IDs, etc.).
     import threedgrut.datasets as datasets
+
     dataset, _val_dataset = datasets.make(conf.dataset.type, conf, ray_jitter=None)
 
     # 3. Build LayeredGaussians + init layers
@@ -170,6 +184,7 @@ def main(argv=None) -> int:
     else:
         # Init bg from LiDAR (mirror trainer.setup_training T3 path L327-356).
         from threedgrut.datasets.utils import PointCloud
+
         pc = PointCloud.from_sequence(
             list(dataset.get_point_clouds(step_frame=1, non_dynamic_points_only=True)),
             device="cpu",
@@ -180,36 +195,49 @@ def main(argv=None) -> int:
             idxs = torch.randperm(len(pc.xyz_end), generator=rng)[:n_init]
             pc = pc.selected_idxs(idxs)
         observer_points = torch.tensor(
-            dataset.get_observer_points(), dtype=torch.float32, device=device,
+            dataset.get_observer_points(),
+            dtype=torch.float32,
+            device=device,
         )
         if "background" in model.layers:
             model.layers["background"].init_from_lidar(pc, observer_points)
-            print(f"[frame0] bg layer initialized: "
-                  f"{model.layers['background'].num_gaussians} particles", flush=True)
+            print(
+                f"[frame0] bg layer initialized: " f"{model.layers['background'].num_gaussians} particles", flush=True
+            )
 
         # Init road (BEV-grid + KNN, optional). init_road_layer returns
         # (positions, rotations, scales, densities, colors) so we unpack.
         if "road" in model.layers:
             from threedgrut.layers.road_init import init_road_layer
+
             road_pts, _road_rgb = dataset.get_road_lidar_points()
             traj_pts = torch.tensor(
-                dataset.get_observer_points(), dtype=torch.float32, device=device,
+                dataset.get_observer_points(),
+                dtype=torch.float32,
+                device=device,
             )
             r_pos, r_rot, r_sca, r_den, r_col = init_road_layer(
-                road_pts.to(device), traj_pts,
+                road_pts.to(device),
+                traj_pts,
             )
             model.init_layer_from_points(
-                "road", r_pos, rotations=r_rot, scales=r_sca,
-                densities=r_den, colors=r_col, setup_optimizer=False,
+                "road",
+                r_pos,
+                rotations=r_rot,
+                scales=r_sca,
+                densities=r_den,
+                colors=r_col,
+                setup_optimizer=False,
             )
-            print(f"[frame0] road layer initialized: {r_pos.shape[0]} particles",
-                  flush=True)
+            print(f"[frame0] road layer initialized: {r_pos.shape[0]} particles", flush=True)
 
         # Init dyn_rigids + populate tracks
         if "dynamic_rigids" in model.layers:
             import ncore.data as _nd
+
             from threedgrut.datasets.tracks_loader import load_tracks_from_ncore_cuboids
             from threedgrut.layers.dynamic_rigid_init import init_dynamic_rigid_layer
+
             loader = dataset.sequence_loaders[dataset.sequence_id]
             ref_cam = dataset.camera_ids[0]
             ref_sensor = dataset.sequence_camera_sensors[dataset.sequence_id][ref_cam]
@@ -236,34 +264,39 @@ def main(argv=None) -> int:
                         "class": info["class"],
                     }
                 d_pos, d_track_ids, _ = init_dynamic_rigid_layer(
-                    tracks_cpu, dyn_pts_cpu, max_pts_per_track=5_000,
+                    tracks_cpu,
+                    dyn_pts_cpu,
+                    max_pts_per_track=5_000,
                 )
                 model.init_layer_from_points(
-                    "dynamic_rigids", d_pos.to(device),
-                    track_ids=d_track_ids.to(device), setup_optimizer=False,
+                    "dynamic_rigids",
+                    d_pos.to(device),
+                    track_ids=d_track_ids.to(device),
+                    setup_optimizer=False,
                 )
-                print(f"[frame0] dyn_rigids layer initialized: {d_pos.shape[0]} particles",
-                      flush=True)
+                print(f"[frame0] dyn_rigids layer initialized: {d_pos.shape[0]} particles", flush=True)
 
     # 4. Get frame batch (use frame_idx)
     raw_batch = dataset[args.frame_idx]
     gpu_batch = dataset.get_gpu_batch_with_intrinsics(raw_batch)
     H, W = int(gpu_batch.rgb_gt.shape[1]), int(gpu_batch.rgb_gt.shape[2])
-    print(f"[frame0] frame {args.frame_idx} | H={H} W={W} | "
-          f"ts_us={getattr(gpu_batch, 'timestamp_us', -1)} | "
-          f"cam_idx={getattr(gpu_batch, 'camera_idx', -1)}",
-          flush=True)
+    print(
+        f"[frame0] frame {args.frame_idx} | H={H} W={W} | "
+        f"ts_us={getattr(gpu_batch, 'timestamp_us', -1)} | "
+        f"cam_idx={getattr(gpu_batch, 'camera_idx', -1)}",
+        flush=True,
+    )
 
     ftheta_dict = getattr(gpu_batch, "intrinsics_FThetaCameraModelParameters", None)
     if ftheta_dict is None:
         raise RuntimeError(
-            "Batch has no intrinsics_FThetaCameraModelParameters — "
-            "current validation only supports FTheta cameras."
+            "Batch has no intrinsics_FThetaCameraModelParameters — " "current validation only supports FTheta cameras."
         )
     T_c2w = gpu_batch.T_to_world[0].detach().cpu().numpy()
 
     # 5. Build FTheta projector (numpy)
     from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
+
     # ftheta_dict from NCore: angle_to_pixeldist_poly list, principal_point list,
     # resolution list, max_angle scalar. FthetaForwardProjector accepts dict directly.
     projector = FthetaForwardProjector(ftheta_dict)
@@ -274,7 +307,7 @@ def main(argv=None) -> int:
     # so we PRE-undo the projector's flip by sending c2w @ FLIP^-1.
     # FLIP_VISER_TO_OPENCV = diag([1, 1, -1, 1]), self-inverse.
     flip = np.diag([1.0, 1.0, -1.0, 1.0])
-    c2w_for_projector = T_c2w @ flip   # projector applies @ flip again → cancels
+    c2w_for_projector = T_c2w @ flip  # projector applies @ flip again → cancels
 
     # 6. GT image → PIL
     rgb_gt = gpu_batch.rgb_gt[0]  # [H, W, 3]
@@ -285,10 +318,11 @@ def main(argv=None) -> int:
     # 7. Cuboid wireframes (FTheta-projected)
     pil_cuboids = pil_gt.copy()
     from threedgrut_playground.utils.cuboid import (
-        cuboid_world_edges,
-        class_color,
         UNIT_CUBE_EDGES,
+        class_color,
+        cuboid_world_edges,
     )
+
     n_cuboids_drawn = 0
     if model.tracks_poses:
         idx = model._resolve_pose_idx(
@@ -313,8 +347,7 @@ def main(argv=None) -> int:
                 t_lin = np.linspace(0, 1, 21)
                 pts = seg[0:1] + (seg[1:2] - seg[0:1]) * t_lin[:, None]
                 polylines.append(pts.astype(np.float64))
-            results = projector.project_polylines(polylines, c2w_for_projector,
-                                                  subdivide_n=1)
+            results = projector.project_polylines(polylines, c2w_for_projector, subdivide_n=1)
             cls = meta.get("class", "unknown")
             col_f = class_color(str(cls))
             col = tuple(int(round(c * 255)) for c in col_f)
@@ -322,8 +355,10 @@ def main(argv=None) -> int:
                 _draw_polyline(pil_cuboids, uv, vis, col, width=2)
             n_cuboids_drawn += 1
     pil_cuboids.save(args.output_dir / "out_1_cuboids.png")
-    print(f"[frame0] saved {args.output_dir / 'out_1_cuboids.png'} "
-          f"({n_cuboids_drawn} active cuboids drawn)", flush=True)
+    print(
+        f"[frame0] saved {args.output_dir / 'out_1_cuboids.png'} " f"({n_cuboids_drawn} active cuboids drawn)",
+        flush=True,
+    )
 
     # 8. Sseg dynamic mask overlay
     pil_sseg = pil_gt.copy()
@@ -343,8 +378,10 @@ def main(argv=None) -> int:
         # Sanity check: dataset sometimes stores mask transposed relative to
         # image. Image PIL array is (H, W, 3); mask must be (H, W).
         if mask_np.shape != (H, W):
-            print(f"[frame0] sseg mask shape {mask_np.shape} differs from "
-                  f"image (H={H}, W={W}); transposing.", flush=True)
+            print(
+                f"[frame0] sseg mask shape {mask_np.shape} differs from " f"image (H={H}, W={W}); transposing.",
+                flush=True,
+            )
             mask_np = mask_np.T
         _draw_mask_overlay(pil_sseg, mask_np, color=(255, 0, 0), alpha=0.45)
     pil_sseg.save(args.output_dir / "out_2_sseg.png")
@@ -357,8 +394,7 @@ def main(argv=None) -> int:
     bg_layer = model.layers["background"]
     bg_pos_np = bg_layer.positions.detach().cpu().numpy()
     uv_bg, vis_bg = projector.project_points(bg_pos_np, c2w_for_projector)
-    _draw_dots(pil_lidar, uv_bg, vis_bg, color=(80, 120, 255), radius=1,
-               subsample=args.bg_subsample)
+    _draw_dots(pil_lidar, uv_bg, vis_bg, color=(80, 120, 255), radius=1, subsample=args.bg_subsample)
 
     if "dynamic_rigids" in model.layers:
         dyn = model.layers["dynamic_rigids"]
@@ -383,22 +419,27 @@ def main(argv=None) -> int:
                     continue
                 pose = model.tracks_poses[tid][idx_t].detach().cpu().numpy()
                 pts_h = np.concatenate(
-                    [dyn_local[sel], np.ones((int(sel.sum()), 1))], axis=-1,
+                    [dyn_local[sel], np.ones((int(sel.sum()), 1))],
+                    axis=-1,
                 )
                 dyn_world[sel] = (pose @ pts_h.T).T[:, :3]
             uv_dyn, vis_dyn = projector.project_points(dyn_world, c2w_for_projector)
             _draw_dots(pil_lidar, uv_dyn, vis_dyn, color=(255, 80, 80), radius=2)
     pil_lidar.save(args.output_dir / "out_3_lidar_init.png")
-    print(f"[frame0] saved {args.output_dir / 'out_3_lidar_init.png'} "
-          f"(bg subsampled to {args.bg_subsample} dots)", flush=True)
+    print(
+        f"[frame0] saved {args.output_dir / 'out_3_lidar_init.png'} " f"(bg subsampled to {args.bg_subsample} dots)",
+        flush=True,
+    )
 
     # 10. Combined Gaussian-center overlay (same as #9 since centers == LiDAR
     # init points at iter 0; differs after training).
     # In ckpt mode the layer positions have drifted, so this is the post-train
     # projected centers.
     pil_lidar.save(args.output_dir / "out_4_gaussian_centers.png")
-    print(f"[frame0] saved {args.output_dir / 'out_4_gaussian_centers.png'} "
-          f"(== out_3 unless --ckpt is passed)", flush=True)
+    print(
+        f"[frame0] saved {args.output_dir / 'out_4_gaussian_centers.png'} " f"(== out_3 unless --ckpt is passed)",
+        flush=True,
+    )
 
     print("[frame0] DONE")
     return 0

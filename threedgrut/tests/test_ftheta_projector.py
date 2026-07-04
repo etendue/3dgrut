@@ -5,14 +5,13 @@ Calibration anchor at the end pins the Phase 0 probe result
 (see docs/T8_artifacts/B2_calibration_probe_log.md). If that test
 regresses, the convention has drifted and the overlay will be misaligned.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from threedgrut_playground.utils.ftheta_intrinsics import (
-    ftheta_pixels_to_camera_rays,
-)
+from threedgrut_playground.utils.ftheta_intrinsics import ftheta_pixels_to_camera_rays
 from threedgrut_playground.utils.ftheta_projector import (
     FLIP_VISER_TO_OPENCV,
     FthetaForwardProjector,
@@ -28,22 +27,20 @@ def _synthetic_ftheta_dict():
     is well-defined for the math tests.
     """
     return {
-        "resolution":              np.array([1920, 1080], dtype=np.int64),
-        "shutter_type":            "ROLLING_TOP_TO_BOTTOM",
-        "principal_point":         np.array([960.0, 540.0], dtype=np.float32),
-        "reference_poly":          "ANGLE_TO_PIXELDIST",
+        "resolution": np.array([1920, 1080], dtype=np.int64),
+        "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+        "principal_point": np.array([960.0, 540.0], dtype=np.float32),
+        "reference_poly": "ANGLE_TO_PIXELDIST",
         # angle (rad) → r_pix: ~800 * angle (near-linear fisheye for small θ).
-        "angle_to_pixeldist_poly": np.array(
-            [0.0, 800.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        "angle_to_pixeldist_poly": np.array([0.0, 800.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
         # r_pix → angle: ~r_pix / 800 (matching inverse for roundtrip test).
-        "pixeldist_to_angle_poly": np.array(
-            [0.0, 1.0 / 800.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        "pixeldist_to_angle_poly": np.array([0.0, 1.0 / 800.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
         # Use a generous 89° max_angle in the synthetic dict so the linear
         # poly (which doesn't compress angles at the edge the way NCore's
         # quintic does) still keeps all image corners in FOV for the
         # roundtrip test. NCore's real ckpt uses ~70° + a non-linear poly.
-        "max_angle":               np.pi / 2 - 0.01,
-        "linear_cde":              np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        "max_angle": np.pi / 2 - 0.01,
+        "linear_cde": np.array([1.0, 0.0, 0.0], dtype=np.float32),
     }
 
 
@@ -81,7 +78,7 @@ def test_project_unproject_roundtrip():
     """
     ftheta = _synthetic_ftheta_dict()
     proj = FthetaForwardProjector(ftheta)
-    rays_hw = ftheta_pixels_to_camera_rays(ftheta)        # (H, W, 3)
+    rays_hw = ftheta_pixels_to_camera_rays(ftheta)  # (H, W, 3)
     H, W = rays_hw.shape[:2]
 
     # Sample 100 pixels: 10x10 grid avoiding image borders.
@@ -96,7 +93,7 @@ def test_project_unproject_roundtrip():
     # With identity viser c2w, world (x,y,z) → cam (x, y, -z).
     # So a cam-frame point P_cam = ray * 5 corresponds to world (x, y, -z).
     world_pts = cam_dirs * 5.0
-    world_pts[:, 2] *= -1                                   # invert Z back to world
+    world_pts[:, 2] *= -1  # invert Z back to world
 
     uv_back, vis = proj.project_points(world_pts, _identity_c2w_viser())
     assert vis.all(), f"all sampled pixels must roundtrip; visible={vis.sum()}/{len(vis)}"
@@ -164,9 +161,7 @@ def test_polyline_subdivision_endpoints_preserved():
     """N-vertex polyline + subdivide_n=k → 1 + (N-1)*k vertices, with
     endpoints exactly preserved.
     """
-    pl = np.array([[0.0, 0.0, 0.0],
-                   [1.0, 2.0, 3.0],
-                   [4.0, 5.0, 6.0]], dtype=np.float64)         # N=3
+    pl = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64)  # N=3
     sub = _subdivide_polyline(pl, n=5)
     assert sub.shape == (1 + 2 * 5, 3), f"got {sub.shape}"
     np.testing.assert_array_equal(sub[0], pl[0])
@@ -178,8 +173,7 @@ def test_polyline_subdivision_endpoints_preserved():
 
 def test_polyline_subdivision_intermediate_linear():
     """Subdivided intermediate vertices should be linear interpolants."""
-    pl = np.array([[0.0, 0.0, 0.0],
-                   [10.0, 0.0, 0.0]], dtype=np.float64)
+    pl = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], dtype=np.float64)
     sub = _subdivide_polyline(pl, n=10)
     # Should have 11 vertices at x = 0, 1, 2, ..., 10.
     assert sub.shape == (11, 3)
@@ -200,21 +194,19 @@ def test_calibration_anchor_phase0_combo_d():
     """
     # Reproduce Phase 0 probe inputs (snapshot from B2_calibration_probe.json):
     ftheta = {
-        "resolution":              np.array([1920, 1080], dtype=np.int64),
-        "shutter_type":            "ROLLING_TOP_TO_BOTTOM",
-        "principal_point":         np.array([960.31537, 545.4275],
-                                            dtype=np.float32),
-        "reference_poly":          "ANGLE_TO_PIXELDIST",
+        "resolution": np.array([1920, 1080], dtype=np.int64),
+        "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+        "principal_point": np.array([960.31537, 545.4275], dtype=np.float32),
+        "reference_poly": "ANGLE_TO_PIXELDIST",
         "angle_to_pixeldist_poly": np.array(
-            [0.0, 927.5706787109375, 5.75466251373291,
-             -37.59929656982422, 24.825389862060547,
-             -8.416096687316895], dtype=np.float32),
+            [0.0, 927.5706787109375, 5.75466251373291, -37.59929656982422, 24.825389862060547, -8.416096687316895],
+            dtype=np.float32,
+        ),
         "pixeldist_to_angle_poly": np.array(
-            [0.0, 1.0782e-3, -8.5288e-9, 5.5028e-11,
-             -4.1299e-14, 1.6549e-17], dtype=np.float32),
-        "max_angle":               1.2205,
-        "linear_cde":              np.array([1.0016, 0.0, 0.0],
-                                            dtype=np.float32),
+            [0.0, 1.0782e-3, -8.5288e-9, 5.5028e-11, -4.1299e-14, 1.6549e-17], dtype=np.float32
+        ),
+        "max_angle": 1.2205,
+        "linear_cde": np.array([1.0016, 0.0, 0.0], dtype=np.float32),
     }
     proj = FthetaForwardProjector(ftheta)
 
@@ -225,14 +217,17 @@ def test_calibration_anchor_phase0_combo_d():
     # After D-combo projection these should have:
     #   - bottom verts → v > cy   (lower on the image)
     #   - top    verts → v < cy   (higher on the image)
-    cuboid_verts_world = np.array([
-        # bottom (low world y already-down, so cam-frame y > 0 → v > cy)
-        [-1.0, +0.7, -75.0],
-        [+1.0, +0.7, -75.0],
-        # top (high world -y → cam-frame y < 0 → v < cy)
-        [-1.0, -0.7, -75.0],
-        [+1.0, -0.7, -75.0],
-    ], dtype=np.float64)
+    cuboid_verts_world = np.array(
+        [
+            # bottom (low world y already-down, so cam-frame y > 0 → v > cy)
+            [-1.0, +0.7, -75.0],
+            [+1.0, +0.7, -75.0],
+            # top (high world -y → cam-frame y < 0 → v < cy)
+            [-1.0, -0.7, -75.0],
+            [+1.0, -0.7, -75.0],
+        ],
+        dtype=np.float64,
+    )
 
     uv, vis = proj.project_points(cuboid_verts_world, _identity_c2w_viser())
 
@@ -241,35 +236,35 @@ def test_calibration_anchor_phase0_combo_d():
 
     # Bottom verts (world y > 0) have v > cy; top verts have v < cy.
     v_bottom = uv[:2, 1]
-    v_top    = uv[2:, 1]
+    v_top = uv[2:, 1]
     assert v_bottom.min() > ftheta["principal_point"][1], (
-        f"bottom verts must be below cy={ftheta['principal_point'][1]:.1f}; "
-        f"got v_bottom={v_bottom}"
+        f"bottom verts must be below cy={ftheta['principal_point'][1]:.1f}; " f"got v_bottom={v_bottom}"
     )
     assert v_top.max() < ftheta["principal_point"][1], (
-        f"top verts must be above cy={ftheta['principal_point'][1]:.1f}; "
-        f"got v_top={v_top}"
+        f"top verts must be above cy={ftheta['principal_point'][1]:.1f}; " f"got v_top={v_top}"
     )
 
     # u is symmetric (world ±1 → cam ±1), so the 2 left verts should mirror
     # the 2 right verts around cx.
-    np.testing.assert_allclose(uv[0, 0] + uv[1, 0],
-                               2.0 * ftheta["principal_point"][0], atol=1e-3)
+    np.testing.assert_allclose(uv[0, 0] + uv[1, 0], 2.0 * ftheta["principal_point"][0], atol=1e-3)
 
     # Confirm FLIP_VISER_TO_OPENCV is what we pinned in Phase 0.
     expected = np.diag([1.0, 1.0, -1.0, 1.0])
-    np.testing.assert_array_equal(FLIP_VISER_TO_OPENCV, expected,
-                                  err_msg="FLIP_VISER_TO_OPENCV changed — "
-                                          "Phase 0 calibration is invalidated. "
-                                          "Re-run scripts/probe_ftheta_overlay.py.")
+    np.testing.assert_array_equal(
+        FLIP_VISER_TO_OPENCV,
+        expected,
+        err_msg="FLIP_VISER_TO_OPENCV changed — "
+        "Phase 0 calibration is invalidated. "
+        "Re-run scripts/probe_ftheta_overlay.py.",
+    )
 
 
 # ---- Test 8: horner ascending matches naive sum --------------------------
 def test_horner_ascending_matches_polyval():
     """_horner_ascending(poly, x) ≡ sum(poly[k] * x^k for k)."""
-    poly = np.array([1.0, 2.0, 3.0, 4.0])    # 1 + 2x + 3x² + 4x³
+    poly = np.array([1.0, 2.0, 3.0, 4.0])  # 1 + 2x + 3x² + 4x³
     x = np.array([0.0, 1.0, 0.5, -1.0])
-    expected = poly[0] + poly[1] * x + poly[2] * x ** 2 + poly[3] * x ** 3
+    expected = poly[0] + poly[1] * x + poly[2] * x**2 + poly[3] * x**3
     actual = _horner_ascending(poly, x)
     np.testing.assert_allclose(actual, expected, atol=1e-12)
 
@@ -288,15 +283,15 @@ def test_project_polylines_split_back():
     """3 polylines in → 3 results out, each with correct subdivided length."""
     proj = FthetaForwardProjector(_synthetic_ftheta_dict())
     pls = [
-        np.array([[0, 0, -5], [1, 0, -5]], dtype=np.float64),       # M=2
+        np.array([[0, 0, -5], [1, 0, -5]], dtype=np.float64),  # M=2
         np.array([[0, 0, -10], [0, 1, -10], [0, 2, -10]], dtype=np.float64),  # M=3
-        np.array([[2, 2, -8]], dtype=np.float64),                    # M=1 edge case
+        np.array([[2, 2, -8]], dtype=np.float64),  # M=1 edge case
     ]
     out = proj.project_polylines(pls, _identity_c2w_viser(), subdivide_n=4)
     assert len(out) == 3
-    assert out[0][0].shape == (1 + 1 * 4, 2)     # M=2 → 5 verts
-    assert out[1][0].shape == (1 + 2 * 4, 2)     # M=3 → 9 verts
-    assert out[2][0].shape == (1, 2)              # M=1 → 1 vert passthrough
+    assert out[0][0].shape == (1 + 1 * 4, 2)  # M=2 → 5 verts
+    assert out[1][0].shape == (1 + 2 * 4, 2)  # M=3 → 9 verts
+    assert out[2][0].shape == (1, 2)  # M=1 → 1 vert passthrough
 
 
 # ---- Test 11: missing required key raises --------------------------------
@@ -320,15 +315,12 @@ def test_flip_identity_parity_with_default_viser_flip():
     """
     ftheta = _synthetic_ftheta_dict()
     proj_default = FthetaForwardProjector(ftheta)  # flip = diag([1,1,-1,1])
-    proj_no_flip = FthetaForwardProjector(
-        ftheta, world_to_camera_flip=np.eye(4))    # NCore raw-camera convention
+    proj_no_flip = FthetaForwardProjector(ftheta, world_to_camera_flip=np.eye(4))  # NCore raw-camera convention
 
     # In default path: world (0,0,-10) → cam (0,0,+10) → (cx,cy).
     # In no-flip path: world (0,0,+10) → cam (0,0,+10) → (cx,cy).
-    uv_d, vis_d = proj_default.project_points(
-        np.array([[0.0, 0.0, -10.0]]), np.eye(4))
-    uv_n, vis_n = proj_no_flip.project_points(
-        np.array([[0.0, 0.0, +10.0]]), np.eye(4))
+    uv_d, vis_d = proj_default.project_points(np.array([[0.0, 0.0, -10.0]]), np.eye(4))
+    uv_n, vis_n = proj_no_flip.project_points(np.array([[0.0, 0.0, +10.0]]), np.eye(4))
 
     assert vis_d[0] and vis_n[0]
     np.testing.assert_allclose(uv_d, uv_n, atol=1e-9)

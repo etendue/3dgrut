@@ -16,6 +16,7 @@ Coverage:
 
 The conftest pattern matches test_track_albedo_scale_params.py.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,9 +28,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -38,40 +37,46 @@ def real_conf():
         return compose(config_name="apps/ncore_3dgut_mcmc")
 
 
-def _build_model(real_conf, *, albedo: bool, scale: bool, warmup: int = 50,
-                 albedo_lr: float = 1e-5, scale_lr: float = 1e-5):
-    extra = {"track_warmup_steps": warmup,
-             "track_albedo_lr": albedo_lr, "track_scale_lr": scale_lr}
+def _build_model(
+    real_conf, *, albedo: bool, scale: bool, warmup: int = 50, albedo_lr: float = 1e-5, scale_lr: float = 1e-5
+):
+    extra = {"track_warmup_steps": warmup, "track_albedo_lr": albedo_lr, "track_scale_lr": scale_lr}
     if albedo:
         extra["optimize_track_albedo"] = True
     if scale:
         extra["optimize_track_scale"] = True
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000,
-                  scale_prior=(0.05, 0.05, 0.05), extra=extra),
+        LayerSpec(
+            name="dynamic_rigids", layer_id=2, max_n_particles=200_000, scale_prior=(0.05, 0.05, 0.05), extra=extra
+        ),
     ]
     eye = torch.eye(4).expand(5, 4, 4).clone()
     tracks = {
-        "alice": {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool),
-                  "class": "automobile", "size": torch.tensor([4.0, 2.0, 1.5])},
-        "bob":   {"poses": eye.clone(), "active": torch.ones(5, dtype=torch.bool),
-                  "class": "automobile", "size": torch.tensor([4.0, 2.0, 1.5])},
+        "alice": {
+            "poses": eye.clone(),
+            "active": torch.ones(5, dtype=torch.bool),
+            "class": "automobile",
+            "size": torch.tensor([4.0, 2.0, 1.5]),
+        },
+        "bob": {
+            "poses": eye.clone(),
+            "active": torch.ones(5, dtype=torch.bool),
+            "class": "automobile",
+            "size": torch.tensor([4.0, 2.0, 1.5]),
+        },
     }
-    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
-                             tracks=tracks)
-    model.init_layer_from_points("background", torch.randn(5, 3),
-                                 setup_optimizer=False)
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0, tracks=tracks)
+    model.init_layer_from_points("background", torch.randn(5, 3), setup_optimizer=False)
     track_names = sorted(tracks.keys())
     all_pts = []
     all_ids = []
     for tid in track_names:
         all_pts.append(torch.zeros(4, 3))
         all_ids.append(torch.full((4,), track_names.index(tid), dtype=torch.long))
-    model.init_layer_from_points("dynamic_rigids",
-                                 torch.cat(all_pts),
-                                 track_ids=torch.cat(all_ids),
-                                 setup_optimizer=False)
+    model.init_layer_from_points(
+        "dynamic_rigids", torch.cat(all_pts), track_ids=torch.cat(all_ids), setup_optimizer=False
+    )
     return model
 
 
@@ -105,8 +110,7 @@ def test_maybe_activate_track_params_off_mode_is_noop(real_conf):
 
 # --- (b/c/d) optimizer attach -----------------------------------------------
 def test_setup_optimizer_attaches_track_optim_when_enabled(real_conf):
-    model = _build_model(real_conf, albedo=True, scale=True,
-                         albedo_lr=2.0e-5, scale_lr=3.0e-5)
+    model = _build_model(real_conf, albedo=True, scale=True, albedo_lr=2.0e-5, scale_lr=3.0e-5)
     # Per-layer particle optimizers were already set during init_layer_from_points;
     # explicit setup_optimizer() triggers sky_envmap + V3-L8/L9 attach.
     model.setup_optimizer()
@@ -169,8 +173,7 @@ def test_layered_optimizer_view_no_track_optim_when_off(real_conf):
 
 # --- (f) optimizer.step actually mutates the tables once activated ---------
 def test_track_optim_step_mutates_table_after_warmup(real_conf):
-    model = _build_model(real_conf, albedo=True, scale=False, warmup=0,
-                         albedo_lr=1e-2)
+    model = _build_model(real_conf, albedo=True, scale=False, warmup=0, albedo_lr=1e-2)
     model.setup_optimizer()
     # Activate immediately (warmup=0).
     model.maybe_activate_track_params(0)

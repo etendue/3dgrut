@@ -13,6 +13,7 @@
   python view_pointcloud.py --input test_set_30000_color_Background.ply --port 8091
   python view_pointcloud.py --input xxx_gs_Background.ply --max_points 1500000
 """
+
 import argparse
 import os
 import time
@@ -24,6 +25,7 @@ C0 = 0.28209479177387814  # SH degree-0 基函数常数 (rgb = f_dc * C0 + 0.5)
 
 def load_ply(path):
     from plyfile import PlyData
+
     print(f"[load] reading PLY {path} ...", flush=True)
     ply = PlyData.read(path)
     v = ply["vertex"].data
@@ -44,6 +46,7 @@ def load_ply(path):
 
 def load_usd(path):
     from pxr import Usd, UsdGeom
+
     print(f"[load] opening USD {path} ...", flush=True)
     stage = Usd.Stage.Open(path)
     prim = next((p for p in stage.Traverse() if p.GetTypeName() == "Points"), None)
@@ -117,9 +120,7 @@ def main():
         g_sh = server.gui.add_dropdown(
             "shape", options=["circle", "square", "rounded", "diamond", "sparkle"], initial_value="circle"
         )
-        g_up = server.gui.add_dropdown(
-            "up axis", options=["+z", "-z", "+y", "-y", "+x", "-x"], initial_value=args.up
-        )
+        g_up = server.gui.add_dropdown("up axis", options=["+z", "-z", "+y", "-y", "+x", "-x"], initial_value=args.up)
         server.gui.add_text("points", initial_value=f"{len(xyz):,}", disabled=True)
         server.gui.add_text("bbox diag", initial_value=f"{diag:.2f}", disabled=True)
         server.gui.add_text("color src", initial_value=src, disabled=True)

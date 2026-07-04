@@ -20,6 +20,7 @@ synthetic ckpt blob (same pattern as ``test_render_per_camera.py``) plus add
 two source-level smoke checks that catch accidental code removal from
 render.py.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -31,10 +32,7 @@ from hydra import compose, initialize_config_dir
 
 from threedgrut.layers.layer_spec import LayerSpec
 
-
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -43,8 +41,7 @@ def real_conf():
         return compose(config_name="apps/ncore_3dgut_mcmc")
 
 
-def _build_synthetic_ckpt(num_tracks: int = 3, num_frames: int = 4,
-                           scene_extent: float = 1.103) -> dict:
+def _build_synthetic_ckpt(num_tracks: int = 3, num_frames: int = 4, scene_extent: float = 1.103) -> dict:
     """Mimic a v2 LayeredGaussians ckpt with viz_4d block.
 
     Shape: ``{model: {gaussians_nodes, scene_extent, sky_envmap_state},
@@ -70,13 +67,14 @@ def _build_synthetic_ckpt(num_tracks: int = 3, num_frames: int = 4,
         poses = torch.eye(4).repeat(num_frames, 1, 1)
         poses[:, 0, 3] = torch.arange(num_frames, dtype=torch.float32) + i * 10.0
         tracks[tid] = {
-            "poses":      poses,
-            "size":       torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
+            "poses": poses,
+            "size": torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
             "frame_info": torch.ones(num_frames, dtype=torch.bool),
-            "class":      "automobile",
+            "class": "automobile",
         }
     shared_ts = torch.tensor(
-        [(i + 1) * 1000 for i in range(num_frames)], dtype=torch.int64,
+        [(i + 1) * 1000 for i in range(num_frames)],
+        dtype=torch.int64,
     )
     return {
         "model": {
@@ -160,8 +158,7 @@ def test_reload_passes_scene_extent_to_ctor(real_conf):
     # layered_model.py uses object.__setattr__). Per-layer MoG also receives
     # it (line 283).
     assert abs(model.scene_extent - 2.718) < 1e-6, (
-        f"model.scene_extent={model.scene_extent} != 2.718; render.py:164 "
-        f"may have reverted to scene_extent=None"
+        f"model.scene_extent={model.scene_extent} != 2.718; render.py:164 " f"may have reverted to scene_extent=None"
     )
 
 
@@ -189,9 +186,7 @@ def test_reload_viz_4d_missing_shared_ts_skipped(real_conf):
     assert model.tracks_poses == {}
 
 
-_RENDER_PY = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "render.py")
-)
+_RENDER_PY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "render.py"))
 
 
 def _render_py_text() -> str:
@@ -232,6 +227,7 @@ def test_render_py_source_reads_scene_extent_from_ckpt():
 
 # T9.3 / V3-P1.c: source-level guards for eval-time exposure_model apply ------
 
+
 def test_render_py_source_renderer_init_accepts_exposure_model():
     """Renderer.__init__ must accept and store ``exposure_model``."""
     src = _render_py_text()
@@ -241,8 +237,7 @@ def test_render_py_source_renderer_init_accepts_exposure_model():
         "v2-style raw-vs-train mismatch."
     )
     assert "self.exposure_model = exposure_model" in src, (
-        "T9.3 regression: Renderer.__init__ stops storing exposure_model "
-        "on self. render_all can't reach it."
+        "T9.3 regression: Renderer.__init__ stops storing exposure_model " "on self. render_all can't reach it."
     )
 
 
@@ -270,24 +265,21 @@ def test_render_py_source_from_checkpoint_rebuilds_bilateral_grid():
     ckpt['exposure_state']['module']['grids'] shape + load state."""
     src = _render_py_text()
     # Construct BilateralGrid (import + ctor).
-    assert "from threedgrut.correction import BilateralGrid" in src, (
-        "T9.3 regression: from_checkpoint no longer imports BilateralGrid."
-    )
+    assert (
+        "from threedgrut.correction import BilateralGrid" in src
+    ), "T9.3 regression: from_checkpoint no longer imports BilateralGrid."
     assert "BilateralGrid(" in src
     # Read grids tensor's shape — the only thing we have at ckpt-load time.
     assert "module_state" in src and '"grids"' in src
     # Legacy v2 ckpt detection so old ExposureModel ckpts don't crash.
-    assert 'exposure_a' in src and 'exposure_b' in src, (
-        "T9.3 regression: legacy v2 ckpt path removed; loading a v2 "
-        "exposure_state.module would raise KeyError."
+    assert "exposure_a" in src and "exposure_b" in src, (
+        "T9.3 regression: legacy v2 ckpt path removed; loading a v2 " "exposure_state.module would raise KeyError."
     )
 
 
 def _trainer_py_text() -> str:
     """Read trainer.py source directly (avoids torchvision/CUDA imports)."""
-    path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "trainer.py")
-    )
+    path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "trainer.py"))
     with open(path, "r") as f:
         return f.read()
 
@@ -312,6 +304,7 @@ def test_trainer_py_passes_exposure_model_to_from_preloaded_model():
 
 # T9.4 / V3-P1.d: source-level guards for BilateralGrid health monitoring ----
 
+
 def test_trainer_py_t9_4_logs_exposure_grids_std():
     """Per log_frequency train step must emit exposure/grids_std + drift +
     lr + frozen scalars when exposure_model has a 'grids' attr (BilateralGrid)."""
@@ -324,9 +317,9 @@ def test_trainer_py_t9_4_logs_exposure_grids_std():
         "T9.4 regression: drift-from-identity gauge missing. v3_plan §2.1 "
         "退化 indicator gone — won't catch BilateralGrid absorbing tone."
     )
-    assert '"exposure/lr"' in src and '"exposure/frozen"' in src, (
-        "T9.4 regression: cosine-LR / freeze-gate trace missing."
-    )
+    assert (
+        '"exposure/lr"' in src and '"exposure/frozen"' in src
+    ), "T9.4 regression: cosine-LR / freeze-gate trace missing."
 
 
 def test_trainer_py_t9_4_logs_raw_minus_cc_gap():
@@ -353,12 +346,10 @@ def test_trainer_py_t9_4_computes_cc_psnr_in_val_metrics():
     write the gap scalars from."""
     src = _trainer_py_text()
     assert 'metrics["cc_psnr"]' in src, (
-        "T9.4 regression: cc_psnr not populated in val metrics; the val "
-        "gap scalar will silently no-op forever."
+        "T9.4 regression: cc_psnr not populated in val metrics; the val " "gap scalar will silently no-op forever."
     )
     assert "color_correct_affine" in src, (
-        "T9.4 regression: cc_psnr computation removed — gap monitoring "
-        "would emit zero or stale data."
+        "T9.4 regression: cc_psnr computation removed — gap monitoring " "would emit zero or stale data."
     )
 
 
@@ -376,10 +367,7 @@ def test_trainer_py_t9_4_computes_cc_psnr_in_val_metrics():
 # These guards pin the corrected order in both call sites.
 
 
-_ENGINE_PY = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..",
-                 "threedgrut_playground", "engine.py")
-)
+_ENGINE_PY = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "threedgrut_playground", "engine.py"))
 
 
 def _engine_py_text() -> str:
@@ -392,17 +380,16 @@ def _find_block(src: str, anchor: str, window: int = 4000) -> str:
     idx = src.find(anchor)
     if idx < 0:
         raise AssertionError(
-            f"Source anchor not found: {anchor!r} — file may have been "
-            f"refactored away from the V3 ckpt-load idiom."
+            f"Source anchor not found: {anchor!r} — file may have been " f"refactored away from the V3 ckpt-load idiom."
         )
-    return src[idx:idx + window]
+    return src[idx : idx + window]
 
 
 def test_render_py_populate_tracks_before_init_from_checkpoint():
     """render.py:from_checkpoint must call populate_tracks BEFORE
     init_from_checkpoint for the layered branch."""
     src = _render_py_text()
-    block = _find_block(src, "if conf.get(\"use_layered_model\"")
+    block = _find_block(src, 'if conf.get("use_layered_model"')
     pop_at = block.find("model.populate_tracks(tracks_dict)")
     init_at = block.find("model.init_from_checkpoint(checkpoint")
     assert pop_at > 0, "populate_tracks call missing from layered branch"
@@ -480,12 +467,15 @@ def test_populate_tracks_before_load_state_dict_preserves_learned_pose():
     # the GT pose buffer is registered.
     tids = sorted(tracks_dict.keys())
     for tid in tids:
-        assert f"_track_quat_{tid}" in model._parameters, \
-            f"populate_tracks did not register _track_quat_{tid} Parameter"
-        assert f"_track_trans_{tid}" in model._parameters, \
-            f"populate_tracks did not register _track_trans_{tid} Parameter"
-        assert f"_track_pose_gt_{tid}" in model._buffers, \
-            f"populate_tracks did not register _track_pose_gt_{tid} buffer"
+        assert (
+            f"_track_quat_{tid}" in model._parameters
+        ), f"populate_tracks did not register _track_quat_{tid} Parameter"
+        assert (
+            f"_track_trans_{tid}" in model._parameters
+        ), f"populate_tracks did not register _track_trans_{tid} Parameter"
+        assert (
+            f"_track_pose_gt_{tid}" in model._buffers
+        ), f"populate_tracks did not register _track_pose_gt_{tid} buffer"
 
     # Build a "post-training" layered_track_state where the learned quat is
     # NOT identity (different from GT init). This is what a Stage A/B 30k
@@ -500,10 +490,8 @@ def test_populate_tracks_before_load_state_dict_preserves_learned_pose():
         t = torch.tensor([[1.0, 2.0, 3.0]]).repeat(4, 1)
         fake_learned_state[f"_track_trans_{tid}"] = t.clone()
         # Keep GT pose buffer + active mask as-is (mirror Stage B ckpt).
-        fake_learned_state[f"_track_pose_gt_{tid}"] = \
-            model._buffers[f"_track_pose_gt_{tid}"].clone()
-        fake_learned_state[f"_track_active_{tid}"] = \
-            model._buffers[f"_track_active_{tid}"].clone()
+        fake_learned_state[f"_track_pose_gt_{tid}"] = model._buffers[f"_track_pose_gt_{tid}"].clone()
+        fake_learned_state[f"_track_active_{tid}"] = model._buffers[f"_track_active_{tid}"].clone()
 
     # Run the load_state_dict portion of init_from_checkpoint (mirror
     # layered_model.py L648-651).
@@ -526,16 +514,15 @@ def test_populate_tracks_before_load_state_dict_preserves_learned_pose():
             f"V3-E4.1 follow-up fix regressed: populate_tracks must run "
             f"BEFORE init_from_checkpoint's load_state_dict call."
         )
-        assert torch.allclose(t_loaded, t_expected, atol=1e-6), (
-            f"_track_trans_{tid} did NOT get loaded from state_dict."
-        )
+        assert torch.allclose(
+            t_loaded, t_expected, atol=1e-6
+        ), f"_track_trans_{tid} did NOT get loaded from state_dict."
 
         # GT pose buffer must still reflect the original tracks_dict GT
         # (load_state_dict for _track_pose_gt_ above writes the cloned
         # populate-time value back; this confirms the buffer slot exists).
         gt = model._buffers[f"_track_pose_gt_{tid}"]
-        assert gt.shape == (4, 4, 4), \
-            f"_track_pose_gt_{tid} shape changed: {gt.shape}"
+        assert gt.shape == (4, 4, 4), f"_track_pose_gt_{tid} shape changed: {gt.shape}"
 
 
 def test_load_state_dict_before_populate_drops_learned_pose_unexpected():
@@ -569,6 +556,7 @@ def test_load_state_dict_before_populate_drops_learned_pose_unexpected():
 
 
 # T9.2 fix: scheduler step paired with optim step (avoid PyTorch warn) -------
+
 
 def test_trainer_py_t9_2_scheduler_step_paired_with_optim_step():
     """T9.2 fix: exposure_scheduler.step() must be INSIDE the
@@ -616,6 +604,7 @@ def test_trainer_py_t9_2_cosine_t_max_minus_freeze():
 
 # T9.4 fix: val loop must apply exposure_model (train/val/test parity) -------
 
+
 def test_trainer_py_t9_4_val_loop_applies_exposure_model():
     """T9.4 fix: run_validation_pass must apply exposure_model after
     model.forward + post_processing, mirroring trainer.step_iter (L1712)
@@ -631,7 +620,7 @@ def test_trainer_py_t9_4_val_loop_applies_exposure_model():
     assert rvp_idx >= 0, "run_validation_pass missing"
     # Body extends to next def or end of file.
     body_end = src.find("\n    def ", rvp_idx + 5)
-    body = src[rvp_idx:body_end if body_end > 0 else len(src)]
+    body = src[rvp_idx : body_end if body_end > 0 else len(src)]
 
     assert "self.exposure_model is not None" in body, (
         "T9.4 fix regression: run_validation_pass no longer gates on "

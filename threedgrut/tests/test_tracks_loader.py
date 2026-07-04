@@ -3,6 +3,7 @@
 
 Pure stdlib + torch; runs on Mac CPU without NCore SDK.
 """
+
 from __future__ import annotations
 
 import json
@@ -22,8 +23,7 @@ def _write_manifest(payload: dict) -> str:
     return f.name
 
 
-def _make_track(id_: str, F: int = 20, extent: list = None,
-                class_: str = "vehicle") -> dict:
+def _make_track(id_: str, F: int = 20, extent: list = None, class_: str = "vehicle") -> dict:
     eye = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     return {
         "id": id_,
@@ -54,11 +54,13 @@ def test_load_tracks_basic_schema():
 
 def test_load_tracks_multiple():
     """T4.1.a: 3 tracks (vehicle + pedestrian + truck) all loaded preserving keys."""
-    manifest = {"tracks": [
-        _make_track("veh_01", F=20, class_="vehicle"),
-        _make_track("ped_07", F=20, extent=[0.5, 0.5, 1.8], class_="pedestrian"),
-        _make_track("trk_03", F=20, extent=[8.0, 2.5, 3.5], class_="truck"),
-    ]}
+    manifest = {
+        "tracks": [
+            _make_track("veh_01", F=20, class_="vehicle"),
+            _make_track("ped_07", F=20, extent=[0.5, 0.5, 1.8], class_="pedestrian"),
+            _make_track("trk_03", F=20, extent=[8.0, 2.5, 3.5], class_="truck"),
+        ]
+    }
     d = load_tracks_from_manifest(_write_manifest(manifest))
     assert set(d.keys()) == {"veh_01", "ped_07", "trk_03"}
     assert d["ped_07"]["size"].tolist() == pytest.approx([0.5, 0.5, 1.8], abs=1e-5)

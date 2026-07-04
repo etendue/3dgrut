@@ -17,6 +17,7 @@ single frame. This module pins the fix:
   3. The original ``_transform_means`` API is unchanged for backward compat
      with the three T4.3 transform tests.
 """
+
 from __future__ import annotations
 
 import os
@@ -28,9 +29,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.layers.registry import specs_from_config
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -41,22 +40,25 @@ def real_conf():
 
 def _with_dyn_layer(conf):
     from copy import deepcopy
+
     c = deepcopy(conf)
     c.layers = {"enabled": ["background", "dynamic_rigids"]}
     return c
 
 
-def _make_model_with_two_tracks(conf, alice_active_at_frame_0: bool,
-                                bob_active_at_frame_0: bool):
+def _make_model_with_two_tracks(conf, alice_active_at_frame_0: bool, bob_active_at_frame_0: bool):
     """Build a LayeredGaussians with two tracks (alice, bob) where
     each has known activity at frame 0."""
-    pose_a = torch.eye(4); pose_a[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
-    pose_b = torch.eye(4); pose_b[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
+    pose_a = torch.eye(4)
+    pose_a[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
+    pose_b = torch.eye(4)
+    pose_b[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
     tracks = {
         "alice": {
             "poses": pose_a.unsqueeze(0).expand(3, 4, 4).clone(),
             "active": torch.tensor(
-                [alice_active_at_frame_0, True, True], dtype=torch.bool,
+                [alice_active_at_frame_0, True, True],
+                dtype=torch.bool,
             ),
             "size": torch.tensor([2.0, 2.0, 2.0]),
             "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
@@ -64,21 +66,24 @@ def _make_model_with_two_tracks(conf, alice_active_at_frame_0: bool,
         "bob": {
             "poses": pose_b.unsqueeze(0).expand(3, 4, 4).clone(),
             "active": torch.tensor(
-                [bob_active_at_frame_0, True, True], dtype=torch.bool,
+                [bob_active_at_frame_0, True, True],
+                dtype=torch.bool,
             ),
             "size": torch.tensor([2.0, 2.0, 2.0]),
             "cam_timestamps_us": torch.tensor([1000, 2000, 3000], dtype=torch.int64),
         },
     }
-    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0, tracks=tracks)
     model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
     # Each track owns 3 particles (object-local position = origin so we can
     # easily verify which world translation gets applied).
     positions = torch.zeros(6, 3)
     track_ids = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.int64)  # 0=alice, 1=bob
     model.init_layer_from_points(
-        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+        "dynamic_rigids",
+        positions,
+        track_ids=track_ids,
+        setup_optimizer=False,
     )
     return model
 
@@ -86,6 +91,7 @@ def _make_model_with_two_tracks(conf, alice_active_at_frame_0: bool,
 # -----------------------------------------------------------------------------
 # _transform_means_and_active
 # -----------------------------------------------------------------------------
+
 
 def test_transform_means_and_active_all_active(real_conf):
     """Both tracks active at frame 0 → active_mask all True."""
@@ -135,7 +141,10 @@ def test_transform_means_and_active_rotation_composition_identity_pose(real_conf
     # default per-particle rotation is identity (1, 0, 0, 0)
     rot_local = model.layers["dynamic_rigids"].rotation
     _, _, rot_world = model._transform_means_and_active(
-        local, track_ids, rotations_local=rot_local, frame_id=0,
+        local,
+        track_ids,
+        rotations_local=rot_local,
+        frame_id=0,
     )
     assert rot_world is not None
     assert rot_world.shape == rot_local.shape
@@ -150,15 +159,18 @@ def test_transform_means_and_active_rotation_composition_yaw(real_conf):
     With q_local = identity (1, 0, 0, 0), q_world should equal q_pose
     (rotation about Z by π/2 → quat = (cos π/4, 0, 0, sin π/4))."""
     import math
+
     # Build tracks dict explicitly with a yaw=π/2 pose
     yaw = math.pi / 2.0
     cz, sz = math.cos(yaw), math.sin(yaw)
-    pose_yaw = torch.tensor([
-        [cz, -sz, 0.0, 0.0],
-        [sz,  cz, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ])
+    pose_yaw = torch.tensor(
+        [
+            [cz, -sz, 0.0, 0.0],
+            [sz, cz, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
     tracks = {
         "v0": {
             "poses": pose_yaw.unsqueeze(0).expand(3, 4, 4).clone(),
@@ -168,27 +180,34 @@ def test_transform_means_and_active_rotation_composition_yaw(real_conf):
         }
     }
     conf = _with_dyn_layer(real_conf)
-    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0, tracks=tracks)
     model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
     positions = torch.zeros(4, 3)
     track_ids = torch.zeros(4, dtype=torch.int64)
     model.init_layer_from_points(
-        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+        "dynamic_rigids",
+        positions,
+        track_ids=track_ids,
+        setup_optimizer=False,
     )
     rot_local = model.layers["dynamic_rigids"].rotation  # all identity (1,0,0,0)
     _, _, rot_world = model._transform_means_and_active(
-        positions, track_ids, rotations_local=rot_local, frame_id=0,
+        positions,
+        track_ids,
+        rotations_local=rot_local,
+        frame_id=0,
     )
     # Expected world quat = yaw-π/2 Z rotation = (cos π/4, 0, 0, sin π/4)
     expected_w = math.cos(math.pi / 4)
     expected_z = math.sin(math.pi / 4)
     # All 4 particles share the same track, so all rotations should be identical
     for i in range(4):
-        assert math.isclose(float(rot_world[i, 0]), expected_w, abs_tol=1e-5), \
-            f"q_world[{i}].w = {rot_world[i, 0]} (expected {expected_w})"
-        assert math.isclose(float(rot_world[i, 3]), expected_z, abs_tol=1e-5), \
-            f"q_world[{i}].z = {rot_world[i, 3]} (expected {expected_z})"
+        assert math.isclose(
+            float(rot_world[i, 0]), expected_w, abs_tol=1e-5
+        ), f"q_world[{i}].w = {rot_world[i, 0]} (expected {expected_w})"
+        assert math.isclose(
+            float(rot_world[i, 3]), expected_z, abs_tol=1e-5
+        ), f"q_world[{i}].z = {rot_world[i, 3]} (expected {expected_z})"
         # x, y components should be ~0
         assert abs(float(rot_world[i, 1])) < 1e-5
         assert abs(float(rot_world[i, 2])) < 1e-5
@@ -209,10 +228,13 @@ def test_fused_view_applies_rotation_composition(real_conf):
     """fused_view should override the rotation field with q_world for the
     dynamic_rigids layer when tracks are populated + a frame is provided."""
     import math
+
     yaw = math.pi
     pose_pi = torch.eye(4)
-    pose_pi[0, 0] = math.cos(yaw); pose_pi[0, 1] = -math.sin(yaw)
-    pose_pi[1, 0] = math.sin(yaw); pose_pi[1, 1] = math.cos(yaw)
+    pose_pi[0, 0] = math.cos(yaw)
+    pose_pi[0, 1] = -math.sin(yaw)
+    pose_pi[1, 0] = math.sin(yaw)
+    pose_pi[1, 1] = math.cos(yaw)
     tracks = {
         "v0": {
             "poses": pose_pi.unsqueeze(0).expand(3, 4, 4).clone(),
@@ -222,12 +244,13 @@ def test_fused_view_applies_rotation_composition(real_conf):
         }
     }
     conf = _with_dyn_layer(real_conf)
-    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0, tracks=tracks)
     model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
     model.init_layer_from_points(
-        "dynamic_rigids", torch.zeros(3, 3),
-        track_ids=torch.zeros(3, dtype=torch.int64), setup_optimizer=False,
+        "dynamic_rigids",
+        torch.zeros(3, 3),
+        track_ids=torch.zeros(3, dtype=torch.int64),
+        setup_optimizer=False,
     )
     fv = model.fused_view(frame_id=0)
     # bg rows 0-1 keep their identity rotation; dyn rows 2-4 should have the
@@ -235,8 +258,7 @@ def test_fused_view_applies_rotation_composition(real_conf):
     dyn_rot = fv["rotation"][2:]
     for i in range(3):
         assert abs(float(dyn_rot[i, 0])) < 1e-4, f"yaw=π should give w≈0; got {dyn_rot[i, 0]}"
-        assert abs(float(dyn_rot[i, 3])) > 0.99, \
-            f"yaw=π should give |z|≈1; got {dyn_rot[i, 3]}"
+        assert abs(float(dyn_rot[i, 3])) > 0.99, f"yaw=π should give |z|≈1; got {dyn_rot[i, 3]}"
 
 
 def test_transform_means_unchanged_returns_only_positions(real_conf):
@@ -261,9 +283,7 @@ _DENSITY_SENTINEL = -50.0
 def _set_dyn_density(model, raw_value: float):
     """Helper: overwrite the dynamic_rigids layer's raw density (pre-sigmoid)."""
     n = model.layers["dynamic_rigids"].positions.shape[0]
-    model.layers["dynamic_rigids"].density = torch.nn.Parameter(
-        torch.full((n, 1), float(raw_value))
-    )
+    model.layers["dynamic_rigids"].density = torch.nn.Parameter(torch.full((n, 1), float(raw_value)))
 
 
 def test_fused_view_keeps_density_when_all_tracks_active(real_conf):
@@ -331,11 +351,13 @@ def test_fused_view_no_time_uses_per_track_first_active_fallback(real_conf):
     each track's particles by THEIR first-active pose.
     """
     pose_a_f0 = torch.eye(4)
-    pose_a_f1 = torch.eye(4); pose_a_f1[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
+    pose_a_f1 = torch.eye(4)
+    pose_a_f1[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
     pose_a_f2 = torch.eye(4)
     pose_b_f0 = torch.eye(4)
     pose_b_f1 = torch.eye(4)
-    pose_b_f2 = torch.eye(4); pose_b_f2[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
+    pose_b_f2 = torch.eye(4)
+    pose_b_f2[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
     tracks = {
         "alice": {
             "poses": torch.stack([pose_a_f0, pose_a_f1, pose_a_f2]),
@@ -351,13 +373,15 @@ def test_fused_view_no_time_uses_per_track_first_active_fallback(real_conf):
         },
     }
     conf = _with_dyn_layer(real_conf)
-    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0, tracks=tracks)
     model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
     positions = torch.zeros(6, 3)
     track_ids = torch.tensor([0, 0, 0, 1, 1, 1], dtype=torch.int64)
     model.init_layer_from_points(
-        "dynamic_rigids", positions, track_ids=track_ids, setup_optimizer=False,
+        "dynamic_rigids",
+        positions,
+        track_ids=track_ids,
+        setup_optimizer=False,
     )
     _set_dyn_density(model, raw_value=0.5)
 
@@ -377,7 +401,8 @@ def test_fused_view_no_time_uses_per_track_first_active_fallback(real_conf):
 def test_fused_view_no_time_track_with_zero_active_marked_inactive(real_conf):
     """E.2.c: tracks with NO active frames at all → particles still get density
     suppressed, mirroring the existing inactive-track behaviour."""
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([5.0, 0.0, 0.0])
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([5.0, 0.0, 0.0])
     tracks = {
         "alice": {
             "poses": pose.unsqueeze(0).expand(3, 4, 4).clone(),
@@ -387,12 +412,13 @@ def test_fused_view_no_time_track_with_zero_active_marked_inactive(real_conf):
         },
     }
     conf = _with_dyn_layer(real_conf)
-    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0, tracks=tracks)
     model.init_layer_from_points("background", torch.zeros(2, 3), setup_optimizer=False)
     model.init_layer_from_points(
-        "dynamic_rigids", torch.zeros(3, 3),
-        track_ids=torch.zeros(3, dtype=torch.int64), setup_optimizer=False,
+        "dynamic_rigids",
+        torch.zeros(3, 3),
+        track_ids=torch.zeros(3, dtype=torch.int64),
+        setup_optimizer=False,
     )
     _set_dyn_density(model, raw_value=0.5)
     fv = model.fused_view()

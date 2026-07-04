@@ -21,6 +21,7 @@
   # 整体椭球过糊调小 / 过碎调大:
   python view_gaussians.py --input ..._gs_...ply --splat_scale 0.8
 """
+
 import argparse
 import os
 import time
@@ -58,11 +59,26 @@ def quat_to_rotmat(q):  # q (N,4) wxyz
 
 def load_gs_ply(path):
     from plyfile import PlyData
+
     print(f"[load] reading {path} ...", flush=True)
     v = PlyData.read(path)["vertex"].data
     names = v.dtype.names
-    need = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
-            "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
+    need = [
+        "x",
+        "y",
+        "z",
+        "f_dc_0",
+        "f_dc_1",
+        "f_dc_2",
+        "opacity",
+        "scale_0",
+        "scale_1",
+        "scale_2",
+        "rot_0",
+        "rot_1",
+        "rot_2",
+        "rot_3",
+    ]
     missing = [n for n in need if n not in names]
     if missing:
         raise RuntimeError(f"PLY 缺少 3DGS 字段 {missing} —— 这不是高斯 ply?")
@@ -81,7 +97,9 @@ def main():
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--max_gaussians", type=int, default=0, help="0=全部;否则按不透明度加权降采样到该上限")
     ap.add_argument("--splat_scale", type=float, default=1.0, help="整体椭球缩放(过糊调小/过碎调大)")
-    ap.add_argument("--max_scale", type=float, default=0.0, help="clamp 椭球各轴上限(米);0=自动按 float16 安全值(~250)防溢出")
+    ap.add_argument(
+        "--max_scale", type=float, default=0.0, help="clamp 椭球各轴上限(米);0=自动按 float16 安全值(~250)防溢出"
+    )
     ap.add_argument("--min_opacity", type=float, default=0.0, help=">0 时过滤 sigmoid(opacity) 低于此值的高斯")
     ap.add_argument("--up", default="+z")
     args = ap.parse_args()
@@ -94,9 +112,9 @@ def main():
         print("[warn] 检测到高阶 SH,但 viser 只用 DC 近似(无视角相关高光)", flush=True)
 
     # 激活
-    rgb = np.clip(fdc * C0 + 0.5, 0.0, 1.0).astype(np.float32)        # (N,3) [0,1]
-    op = sigmoid(op_raw).reshape(-1, 1)                               # (N,1)
-    s = np.exp(np.clip(scale_raw, -20, 20)).astype(np.float32)        # (N,3) 标准差
+    rgb = np.clip(fdc * C0 + 0.5, 0.0, 1.0).astype(np.float32)  # (N,3) [0,1]
+    op = sigmoid(op_raw).reshape(-1, 1)  # (N,1)
+    s = np.exp(np.clip(scale_raw, -20, 20)).astype(np.float32)  # (N,3) 标准差
 
     # (可选) 过滤近透明高斯(减少雾感与排序开销)
     if args.min_opacity > 0:
@@ -125,7 +143,7 @@ def main():
     t1 = time.time()
     R = quat_to_rotmat(quat)
     RS = R * s[:, None, :]
-    cov = (RS @ RS.transpose(0, 2, 1)).astype(np.float32)             # (N,3,3)
+    cov = (RS @ RS.transpose(0, 2, 1)).astype(np.float32)  # (N,3,3)
     print(f"[cov] {cov.shape} built in {time.time() - t1:.1f}s", flush=True)
 
     bmin, bmax = xyz.min(0), xyz.max(0)

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """B2: OverlayRenderer + alpha_blend unit tests."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -29,8 +30,10 @@ def test_render_single_horizontal_segment():
     uv = np.array([[10.0, 32.0], [50.0, 32.0]])
     visible = np.array([True, True])
     layer = OverlayLayer(
-        name="test", polylines=[(uv, visible)],
-        color=(0, 255, 0, 255), width=1,
+        name="test",
+        polylines=[(uv, visible)],
+        color=(0, 255, 0, 255),
+        width=1,
     )
     out = r.render([layer])
     # The line passes through y=32; some x in [10, 50] should have green.
@@ -48,8 +51,10 @@ def test_render_invisible_endpoint_skipped():
     uv = np.array([[5.0, 16.0], [30.0, 16.0], [55.0, 16.0]])
     visible = np.array([True, False, True])
     layer = OverlayLayer(
-        name="test", polylines=[(uv, visible)],
-        color=(255, 0, 0, 255), width=1,
+        name="test",
+        polylines=[(uv, visible)],
+        color=(255, 0, 0, 255),
+        width=1,
     )
     out = r.render([layer])
     # No segments should be drawn at all (endpoint pairs are (T,F), (F,T)).
@@ -110,10 +115,8 @@ def test_multilayer_ordering_top_layer_wins():
     r = OverlayRenderer(height=32, width=32)
     uv = np.array([[5.0, 16.0], [25.0, 16.0]])
     visible = np.array([True, True])
-    bottom = OverlayLayer(name="bot",  polylines=[(uv, visible)],
-                          color=(255, 0, 0, 255), width=2)
-    top    = OverlayLayer(name="top",  polylines=[(uv, visible)],
-                          color=(0, 0, 255, 255), width=2)
+    bottom = OverlayLayer(name="bot", polylines=[(uv, visible)], color=(255, 0, 0, 255), width=2)
+    top = OverlayLayer(name="top", polylines=[(uv, visible)], color=(0, 0, 255, 255), width=2)
     out = r.render([bottom, top])
     # At pixel (15, 16) both layers drew; top (blue) should win.
     px = out[16, 15]
@@ -126,13 +129,14 @@ def test_render_text_draws_pixels_near_anchor():
     sharing the layer color (the wireframe's instance color)."""
     r = OverlayRenderer(height=128, width=256)
     layer = OverlayLayer(
-        name="labels", color=(0, 255, 0, 255),
+        name="labels",
+        color=(0, 255, 0, 255),
         texts=[(60.0, 80.0, "t7 | bus")],
     )
     out = r.render([layer])
     # Some non-transparent pixels must appear in a window above/right of the
     # anchor (text is drawn adjacent to the anchor, not centered on it).
-    win = out[80 - 40:80 + 8, 60 - 4:60 + 120]
+    win = out[80 - 40 : 80 + 8, 60 - 4 : 60 + 120]
     assert (win[..., 3] > 0).sum() > 20, "expected text pixels near anchor"
 
 
@@ -140,7 +144,8 @@ def test_render_text_out_of_bounds_anchor_no_crash():
     """Anchors far outside the canvas must not crash PIL (clipping is fine)."""
     r = OverlayRenderer(height=64, width=64)
     layer = OverlayLayer(
-        name="labels", color=(255, 0, 0, 255),
+        name="labels",
+        color=(255, 0, 0, 255),
         texts=[(-500.0, -500.0, "offscreen"), (10_000.0, 10_000.0, "far")],
     )
     out = r.render([layer])

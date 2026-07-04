@@ -10,6 +10,7 @@ convention (col0=right, col1=down, col2=forward). Equidistant fisheye FTheta
 poly r_pix = f * angle is its own exact inverse pair for ray generation vs
 projection, so warp consistency can be tested end-to-end without circularity.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -35,9 +36,7 @@ def _pp(h: int, w: int) -> tuple[float, float]:
 
 def _ftheta_params(h: int = H, w: int = W, f: float = F_PIX):
     return {
-        "angle_to_pixeldist_poly": torch.tensor(
-            [0.0, f, 0.0, 0.0, 0.0], dtype=torch.float32
-        ),
+        "angle_to_pixeldist_poly": torch.tensor([0.0, f, 0.0, 0.0, 0.0], dtype=torch.float32),
         "principal_point": torch.tensor(_pp(h, w), dtype=torch.float32),
     }
 
@@ -129,8 +128,12 @@ def test_flat_plane_warp_consistency():
     expected_novel = _plane_texture(p_novel[..., 0], p_novel[..., 1])
 
     grid, valid = build_plane_warp(
-        rays, c2w_novel, c2w_orig, params,
-        height_field=None, z0_fallback=0.0,
+        rays,
+        c2w_novel,
+        c2w_orig,
+        params,
+        height_field=None,
+        z0_fallback=0.0,
     )
     warped = warp_image(img_orig, grid, valid)[..., 0]
 
@@ -148,8 +151,7 @@ def test_flat_plane_warp_consistency():
     gx, gy = grid[0, ..., 0], grid[0, ..., 1]
     margin_x = 2.0 * 12.0 / (W - 1)
     margin_y = 2.0 * 12.0 / (H - 1)
-    inner = (gx > -1 + margin_x) & (gx < 1 - margin_x) \
-        & (gy > -1 + margin_y) & (gy < 1 - margin_y)
+    inner = (gx > -1 + margin_x) & (gx < 1 - margin_x) & (gy > -1 + margin_y) & (gy < 1 - margin_y)
     sel = eroded & inner & near_field
     assert int(sel.sum()) > 5000, "test geometry must keep a usable region"
     err = (warped[sel] - expected_novel[sel]).abs()
@@ -162,7 +164,12 @@ def test_identity_warp_grid_normalization():
     rays = _rays_dir_cam(h=64, w=96, f=40.0)
     c2w = _c2w_looking_plus_x([0.0, 0.0, 2.0])
     grid, valid = build_plane_warp(
-        rays, c2w, c2w, _ftheta_params(64, 96, f=40.0), height_field=None, z0_fallback=0.0,
+        rays,
+        c2w,
+        c2w,
+        _ftheta_params(64, 96, f=40.0),
+        height_field=None,
+        z0_fallback=0.0,
     )
     gx, gy = grid[0, ..., 0], grid[0, ..., 1]
     # pick a pixel guaranteed to hit the plane: bottom-center looks downward
@@ -179,7 +186,12 @@ def test_sky_rays_invalid():
     rays = _rays_dir_cam(h=64, w=96, f=40.0)
     c2w = _c2w_looking_plus_x([0.0, 0.0, 2.0])
     _, valid = build_plane_warp(
-        rays, c2w, c2w, _ftheta_params(64, 96, f=40.0), height_field=None, z0_fallback=0.0,
+        rays,
+        c2w,
+        c2w,
+        _ftheta_params(64, 96, f=40.0),
+        height_field=None,
+        z0_fallback=0.0,
     )
     d_w = torch.einsum("ij,hwj->hwi", c2w[:3, :3], rays)
     sky = d_w[..., 2] >= 0
@@ -197,12 +209,17 @@ def test_height_field_gates_valid_and_adjusts_t():
     ys = torch.arange(-15.0, 15.0, 0.5)
     gx, gy = torch.meshgrid(xs, ys, indexing="ij")
     road_pts = torch.stack(
-        [gx.reshape(-1), gy.reshape(-1), torch.zeros(gx.numel())], dim=-1,
+        [gx.reshape(-1), gy.reshape(-1), torch.zeros(gx.numel())],
+        dim=-1,
     )
     hf = build_road_height_field(road_pts, cell_size=1.0)
 
     grid, valid = build_plane_warp(
-        rays, c2w, c2w, _ftheta_params(64, 96, f=40.0), height_field=hf,
+        rays,
+        c2w,
+        c2w,
+        _ftheta_params(64, 96, f=40.0),
+        height_field=hf,
     )
     d_w = torch.einsum("ij,hwj->hwi", c2w[:3, :3], rays)
     o_w = c2w[:3, 3]
@@ -210,9 +227,14 @@ def test_height_field_gates_valid_and_adjusts_t():
     x_hit = o_w[0] + t_flat * d_w[..., 0]
     down = d_w[..., 2] < -1e-6
     far = down & (t_flat > 0) & (x_hit > 30.0) & (t_flat < 120.0)
-    near = down & (t_flat > 0) & (x_hit > 2.0) & (x_hit < 20.0) \
-        & (o_w[1] + t_flat * d_w[..., 1] > -12.0) \
+    near = (
+        down
+        & (t_flat > 0)
+        & (x_hit > 2.0)
+        & (x_hit < 20.0)
+        & (o_w[1] + t_flat * d_w[..., 1] > -12.0)
         & (o_w[1] + t_flat * d_w[..., 1] < 12.0)
+    )
     assert near.any() and far.any()
     assert valid[near].all(), "hits inside occupied region must be valid"
     assert not valid[far].any(), "hits beyond occupied region must be invalid"

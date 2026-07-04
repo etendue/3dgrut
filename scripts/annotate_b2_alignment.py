@@ -16,6 +16,7 @@ Usage (ThinkPad):
         --backdrop /tmp/b2dump/b2_backdrop.png \\
         --out /tmp/b2dump/b2_annotated.png
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,15 +38,21 @@ from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", required=True, type=Path)
-    ap.add_argument("--backdrop", required=True, type=Path,
-                    help="PNG of the Gaussian backdrop (from B2_DUMP_DIR)")
-    ap.add_argument("--c2w", type=Path, default=None,
-                    help="npy of the c2w used to render the backdrop. If "
-                         "absent, falls back to meta.ego_poses_c2w[frame_idx].")
-    ap.add_argument("--t-us", type=Path, default=None,
-                    help="txt file with the t_us at which the backdrop was "
-                         "rendered. Used to look up the right frame_idx for "
-                         "active tracks.")
+    ap.add_argument("--backdrop", required=True, type=Path, help="PNG of the Gaussian backdrop (from B2_DUMP_DIR)")
+    ap.add_argument(
+        "--c2w",
+        type=Path,
+        default=None,
+        help="npy of the c2w used to render the backdrop. If " "absent, falls back to meta.ego_poses_c2w[frame_idx].",
+    )
+    ap.add_argument(
+        "--t-us",
+        type=Path,
+        default=None,
+        help="txt file with the t_us at which the backdrop was "
+        "rendered. Used to look up the right frame_idx for "
+        "active tracks.",
+    )
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--frame-idx", type=int, default=0)
     args = ap.parse_args()
@@ -65,8 +72,7 @@ def main():
     overlay = Image.new("RGBA", bg.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
     except IOError:
         font = ImageFont.load_default()
 
@@ -100,8 +106,8 @@ def main():
             continue
 
         # 12 edges in world coords -> project via FthetaForwardProjector
-        edges = cuboid_world_edges(pose, size)              # (12, 2, 3)
-        verts = edges.reshape(-1, 3).astype(np.float64)     # (24, 3)
+        edges = cuboid_world_edges(pose, size)  # (12, 2, 3)
+        verts = edges.reshape(-1, 3).astype(np.float64)  # (24, 3)
         uv, vis = proj.project_points(verts, c2w_viser)
         if vis.sum() < 4:
             continue
@@ -117,9 +123,7 @@ def main():
         for ei in range(12):
             i0, i1 = 2 * ei, 2 * ei + 1
             if vis[i0] and vis[i1]:
-                draw.line(
-                    [(uv[i0, 0], uv[i0, 1]), (uv[i1, 0], uv[i1, 1])],
-                    fill=col, width=2)
+                draw.line([(uv[i0, 0], uv[i0, 1]), (uv[i1, 0], uv[i1, 1])], fill=col, width=2)
 
         # Label at bbox center (mean of visible vertices)
         visible_uv = uv[vis]

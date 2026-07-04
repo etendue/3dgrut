@@ -15,6 +15,7 @@ Pure numpy + cv2 + FthetaForwardProjector — no torch / no GPU. NCore SDK
 required only by the *caller* (to fetch raw image arrays + per-frame c2w);
 the stitcher itself takes pre-extracted arrays.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,28 +35,29 @@ class CameraRig:
     "closest-looking" camera. Approximated from camera_id (front/rear/cross_*)
     when not provided explicitly.
     """
+
     camera_id: str
     ftheta_dict: dict
     azimuth_deg: float
-    image_hw: tuple[int, int]   # (H, W) of raw image — for clipping pixel coords
+    image_hw: tuple[int, int]  # (H, W) of raw image — for clipping pixel coords
 
 
 _DEFAULT_AZIMUTH: dict[str, float] = {
-    "camera_front_wide_120fov":  0.0,
-    "camera_front_wide":         0.0,
-    "camera_front":              0.0,
-    "camera_front_tele":         0.0,
-    "camera_front_tele_30fov":   0.0,
-    "camera_cross_left_120fov":  90.0,
-    "camera_cross_left":         90.0,
+    "camera_front_wide_120fov": 0.0,
+    "camera_front_wide": 0.0,
+    "camera_front": 0.0,
+    "camera_front_tele": 0.0,
+    "camera_front_tele_30fov": 0.0,
+    "camera_cross_left_120fov": 90.0,
+    "camera_cross_left": 90.0,
     "camera_cross_right_120fov": -90.0,
-    "camera_cross_right":        -90.0,
-    "camera_rear_120fov":        180.0,
-    "camera_rear":               180.0,
-    "camera_rear_tele":          180.0,
-    "camera_rear_tele_30fov":    180.0,
-    "camera_rear_left_70fov":    135.0,
-    "camera_rear_right_70fov":   -135.0,
+    "camera_cross_right": -90.0,
+    "camera_rear_120fov": 180.0,
+    "camera_rear": 180.0,
+    "camera_rear_tele": 180.0,
+    "camera_rear_tele_30fov": 180.0,
+    "camera_rear_left_70fov": 135.0,
+    "camera_rear_right_70fov": -135.0,
 }
 
 
@@ -104,8 +106,8 @@ class BEVStitcher:
         side = int(round(2.0 * self.xy_range_m / self.res_mpp))
         if side <= 0:
             raise ValueError(
-                f"bev_xy_range_m / bev_resolution_m_per_px → {side} pixels; "
-                "increase range or decrease resolution.")
+                f"bev_xy_range_m / bev_resolution_m_per_px → {side} pixels; " "increase range or decrease resolution."
+            )
         self.bev_w = side
         self.bev_h = side
 
@@ -117,7 +119,8 @@ class BEVStitcher:
         identity_flip = np.eye(4, dtype=np.float64)
         for rig in rigs:
             self.projectors[rig.camera_id] = FthetaForwardProjector(
-                rig.ftheta_dict, world_to_camera_flip=identity_flip,
+                rig.ftheta_dict,
+                world_to_camera_flip=identity_flip,
             )
 
         # Pre-build the BEV grid offset template (vehicle-centered, in m).
@@ -130,23 +133,23 @@ class BEVStitcher:
         # along row axis so flip if needed when assembling final image —
         # we leave gy as-is here and flip in stitch_frame so the final
         # PNG is upright (matches matplotlib origin='lower').
-        self._grid_offsets = np.stack([gx, gy], axis=-1)        # (H, W, 2)
+        self._grid_offsets = np.stack([gx, gy], axis=-1)  # (H, W, 2)
 
         # Precompute per-cell azimuth in vehicle frame and the camera index
         # whose nominal azimuth is closest (used for stitching coverage).
-        cell_az_deg = np.degrees(np.arctan2(gy, gx))            # (H, W)
+        cell_az_deg = np.degrees(np.arctan2(gy, gx))  # (H, W)
         camera_az = np.array([r.azimuth_deg for r in rigs], dtype=np.float64)
         # Angular distance, wrapped to [0, 180].
         d = np.abs(cell_az_deg[..., None] - camera_az[None, None, :])
         d = np.minimum(d, 360.0 - d)
-        self._best_camera_idx = np.argmin(d, axis=-1).astype(np.int16)   # (H, W)
+        self._best_camera_idx = np.argmin(d, axis=-1).astype(np.int16)  # (H, W)
 
     def stitch_frame(
         self,
-        camera_c2w: Mapping[str, np.ndarray],   # cam_id → (4, 4) world c2w
+        camera_c2w: Mapping[str, np.ndarray],  # cam_id → (4, 4) world c2w
         camera_images: Mapping[str, np.ndarray],  # cam_id → (H_img, W_img, 3) uint8
-        ego_xy_world: np.ndarray,               # (2,) — BEV center
-        ego_z_world: float,                     # ground plane z (world)
+        ego_xy_world: np.ndarray,  # (2,) — BEV center
+        ego_z_world: float,  # ground plane z (world)
     ) -> tuple[np.ndarray, np.ndarray]:
         """Stitch one BEV frame.
 
@@ -178,22 +181,24 @@ class BEVStitcher:
             cell_mask = (self._best_camera_idx == rig_i).ravel()
             if not cell_mask.any():
                 continue
-            sel_pts = world_pts[cell_mask]                  # (M, 3)
+            sel_pts = world_pts[cell_mask]  # (M, 3)
 
             uv, visible = projector.project_points(sel_pts, c2w)
             # Filter visible cells; uncovered cells remain black.
             if not visible.any():
                 continue
 
-            uv_v = uv[visible]                              # (K, 2) — float pixels
+            uv_v = uv[visible]  # (K, 2) — float pixels
             H_img, W_img = rig.image_hw
 
             # Bilinear sample directly via per-corner index (cv2.remap caps
             # each map dim at SHRT_MAX which a single-row K>32k map exceeds).
             u = np.clip(uv_v[:, 0], 0, W_img - 1.0001)
             v = np.clip(uv_v[:, 1], 0, H_img - 1.0001)
-            u0 = u.astype(np.int32); u1 = u0 + 1
-            v0 = v.astype(np.int32); v1 = v0 + 1
+            u0 = u.astype(np.int32)
+            u1 = u0 + 1
+            v0 = v.astype(np.int32)
+            v1 = v0 + 1
             du = (u - u0).astype(np.float32)[:, None]
             dv = (v - v0).astype(np.float32)[:, None]
             img_f = img.astype(np.float32)
@@ -201,12 +206,9 @@ class BEVStitcher:
             c01 = img_f[v0, u1]
             c10 = img_f[v1, u0]
             c11 = img_f[v1, u1]
-            sampled = (
-                (1 - du) * (1 - dv) * c00
-                + du * (1 - dv) * c01
-                + (1 - du) * dv * c10
-                + du * dv * c11
-            ).astype(np.uint8)                              # (K, 3)
+            sampled = ((1 - du) * (1 - dv) * c00 + du * (1 - dv) * c01 + (1 - du) * dv * c10 + du * dv * c11).astype(
+                np.uint8
+            )  # (K, 3)
 
             # Scatter back into the flat output buffer.
             sel_idx = np.nonzero(cell_mask)[0]
@@ -224,5 +226,4 @@ class BEVStitcher:
         Use as matplotlib ``extent`` arg for imshow(origin='lower').
         """
         cx, cy = float(ego_xy_world[0]), float(ego_xy_world[1])
-        return (cx - self.xy_range_m, cx + self.xy_range_m,
-                cy - self.xy_range_m, cy + self.xy_range_m)
+        return (cx - self.xy_range_m, cx + self.xy_range_m, cy - self.xy_range_m, cy + self.xy_range_m)

@@ -19,6 +19,7 @@ plumbed in both places); keeping the function pure (no model / no trainer
 state) lets both consumers reuse the same code and lets the Mac test suite
 exercise it without a real renderer.
 """
+
 from __future__ import annotations
 
 import math
@@ -31,9 +32,9 @@ from threedgrut.layers.dynamic_mask import project_cuboids_to_mask
 
 
 def compute_psnr_in_mask(
-    rgb_pred: torch.Tensor,   # [H, W, 3] in [0, 1]
-    rgb_gt: torch.Tensor,     # [H, W, 3]
-    mask: torch.Tensor,       # [H, W] float or bool — 1 inside the region
+    rgb_pred: torch.Tensor,  # [H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,  # [H, W, 3]
+    mask: torch.Tensor,  # [H, W] float or bool — 1 inside the region
     min_pixels: int = 50,
 ) -> Optional[float]:
     """Compute PSNR over the masked region only.
@@ -58,11 +59,11 @@ def compute_psnr_in_mask(
 
 
 def compute_class_psnr(
-    rgb_pred: torch.Tensor,            # [B, H, W, 3] in [0, 1]
-    rgb_gt: torch.Tensor,              # [B, H, W, 3]
+    rgb_pred: torch.Tensor,  # [B, H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,  # [B, H, W, 3]
     valid_mask: Optional[torch.Tensor],  # [B, H, W, 1] or None
     active_tracks: List[Dict[str, object]],  # see schema in fn body
-    T_world2cam: torch.Tensor,         # [4, 4]
+    T_world2cam: torch.Tensor,  # [4, 4]
     H: int,
     W: int,
     *,
@@ -99,13 +100,9 @@ def compute_class_psnr(
         float | None, "n_tracks": int}}``.
     """
     device = rgb_pred.device
-    rgb_pred_one = rgb_pred[0]   # [H, W, 3]
-    rgb_gt_one = rgb_gt[0]       # [H, W, 3]
-    valid_mask_one = (
-        valid_mask[0, ..., 0].to(rgb_pred.dtype)
-        if valid_mask is not None
-        else None
-    )
+    rgb_pred_one = rgb_pred[0]  # [H, W, 3]
+    rgb_gt_one = rgb_gt[0]  # [H, W, 3]
+    valid_mask_one = valid_mask[0, ..., 0].to(rgb_pred.dtype) if valid_mask is not None else None
 
     per_track: List[Dict[str, object]] = []
     n_with_psnr = 0
@@ -118,23 +115,34 @@ def compute_class_psnr(
         size = trk["size"].to(device=device, dtype=rgb_pred.dtype).unsqueeze(0)  # [1, 3]
 
         cuboid_mask = project_cuboids_to_mask(
-            pose, size, K, T_world2cam, H, W,
-            device=device, ftheta_params=ftheta_params,
-        )                                                         # [H, W] bool
+            pose,
+            size,
+            K,
+            T_world2cam,
+            H,
+            W,
+            device=device,
+            ftheta_params=ftheta_params,
+        )  # [H, W] bool
         if valid_mask_one is not None:
             mask_f = cuboid_mask.to(rgb_pred.dtype) * valid_mask_one
         else:
             mask_f = cuboid_mask.to(rgb_pred.dtype)
         n_pix = int(mask_f.sum().item())
         psnr = compute_psnr_in_mask(
-            rgb_pred_one, rgb_gt_one, mask_f, min_pixels=min_pixels,
+            rgb_pred_one,
+            rgb_gt_one,
+            mask_f,
+            min_pixels=min_pixels,
         )
-        per_track.append({
-            "track_id": tid,
-            "class": cls,
-            "psnr": psnr,
-            "n_pixels": n_pix,
-        })
+        per_track.append(
+            {
+                "track_id": tid,
+                "class": cls,
+                "psnr": psnr,
+                "n_pixels": n_pix,
+            }
+        )
         if psnr is not None:
             n_with_psnr += 1
             by_class[cls].append(psnr)
@@ -182,10 +190,12 @@ def collect_active_tracks_for_frame(
         size = meta.get("size")
         if size is None:
             continue
-        out.append({
-            "id": str(tid),
-            "class": str(meta.get("class", "unknown")),
-            "pose": poses[frame_idx],
-            "size": size,
-        })
+        out.append(
+            {
+                "id": str(tid),
+                "class": str(meta.get("class", "unknown")),
+                "pose": poses[frame_idx],
+                "size": size,
+            }
+        )
     return out

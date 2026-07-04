@@ -5,6 +5,7 @@ Tests the pure ``particle_layer_names_excluding`` helper that decides which
 layers feed the opacity L1 reg. Loads ``layer_spec.py`` standalone via importlib
 so it runs without the torch-heavy ``threedgrut`` package __init__ (Mac venv).
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -35,18 +36,15 @@ def _specs():
 
 
 def test_exclude_empty_returns_all_particle_layers_in_spec_order():
-    assert particle_layer_names_excluding(_specs(), []) == [
-        "background", "road", "dynamic_rigids"]
+    assert particle_layer_names_excluding(_specs(), []) == ["background", "road", "dynamic_rigids"]
 
 
 def test_exclude_road_drops_only_road():
-    assert particle_layer_names_excluding(_specs(), ["road"]) == [
-        "background", "dynamic_rigids"]
+    assert particle_layer_names_excluding(_specs(), ["road"]) == ["background", "dynamic_rigids"]
 
 
 def test_exclude_none_treated_as_empty():
-    assert particle_layer_names_excluding(_specs(), None) == [
-        "background", "road", "dynamic_rigids"]
+    assert particle_layer_names_excluding(_specs(), None) == ["background", "road", "dynamic_rigids"]
 
 
 def test_non_particle_layer_always_excluded():
@@ -54,10 +52,8 @@ def test_non_particle_layer_always_excluded():
 
 
 def test_unknown_exclude_name_is_noop():
-    assert particle_layer_names_excluding(_specs(), ["does_not_exist"]) == [
-        "background", "road", "dynamic_rigids"]
+    assert particle_layer_names_excluding(_specs(), ["does_not_exist"]) == ["background", "road", "dynamic_rigids"]
 
 
 def test_exclude_multiple_layers():
-    assert particle_layer_names_excluding(_specs(), ["road", "background"]) == [
-        "dynamic_rigids"]
+    assert particle_layer_names_excluding(_specs(), ["road", "background"]) == ["dynamic_rigids"]

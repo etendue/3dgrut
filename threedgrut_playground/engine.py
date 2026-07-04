@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import copy
 import os
-import numpy as np
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import kaolin
+import numpy as np
 import torch
 from kaolin.render.camera import (
     Camera,
@@ -822,7 +822,10 @@ class Engine3DGRUT:
     ANTIALIASING_MODES = ["4x MSAA", "8x MSAA", "16x MSAA", "Quasi-Random (Sobol)"]
 
     def __init__(
-        self, gs_object: str, mesh_assets_folder: str, default_config: str,
+        self,
+        gs_object: str,
+        mesh_assets_folder: str,
+        default_config: str,
         envmap_assets_folder: Optional[str] = None,
         renderer: str = "3dgrt",
     ):
@@ -847,17 +850,24 @@ class Engine3DGRUT:
                 _eck = torch.load(gs_object, map_location=self.device, weights_only=False)
                 if isinstance(_eck, dict) and "exposure_state" in _eck:
                     from threedgrut.correction import BilateralGrid
+
                     _ms = _eck["exposure_state"]["module"]
                     if "grids" in _ms:
                         _N, _tw, _Lz, _Ly, _Lx = _ms["grids"].shape
                         self.exposure_model = BilateralGrid(
-                            num_camera=_N, grid_X=_Lx, grid_Y=_Ly, grid_W=_Lz,
+                            num_camera=_N,
+                            grid_X=_Lx,
+                            grid_Y=_Ly,
+                            grid_W=_Lz,
                         ).to(self.device)
                         self.exposure_model.load_state_dict(_ms, strict=True)
                         self.exposure_model.eval()
-                        print(f"[viz_4d] BilateralGrid exposure loaded: {_N} cams "
-                              f"grid={_Lx}x{_Ly}x{_Lz}; novel-view uses cam "
-                              f"{self.exposure_camera_idx}", flush=True)
+                        print(
+                            f"[viz_4d] BilateralGrid exposure loaded: {_N} cams "
+                            f"grid={_Lx}x{_Ly}x{_Lz}; novel-view uses cam "
+                            f"{self.exposure_camera_idx}",
+                            flush=True,
+                        )
                 del _eck
             except Exception as _e:  # exposure is optional; never block rendering
                 print(f"[viz_4d] exposure load skipped: {_e}", flush=True)
@@ -1048,12 +1058,17 @@ class Engine3DGRUT:
         rendered_results["pred_rgb"] = pred_rgb
         return rendered_results
 
-    def _trace_scene_mog(self, rays_ori: torch.Tensor, rays_dir: torch.Tensor,
-                         *, camera: Optional[Camera] = None,
-                         fisheye_intrinsics: Optional[dict] = None,
-                         opencv_pinhole_intrinsics: Optional[dict] = None,
-                         opencv_pinhole_rays: Optional[np.ndarray] = None,
-                         timestamp_us: int = -1) -> Dict[str, torch.Tensor]:
+    def _trace_scene_mog(
+        self,
+        rays_ori: torch.Tensor,
+        rays_dir: torch.Tensor,
+        *,
+        camera: Optional[Camera] = None,
+        fisheye_intrinsics: Optional[dict] = None,
+        opencv_pinhole_intrinsics: Optional[dict] = None,
+        opencv_pinhole_rays: Optional[np.ndarray] = None,
+        timestamp_us: int = -1,
+    ) -> Dict[str, torch.Tensor]:
         # LayeredGaussians with active dynamic tracks: route through forward()
         # so per-track SE(3) deformation runs against the supplied timestamp.
         #
@@ -1107,8 +1122,7 @@ class Engine3DGRUT:
         # they keep the original scene_mog.trace fallthrough untouched.
         _has_ncore_intrinsics = camera is not None and (
             fisheye_intrinsics is not None
-            or (opencv_pinhole_intrinsics is not None
-                and opencv_pinhole_rays is not None)
+            or (opencv_pinhole_intrinsics is not None and opencv_pinhole_rays is not None)
         )
         if isinstance(self.scene_mog, LayeredGaussians) or _has_ncore_intrinsics:
             intrinsics = None
@@ -1122,9 +1136,7 @@ class Engine3DGRUT:
                 if fisheye_intrinsics is not None:
                     # T8.13 FTheta path: defer projection to 3dgut UT rasterizer
                     # via Batch.intrinsics_FThetaCameraModelParameters.
-                    ftheta_intrinsics_t = ftheta_dict_to_tensors(
-                        fisheye_intrinsics, device=rays_ori.device
-                    )
+                    ftheta_intrinsics_t = ftheta_dict_to_tensors(fisheye_intrinsics, device=rays_ori.device)
                     # T8.13 critical fix: training-side rays come from
                     # camera_model.pixels_to_camera_rays (FTheta polynomial
                     # inverse). kaolin's pinhole raygen produces totally
@@ -1134,14 +1146,12 @@ class Engine3DGRUT:
                     # matches NCoreDataset._lazy_worker_gpu_cache (rays_ori=0,
                     # rays_dir=FTheta camera-space, rays_in_world_space=False).
                     rays_np = ftheta_pixels_to_camera_rays(fisheye_intrinsics)
-                    rays_dir_use = torch.from_numpy(rays_np).to(
-                        device=rays_ori.device, dtype=rays_ori.dtype
-                    ).unsqueeze(0)  # [1, H, W, 3]
+                    rays_dir_use = (
+                        torch.from_numpy(rays_np).to(device=rays_ori.device, dtype=rays_ori.dtype).unsqueeze(0)
+                    )  # [1, H, W, 3]
                     rays_ori_use = torch.zeros_like(rays_dir_use)
                     # Build c2w → T_to_world (viser_gui_4d passes c2w in).
-                    c2w_t = camera.view_matrix().to(
-                        rays_ori.device, dtype=rays_ori.dtype
-                    )
+                    c2w_t = camera.view_matrix().to(rays_ori.device, dtype=rays_ori.dtype)
                     if c2w_t.ndim == 2:
                         c2w_t = c2w_t.unsqueeze(0)
                     T_to_world = c2w_t
@@ -1166,17 +1176,16 @@ class Engine3DGRUT:
                     # _load_multi_cam_poses already builds these as numpy; keep
                     # them CPU/numpy here (only pull any torch tensor back).
                     opencv_pinhole_intrinsics_t = {
-                        k: (v.detach().cpu().numpy()
-                            if isinstance(v, torch.Tensor) else v)
+                        k: (v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v)
                         for k, v in opencv_pinhole_intrinsics.items()
                     }
-                    rays_dir_use = torch.from_numpy(opencv_pinhole_rays).to(
-                        device=rays_ori.device, dtype=rays_ori.dtype
-                    ).unsqueeze(0)  # [1, H, W, 3]
+                    rays_dir_use = (
+                        torch.from_numpy(opencv_pinhole_rays)
+                        .to(device=rays_ori.device, dtype=rays_ori.dtype)
+                        .unsqueeze(0)
+                    )  # [1, H, W, 3]
                     rays_ori_use = torch.zeros_like(rays_dir_use)
-                    c2w_t = camera.view_matrix().to(
-                        rays_ori.device, dtype=rays_ori.dtype
-                    )
+                    c2w_t = camera.view_matrix().to(rays_ori.device, dtype=rays_ori.dtype)
                     if c2w_t.ndim == 2:
                         c2w_t = c2w_t.unsqueeze(0)
                     T_to_world = c2w_t
@@ -1187,16 +1196,14 @@ class Engine3DGRUT:
                     intrinsics = [float(camera.focal_x), float(camera.focal_y), cx, cy]
                     # Build c2w (kaolin stores whatever we pass as view_matrix
                     # verbatim; viser_gui_4d passes c2w in).
-                    c2w_t = camera.view_matrix().to(
-                        rays_ori.device, dtype=rays_ori.dtype
-                    )
+                    c2w_t = camera.view_matrix().to(rays_ori.device, dtype=rays_ori.dtype)
                     if c2w_t.ndim == 2:
                         c2w_t = c2w_t.unsqueeze(0)
                     T_to_world = c2w_t
                     rays_in_world = False
                     # Convert kaolin's world-space rays back to camera-space.
-                    R_c2w = c2w_t[0, :3, :3]                 # [3,3]
-                    R_w2c = R_c2w.transpose(0, 1)            # [3,3]
+                    R_c2w = c2w_t[0, :3, :3]  # [3,3]
+                    R_w2c = R_c2w.transpose(0, 1)  # [3,3]
                     rays_dir_use = torch.einsum("ij,bhwj->bhwi", R_w2c, rays_dir.contiguous())
                     rays_ori_use = torch.zeros_like(rays_ori)
             batch = Batch(
@@ -1214,12 +1221,16 @@ class Engine3DGRUT:
 
     @torch.cuda.nvtx.range("render_pass")
     @torch.no_grad()
-    def render_pass(self, camera: Camera, is_first_pass: bool,
-                    *, timestamp_us: int = -1,
-                    fisheye_intrinsics: Optional[dict] = None,
-                    opencv_pinhole_intrinsics: Optional[dict] = None,
-                    opencv_pinhole_rays: Optional[np.ndarray] = None,
-                    ) -> Dict[str, torch.Tensor]:
+    def render_pass(
+        self,
+        camera: Camera,
+        is_first_pass: bool,
+        *,
+        timestamp_us: int = -1,
+        fisheye_intrinsics: Optional[dict] = None,
+        opencv_pinhole_intrinsics: Optional[dict] = None,
+        opencv_pinhole_rays: Optional[np.ndarray] = None,
+    ) -> Dict[str, torch.Tensor]:
         """Renders a single frame pass from the provided camera view, with optional progressive effects.
         This method is designed for interactive/real-time rendering scenarios where frame rate is prioritized
         over immediate full quality. It manages an internal state for progressive rendering effects.
@@ -1292,13 +1303,15 @@ class Engine3DGRUT:
             # primitives-based dispatch untouched.
             _ncore_backdrop = camera is not None and (
                 fisheye_intrinsics is not None
-                or (opencv_pinhole_intrinsics is not None
-                    and opencv_pinhole_rays is not None)
+                or (opencv_pinhole_intrinsics is not None and opencv_pinhole_rays is not None)
             )
             # Disable path tracer under certain settings, useful for comparing with the vanilla volumetric tracer
-            if (_ncore_backdrop or not self.primitives.enabled
-                    or not self.primitives.has_visible_objects()
-                    or self.tracer is None):
+            if (
+                _ncore_backdrop
+                or not self.primitives.enabled
+                or not self.primitives.has_visible_objects()
+                or self.tracer is None
+            ):
                 if self.disable_gaussian_tracing:
                     rb = dict(
                         pred_rgb=torch.zeros_like(rays.rays_ori),
@@ -1306,7 +1319,9 @@ class Engine3DGRUT:
                     )
                 else:
                     rb = self._trace_scene_mog(
-                        rays.rays_ori, rays.rays_dir, camera=camera,
+                        rays.rays_ori,
+                        rays.rays_dir,
+                        camera=camera,
                         fisheye_intrinsics=fisheye_intrinsics,
                         opencv_pinhole_intrinsics=opencv_pinhole_intrinsics,
                         opencv_pinhole_rays=opencv_pinhole_rays,
@@ -1455,9 +1470,7 @@ class Engine3DGRUT:
             use_layered = bool(conf.get("use_layered_model", False))
             if use_layered:
                 specs = specs_from_config(conf)
-                scene_extent = float(
-                    checkpoint.get("model", {}).get("scene_extent", 1.0)
-                )
+                scene_extent = float(checkpoint.get("model", {}).get("scene_extent", 1.0))
                 model = LayeredGaussians(conf, specs=specs, scene_extent=scene_extent)
                 # V3 Stage A/B/D.2 bugfix: ``populate_tracks`` MUST run BEFORE
                 # ``init_from_checkpoint`` for learnable_pose ckpts. Reason:

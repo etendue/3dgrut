@@ -7,6 +7,7 @@ existing ``_on_time_change`` end-of-method conditionally calls it.
 
 We stub heavy deps (viser/kaolin/engine) so the test runs on Mac CPU.
 """
+
 from __future__ import annotations
 
 import sys
@@ -34,16 +35,14 @@ def viewer_class(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "viser", fake_viser)
     monkeypatch.setitem(sys.modules, "viser.transforms", fake_viser.transforms)
-    fake_kaolin = SimpleNamespace(render=SimpleNamespace(
-        camera=SimpleNamespace(Camera=object)))
+    fake_kaolin = SimpleNamespace(render=SimpleNamespace(camera=SimpleNamespace(Camera=object)))
     monkeypatch.setitem(sys.modules, "kaolin", fake_kaolin)
     monkeypatch.setitem(sys.modules, "kaolin.render", fake_kaolin.render)
-    monkeypatch.setitem(sys.modules, "kaolin.render.camera",
-                        fake_kaolin.render.camera)
+    monkeypatch.setitem(sys.modules, "kaolin.render.camera", fake_kaolin.render.camera)
     fake_engine_mod = SimpleNamespace(Engine3DGRUT=type("Engine3DGRUT", (), {}))
-    monkeypatch.setitem(sys.modules, "threedgrut_playground.engine",
-                        fake_engine_mod)
+    monkeypatch.setitem(sys.modules, "threedgrut_playground.engine", fake_engine_mod)
     from threedgrut_playground import viser_gui_4d
+
     return viser_gui_4d.Viser4DViewer
 
 
@@ -55,24 +54,36 @@ def _make_fake_metadata():
     Frame 2: position (20, 0, 0)    identity rotation
     """
     from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
+
     poses = np.tile(np.eye(4, dtype=np.float32)[None, ...], (3, 1, 1))
     poses[0, :3, 3] = [0.0, 0.0, 0.0]
     poses[1, :3, 3] = [10.0, 0.0, 0.0]
     poses[2, :3, 3] = [20.0, 0.0, 0.0]
     ts = np.array([0, 1_000_000, 2_000_000], dtype=np.int64)
     return FourDMetadata(
-        schema_version=2, sequence_id="test",
+        schema_version=2,
+        sequence_id="test",
         ego_poses_c2w=poses,
         ego_frame_timestamps_us=ts,
         ego_primary_camera_id="primary",
-        ego_primary_fov_y_rad=1.0, ego_primary_aspect=1.78,
+        ego_primary_fov_y_rad=1.0,
+        ego_primary_aspect=1.78,
         ego_primary_intrinsics_ftheta=None,
         ego_primary_resolution=None,
-        tracks={}, tracks_camera_timestamps_us=ts,
-        road_xyz=None, road_rgb=None, dyn_xyz=None, dyn_rgb=None,
-        road_n_total=None, dyn_n_total=None,
-        dyn_local_xyz=None, dyn_track_ids=None, dyn_track_names=None,
-        initial_c2w=poses[0], t_us_first=0, t_us_last=2_000_000,
+        tracks={},
+        tracks_camera_timestamps_us=ts,
+        road_xyz=None,
+        road_rgb=None,
+        dyn_xyz=None,
+        dyn_rgb=None,
+        road_n_total=None,
+        dyn_n_total=None,
+        dyn_local_xyz=None,
+        dyn_track_ids=None,
+        dyn_track_names=None,
+        initial_c2w=poses[0],
+        t_us_first=0,
+        t_us_last=2_000_000,
     )
 
 
@@ -95,12 +106,14 @@ def _bypass_init_viewer(viewer_cls, *, meta):
     viewer._current_dropdown_cam = None
     viewer.h_ego_frustum = None
     # Fake server with mutable clients dict.
-    fake_client = SimpleNamespace(camera=SimpleNamespace(
-        wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
-        position=np.array([99.0, 99.0, 99.0]),  # initial "wrong" position
-        look_at=np.array([0.0, 0.0, 0.0]),
-        up_direction=np.array([0.0, 1.0, 0.0]),
-    ))
+    fake_client = SimpleNamespace(
+        camera=SimpleNamespace(
+            wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            position=np.array([99.0, 99.0, 99.0]),  # initial "wrong" position
+            look_at=np.array([0.0, 0.0, 0.0]),
+            up_direction=np.array([0.0, 1.0, 0.0]),
+        )
+    )
     fake_server = SimpleNamespace(get_clients=lambda: {"c1": fake_client})
     viewer.server = fake_server
     return viewer, fake_client

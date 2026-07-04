@@ -12,6 +12,7 @@ ckpt['exposure_state']['module'] holds) loads strict=True, and a <1 gain
 darkens over-bright radiance. (Engine wiring itself is GPU + viser-visual
 verified on inceptio; this is the CPU-testable core.)
 """
+
 import torch
 
 from threedgrut.correction import BilateralGrid
@@ -24,8 +25,8 @@ def _make_state(n: int, cam0_gain: float | None = None) -> dict:
     bg = BilateralGrid(num_camera=n, grid_X=1, grid_Y=1, grid_W=1)  # identity init
     if cam0_gain is not None:
         with torch.no_grad():
-            bg.grids[0, 0, 0, 0, 0] = cam0_gain   # R
-            bg.grids[0, 5, 0, 0, 0] = cam0_gain   # G
+            bg.grids[0, 0, 0, 0, 0] = cam0_gain  # R
+            bg.grids[0, 5, 0, 0, 0] = cam0_gain  # G
             bg.grids[0, 10, 0, 0, 0] = cam0_gain  # B
     return bg.state_dict()
 
@@ -52,8 +53,9 @@ def test_exposure_darkens_overexposed_white():
     raw_white = torch.ones(4, 4, 3)  # overexposed
     out = bg(0, raw_white)
     assert out.shape == raw_white.shape
-    assert torch.allclose(out, torch.full_like(out, 0.5), atol=1e-4), \
-        "0.5 per-channel gain on white should yield 0.5 (darkened)"
+    assert torch.allclose(
+        out, torch.full_like(out, 0.5), atol=1e-4
+    ), "0.5 per-channel gain on white should yield 0.5 (darkened)"
 
 
 def test_exposure_preserves_batched_shape_identity():

@@ -12,6 +12,7 @@ everything synthesisable on a Mac:
   - extract_with_no_tracks:    empty tracks dict + None shared ts
   - schema_version_constant:   stay at 1 until a deliberate bump
 """
+
 from __future__ import annotations
 
 import os
@@ -26,10 +27,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.viz.metadata import SCHEMA_VERSION, extract_4d_metadata
 
-
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 # ----------------------------------------------------------------- fixtures
@@ -39,9 +37,14 @@ def real_conf():
         return compose(config_name="apps/ncore_3dgut_mcmc")
 
 
-def _mock_dataset(*, n_frames: int = 5, road_pts: int = 1000,
-                  dyn_pts: int = 500, with_lidar: bool = True,
-                  camera_type: str = "pinhole"):
+def _mock_dataset(
+    *,
+    n_frames: int = 5,
+    road_pts: int = 1000,
+    dyn_pts: int = 500,
+    with_lidar: bool = True,
+    camera_type: str = "pinhole",
+):
     """Build a duck-typed dataset matching NCoreDataset's viz_4d surface.
 
     ``camera_type``:
@@ -93,10 +96,8 @@ def _mock_dataset(*, n_frames: int = 5, road_pts: int = 1000,
         get_poses=lambda: poses,
     )
     if with_lidar:
-        ds.get_road_lidar_points = lambda: (
-            torch.randn(road_pts, 3), torch.rand(road_pts, 3))
-        ds.get_dynamic_lidar_points = lambda: (
-            torch.randn(dyn_pts, 3), None)
+        ds.get_road_lidar_points = lambda: (torch.randn(road_pts, 3), torch.rand(road_pts, 3))
+        ds.get_dynamic_lidar_points = lambda: (torch.randn(dyn_pts, 3), None)
     return ds
 
 
@@ -108,21 +109,20 @@ def _model_with_tracks(real_conf, *, with_metadata: bool = True):
     F = 5
     tracks = {
         "t0": {
-            "poses":      torch.eye(4).repeat(F, 1, 1),
+            "poses": torch.eye(4).repeat(F, 1, 1),
             "frame_info": torch.ones(F, dtype=torch.bool),
-            "cam_timestamps_us": torch.tensor([1000, 2000, 3000, 4000, 5000],
-                                              dtype=torch.int64),
+            "cam_timestamps_us": torch.tensor([1000, 2000, 3000, 4000, 5000], dtype=torch.int64),
         },
         "t1": {
-            "poses":      torch.eye(4).repeat(F, 1, 1),
+            "poses": torch.eye(4).repeat(F, 1, 1),
             "frame_info": torch.tensor([1, 0, 1, 1, 0], dtype=torch.bool),
         },
     }
     if with_metadata:
         tracks["t0"]["class"] = "automobile"
-        tracks["t0"]["size"]  = torch.tensor([2.0, 1.5, 4.5])
+        tracks["t0"]["size"] = torch.tensor([2.0, 1.5, 4.5])
         tracks["t1"]["class"] = "heavy_truck"
-        tracks["t1"]["size"]  = torch.tensor([3.0, 2.5, 12.0])
+        tracks["t1"]["size"] = torch.tensor([3.0, 2.5, 12.0])
     model.populate_tracks(tracks)
     return model
 
@@ -139,13 +139,19 @@ def test_schema_version_is_2(real_conf):
 def test_detect_primary_camera_returns_ftheta_dict_for_ncore(real_conf):
     # T8.13: FTheta camera_model → 8-key dict returned + resolution tuple.
     from threedgrut.viz.metadata import _detect_primary_camera
+
     dataset = _mock_dataset(n_frames=3, camera_type="ftheta")
     cam_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
     assert cam_id == "front_long"
     assert ftheta_dict is not None
     expected_keys = {
-        "resolution", "shutter_type", "principal_point", "reference_poly",
-        "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+        "resolution",
+        "shutter_type",
+        "principal_point",
+        "reference_poly",
+        "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly",
+        "max_angle",
         "linear_cde",
     }
     assert set(ftheta_dict.keys()) == expected_keys
@@ -158,6 +164,7 @@ def test_detect_primary_camera_returns_ftheta_dict_for_ncore(real_conf):
 def test_detect_primary_camera_returns_none_ftheta_for_pinhole(real_conf):
     # T8.13: pinhole camera_model → ftheta_dict is None, resolution still set.
     from threedgrut.viz.metadata import _detect_primary_camera
+
     dataset = _mock_dataset(n_frames=3, camera_type="pinhole")
     cam_id, fov_y, aspect, ftheta_dict, resolution = _detect_primary_camera(dataset)
     assert ftheta_dict is None
@@ -172,8 +179,13 @@ def test_extract_ego_writes_ftheta_dict_to_ckpt(real_conf):
     ego = md["ego"]
     assert ego["primary_camera_intrinsics_FTheta"] is not None
     assert set(ego["primary_camera_intrinsics_FTheta"].keys()) == {
-        "resolution", "shutter_type", "principal_point", "reference_poly",
-        "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+        "resolution",
+        "shutter_type",
+        "principal_point",
+        "reference_poly",
+        "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly",
+        "max_angle",
         "linear_cde",
     }
     assert ego["primary_camera_resolution"] == (1920, 1208)
@@ -225,11 +237,13 @@ def test_subsample_respected(real_conf):
 
     # Override defaults via a minimal patch of real_conf using OmegaConf.
     from omegaconf import OmegaConf
-    conf = OmegaConf.merge(real_conf, OmegaConf.create({
-        "viz_4d": {"lidar_road_subsample": 200,
-                   "lidar_dynamic_pts_per_track": 50,
-                   "include_lidar": True}
-    }))
+
+    conf = OmegaConf.merge(
+        real_conf,
+        OmegaConf.create(
+            {"viz_4d": {"lidar_road_subsample": 200, "lidar_dynamic_pts_per_track": 50, "include_lidar": True}}
+        ),
+    )
     md = extract_4d_metadata(model, dataset, conf)
     assert md["lidar"]["road_xyz"].shape == (200, 3)
     assert md["lidar"]["road_rgb"].shape == (200, 3)
@@ -246,9 +260,8 @@ def test_include_lidar_false_skips_clouds(real_conf):
     model = _model_with_tracks(real_conf)
     dataset = _mock_dataset()
     from omegaconf import OmegaConf
-    conf = OmegaConf.merge(real_conf, OmegaConf.create({
-        "viz_4d": {"include_lidar": False}
-    }))
+
+    conf = OmegaConf.merge(real_conf, OmegaConf.create({"viz_4d": {"include_lidar": False}}))
     md = extract_4d_metadata(model, dataset, conf)
     assert md["lidar"]["road_xyz"] is None
     assert md["lidar"]["dynamic_xyz"] is None
@@ -267,11 +280,11 @@ def test_dyn_lidar_per_track_local_frame(real_conf):
     # Two tracks at origin with non-zero size so points near origin land in.
     tracks = {
         "ta": {
-            "poses":      torch.eye(4).repeat(F, 1, 1),
+            "poses": torch.eye(4).repeat(F, 1, 1),
             "frame_info": torch.ones(F, dtype=torch.bool),
             "cam_timestamps_us": torch.tensor([1, 2, 3], dtype=torch.int64),
-            "class":      "automobile",
-            "size":       torch.tensor([4.0, 2.0, 1.5]),
+            "class": "automobile",
+            "size": torch.tensor([4.0, 2.0, 1.5]),
         },
     }
     model.populate_tracks(tracks)
@@ -300,19 +313,20 @@ def test_tracks_metadata_populated_via_populate_tracks(real_conf):
 
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=1.0)
-    model.populate_tracks({
-        "ta": {
-            "poses": torch.eye(4).repeat(3, 1, 1),
-            "frame_info": torch.ones(3, dtype=torch.bool),
-            "cam_timestamps_us": torch.tensor([10, 20, 30], dtype=torch.int64),
-            "class": "bus",
-            "size": torch.tensor([3.0, 2.5, 12.0]),
-        },
-    })
+    model.populate_tracks(
+        {
+            "ta": {
+                "poses": torch.eye(4).repeat(3, 1, 1),
+                "frame_info": torch.ones(3, dtype=torch.bool),
+                "cam_timestamps_us": torch.tensor([10, 20, 30], dtype=torch.int64),
+                "class": "bus",
+                "size": torch.tensor([3.0, 2.5, 12.0]),
+            },
+        }
+    )
     assert "ta" in model.tracks_metadata
     assert model.tracks_metadata["ta"]["class"] == "bus"
-    assert torch.allclose(model.tracks_metadata["ta"]["size"],
-                          torch.tensor([3.0, 2.5, 12.0]))
+    assert torch.allclose(model.tracks_metadata["ta"]["size"], torch.tensor([3.0, 2.5, 12.0]))
 
 
 def test_extract_without_tracks(real_conf):
@@ -343,13 +357,15 @@ def test_unknown_class_default(real_conf):
 
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=1.0)
-    model.populate_tracks({
-        "tx": {
-            "poses": torch.eye(4).repeat(2, 1, 1),
-            "frame_info": torch.ones(2, dtype=torch.bool),
-            "cam_timestamps_us": torch.tensor([1, 2], dtype=torch.int64),
-        },
-    })
+    model.populate_tracks(
+        {
+            "tx": {
+                "poses": torch.eye(4).repeat(2, 1, 1),
+                "frame_info": torch.ones(2, dtype=torch.bool),
+                "cam_timestamps_us": torch.tensor([1, 2], dtype=torch.int64),
+            },
+        }
+    )
     dataset = _mock_dataset(n_frames=2, with_lidar=False)
     md = extract_4d_metadata(model, dataset, real_conf)
     assert md["tracks"]["tx"]["class"] == "unknown"

@@ -89,9 +89,8 @@ def _install_stubs() -> None:
 
     # 5. torch.utils.tensorboard: not installed in CPU pip venv
     import torch.utils  # noqa: E402
-    if not hasattr(torch.utils, "tensorboard") or not hasattr(
-        getattr(torch.utils, "tensorboard", None), "writer"
-    ):
+
+    if not hasattr(torch.utils, "tensorboard") or not hasattr(getattr(torch.utils, "tensorboard", None), "writer"):
         tb_stub = MagicMock()
         tb_stub.writer.SummaryWriter = MagicMock()
         sys.modules.setdefault("tensorboard", MagicMock())
@@ -102,9 +101,7 @@ def _install_stubs() -> None:
     #    imports (e.g. threedgrut.datasets.utils) succeed without executing
     #    datasets/__init__.py (which would pull cv2, imageio, kornia, etc.).
     if "threedgrut.datasets" not in sys.modules:
-        _datasets_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "datasets")
-        )
+        _datasets_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "datasets"))
         ds_mod = types.ModuleType("threedgrut.datasets")
         ds_mod.__path__ = [_datasets_path]
         ds_mod.__package__ = "threedgrut.datasets"
@@ -114,9 +111,7 @@ def _install_stubs() -> None:
     #    model.py gets read_colmap_points3D_text etc.), then override
     #    DEFAULT_DEVICE to cpu so background.py can create tensors on Mac.
     if "threedgrut.datasets.utils" not in sys.modules:
-        _utils_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "datasets", "utils.py")
-        )
+        _utils_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "datasets", "utils.py"))
         _spec = importlib.util.spec_from_file_location("threedgrut.datasets.utils", _utils_path)
         _utils_mod = importlib.util.module_from_spec(_spec)
         _utils_mod.__package__ = "threedgrut.datasets"

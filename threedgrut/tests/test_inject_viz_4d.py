@@ -8,6 +8,7 @@ NCore SDK + a real manifest), but we can verify:
     (we forge the metadata directly without going through the full extract).
   * Backup-file behavior on in-place writes.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,10 +26,12 @@ from threedgrut.viz.inject import _populate_tracks_from_dataset, inject_viz_4d
 def _write_dummy_ckpt(path: Path, use_layered_model: bool = True) -> None:
     """Minimal v2 ckpt skeleton — just enough fields for inject's validation."""
     ckpt = {
-        "config": OmegaConf.create({
-            "use_layered_model": use_layered_model,
-            "path": "/nonexistent/old_training_path.json",
-        }),
+        "config": OmegaConf.create(
+            {
+                "use_layered_model": use_layered_model,
+                "path": "/nonexistent/old_training_path.json",
+            }
+        ),
         "model": {"gaussians_nodes": {}, "scene_extent": 1.0},
         "global_step": 100,
     }
@@ -54,8 +57,7 @@ def test_v1_ckpt_rejected(tmp_path):
 
 def test_missing_ckpt_raises(tmp_path):
     with pytest.raises(FileNotFoundError, match="ckpt not found"):
-        inject_viz_4d(str(tmp_path / "does_not_exist.pt"),
-                       dataset_path="/fake/manifest.json", out_path=None)
+        inject_viz_4d(str(tmp_path / "does_not_exist.pt"), dataset_path="/fake/manifest.json", out_path=None)
 
 
 def test_populate_tracks_no_dynamic_layer():
@@ -77,13 +79,12 @@ def test_inject_extract_to_ckpt_roundtrip_preserves_ftheta(tmp_path, monkeypatch
     minus the LayeredGaussians init + populate_tracks (covered elsewhere).
     """
     # Reuse the FTheta mock fixture pattern from test_viz_4d_metadata.
-    from threedgrut.tests.test_viz_4d_metadata import _mock_dataset, _model_with_tracks
-    from threedgrut.viz.metadata import extract_4d_metadata
     from hydra import compose, initialize_config_dir
 
-    _CONFIG_DIR = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-    )
+    from threedgrut.tests.test_viz_4d_metadata import _mock_dataset, _model_with_tracks
+    from threedgrut.viz.metadata import extract_4d_metadata
+
+    _CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
     with initialize_config_dir(config_dir=_CONFIG_DIR, version_base=None):
         conf = compose(config_name="apps/ncore_3dgut_mcmc")
 
@@ -91,9 +92,11 @@ def test_inject_extract_to_ckpt_roundtrip_preserves_ftheta(tmp_path, monkeypatch
     dataset = _mock_dataset(n_frames=4, camera_type="ftheta")
     md = extract_4d_metadata(model, dataset, conf)
 
-    ckpt = {"config": OmegaConf.create({"use_layered_model": True}),
-            "model": {"gaussians_nodes": {}, "scene_extent": 1.0},
-            "viz_4d": md}
+    ckpt = {
+        "config": OmegaConf.create({"use_layered_model": True}),
+        "model": {"gaussians_nodes": {}, "scene_extent": 1.0},
+        "viz_4d": md,
+    }
     p = tmp_path / "ftheta_ckpt.pt"
     torch.save(ckpt, p)
     loaded = torch.load(p, weights_only=False)
@@ -103,9 +106,14 @@ def test_inject_extract_to_ckpt_roundtrip_preserves_ftheta(tmp_path, monkeypatch
     ego = loaded["viz_4d"]["ego"]
     assert ego["primary_camera_intrinsics_FTheta"] is not None
     assert set(ego["primary_camera_intrinsics_FTheta"].keys()) >= {
-        "resolution", "max_angle", "pixeldist_to_angle_poly",
-        "angle_to_pixeldist_poly", "linear_cde", "principal_point",
-        "shutter_type", "reference_poly",
+        "resolution",
+        "max_angle",
+        "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly",
+        "linear_cde",
+        "principal_point",
+        "shutter_type",
+        "reference_poly",
     }
     assert tuple(ego["primary_camera_resolution"]) == (1920, 1208)
 

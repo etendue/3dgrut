@@ -13,7 +13,9 @@ into `cell_size`-meter cells, store per-cell median Z = local ground height.
 A bg particle is "on road" iff its XY lands in an occupied cell and
 |z - ground_z| < z_band.
 """
+
 from __future__ import annotations
+
 from typing import Dict, Tuple
 
 import torch
@@ -50,11 +52,11 @@ def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0
                 "occupied": torch.zeros(0, 0, dtype=torch.bool, device=device),
             }
 
-        xy = road_positions[:, :2]   # [M, 2]
-        z  = road_positions[:, 2]    # [M]
+        xy = road_positions[:, :2]  # [M, 2]
+        z = road_positions[:, 2]  # [M]
 
-        xy_min = xy.min(dim=0).values          # [2]
-        xy_max = xy.max(dim=0).values          # [2]
+        xy_min = xy.min(dim=0).values  # [2]
+        xy_max = xy.max(dim=0).values  # [2]
 
         # Number of cells in each dimension (at least 1)
         span = xy_max - xy_min
@@ -64,12 +66,12 @@ def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0
         # Compute integer cell index for each road particle
         idx_x = torch.floor((xy[:, 0] - xy_min[0]) / cell_size).long().clamp(0, H - 1)
         idx_y = torch.floor((xy[:, 1] - xy_min[1]) / cell_size).long().clamp(0, W - 1)
-        flat_idx = idx_x * W + idx_y            # [M] flat cell index
+        flat_idx = idx_x * W + idx_y  # [M] flat cell index
 
         # Build grid_z by computing per-cell median Z.
         # We iterate over unique cells — M ~200k but this runs ONCE at setup.
-        grid_z    = torch.zeros(H * W, dtype=dtype, device=device)
-        occupied  = torch.zeros(H * W, dtype=torch.bool, device=device)
+        grid_z = torch.zeros(H * W, dtype=dtype, device=device)
+        occupied = torch.zeros(H * W, dtype=torch.bool, device=device)
 
         unique_cells = flat_idx.unique()
         for cell in unique_cells:
@@ -79,7 +81,7 @@ def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0
             grid_z[cell] = median_z
             occupied[cell] = True
 
-        grid_z   = grid_z.view(H, W)
+        grid_z = grid_z.view(H, W)
         occupied = occupied.view(H, W)
 
         return {
@@ -91,7 +93,7 @@ def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0
 
 
 def query_ground_z(
-    positions_xy: torch.Tensor,   # [N, 2] world XY
+    positions_xy: torch.Tensor,  # [N, 2] world XY
     height_field: Dict,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Look up ground Z for each query XY.
@@ -106,17 +108,17 @@ def query_ground_z(
     bounds-check against grid shape, and gate by `occupied`.
     """
     with torch.no_grad():
-        grid_z   = height_field["grid_z"]
+        grid_z = height_field["grid_z"]
         occupied = height_field["occupied"]
-        xy_min   = height_field["xy_min"]
+        xy_min = height_field["xy_min"]
         cell_size = float(height_field["cell_size"])
 
         N = positions_xy.shape[0]
         device = positions_xy.device
-        dtype  = positions_xy.dtype
+        dtype = positions_xy.dtype
 
         ground_z = torch.zeros(N, dtype=dtype, device=device)
-        valid    = torch.zeros(N, dtype=torch.bool, device=device)
+        valid = torch.zeros(N, dtype=torch.bool, device=device)
 
         # Handle empty grid
         if grid_z.numel() == 0:
@@ -135,8 +137,8 @@ def query_ground_z(
         if in_bounds.any():
             ix_clamp = ix[in_bounds].clamp(0, H - 1)
             iy_clamp = iy[in_bounds].clamp(0, W - 1)
-            occ_sel  = occupied[ix_clamp, iy_clamp]       # [K] bool
-            gz_sel   = grid_z[ix_clamp, iy_clamp]         # [K] float
+            occ_sel = occupied[ix_clamp, iy_clamp]  # [K] bool
+            gz_sel = grid_z[ix_clamp, iy_clamp]  # [K] float
 
             # Build full-size mask: in_bounds AND occupied
             valid_full = torch.zeros(N, dtype=torch.bool, device=device)
@@ -150,7 +152,7 @@ def query_ground_z(
 
 
 def compute_bg_road_opacity_penalty(
-    bg_positions: torch.Tensor,    # [N,3] world frame
+    bg_positions: torch.Tensor,  # [N,3] world frame
     bg_density_raw: torch.Tensor,  # [N] or [N,1] pre-sigmoid nn.Parameter
     height_field: Dict,
     z_band: float,
@@ -182,7 +184,7 @@ def compute_bg_road_opacity_penalty(
     # Spatial mask is piecewise-constant in positions — no grad through it.
     with torch.no_grad():
         positions_xy = bg_positions[:, :2].detach()
-        positions_z  = bg_positions[:, 2].detach()
+        positions_z = bg_positions[:, 2].detach()
 
         ground_z, valid = query_ground_z(positions_xy, height_field)
 
@@ -192,6 +194,6 @@ def compute_bg_road_opacity_penalty(
 
     mask_f = on_road.to(dtype=bg_density_raw.dtype)
 
-    opacity = torch.sigmoid(bg_density_raw.view(-1))    # [N]
+    opacity = torch.sigmoid(bg_density_raw.view(-1))  # [N]
     loss = (opacity * mask_f).mean()
     return float(lambda_val) * loss

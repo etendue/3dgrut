@@ -12,6 +12,7 @@ see v2_architecture § 7). The detector is duck-typed (``detect_vehicles``)
 so the matching logic is testable on Mac with a fake; the real YOLO wrapper
 lives in ``vehicle_detector.py``.
 """
+
 from __future__ import annotations
 
 import torch
@@ -23,7 +24,12 @@ from threedgrut.layers.dynamic_mask import _CORNER_SIGNS, project_cuboids_to_mas
 # {automobile: 68, heavy_truck: 1, bus: 1}. Extra aliases are harmless — the
 # set is only used as a filter.
 VEHICLE_TRACK_CLASSES = {
-    "automobile", "heavy_truck", "bus", "car", "truck", "vehicle",
+    "automobile",
+    "heavy_truck",
+    "bus",
+    "car",
+    "truck",
+    "vehicle",
 }
 # COCO class ids kept by the detector: car=2, motorcycle=3, bus=5, truck=7
 VEHICLE_COCO_IDS = (2, 3, 5, 7)
@@ -40,17 +46,23 @@ def project_track_to_2d_box(pose, size, K, ftheta_params, T_w2c, H, W):
     # behind the camera → invisible. (The pinhole branch of
     # project_cuboids_to_mask clamps z to 0.1 and would happily project a
     # behind-camera cuboid; the FTheta branch handles this itself.)
-    corners = _CORNER_SIGNS.to(device=device, dtype=torch.float32) \
-        * (size.to(device=device, dtype=torch.float32) * 0.5)        # [8, 3]
+    corners = _CORNER_SIGNS.to(device=device, dtype=torch.float32) * (
+        size.to(device=device, dtype=torch.float32) * 0.5
+    )  # [8, 3]
     ones = torch.ones(8, 1, dtype=torch.float32, device=device)
-    world = (pose.to(device=device, dtype=torch.float32)
-             @ torch.cat([corners, ones], dim=-1).T).T               # [8, 4]
+    world = (pose.to(device=device, dtype=torch.float32) @ torch.cat([corners, ones], dim=-1).T).T  # [8, 4]
     cam_z = (T_w2c.to(device=device, dtype=torch.float32) @ world.T).T[:, 2]
     if not bool((cam_z > 0).any()):
         return None
     mask = project_cuboids_to_mask(
-        pose.unsqueeze(0), size.unsqueeze(0), K, T_w2c, H, W,
-        device=device, ftheta_params=ftheta_params,
+        pose.unsqueeze(0),
+        size.unsqueeze(0),
+        K,
+        T_w2c,
+        H,
+        W,
+        device=device,
+        ftheta_params=ftheta_params,
     )  # [H, W] bool
     ys, xs = torch.where(mask)
     if ys.numel() == 0:
@@ -59,7 +71,14 @@ def project_track_to_2d_box(pose, size, K, ftheta_params, T_w2c, H, W):
 
 
 def compute_frame_nta_iou(
-    pred_rgb_hw3, active_tracks, detector, K, ftheta_params, T_w2c, H, W,
+    pred_rgb_hw3,
+    active_tracks,
+    detector,
+    K,
+    ftheta_params,
+    T_w2c,
+    H,
+    W,
 ):
     """One frame of NTA-IoU. Returns ``{"mean_nta_iou", "n_gt", "n_det"}``;
     None when the frame has no visible GT vehicle (frame not counted).
@@ -72,8 +91,13 @@ def compute_frame_nta_iou(
         if str(t.get("class", "")).lower() not in VEHICLE_TRACK_CLASSES:
             continue
         b = project_track_to_2d_box(
-            t["pose"].to(torch.float32), t["size"].to(torch.float32),
-            K, ftheta_params, T_w2c, H, W,
+            t["pose"].to(torch.float32),
+            t["size"].to(torch.float32),
+            K,
+            ftheta_params,
+            T_w2c,
+            H,
+            W,
         )
         if b is not None:
             gt_boxes.append(b)
@@ -83,8 +107,8 @@ def compute_frame_nta_iou(
     if det is None or det.numel() == 0:
         return {"mean_nta_iou": 0.0, "n_gt": len(gt_boxes), "n_det": 0}
     gt = torch.tensor(gt_boxes, dtype=torch.float32)
-    iou = _tv_box_iou(gt, det.to(torch.float32).cpu())   # [G, M]
-    best = iou.max(dim=1).values                          # best match per GT
+    iou = _tv_box_iou(gt, det.to(torch.float32).cpu())  # [G, M]
+    best = iou.max(dim=1).values  # best match per GT
     return {
         "mean_nta_iou": float(best.mean()),
         "n_gt": len(gt_boxes),

@@ -3,6 +3,7 @@
 
 Pure CPU mock tests.
 """
+
 from __future__ import annotations
 
 import torch
@@ -10,14 +11,16 @@ import torch
 from threedgrut.layers.dynamic_rigid_init import init_dynamic_rigid_layer
 
 
-def _identity_track(F: int = 5, size=(4.0, 2.0, 1.5),
-                    active=None) -> dict:
+def _identity_track(F: int = 5, size=(4.0, 2.0, 1.5), active=None) -> dict:
     eye = torch.eye(4).expand(F, 4, 4).clone()
     active = torch.ones(F, dtype=torch.bool) if active is None else active
     return {
-        "pts": None, "colors": None,
-        "poses": eye, "size": torch.tensor(list(size)),
-        "frame_info": active, "class": "vehicle",
+        "pts": None,
+        "colors": None,
+        "poses": eye,
+        "size": torch.tensor(list(size)),
+        "frame_info": active,
+        "class": "vehicle",
     }
 
 
@@ -26,9 +29,12 @@ def _translated_track(F: int = 5, t=(10.0, 5.0, 0.0), size=(4.0, 2.0, 1.5)) -> d
     eye[:3, 3] = torch.tensor(list(t))
     poses = eye.expand(F, 4, 4).clone()
     return {
-        "pts": None, "colors": None,
-        "poses": poses, "size": torch.tensor(list(size)),
-        "frame_info": torch.ones(F, dtype=torch.bool), "class": "vehicle",
+        "pts": None,
+        "colors": None,
+        "poses": poses,
+        "size": torch.tensor(list(size)),
+        "frame_info": torch.ones(F, dtype=torch.bool),
+        "class": "vehicle",
     }
 
 
@@ -38,15 +44,19 @@ def test_init_dyn_rigid_cuboid_filter_keeps_inside_points():
     inside box are kept (in object-local frame == world frame for identity)."""
     tracks = {"v0": _identity_track(F=1, size=(4.0, 2.0, 1.5))}
     # 8 LiDAR points: 4 inside cuboid (|x|<2, |y|<1, |z|<0.75), 4 outside
-    pts = torch.tensor([
-        [0.0, 0.0, 0.0],    [1.5, 0.5, 0.5],    [-1.0, -0.5, -0.3],
-        [1.9, 0.9, 0.7],     # inside (4)
-        [3.0, 0.0, 0.0],    [0.0, 1.5, 0.0],    [0.0, 0.0, 1.0],
-        [-3.0, -3.0, -3.0],  # outside (4)
-    ])
-    positions, track_ids, names = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100
+    pts = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.5, 0.5, 0.5],
+            [-1.0, -0.5, -0.3],
+            [1.9, 0.9, 0.7],  # inside (4)
+            [3.0, 0.0, 0.0],
+            [0.0, 1.5, 0.0],
+            [0.0, 0.0, 1.0],
+            [-3.0, -3.0, -3.0],  # outside (4)
+        ]
     )
+    positions, track_ids, names = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100)
     assert positions.shape == (4, 3)
     assert torch.all(track_ids == 0)
     assert names == ["v0"]
@@ -55,18 +65,17 @@ def test_init_dyn_rigid_cuboid_filter_keeps_inside_points():
 def test_init_dyn_rigid_local_frame_roundtrip():
     """T4.2.a: translated track → LiDAR points in world but cuboid filter
     works in local frame; local pts NEAR origin (not at world translation)."""
-    tracks = {"v0": _translated_track(F=1, t=(10.0, 5.0, 0.0),
-                                       size=(4.0, 2.0, 1.5))}
+    tracks = {"v0": _translated_track(F=1, t=(10.0, 5.0, 0.0), size=(4.0, 2.0, 1.5))}
     # World pts near (10, 5, 0) → in local frame near (0, 0, 0)
-    pts = torch.tensor([
-        [10.0, 5.0, 0.0],     # local (0,0,0)
-        [11.5, 5.5, 0.5],     # local (1.5, 0.5, 0.5) inside
-        [11.9, 5.9, 0.7],     # local (1.9, 0.9, 0.7) inside
-        [13.0, 5.0, 0.0],     # local (3, 0, 0) outside (|x|>2)
-    ])
-    positions, _, _ = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100
+    pts = torch.tensor(
+        [
+            [10.0, 5.0, 0.0],  # local (0,0,0)
+            [11.5, 5.5, 0.5],  # local (1.5, 0.5, 0.5) inside
+            [11.9, 5.9, 0.7],  # local (1.9, 0.9, 0.7) inside
+            [13.0, 5.0, 0.0],  # local (3, 0, 0) outside (|x|>2)
+        ]
     )
+    positions, _, _ = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100)
     # 3 inside; positions in LOCAL frame (near origin, not (10,5,0))
     assert positions.shape == (3, 3)
     assert positions[:, 0].abs().max().item() < 2.0  # local |x| within half-extent
@@ -80,9 +89,7 @@ def test_init_dyn_rigid_subsample_respects_max_pts():
     tracks = {"v0": _identity_track(F=1, size=(20.0, 20.0, 20.0))}  # huge box
     # 1000 random pts all inside (size half=10)
     pts = (torch.rand(1000, 3) - 0.5) * 10
-    positions, track_ids, _ = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100
-    )
+    positions, track_ids, _ = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100)
     assert positions.shape == (100, 3)
     assert track_ids.shape == (100,)
 
@@ -93,17 +100,17 @@ def test_init_dyn_rigid_multi_track_routing():
         "v0": _identity_track(F=1, size=(2.0, 2.0, 2.0)),
         "v1": _translated_track(F=1, t=(50.0, 0.0, 0.0), size=(2.0, 2.0, 2.0)),
     }
-    pts = torch.tensor([
-        [0.0, 0.0, 0.0],      # v0 inside (local 0,0,0)
-        [0.5, 0.5, 0.5],      # v0 inside
-        [50.0, 0.0, 0.0],     # v1 inside (local 0,0,0)
-        [50.3, 0.0, 0.0],     # v1 inside
-        [50.4, 0.0, 0.0],     # v1 inside
-        [100.0, 0.0, 0.0],    # neither
-    ])
-    positions, track_ids, names = init_dynamic_rigid_layer(
-        tracks, pts, max_pts_per_track=100
+    pts = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # v0 inside (local 0,0,0)
+            [0.5, 0.5, 0.5],  # v0 inside
+            [50.0, 0.0, 0.0],  # v1 inside (local 0,0,0)
+            [50.3, 0.0, 0.0],  # v1 inside
+            [50.4, 0.0, 0.0],  # v1 inside
+            [100.0, 0.0, 0.0],  # neither
+        ]
     )
+    positions, track_ids, names = init_dynamic_rigid_layer(tracks, pts, max_pts_per_track=100)
     # Determinism: sorted names → v0=0, v1=1
     assert names == ["v0", "v1"]
     # 2 pts for v0, 3 pts for v1, total 5
@@ -115,9 +122,7 @@ def test_init_dyn_rigid_multi_track_routing():
 def test_init_dyn_rigid_empty_lidar_returns_empty():
     """T4.2.a: 空 dyn_lidar_pts → shape (0,3) / (0,) 返回不 crash."""
     tracks = {"v0": _identity_track(F=5)}
-    positions, track_ids, names = init_dynamic_rigid_layer(
-        tracks, torch.zeros(0, 3), max_pts_per_track=100
-    )
+    positions, track_ids, names = init_dynamic_rigid_layer(tracks, torch.zeros(0, 3), max_pts_per_track=100)
     assert positions.shape == (0, 3)
     assert track_ids.shape == (0,)
     assert names == ["v0"]
@@ -125,9 +130,7 @@ def test_init_dyn_rigid_empty_lidar_returns_empty():
 
 def test_init_dyn_rigid_empty_tracks_returns_empty():
     """T4.2.a: 空 instance_pts_dict → 空输出."""
-    positions, track_ids, names = init_dynamic_rigid_layer(
-        {}, torch.randn(100, 3), max_pts_per_track=50
-    )
+    positions, track_ids, names = init_dynamic_rigid_layer({}, torch.randn(100, 3), max_pts_per_track=50)
     assert positions.shape == (0, 3)
     assert names == []
 

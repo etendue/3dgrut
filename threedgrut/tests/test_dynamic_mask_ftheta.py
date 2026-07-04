@@ -11,6 +11,7 @@ The FTheta branch is exercised here with a synthetic but non-linear polynomial
 mirrors the well-behaved real NCore poly without coupling tests to a specific
 camera calibration.
 """
+
 from __future__ import annotations
 
 import math
@@ -25,8 +26,8 @@ from threedgrut.layers.dynamic_mask import (
     project_cuboids_to_mask,
 )
 
-
 # --- shared fixtures -------------------------------------------------------
+
 
 def _identity_pose() -> torch.Tensor:
     return torch.eye(4)
@@ -56,6 +57,7 @@ def _nonlinear_ftheta(cx: float = 256.0, cy: float = 256.0):
 
 # --- _horner_ascending_torch ----------------------------------------------
 
+
 def test_horner_ascending_linear():
     poly = torch.tensor([0.0, 5.0])
     x = torch.tensor([0.0, 1.0, 2.0, 3.0])
@@ -80,10 +82,11 @@ def test_horner_constant():
 
 # --- _normalize_ftheta_params ---------------------------------------------
 
+
 def test_normalize_ftheta_from_list():
     n = _normalize_ftheta_params(
-        {"angle_to_pixeldist_poly": [0.0, 500.0],
-         "principal_point": [256.0, 256.0]}, device="cpu",
+        {"angle_to_pixeldist_poly": [0.0, 500.0], "principal_point": [256.0, 256.0]},
+        device="cpu",
     )
     assert torch.is_tensor(n["angle_to_pixeldist_poly"])
     assert n["angle_to_pixeldist_poly"].dtype == torch.float32
@@ -92,6 +95,7 @@ def test_normalize_ftheta_from_list():
 
 def test_normalize_ftheta_from_numpy():
     import numpy as np
+
     raw = {
         "angle_to_pixeldist_poly": np.asarray([0.0, 500.0], dtype=np.float64),
         "principal_point": np.asarray([256.0, 256.0], dtype=np.float64),
@@ -102,6 +106,7 @@ def test_normalize_ftheta_from_numpy():
 
 
 # --- _corners_to_pixels_ftheta micro -------------------------------------
+
 
 def test_ftheta_corner_on_axis_lands_at_principal_point():
     # Single corner exactly on optical axis: x=0, y=0, z=1.
@@ -125,14 +130,19 @@ def test_ftheta_corner_off_axis_matches_polynomial():
 
 # --- project_cuboids_to_mask FTheta path ----------------------------------
 
+
 def test_ftheta_basic_centered_box_produces_mask():
     pose = torch.eye(4)
     pose[:3, 3] = torch.tensor([0.0, 0.0, 5.0])
     sizes = torch.tensor([[1.0, 1.0, 1.0]])
     mask = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes,
-        K=None, T_world2cam=_identity_pose(),
-        H=512, W=512, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        K=None,
+        T_world2cam=_identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
         ftheta_params=_linear_ftheta(),
     )
     assert mask.dtype == torch.bool
@@ -144,14 +154,27 @@ def test_ftheta_basic_centered_box_produces_mask():
 
 def test_ftheta_vs_pinhole_overlap_at_center_small_angle():
     """Same cuboid + same image → FTheta(linear) ≈ pinhole near optical axis."""
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([0.0, 0.0, 5.0])
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([0.0, 0.0, 5.0])
     sizes = torch.tensor([[1.0, 1.0, 1.0]])
     K = _pinhole_K(fx=400.0, fy=400.0)
     mask_pin = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes, K, _identity_pose(), H=512, W=512, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        K,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
     )
     mask_ftheta = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes, None, _identity_pose(), H=512, W=512, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        None,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
         ftheta_params=_linear_ftheta(fx_equiv=400.0),
     )
     # IoU > 0.7 at small angle; pinhole uses tan(θ), ftheta uses θ — tiny diff
@@ -169,31 +192,48 @@ def test_ftheta_off_axis_aabb_stays_bounded_while_pinhole_spans_edge():
         u_off ≈ 355 * (4/4) = 355, u ≈ 256 + 355 = 611 → still slightly clamps
         but doesn't blow up. AABB area is meaningfully smaller.
     """
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([4.0, 0.0, 1.0])
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([4.0, 0.0, 1.0])
     sizes = torch.tensor([[0.5, 0.5, 0.5]])
     K = _pinhole_K(fx=400.0, fy=400.0)
     mask_pin = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes, K, _identity_pose(), H=512, W=512, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        K,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
     )
     mask_ftheta = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes, None, _identity_pose(), H=512, W=512, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        None,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
         ftheta_params=_nonlinear_ftheta(),
     )
     n_pin = int(mask_pin.sum().item())
     n_ft = int(mask_ftheta.sum().item())
     # FTheta produces a finite, smaller AABB; pinhole bigger (often clamped).
-    assert n_pin > n_ft, (
-        f"expected pinhole AABB ({n_pin}) > FTheta AABB ({n_ft}) at large off-axis"
-    )
+    assert n_pin > n_ft, f"expected pinhole AABB ({n_pin}) > FTheta AABB ({n_ft}) at large off-axis"
 
 
 def test_ftheta_all_corners_behind_camera_skips_track():
     """Cube fully behind the camera (z<0): FTheta path skips → empty mask."""
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([0.0, 0.0, -3.0])
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([0.0, 0.0, -3.0])
     sizes = torch.tensor([[1.0, 1.0, 1.0]])
     mask = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes, None, _identity_pose(),
-        H=256, W=256, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        None,
+        _identity_pose(),
+        H=256,
+        W=256,
+        device="cpu",
         ftheta_params=_linear_ftheta(),
     )
     assert int(mask.sum().item()) == 0
@@ -205,11 +245,17 @@ def test_ftheta_partial_behind_camera_uses_visible_corners_only():
     With pose translation (0, 0, 0.3) and size (1, 1, 1), corners span z∈[-0.2, 0.8].
     4 corners visible (z=+0.8), 4 behind. AABB only uses the visible 4.
     """
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([0.0, 0.0, 0.3])
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([0.0, 0.0, 0.3])
     sizes = torch.tensor([[1.0, 1.0, 1.0]])
     mask = project_cuboids_to_mask(
-        pose.unsqueeze(0), sizes, None, _identity_pose(),
-        H=512, W=512, device="cpu",
+        pose.unsqueeze(0),
+        sizes,
+        None,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
         ftheta_params=_linear_ftheta(),
     )
     # Visible corners are z=0.8; symmetric in x, y → AABB centered at principal
@@ -222,8 +268,13 @@ def test_ftheta_empty_tracks_returns_zero_mask():
     empty_poses = torch.zeros(0, 4, 4)
     empty_sizes = torch.zeros(0, 3)
     mask = project_cuboids_to_mask(
-        empty_poses, empty_sizes, None, _identity_pose(),
-        H=128, W=128, device="cpu",
+        empty_poses,
+        empty_sizes,
+        None,
+        _identity_pose(),
+        H=128,
+        W=128,
+        device="cpu",
         ftheta_params=_linear_ftheta(),
     )
     assert int(mask.sum().item()) == 0
@@ -231,20 +282,34 @@ def test_ftheta_empty_tracks_returns_zero_mask():
 
 
 def test_ftheta_multiple_tracks_union():
-    poses = torch.stack([
-        torch.eye(4),
-        torch.eye(4),
-    ])
+    poses = torch.stack(
+        [
+            torch.eye(4),
+            torch.eye(4),
+        ]
+    )
     poses[0, :3, 3] = torch.tensor([0.0, 0.0, 5.0])
     poses[1, :3, 3] = torch.tensor([0.5, 0.5, 5.0])
     sizes = torch.tensor([[0.5, 0.5, 0.5], [0.5, 0.5, 0.5]])
     mask = project_cuboids_to_mask(
-        poses, sizes, None, _identity_pose(), H=512, W=512, device="cpu",
+        poses,
+        sizes,
+        None,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
         ftheta_params=_linear_ftheta(),
     )
     # Two overlapping cuboids should produce more mask than just one.
     mask_one = project_cuboids_to_mask(
-        poses[:1], sizes[:1], None, _identity_pose(), H=512, W=512, device="cpu",
+        poses[:1],
+        sizes[:1],
+        None,
+        _identity_pose(),
+        H=512,
+        W=512,
+        device="cpu",
         ftheta_params=_linear_ftheta(),
     )
     assert int(mask.sum().item()) >= int(mask_one.sum().item())
@@ -255,6 +320,11 @@ def test_ftheta_rejects_missing_intrinsics():
     sizes = torch.tensor([[1.0, 1.0, 1.0]])
     with pytest.raises(ValueError, match="K or ftheta_params"):
         project_cuboids_to_mask(
-            poses, sizes, K=None, T_world2cam=_identity_pose(),
-            H=64, W=64, device="cpu",
+            poses,
+            sizes,
+            K=None,
+            T_world2cam=_identity_pose(),
+            H=64,
+            W=64,
+            device="cpu",
         )

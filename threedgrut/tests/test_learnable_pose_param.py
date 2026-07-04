@@ -27,6 +27,7 @@ Engine isolation note: same as ``test_engine_layered_load.py`` — we don't
 construct a full Engine (kaolin / OptiX absent on Mac); the unit under test
 is ``LayeredGaussians`` itself.
 """
+
 import os
 
 import pytest
@@ -36,10 +37,7 @@ from hydra import compose, initialize_config_dir
 
 from threedgrut.layers.layer_spec import LayerSpec
 
-
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -76,14 +74,16 @@ def _viz4d_tracks_dict(F: int = 4) -> dict:
         for f in range(F):
             yaw = torch.tensor(0.1 * (f + 1) + 0.5 * i, dtype=torch.float32)
             c, s = torch.cos(yaw), torch.sin(yaw)
-            poses[f, 0, 0] =  c; poses[f, 0, 1] = -s
-            poses[f, 1, 0] =  s; poses[f, 1, 1] =  c
+            poses[f, 0, 0] = c
+            poses[f, 0, 1] = -s
+            poses[f, 1, 0] = s
+            poses[f, 1, 1] = c
             poses[f, 0, 3] = torch.arange(F, dtype=torch.float32)[f] + i * 100.0
         tracks[tid] = {
-            "poses":      poses,
-            "size":       torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
+            "poses": poses,
+            "size": torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
             "frame_info": torch.ones(F, dtype=torch.bool),
-            "class":      "automobile" if i == 0 else "heavy_truck",
+            "class": "automobile" if i == 0 else "heavy_truck",
         }
     return tracks
 
@@ -94,21 +94,24 @@ def _viz4d_tracks_dict(F: int = 4) -> dict:
 def test_quat_wxyz_to_rotmat_round_trip():
     """rot → quat → rot identity on random SO(3) elements via axis-angle."""
     from threedgrut.layers.layered_model import (
-        _rotmat_to_quat_wxyz, _quat_wxyz_to_rotmat,
+        _quat_wxyz_to_rotmat,
+        _rotmat_to_quat_wxyz,
     )
 
     torch.manual_seed(42)
     max_err = 0.0
     for _ in range(50):
-        axis = torch.randn(3); axis = axis / axis.norm()
-        angle = torch.rand(1).item() * 6.0 - 3.0   # ∈ (-3, 3) covers ±π
-        K = torch.tensor([
-            [0.0,    -axis[2], axis[1]],
-            [axis[2], 0.0,    -axis[0]],
-            [-axis[1], axis[0], 0.0],
-        ])
-        R = torch.eye(3) + torch.sin(torch.tensor(angle)) * K \
-            + (1 - torch.cos(torch.tensor(angle))) * (K @ K)
+        axis = torch.randn(3)
+        axis = axis / axis.norm()
+        angle = torch.rand(1).item() * 6.0 - 3.0  # ∈ (-3, 3) covers ±π
+        K = torch.tensor(
+            [
+                [0.0, -axis[2], axis[1]],
+                [axis[2], 0.0, -axis[0]],
+                [-axis[1], axis[0], 0.0],
+            ]
+        )
+        R = torch.eye(3) + torch.sin(torch.tensor(angle)) * K + (1 - torch.cos(torch.tensor(angle))) * (K @ K)
         q = _rotmat_to_quat_wxyz(R)
         R2 = _quat_wxyz_to_rotmat(q)
         max_err = max(max_err, (R - R2).abs().max().item())
@@ -136,9 +139,7 @@ def test_populate_tracks_registers_buffer_when_disabled(conf_learnable_off):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     # Buffer mode: pose buffer exists, quat/trans Parameter do NOT.
@@ -158,9 +159,7 @@ def test_populate_tracks_registers_parameter_when_enabled(conf_learnable_on):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     # Learnable mode: quat[F, 4] and trans[F, 3] Parameters per track.
@@ -197,9 +196,7 @@ def test_tracks_poses_property_survives_state_dict_round_trip(conf_learnable_off
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     src = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     src.populate_tracks(tracks)
     state = src.state_dict()
 
@@ -231,13 +228,11 @@ def test_tracks_poses_property_keys_sorted(conf_learnable_off):
     tracks = {}
     for tid in ["zzz", "aaa", "mmm"]:
         tracks[tid] = {
-            "poses":      torch.eye(4).repeat(F, 1, 1),
-            "size":       torch.tensor([1.0, 1.0, 1.0]),
+            "poses": torch.eye(4).repeat(F, 1, 1),
+            "size": torch.tensor([1.0, 1.0, 1.0]),
             "frame_info": torch.ones(F, dtype=torch.bool),
         }
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [100, 200, 300], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([100, 200, 300], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     assert list(model.tracks_poses.keys()) == ["aaa", "mmm", "zzz"]
@@ -256,9 +251,7 @@ def test_compose_pose_matches_gt_at_init_learnable(conf_learnable_on):
     model = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
     gt_pose_t0 = tracks["t0"]["poses"].clone()
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     # Per-frame composition matches GT to single-precision tolerance
@@ -266,8 +259,7 @@ def test_compose_pose_matches_gt_at_init_learnable(conf_learnable_on):
     for idx in range(4):
         composed = model._compose_pose_for_track("t0", idx)
         assert torch.allclose(composed, gt_pose_t0[idx], atol=1e-5), (
-            f"frame {idx}: composed vs gt diff "
-            f"max={(composed - gt_pose_t0[idx]).abs().max().item():.2e}"
+            f"frame {idx}: composed vs gt diff " f"max={(composed - gt_pose_t0[idx]).abs().max().item():.2e}"
         )
 
 
@@ -279,9 +271,7 @@ def test_compose_pose_buffer_path_returns_slice(conf_learnable_off):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
     for idx in range(4):
         assert torch.equal(
@@ -303,18 +293,18 @@ def test_pose_optimizer_step_changes_trans_parameter(conf_learnable_on):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     trans_before = model._track_trans_t0.detach().clone()
     quat_before = model._track_quat_t0.detach().clone()
 
-    opt = torch.optim.Adam([
-        {"params": [model._track_quat_t0,  model._track_quat_t1],  "lr": 1e-3},
-        {"params": [model._track_trans_t0, model._track_trans_t1], "lr": 1e-2},
-    ])
+    opt = torch.optim.Adam(
+        [
+            {"params": [model._track_quat_t0, model._track_quat_t1], "lr": 1e-3},
+            {"params": [model._track_trans_t0, model._track_trans_t1], "lr": 1e-2},
+        ]
+    )
 
     # Push the trans of t0 frame 1 toward a target offset.
     target = torch.tensor([5.0, 7.0, 0.0])
@@ -327,8 +317,7 @@ def test_pose_optimizer_step_changes_trans_parameter(conf_learnable_on):
 
     trans_after = model._track_trans_t0.detach()
     quat_after = model._track_quat_t0.detach()
-    assert not torch.allclose(trans_after, trans_before), \
-        "trans Parameter did not move under optimization"
+    assert not torch.allclose(trans_after, trans_before), "trans Parameter did not move under optimization"
     # The target-aligned frame should be closer to the target than at init.
     init_dist = (trans_before[1] - target).norm()
     final_dist = (trans_after[1] - target).norm()
@@ -338,8 +327,7 @@ def test_pose_optimizer_step_changes_trans_parameter(conf_learnable_on):
     # after the normalize-in-_compose_pose step.
     composed = model._compose_pose_for_track("t0", 1)
     R = composed[:3, :3]
-    assert torch.allclose(R @ R.T, torch.eye(3), atol=1e-4), \
-        "composed rotation lost orthogonality"
+    assert torch.allclose(R @ R.T, torch.eye(3), atol=1e-4), "composed rotation lost orthogonality"
 
 
 # ─── 6. Resume guard: re-populate doesn't clobber learned Parameter ─────────
@@ -354,9 +342,7 @@ def test_resume_guard_preserves_learned_parameter(conf_learnable_on):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     # Simulate that training moved trans by adding a small delta in-place.
@@ -368,8 +354,9 @@ def test_resume_guard_preserves_learned_parameter(conf_learnable_on):
     model.populate_tracks(tracks)
 
     # Resume guard fires: Parameter still equals the moved value, not GT.
-    assert torch.allclose(model._track_trans_t0.detach(), moved), \
-        "resume guard failed — populate_tracks overwrote learned Parameter"
+    assert torch.allclose(
+        model._track_trans_t0.detach(), moved
+    ), "resume guard failed — populate_tracks overwrote learned Parameter"
 
 
 def test_buffer_mode_repopulate_replaces(conf_learnable_off):
@@ -379,9 +366,7 @@ def test_buffer_mode_repopulate_replaces(conf_learnable_off):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
     tracks_v1 = _viz4d_tracks_dict(F=4)
-    tracks_v1[next(iter(tracks_v1))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks_v1[next(iter(tracks_v1))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks_v1)
     assert model._track_pose_t0.shape == (4, 4, 4)
 
@@ -405,9 +390,7 @@ def test_state_dict_round_trip_learnable_pose(conf_learnable_on):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     src = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     src.populate_tracks(tracks)
 
     # Train one step so quat/trans differ from GT.
@@ -454,9 +437,7 @@ def test_trainer_format_ckpt_round_trip_learnable_pose(conf_learnable_on):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     src = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     src.populate_tracks(tracks)
     src.setup_optimizer_for_test()  # get_model_parameters() asserts optimizer != None
 
@@ -470,15 +451,20 @@ def test_trainer_format_ckpt_round_trip_learnable_pose(conf_learnable_on):
     # Trainer-format save: get_model_parameters wraps under "model" key.
     ckpt = {"model": src.get_model_parameters()}
 
-    assert "layered_track_state" in ckpt["model"], \
-        "get_model_parameters did NOT emit layered_track_state — Stage A ckpt persistence broken"
+    assert (
+        "layered_track_state" in ckpt["model"]
+    ), "get_model_parameters did NOT emit layered_track_state — Stage A ckpt persistence broken"
     # Spot-check that the wxyz quat and trans Parameters AND _track_pose_gt_
     # and _track_active_ buffers are all present.
     expected = {
-        "_track_quat_t0",   "_track_quat_t1",
-        "_track_trans_t0",  "_track_trans_t1",
-        "_track_pose_gt_t0", "_track_pose_gt_t1",
-        "_track_active_t0", "_track_active_t1",
+        "_track_quat_t0",
+        "_track_quat_t1",
+        "_track_trans_t0",
+        "_track_trans_t1",
+        "_track_pose_gt_t0",
+        "_track_pose_gt_t1",
+        "_track_active_t0",
+        "_track_active_t1",
     }
     missing = expected - set(ckpt["model"]["layered_track_state"].keys())
     assert not missing, f"layered_track_state missing entries: {missing}"
@@ -488,15 +474,18 @@ def test_trainer_format_ckpt_round_trip_learnable_pose(conf_learnable_on):
     dst.populate_tracks(tracks)
     # Before load, dst's quat/trans equal GT (not drifted).
     pre_load_trans_t0 = dst._track_trans_t0.detach().clone()
-    assert not torch.allclose(pre_load_trans_t0, src_trans_t0), \
-        "pre-load dst should still be GT, not src's drifted state"
+    assert not torch.allclose(
+        pre_load_trans_t0, src_trans_t0
+    ), "pre-load dst should still be GT, not src's drifted state"
     dst.init_from_checkpoint(ckpt, setup_optimizer=False)
 
     # After load: dst's Parameters match src (refined pose restored).
-    assert torch.allclose(dst._track_trans_t0.detach(), src_trans_t0), \
-        "trans Parameter not restored from ckpt via trainer-format path"
-    assert torch.allclose(dst._track_quat_t1.detach(), src_quat_t1), \
-        "quat Parameter not restored from ckpt via trainer-format path"
+    assert torch.allclose(
+        dst._track_trans_t0.detach(), src_trans_t0
+    ), "trans Parameter not restored from ckpt via trainer-format path"
+    assert torch.allclose(
+        dst._track_quat_t1.detach(), src_quat_t1
+    ), "quat Parameter not restored from ckpt via trainer-format path"
     # Still nn.Parameter, not buffer.
     assert isinstance(dst._track_quat_t0, nn.Parameter)
     assert isinstance(dst._track_trans_t0, nn.Parameter)
@@ -512,9 +501,7 @@ def test_trainer_format_ckpt_round_trip_buffer_mode(conf_learnable_off):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     src = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     src.populate_tracks(tracks)
     src.setup_optimizer_for_test()
 
@@ -547,9 +534,7 @@ def test_property_detach_snapshot_breaks_gradient(conf_learnable_on):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_on, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     # Live property tensor IS gradient-tracking.

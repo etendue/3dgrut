@@ -23,6 +23,7 @@ optimizer, renderer, num_gaussians, get_density(), etc.) to that layer. This
 keeps the existing Trainer + MCMCStrategy code paths working without
 modification for T1.1 smoke. T2 replaces this with explicit fused-view logic.
 """
+
 from __future__ import annotations
 
 from typing import List, Optional
@@ -141,8 +142,14 @@ def _quat_multiply_wxyz(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
     Shapes broadcast: ``q1`` and ``q2`` may be any common-broadcast shape
     ending in 4. Result has the broadcast shape.
     """
-    w1 = q1[..., 0]; x1 = q1[..., 1]; y1 = q1[..., 2]; z1 = q1[..., 3]
-    w2 = q2[..., 0]; x2 = q2[..., 1]; y2 = q2[..., 2]; z2 = q2[..., 3]
+    w1 = q1[..., 0]
+    x1 = q1[..., 1]
+    y1 = q1[..., 2]
+    z1 = q1[..., 3]
+    w2 = q2[..., 0]
+    x2 = q2[..., 1]
+    y2 = q2[..., 2]
+    z2 = q2[..., 3]
     w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
     x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
     y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
@@ -159,10 +166,20 @@ def _quat_wxyz_to_rotmat(q: torch.Tensor) -> torch.Tensor:
     and produce non-orthogonal R. Used by the learnable-pose path
     (``_compose_pose_for_track``) where Adam updates can violate unit-norm.
     """
-    w = q[..., 0]; x = q[..., 1]; y = q[..., 2]; z = q[..., 3]
-    ww = w * w; xx = x * x; yy = y * y; zz = z * z
-    wx = w * x; wy = w * y; wz = w * z
-    xy = x * y; xz = x * z; yz = y * z
+    w = q[..., 0]
+    x = q[..., 1]
+    y = q[..., 2]
+    z = q[..., 3]
+    ww = w * w
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
     r00 = ww + xx - yy - zz
     r01 = 2 * (xy - wz)
     r02 = 2 * (xz + wy)
@@ -187,8 +204,7 @@ class _LayeredOptimizerView:
     (byte-identical with the v1 path; this wrapper is not used).
     """
 
-    def __init__(self, layers: nn.ModuleDict,
-                 extra_optimizers: Optional[list] = None) -> None:
+    def __init__(self, layers: nn.ModuleDict, extra_optimizers: Optional[list] = None) -> None:
         self._layers = layers
         # V3-L8/L9: optimizers attached to LayeredGaussians itself (not to a
         # specific layer) — e.g. the per-track albedo / log-scale Adam. Empty
@@ -222,10 +238,16 @@ class _LayeredOptimizerView:
 # Per-particle parameter names forwarded to the single background layer when in
 # single-layer mode (so MCMCStrategy's setattr(model, name, new_param) writes
 # to bg layer's Parameter rather than registering one on LayeredGaussians).
-_FORWARD_PARAM_NAMES = frozenset({
-    "positions", "rotation", "scale", "density",
-    "features_albedo", "features_specular",
-})
+_FORWARD_PARAM_NAMES = frozenset(
+    {
+        "positions",
+        "rotation",
+        "scale",
+        "density",
+        "features_albedo",
+        "features_specular",
+    }
+)
 
 
 class _FusedView:
@@ -257,49 +279,77 @@ class _FusedView:
 
     # Direct fused tensor access ---------------------------------------------
     @property
-    def positions(self) -> torch.Tensor: return self._t["positions"]
+    def positions(self) -> torch.Tensor:
+        return self._t["positions"]
+
     @property
-    def rotation(self) -> torch.Tensor: return self._t["rotation"]
+    def rotation(self) -> torch.Tensor:
+        return self._t["rotation"]
+
     @property
-    def scale(self) -> torch.Tensor: return self._t["scale"]
+    def scale(self) -> torch.Tensor:
+        return self._t["scale"]
+
     @property
-    def density(self) -> torch.Tensor: return self._t["density"]
+    def density(self) -> torch.Tensor:
+        return self._t["density"]
+
     @property
-    def features_albedo(self) -> torch.Tensor: return self._t["features_albedo"]
+    def features_albedo(self) -> torch.Tensor:
+        return self._t["features_albedo"]
+
     @property
-    def features_specular(self) -> torch.Tensor: return self._t["features_specular"]
+    def features_specular(self) -> torch.Tensor:
+        return self._t["features_specular"]
 
     # Shape / config ---------------------------------------------------------
     @property
-    def num_gaussians(self) -> int: return int(self._t["positions"].shape[0])
+    def num_gaussians(self) -> int:
+        return int(self._t["positions"].shape[0])
+
     @property
-    def n_active_features(self) -> int: return self._ref.n_active_features
+    def n_active_features(self) -> int:
+        return self._ref.n_active_features
+
     @property
-    def max_n_features(self) -> int: return self._ref.max_n_features
+    def max_n_features(self) -> int:
+        return self._ref.max_n_features
+
     @property
-    def background(self): return self._ref.background
+    def background(self):
+        return self._ref.background
+
     @property
-    def device(self): return self._ref.device
+    def device(self):
+        return self._ref.device
 
     # Activated accessors borrowed from ref layer ----------------------------
-    def get_positions(self) -> torch.Tensor: return self._t["positions"]
+    def get_positions(self) -> torch.Tensor:
+        return self._t["positions"]
+
     def get_rotation(self, preactivation: bool = False) -> torch.Tensor:
         return self._t["rotation"] if preactivation else self._ref.rotation_activation(self._t["rotation"])
+
     def get_scale(self, preactivation: bool = False) -> torch.Tensor:
         return self._t["scale"] if preactivation else self._ref.scale_activation(self._t["scale"])
+
     def get_density(self, preactivation: bool = False) -> torch.Tensor:
         return self._t["density"] if preactivation else self._ref.density_activation(self._t["density"])
+
     def get_features(self) -> torch.Tensor:
         return torch.cat((self._t["features_albedo"], self._t["features_specular"]), dim=1)
-    def get_features_albedo(self) -> torch.Tensor: return self._t["features_albedo"]
-    def get_features_specular(self) -> torch.Tensor: return self._t["features_specular"]
+
+    def get_features_albedo(self) -> torch.Tensor:
+        return self._t["features_albedo"]
+
+    def get_features_specular(self) -> torch.Tensor:
+        return self._t["features_specular"]
 
 
 class LayeredGaussians(nn.Module):
     """Drop-in replacement for MixtureOfGaussians when use_layered_model=True."""
 
-    def __init__(self, conf, specs: List[LayerSpec], scene_extent: float,
-                 *, tracks: Optional[dict] = None):
+    def __init__(self, conf, specs: List[LayerSpec], scene_extent: float, *, tracks: Optional[dict] = None):
         super().__init__()
         # Use object.__setattr__ for non-Module fields to bypass our custom
         # __setattr__ forwarding logic below.
@@ -310,10 +360,7 @@ class LayeredGaussians(nn.Module):
         # Default: every contributing layer enabled (particle layers + sky_envmap);
         # GUI callbacks mutate via wholesale set replacement so the render loop
         # always observes a consistent snapshot. Never persisted in state_dict.
-        default_enabled = {
-            s.name for s in specs
-            if (s.is_particle_layer or s.name == "sky_envmap")
-        }
+        default_enabled = {s.name for s in specs if (s.is_particle_layer or s.name == "sky_envmap")}
         object.__setattr__(self, "enabled_layer_names", default_enabled)
         # nn.ModuleDict so .to(device) / state_dict() recurse into layers.
         self.layers: nn.ModuleDict = nn.ModuleDict()
@@ -362,12 +409,14 @@ class LayeredGaussians(nn.Module):
         trainer_conf = getattr(self.conf, "trainer", None)
         if trainer_conf is None:
             return False
-        lp = trainer_conf.get("learnable_pose", None) if hasattr(trainer_conf, "get") \
+        lp = (
+            trainer_conf.get("learnable_pose", None)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "learnable_pose", None)
+        )
         if lp is None:
             return False
-        enabled = lp.get("enabled", False) if hasattr(lp, "get") \
-            else getattr(lp, "enabled", False)
+        enabled = lp.get("enabled", False) if hasattr(lp, "get") else getattr(lp, "enabled", False)
         return bool(enabled)
 
     def _iter_track_tids(self) -> List[str]:
@@ -379,8 +428,7 @@ class LayeredGaussians(nn.Module):
         used by ``init_layer_from_points`` (L951) — see observation #677.
         """
         prefix = "_track_active_"
-        tids = [name[len(prefix):] for name in self._buffers
-                if name.startswith(prefix)]
+        tids = [name[len(prefix) :] for name in self._buffers if name.startswith(prefix)]
         tids.sort()
         return tids
 
@@ -444,12 +492,12 @@ class LayeredGaussians(nn.Module):
         if q_all is None or t_all is None:
             raise KeyError(f"No pose state for track '{tid}'")
         q = q_all[idx]
-        q = q / q.norm().clamp(min=1e-12)             # Adam breaks unit-norm — renormalize per access
-        R = _quat_wxyz_to_rotmat(q)                   # [3, 3]
+        q = q / q.norm().clamp(min=1e-12)  # Adam breaks unit-norm — renormalize per access
+        R = _quat_wxyz_to_rotmat(q)  # [3, 3]
         T = q.new_zeros(4, 4)
         T[:3, :3] = R
-        T[:3, 3]  = t_all[idx]
-        T[3, 3]   = 1.0
+        T[:3, 3] = t_all[idx]
+        T[3, 3] = 1.0
         return T
 
     def _compose_pose_all_frames(self, tid: str) -> torch.Tensor:
@@ -476,12 +524,12 @@ class LayeredGaussians(nn.Module):
         if q_all is None or t_all is None:
             raise KeyError(f"No pose state for track '{tid}'")
         q = q_all / q_all.norm(dim=-1, keepdim=True).clamp(min=1e-12)  # [F, 4]
-        R = _quat_wxyz_to_rotmat(q)                                    # [F, 3, 3]
+        R = _quat_wxyz_to_rotmat(q)  # [F, 3, 3]
         F = q.shape[0]
         T = q.new_zeros(F, 4, 4)
         T[:, :3, :3] = R
-        T[:, :3,  3] = t_all
-        T[:,  3,  3] = 1.0
+        T[:, :3, 3] = t_all
+        T[:, 3, 3] = 1.0
         return T
 
     @property
@@ -493,8 +541,7 @@ class LayeredGaussians(nn.Module):
         ``track_ids``. Computed on every access; in learnable mode the tensors
         are differentiable (do NOT cache the dict across train steps).
         """
-        return {tid: self._compose_pose_all_frames(tid)
-                for tid in self._iter_track_tids()}
+        return {tid: self._compose_pose_all_frames(tid) for tid in self._iter_track_tids()}
 
     @property
     def tracks_active(self) -> dict:
@@ -550,9 +597,7 @@ class LayeredGaussians(nn.Module):
             layer = self.layers[spec.name]
             track_ids = getattr(layer, "track_ids", None)
             if track_ids is not None:
-                out["gaussians_nodes"][spec.name]["track_ids"] = (
-                    track_ids.detach().cpu().to(torch.int64)
-                )
+                out["gaussians_nodes"][spec.name]["track_ids"] = track_ids.detach().cpu().to(torch.int64)
         # T5.4: sky envmap state — saved as raw state_dict so SkyEnvmapMLP /
         # SkyEnvmapCubemap parameters (base / Linear weights) round-trip.
         if "sky_envmap" in self.layers:
@@ -587,10 +632,7 @@ class LayeredGaussians(nn.Module):
         # also match the ``_track_*`` prefix but are already saved under
         # ``track_optim_state`` above; they're left here too as a safety
         # net (load order ensures table values are written exactly once).
-        layered_track_state = {
-            k: v.detach().cpu() for k, v in self.state_dict().items()
-            if k.startswith("_track_")
-        }
+        layered_track_state = {k: v.detach().cpu() for k, v in self.state_dict().items() if k.startswith("_track_")}
         if layered_track_state:
             out["layered_track_state"] = layered_track_state
         return out
@@ -606,11 +648,7 @@ class LayeredGaussians(nn.Module):
         Missing layers warn + skip. Extra ckpt keys ignored silently.
         """
         nodes_dict = None
-        if (
-            "model" in checkpoint
-            and isinstance(checkpoint["model"], dict)
-            and "gaussians_nodes" in checkpoint["model"]
-        ):
+        if "model" in checkpoint and isinstance(checkpoint["model"], dict) and "gaussians_nodes" in checkpoint["model"]:
             nodes_dict = checkpoint["model"]["gaussians_nodes"]
         elif "gaussians_nodes" in checkpoint:
             nodes_dict = checkpoint["gaussians_nodes"]
@@ -628,9 +666,7 @@ class LayeredGaussians(nn.Module):
                         f"['gaussians_nodes']; keeping it empty (warn+skip)."
                     )
                     continue
-                layer.init_from_checkpoint(
-                    nodes_dict[name], setup_optimizer=setup_optimizer
-                )
+                layer.init_from_checkpoint(nodes_dict[name], setup_optimizer=setup_optimizer)
                 # T8/B3 Phase E.4: restore per-layer ``track_ids`` buffer if it
                 # was saved by ``get_model_parameters``. MoG.init_from_checkpoint
                 # reads only its 6 standard params (positions/density/etc) and
@@ -644,7 +680,9 @@ class LayeredGaussians(nn.Module):
                     if hasattr(layer, "track_ids"):
                         delattr(layer, "track_ids")
                     layer.register_buffer(
-                        "track_ids", ckpt_track_ids.long(), persistent=True,
+                        "track_ids",
+                        ckpt_track_ids.long(),
+                        persistent=True,
                     )
             # T5.4: sky envmap state restore — under either NRE-wrapped key
             # "model.sky_envmap_state" or unwrapped "sky_envmap_state".
@@ -690,11 +728,7 @@ class LayeredGaussians(nn.Module):
                         self._track_albedo_table.copy_(saved)
                 if "log_scale" in tables and hasattr(self, "_track_log_scale_table"):
                     with torch.no_grad():
-                        self._track_log_scale_table.copy_(
-                            tables["log_scale"].to(
-                                self._track_log_scale_table.device
-                            )
-                        )
+                        self._track_log_scale_table.copy_(tables["log_scale"].to(self._track_log_scale_table.device))
                 opt_state = track_optim_state.get("optimizer")
                 track_opt = getattr(self, "_track_optim", None)
                 if opt_state is not None and track_opt is not None:
@@ -733,22 +767,16 @@ class LayeredGaussians(nn.Module):
                 # mismatch even with strict=False, so reshape an old [K, 3]
                 # (or differently-sized [K, 3, k']) saved table to the
                 # current model's [K, 3, k] before loading.
-                if (
-                    "_track_albedo_table" in layered_track_state
-                    and hasattr(self, "_track_albedo_table")
-                ):
+                if "_track_albedo_table" in layered_track_state and hasattr(self, "_track_albedo_table"):
                     saved_alb = layered_track_state["_track_albedo_table"]
-                    if tuple(saved_alb.shape) != tuple(
-                        self._track_albedo_table.shape
-                    ):
+                    if tuple(saved_alb.shape) != tuple(self._track_albedo_table.shape):
                         layered_track_state = dict(layered_track_state)
-                        layered_track_state["_track_albedo_table"] = (
-                            upgrade_albedo_table(
-                                saved_alb, self._track_albedo_table.shape[-1]
-                            )
+                        layered_track_state["_track_albedo_table"] = upgrade_albedo_table(
+                            saved_alb, self._track_albedo_table.shape[-1]
                         )
                 missing_keys, unexpected_keys = self.load_state_dict(
-                    layered_track_state, strict=False,
+                    layered_track_state,
+                    strict=False,
                 )
                 # ``missing_keys`` will contain every non-track key (per-layer
                 # MoG params, sky_envmap, etc.) — those are filled by the
@@ -784,12 +812,9 @@ class LayeredGaussians(nn.Module):
             )
         n_particles = checkpoint["positions"].shape[0]
         logger.info(
-            f"[v1->v2] Detected v1-shape checkpoint ({n_particles} particles); "
-            f"routing all into layer 'background'."
+            f"[v1->v2] Detected v1-shape checkpoint ({n_particles} particles); " f"routing all into layer 'background'."
         )
-        self.layers["background"].init_from_checkpoint(
-            checkpoint, setup_optimizer=setup_optimizer
-        )
+        self.layers["background"].init_from_checkpoint(checkpoint, setup_optimizer=setup_optimizer)
 
     # ------------------------------------------------------------------ test helpers
 
@@ -808,11 +833,11 @@ class LayeredGaussians(nn.Module):
             if spec.is_particle_layer:
                 layer.optimizer = torch.optim.Adam(
                     [
-                        {"params": [layer.positions],         "name": "positions"},
-                        {"params": [layer.rotation],          "name": "rotation"},
-                        {"params": [layer.scale],             "name": "scale"},
-                        {"params": [layer.density],           "name": "density"},
-                        {"params": [layer.features_albedo],   "name": "features_albedo"},
+                        {"params": [layer.positions], "name": "positions"},
+                        {"params": [layer.rotation], "name": "rotation"},
+                        {"params": [layer.scale], "name": "scale"},
+                        {"params": [layer.density], "name": "density"},
+                        {"params": [layer.features_albedo], "name": "features_albedo"},
                         {"params": [layer.features_specular], "name": "features_specular"},
                     ],
                     lr=1e-3,
@@ -881,8 +906,7 @@ class LayeredGaussians(nn.Module):
         # When viser toggles disable every particle layer we skip the OptiX
         # pass entirely and let _blend_sky composite onto a blank canvas.
         ref_layer = next(
-            (self.layers[s.name] for s in self.specs
-             if s.is_particle_layer and s.name in self.enabled_layer_names),
+            (self.layers[s.name] for s in self.specs if s.is_particle_layer and s.name in self.enabled_layer_names),
             None,
         )
         if ref_layer is None:
@@ -908,9 +932,9 @@ class LayeredGaussians(nn.Module):
         B, H, W = gpu_batch.rays_dir.shape[:3]
         device = gpu_batch.rays_dir.device
         return {
-            "pred_rgb":     torch.zeros(B, H, W, 3, device=device),
+            "pred_rgb": torch.zeros(B, H, W, 3, device=device),
             "pred_opacity": torch.zeros(B, H, W, 1, device=device),
-            "pred_dist":    torch.zeros(B, H, W, 1, device=device),
+            "pred_dist": torch.zeros(B, H, W, 1, device=device),
         }
 
     # ------------------------------------------------------------------ T5.4 sky blend
@@ -924,20 +948,19 @@ class LayeredGaussians(nn.Module):
         the original Gaussian RGB under the ``rgb_gaussians`` key so
         ``get_losses`` can compute a sky-only L1 on the pre-blend signal.
         """
-        if ("sky_envmap" not in self.layers
-                or "sky_envmap" not in self.enabled_layer_names):
+        if "sky_envmap" not in self.layers or "sky_envmap" not in self.enabled_layer_names:
             return outputs
         sky_module = self.layers["sky_envmap"]
         # viewdirs in world frame: rays_dir is camera-space when
         # rays_in_world_space=False; apply T_to_world's rotation only.
-        rays = batch.rays_dir   # [B, H, W, 3]
+        rays = batch.rays_dir  # [B, H, W, 3]
         if not getattr(batch, "rays_in_world_space", False):
-            R = batch.T_to_world[..., :3, :3]                # [B, 3, 3]
+            R = batch.T_to_world[..., :3, :3]  # [B, 3, 3]
             # Broadcast [B, 1, 1, 3, 3] @ [B, H, W, 3, 1] → [B, H, W, 3, 1]
             rays = (R[:, None, None, :, :] @ rays.unsqueeze(-1)).squeeze(-1)
-        rgb_sky = sky_module(rays)                           # [B, H, W, 3]
+        rgb_sky = sky_module(rays)  # [B, H, W, 3]
         rgb_gauss = outputs["pred_rgb"]
-        alpha = outputs["pred_opacity"]                      # [B, H, W, 1]
+        alpha = outputs["pred_opacity"]  # [B, H, W, 1]
         rgb_final = rgb_gauss + rgb_sky * (1.0 - alpha)
         # Shallow copy so we don't mutate the renderer's returned dict.
         out = dict(outputs)
@@ -955,8 +978,7 @@ class LayeredGaussians(nn.Module):
         return None
 
     # ------------------------------------------------------------------ T2.5 fused-view
-    def fused_view(self, frame_id: int | None = None, *,
-                   timestamp_us: int = -1) -> dict[str, torch.Tensor]:
+    def fused_view(self, frame_id: int | None = None, *, timestamp_us: int = -1) -> dict[str, torch.Tensor]:
         """Return concat of 6 per-particle parameters across all particle layers.
 
         Single-bg-layer mode: short-circuits to direct attribute access (returns
@@ -996,35 +1018,23 @@ class LayeredGaussians(nn.Module):
             transformed_positions = None
             active_mask = None
             transformed_rotations = None
-            if (
-                spec.name == "dynamic_rigids"
-                and hasattr(layer, "track_ids")
-                and len(self.tracks_poses) > 0
-            ):
+            if spec.name == "dynamic_rigids" and hasattr(layer, "track_ids") and len(self.tracks_poses) > 0:
                 # E.2.c: always transform when track buffers are populated.
                 # ``_transform_means_and_active`` handles the no-time fallback
                 # (each track uses its first active frame) so inference free
                 # cameras don't dump dyn particles to world origin.
-                transformed_positions, active_mask, transformed_rotations = \
-                    self._transform_means_and_active(
-                        layer.positions, layer.track_ids,
-                        rotations_local=layer.rotation,
-                        timestamp_us=timestamp_us, frame_id=frame_id,
-                    )
+                transformed_positions, active_mask, transformed_rotations = self._transform_means_and_active(
+                    layer.positions,
+                    layer.track_ids,
+                    rotations_local=layer.rotation,
+                    timestamp_us=timestamp_us,
+                    frame_id=frame_id,
+                )
             # V3-L8/L9 per-track bias tables apply only to dynamic_rigids.
             # Looked up once outside the param loop to avoid repeated hasattr.
-            apply_dyn_bias = (
-                spec.name == "dynamic_rigids"
-                and hasattr(layer, "track_ids")
-            )
-            albedo_table = (
-                getattr(self, "_track_albedo_table", None)
-                if apply_dyn_bias else None
-            )
-            log_scale_table = (
-                getattr(self, "_track_log_scale_table", None)
-                if apply_dyn_bias else None
-            )
+            apply_dyn_bias = spec.name == "dynamic_rigids" and hasattr(layer, "track_ids")
+            albedo_table = getattr(self, "_track_albedo_table", None) if apply_dyn_bias else None
+            log_scale_table = getattr(self, "_track_log_scale_table", None) if apply_dyn_bias else None
             # P1.3b: resolve the current camera-frame index ``t`` and total
             # frame count ``N_t`` once, for the Fourier albedo evaluation.
             # Reuses the same pose-index resolution as the dynamic transform
@@ -1033,8 +1043,7 @@ class LayeredGaussians(nn.Module):
             # tensor; the legacy [K, 3] (k=1) path skips the cos basis.
             albedo_frame_idx = 0
             albedo_n_frames = 1
-            if albedo_table is not None and albedo_table.dim() == 3 \
-                    and albedo_table.shape[-1] > 1:
+            if albedo_table is not None and albedo_table.dim() == 3 and albedo_table.shape[-1] > 1:
                 albedo_frame_idx = self._resolve_pose_idx(timestamp_us, frame_id)
                 tids_for_F = self._iter_track_tids()
                 if tids_for_F:
@@ -1048,24 +1057,18 @@ class LayeredGaussians(nn.Module):
                     # composition, MCMC inflates scales to compensate for the
                     # missing orientation, producing scenes-wide smudge.
                     v = transformed_rotations
-                elif (
-                    n == "density"
-                    and active_mask is not None
-                    and not bool(active_mask.all())
-                ):
+                elif n == "density" and active_mask is not None and not bool(active_mask.all()):
                     # density is [N, 1] raw (pre-sigmoid). Push inactive
                     # particles to a large-negative value so sigmoid(density)
                     # ≈ 0 → no render contribution. No mutation of the
                     # underlying nn.Parameter (only this fused view copy).
                     inactive_value = torch.full_like(v, -50.0)
                     v = torch.where(
-                        active_mask.unsqueeze(-1), v, inactive_value,
+                        active_mask.unsqueeze(-1),
+                        v,
+                        inactive_value,
                     )
-                elif (
-                    n == "features_albedo"
-                    and albedo_table is not None
-                    and v.shape[0] > 0
-                ):
+                elif n == "features_albedo" and albedo_table is not None and v.shape[0] > 0:
                     # V3-L8 / P1.3b: per-track RGB bias on DC SH
                     # (features_albedo is the [N, 3] DC band). Tables
                     # zero-init → identity until the trainer flips
@@ -1082,20 +1085,12 @@ class LayeredGaussians(nn.Module):
                         )
                     else:
                         # Legacy [K, 3] table (pre-P1.3b in-memory shape).
-                        bias = albedo_table[
-                            layer.track_ids.to(albedo_table.device)
-                        ]
+                        bias = albedo_table[layer.track_ids.to(albedo_table.device)]
                     v = v + bias.to(v.device, v.dtype)
-                elif (
-                    n == "scale"
-                    and log_scale_table is not None
-                    and v.shape[0] > 0
-                ):
+                elif n == "scale" and log_scale_table is not None and v.shape[0] > 0:
                     # V3-L9: per-track log-space scale offset broadcast to
                     # all 3 axes. Zero-init = no change (exp(0)=1×).
-                    log_off = log_scale_table[
-                        layer.track_ids.to(log_scale_table.device)
-                    ]
+                    log_off = log_scale_table[layer.track_ids.to(log_scale_table.device)]
                     v = v + log_off.to(v.device, v.dtype)
                 pieces[n].append(v)
         # All particle layers disabled → return 0-row tensors with correct
@@ -1106,8 +1101,7 @@ class LayeredGaussians(nn.Module):
         first_param = next(iter(_FORWARD_PARAM_NAMES))
         if not pieces[first_param]:
             ref = next(iter(self.layers.values()))
-            return {n: getattr(ref, n).new_zeros((0,) + getattr(ref, n).shape[1:])
-                    for n in _FORWARD_PARAM_NAMES}
+            return {n: getattr(ref, n).new_zeros((0,) + getattr(ref, n).shape[1:]) for n in _FORWARD_PARAM_NAMES}
         return {n: torch.cat(pieces[n], dim=0) for n in _FORWARD_PARAM_NAMES}
 
     # ------------------------------------------------------------------ T4.5 transform_means (timestamp-aligned)
@@ -1136,9 +1130,11 @@ class LayeredGaussians(nn.Module):
         if timestamp_us > 0 and hasattr(self, "tracks_camera_timestamps_us"):
             ts_buf = self.tracks_camera_timestamps_us
             # Binary search; clamp to [0, F-1]; check whether prev is closer.
-            idx = int(torch.searchsorted(
-                ts_buf, torch.tensor(int(timestamp_us), dtype=ts_buf.dtype, device=ts_buf.device)
-            ).item())
+            idx = int(
+                torch.searchsorted(
+                    ts_buf, torch.tensor(int(timestamp_us), dtype=ts_buf.dtype, device=ts_buf.device)
+                ).item()
+            )
             idx = max(0, min(idx, F - 1))
             if idx > 0:
                 d_curr = abs(int(ts_buf[idx].item()) - int(timestamp_us))
@@ -1190,7 +1186,7 @@ class LayeredGaussians(nn.Module):
         # visible actors" scene instead of dyn particles snapping to world
         # origin (which is what the old ``timestamp_us > 0 or frame_id is not
         # None`` gate in fused_view used to do).
-        use_per_track_first_active = (timestamp_us <= 0 and frame_id is None)
+        use_per_track_first_active = timestamp_us <= 0 and frame_id is None
 
         if use_per_track_first_active:
             pose_list = []
@@ -1204,46 +1200,40 @@ class LayeredGaussians(nn.Module):
                     nonzero = active_buf.nonzero(as_tuple=False)
                     if nonzero.numel() == 0:
                         fallback_idx = 0
-                        is_active = False    # track has no active frames at all
+                        is_active = False  # track has no active frames at all
                     else:
                         fallback_idx = int(nonzero[0, 0].item())
                         is_active = True
                 # V3 Stage A: route through _compose_pose_for_track so the
                 # learnable-pose Parameter path produces a fresh, gradient-
                 # tracking SE(3) from quat+trans. Buffer path is unchanged.
-                pose_list.append(
-                    self._compose_pose_for_track(n, fallback_idx).to(device)
-                )
-                active_track_flags.append(
-                    torch.tensor(is_active, dtype=torch.bool, device=device)
-                )
-            pose_stack = torch.stack(pose_list)                              # [K, 4, 4]
-            active_stack = torch.stack(active_track_flags)                   # [K] bool
+                pose_list.append(self._compose_pose_for_track(n, fallback_idx).to(device))
+                active_track_flags.append(torch.tensor(is_active, dtype=torch.bool, device=device))
+            pose_stack = torch.stack(pose_list)  # [K, 4, 4]
+            active_stack = torch.stack(active_track_flags)  # [K] bool
         else:
             idx = self._resolve_pose_idx(timestamp_us, frame_id)
             # V3 Stage A: see comment above — _compose_pose_for_track is
             # mode-agnostic.
             pose_stack = torch.stack(
                 [self._compose_pose_for_track(n, idx).to(device) for n in track_names]
-            )                                                                # [K, 4, 4]
+            )  # [K, 4, 4]
             # Per-track active flag at this frame; defaults to all-True when
             # the _track_active_<n> buffer is missing (pre-T4.0).
             active_list = []
             for n in track_names:
                 buf = getattr(self, f"_track_active_{n}", None)
                 if buf is None:
-                    active_list.append(
-                        torch.tensor(True, dtype=torch.bool, device=device)
-                    )
+                    active_list.append(torch.tensor(True, dtype=torch.bool, device=device))
                 else:
                     active_list.append(buf[idx].to(device).to(torch.bool))
-            active_stack = torch.stack(active_list)                          # [K] bool
+            active_stack = torch.stack(active_list)  # [K] bool
 
-        pose_per_pt = pose_stack[track_ids]                                  # [N, 4, 4]
-        R = pose_per_pt[:, :3, :3]                                           # [N, 3, 3]
-        t = pose_per_pt[:, :3, 3]                                            # [N, 3]
+        pose_per_pt = pose_stack[track_ids]  # [N, 4, 4]
+        R = pose_per_pt[:, :3, :3]  # [N, 3, 3]
+        t = pose_per_pt[:, :3, 3]  # [N, 3]
         positions_world = (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
-        active_per_pt = active_stack[track_ids]                              # [N] bool
+        active_per_pt = active_stack[track_ids]  # [N] bool
 
         # Phase E.2.b: compose pose rotation with per-particle local rotation.
         # Done in quaternion space (wxyz). When rotations_local is omitted
@@ -1254,10 +1244,10 @@ class LayeredGaussians(nn.Module):
             # pose_stack[..., :3, :3] is the rotation block per track; convert
             # ONCE per track (not per particle) for efficiency, then gather.
             pose_R_per_track = pose_stack[:, :3, :3].to(rotations_local.dtype)  # [K, 3, 3]
-            q_pose_per_track = _rotmat_to_quat_wxyz(pose_R_per_track)            # [K, 4]
-            q_pose_per_pt = q_pose_per_track[track_ids]                          # [N, 4]
+            q_pose_per_track = _rotmat_to_quat_wxyz(pose_R_per_track)  # [K, 4]
+            q_pose_per_pt = q_pose_per_track[track_ids]  # [N, 4]
             q_local = rotations_local.to(device=device, dtype=q_pose_per_pt.dtype)
-            q_world = _quat_multiply_wxyz(q_pose_per_pt, q_local)                # [N, 4]
+            q_world = _quat_multiply_wxyz(q_pose_per_pt, q_local)  # [N, 4]
             # Renderer / MoG conventionally re-normalizes via rotation_activation
             # ("normalize" in config) but it's cheap to do so here too — bounds
             # numerical drift from float32 multiplication.
@@ -1298,13 +1288,11 @@ class LayeredGaussians(nn.Module):
         # sync each per-track pose tensor to the positions device.
         # V3 Stage A: _compose_pose_for_track is mode-agnostic (buffer or
         # learnable quat+trans Parameter); same call shape in both paths.
-        pose_stack = torch.stack(
-            [self._compose_pose_for_track(n, idx).to(device) for n in track_names]
-        )
+        pose_stack = torch.stack([self._compose_pose_for_track(n, idx).to(device) for n in track_names])
         track_ids = track_ids.to(device)
-        pose_per_pt = pose_stack[track_ids]                                   # [N, 4, 4]
-        R = pose_per_pt[:, :3, :3]                                            # [N, 3, 3]
-        t = pose_per_pt[:, :3, 3]                                             # [N, 3]
+        pose_per_pt = pose_stack[track_ids]  # [N, 4, 4]
+        R = pose_per_pt[:, :3, :3]  # [N, 3, 3]
+        t = pose_per_pt[:, :3, 3]  # [N, 3]
         return (R @ positions_local.to(R.dtype).unsqueeze(-1)).squeeze(-1) + t
 
     # ------------------------------------------------------------------ T3.0 init
@@ -1344,9 +1332,7 @@ class LayeredGaussians(nn.Module):
                 Tests that bypass CUDA conf paths pass False.
         """
         if layer_name not in self.layers:
-            raise ValueError(
-                f"unknown layer '{layer_name}', enabled = {list(self.layers)}"
-            )
+            raise ValueError(f"unknown layer '{layer_name}', enabled = {list(self.layers)}")
         spec = next(s for s in self.specs if s.name == layer_name)
         layer = self.layers[layer_name]
         N = positions.shape[0]
@@ -1372,11 +1358,11 @@ class LayeredGaussians(nn.Module):
         # for putting them on GPU; tests stay on CPU. Note layer.device is
         # hardcoded to "cuda" in MoG.__init__ but is only consulted by code
         # paths that allocate new tensors (not by the assignments below).
-        layer.positions         = nn.Parameter(positions.to(dtype=dtype, device=device))
-        layer.rotation          = nn.Parameter(rotations.to(dtype=dtype, device=device))
-        layer.scale             = nn.Parameter(scales.to(dtype=dtype, device=device))
-        layer.density           = nn.Parameter(densities.to(dtype=dtype, device=device))
-        layer.features_albedo   = nn.Parameter(features_albedo)
+        layer.positions = nn.Parameter(positions.to(dtype=dtype, device=device))
+        layer.rotation = nn.Parameter(rotations.to(dtype=dtype, device=device))
+        layer.scale = nn.Parameter(scales.to(dtype=dtype, device=device))
+        layer.density = nn.Parameter(densities.to(dtype=dtype, device=device))
+        layer.features_albedo = nn.Parameter(features_albedo)
         layer.features_specular = nn.Parameter(features_specular)
 
         if setup_optimizer:
@@ -1503,8 +1489,7 @@ class LayeredGaussians(nn.Module):
             # Replace existing if any; persistent=True so save/load roundtrips.
             if hasattr(self, "tracks_camera_timestamps_us"):
                 delattr(self, "tracks_camera_timestamps_us")
-            self.register_buffer("tracks_camera_timestamps_us",
-                                 shared_ts, persistent=True)
+            self.register_buffer("tracks_camera_timestamps_us", shared_ts, persistent=True)
 
         # T8.2: track-level metadata (class label, cuboid size) that the viz_4d
         # ckpt block needs but the C++ tracer never consumes. Stored as a plain
@@ -1514,25 +1499,25 @@ class LayeredGaussians(nn.Module):
             object.__setattr__(self, "tracks_metadata", {})
         for tid, info in tracks.items():
             poses = info["poses"] if isinstance(info, dict) else info[0]
-            active = (info["active"] if isinstance(info, dict) and "active" in info
-                      else info.get("frame_info") if isinstance(info, dict)
-                      else info[1])
-            buf_pose_name   = f"_track_pose_{tid}"
+            active = (
+                info["active"]
+                if isinstance(info, dict) and "active" in info
+                else info.get("frame_info") if isinstance(info, dict) else info[1]
+            )
+            buf_pose_name = f"_track_pose_{tid}"
             buf_active_name = f"_track_active_{tid}"
-            buf_gt_name     = f"_track_pose_gt_{tid}"
+            buf_gt_name = f"_track_pose_gt_{tid}"
             param_quat_name = f"_track_quat_{tid}"
             param_trans_name = f"_track_trans_{tid}"
 
             # Active mask is identical in both modes (never learnable).
             if hasattr(self, buf_active_name):
                 delattr(self, buf_active_name)
-            self.register_buffer(buf_active_name, active.to(torch.bool),
-                                 persistent=True)
+            self.register_buffer(buf_active_name, active.to(torch.bool), persistent=True)
 
             if learnable_mode:
                 # Resume guard: keep existing Parameter (already trained).
-                if (param_quat_name in self._parameters
-                        and param_trans_name in self._parameters):
+                if param_quat_name in self._parameters and param_trans_name in self._parameters:
                     continue
 
                 # Cross-mode adoption: drop any leftover buffers from previous
@@ -1542,13 +1527,11 @@ class LayeredGaussians(nn.Module):
                         delattr(self, stale)
 
                 poses_f32 = poses.to(torch.float32)
-                R_init = poses_f32[:, :3, :3]                     # [F, 3, 3]
-                t_init = poses_f32[:, :3, 3].contiguous()         # [F, 3]
-                q_init = _rotmat_to_quat_wxyz(R_init).contiguous() # [F, 4]
-                self.register_parameter(param_quat_name,
-                                        nn.Parameter(q_init.detach().clone()))
-                self.register_parameter(param_trans_name,
-                                        nn.Parameter(t_init.detach().clone()))
+                R_init = poses_f32[:, :3, :3]  # [F, 3, 3]
+                t_init = poses_f32[:, :3, 3].contiguous()  # [F, 3]
+                q_init = _rotmat_to_quat_wxyz(R_init).contiguous()  # [F, 4]
+                self.register_parameter(param_quat_name, nn.Parameter(q_init.detach().clone()))
+                self.register_parameter(param_trans_name, nn.Parameter(t_init.detach().clone()))
                 # Frozen GT pose for resume detection + (future) viz diff.
                 self.register_buffer(buf_gt_name, poses_f32.clone(), persistent=True)
             else:
@@ -1566,9 +1549,11 @@ class LayeredGaussians(nn.Module):
                     meta["class"] = str(info["class"])
                 if "size" in info:
                     sz = info["size"]
-                    meta["size"] = (sz.detach().to(dtype=torch.float32, device="cpu")
-                                    if torch.is_tensor(sz)
-                                    else torch.as_tensor(sz, dtype=torch.float32))
+                    meta["size"] = (
+                        sz.detach().to(dtype=torch.float32, device="cpu")
+                        if torch.is_tensor(sz)
+                        else torch.as_tensor(sz, dtype=torch.float32)
+                    )
                 if meta:
                     self.tracks_metadata[tid] = meta
 
@@ -1609,8 +1594,7 @@ class LayeredGaussians(nn.Module):
         if spec is None:
             return
         extra = getattr(spec, "extra", {}) or {}
-        if not (extra.get("optimize_track_albedo")
-                or extra.get("optimize_track_scale")):
+        if not (extra.get("optimize_track_albedo") or extra.get("optimize_track_scale")):
             return  # both OFF → byte-identical to pre-V3 schema
 
         # Pick a device consistent with the existing track buffers; fall
@@ -1633,15 +1617,13 @@ class LayeredGaussians(nn.Module):
             # (cos(0)=1 → frame-independent f_0). Zero-init keeps it identity
             # until the warmup gate flips requires_grad.
             k = self._n_fourier_albedo_terms()
-            albedo = nn.Parameter(torch.zeros(K, 3, k, dtype=torch.float32,
-                                              device=device))
+            albedo = nn.Parameter(torch.zeros(K, 3, k, dtype=torch.float32, device=device))
             albedo.requires_grad_(False)
             self.register_parameter("_track_albedo_table", albedo)
         if extra.get("optimize_track_scale"):
             if hasattr(self, "_track_log_scale_table"):
                 delattr(self, "_track_log_scale_table")
-            log_scale = nn.Parameter(torch.zeros(K, 1, dtype=torch.float32,
-                                                 device=device))
+            log_scale = nn.Parameter(torch.zeros(K, 1, dtype=torch.float32, device=device))
             log_scale.requires_grad_(False)
             self.register_parameter("_track_log_scale_table", log_scale)
 
@@ -1746,17 +1728,21 @@ class LayeredGaussians(nn.Module):
         the previous optimizer (matches v2 retraining pattern)."""
         params: list = []
         if hasattr(self, "_track_albedo_table"):
-            params.append({
-                "params": [self._track_albedo_table],
-                "lr": float(self._track_lr("albedo")),
-                "name": "track_albedo",
-            })
+            params.append(
+                {
+                    "params": [self._track_albedo_table],
+                    "lr": float(self._track_lr("albedo")),
+                    "name": "track_albedo",
+                }
+            )
         if hasattr(self, "_track_log_scale_table"):
-            params.append({
-                "params": [self._track_log_scale_table],
-                "lr": float(self._track_lr("scale")),
-                "name": "track_log_scale",
-            })
+            params.append(
+                {
+                    "params": [self._track_log_scale_table],
+                    "lr": float(self._track_lr("scale")),
+                    "name": "track_log_scale",
+                }
+            )
         if not params:
             return
         # Replace any pre-existing instance (e.g. on retrain / resume).
@@ -1859,21 +1845,29 @@ class LayeredGaussians(nn.Module):
             if name == "num_gaussians":
                 return sum(layers[n].num_gaussians for n in particle_layer_names)
             # MoG accessor methods -> return callable that fuses per-layer results.
-            if name in ("get_density", "get_scale", "get_rotation",
-                        "get_features", "get_features_albedo",
-                        "get_features_specular", "get_positions"):
+            if name in (
+                "get_density",
+                "get_scale",
+                "get_rotation",
+                "get_features",
+                "get_features_albedo",
+                "get_features_specular",
+                "get_positions",
+            ):
+
                 def _fused(*args, **kwargs):
-                    pieces = [getattr(layers[n], name)(*args, **kwargs)
-                              for n in particle_layer_names]
+                    pieces = [getattr(layers[n], name)(*args, **kwargs) for n in particle_layer_names]
                     return torch.cat(pieces, dim=0) if pieces else torch.empty(0)
+
                 return _fused
             # Per-layer broadcast methods (no return-value fusion, just dispatch).
             # scheduler_step / setup_scheduler etc. step each layer independently.
-            if name in ("scheduler_step", "setup_scheduler",
-                        "validate_fields", "set_optimizable_parameters"):
+            if name in ("scheduler_step", "setup_scheduler", "validate_fields", "set_optimizable_parameters"):
+
                 def _broadcast(*args, **kwargs):
                     for n in particle_layer_names:
                         getattr(layers[n], name)(*args, **kwargs)
+
                 return _broadcast
             # Last-resort fallback: delegate to the first particle layer.
             # All layers share the same conf so scalar / config attributes

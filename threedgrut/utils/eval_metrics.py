@@ -6,6 +6,7 @@ BOTH eval paths (render.py offline eval + trainer.get_metrics validation pass)
 — the two-path requirement from CLAUDE.md §B L51-54 (a metric added to only one
 path silently misses from metrics.json).
 """
+
 from __future__ import annotations
 
 import torch
@@ -25,16 +26,13 @@ def kid_subset_size(n: int) -> int:
 def rgb01_to_uint8_chw(img_bhw3: torch.Tensor) -> torch.Tensor:
     """E1.4: [B, H, W, 3] float in [0, 1] → [B, 3, H, W] uint8 (clamped),
     the input format torchmetrics FID/KID expect with normalize=False."""
-    return (
-        img_bhw3.detach().clamp(0.0, 1.0).mul(255.0).round()
-        .to(torch.uint8).permute(0, 3, 1, 2).contiguous()
-    )
+    return img_bhw3.detach().clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8).permute(0, 3, 1, 2).contiguous()
 
 
 def compute_lidar_psnr(
-    pred_dist: torch.Tensor,        # [B,H,W,1] or [H,W,1] rendered ray-depth
+    pred_dist: torch.Tensor,  # [B,H,W,1] or [H,W,1] rendered ray-depth
     lidar_depth_map: torch.Tensor,  # [B,H,W] or [H,W] sparse GT ray-depth (0 = no hit)
-    hit_mask: torch.Tensor,         # [B,H,W] or [H,W] {0,1}
+    hit_mask: torch.Tensor,  # [B,H,W] or [H,W] {0,1}
     max_depth: float = 100.0,
 ) -> float:
     """LiDAR-domain PSNR over hit pixels: -10*log10(MSE / max_depth^2).
@@ -52,5 +50,5 @@ def compute_lidar_psnr(
     if n < 1.0:
         return float("nan")
     mse = ((pd - gd) ** 2 * valid).sum() / n.clamp(min=1.0)
-    psnr = -10.0 * torch.log10(mse / (max_depth ** 2) + 1e-12)
+    psnr = -10.0 * torch.log10(mse / (max_depth**2) + 1e-12)
     return float(psnr.item())

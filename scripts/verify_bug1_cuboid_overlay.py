@@ -30,6 +30,7 @@ Usage (inceptio)::
         --ckpt  ~/work/output/<run>/ours_30000/ckpt_30000.pt \
         --out_dir /tmp/bug1_verify --n_frames 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,8 +58,7 @@ def main() -> int:
     ap.add_argument("--dataset_path", default=None)
     ap.add_argument("--out_dir", default="/tmp/bug1_verify")
     ap.add_argument("--n_frames", type=int, default=5)
-    ap.add_argument("--port", type=int, default=18099,
-                    help="throwaway viser port (no client ever connects)")
+    ap.add_argument("--port", type=int, default=18099, help="throwaway viser port (no client ever connects)")
     args = ap.parse_args()
 
     from kaolin.render.camera import Camera
@@ -95,15 +95,17 @@ def main() -> int:
 
     # Uniform sample + force the max-heading-change (turning) frame.
     k = max(1, args.n_frames - 1)
-    sel = {active_frames[int(i * (len(active_frames) - 1) / max(1, k - 1))]
-           for i in range(k)} if k > 1 else {active_frames[0]}
+    sel = (
+        {active_frames[int(i * (len(active_frames) - 1) / max(1, k - 1))] for i in range(k)}
+        if k > 1
+        else {active_frames[0]}
+    )
     yaw = np.array([_ego_yaw(meta, f) for f in active_frames])
     dyaw = np.abs(np.diff(np.unwrap(yaw)))
     if dyaw.size:
         sel.add(active_frames[int(np.argmax(dyaw))])
     sel_frames = sorted(sel)
-    print(f"[bug1-verify] {len(active_frames)} active frames; "
-          f"sampling {sel_frames}")
+    print(f"[bug1-verify] {len(active_frames)} active frames; " f"sampling {sel_frames}")
 
     W, H = viewer.ftheta_render_wh
     for f in sel_frames:
@@ -115,28 +117,29 @@ def main() -> int:
         cam = Camera.from_args(
             view_matrix=torch.tensor(c2w),
             fov=float(meta.ego_primary_fov_y_rad),
-            width=int(W), height=int(H),
-            near=0.1, far=1000.0,
+            width=int(W),
+            height=int(H),
+            near=0.1,
+            far=1000.0,
             dtype=torch.float32,
             device=engine.device,
         )
         img = viewer.fast_render(cam)
         specs = viewer._collect_overlay_layer_specs(t_us)
         n_layers = sum(1 for s in specs if "active_cuboids" in s.name)
-        blended = viewer._overlay_compositor.composite(
-            img, specs, c2w.astype(np.float64))
+        blended = viewer._overlay_compositor.composite(img, specs, c2w.astype(np.float64))
         overlay_px = int((blended != img).any(axis=-1).sum())
         Image.fromarray(img).save(out_dir / f"frame{f:04d}_backdrop.png")
         Image.fromarray(blended).save(out_dir / f"frame{f:04d}_blended.png")
-        print(f"[bug1-verify] frame {f:4d} t_us={t_us}: "
-              f"active={active_counts[f]} cuboid_layers={n_layers} "
-              f"overlay_px={overlay_px}")
+        print(
+            f"[bug1-verify] frame {f:4d} t_us={t_us}: "
+            f"active={active_counts[f]} cuboid_layers={n_layers} "
+            f"overlay_px={overlay_px}"
+        )
         if n_layers == 0:
-            print("[bug1-verify] WARNING: no cuboid overlay layers — "
-                  "fix not active?")
+            print("[bug1-verify] WARNING: no cuboid overlay layers — " "fix not active?")
         if overlay_px == 0:
-            print("[bug1-verify] WARNING: overlay drew zero pixels — "
-                  "projection off-screen?")
+            print("[bug1-verify] WARNING: overlay drew zero pixels — " "projection off-screen?")
 
     print(f"[bug1-verify] DONE → {out_dir}")
     return 0

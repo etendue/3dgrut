@@ -24,12 +24,12 @@ without OmniRe pixel_source coupling):
 Also exports the int↔name mapping (``track_names``) used by T4.3 to build the
 per-particle pose lookup.
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
 import torch
-
 
 # V3-L5: axis-name → object-local frame coordinate index. Cuboid object-local
 # frame convention (matches load_tracks_from_ncore_cuboids euler_xyz_to_rotation
@@ -71,8 +71,7 @@ def init_dynamic_rigid_layer(
     if symmetric_axis is not None:
         if symmetric_axis not in _SYMMETRIC_AXIS_INDEX:
             raise ValueError(
-                f"symmetric_axis must be one of {sorted(_SYMMETRIC_AXIS_INDEX)} "
-                f"or None, got {symmetric_axis!r}"
+                f"symmetric_axis must be one of {sorted(_SYMMETRIC_AXIS_INDEX)} " f"or None, got {symmetric_axis!r}"
             )
         axis_idx = _SYMMETRIC_AXIS_INDEX[symmetric_axis]
 
@@ -81,8 +80,7 @@ def init_dynamic_rigid_layer(
     dtype = torch.float32
 
     if dynamic_lidar_pts.numel() == 0 or len(track_keys) == 0:
-        device = (dynamic_lidar_pts.device if dynamic_lidar_pts.numel()
-                  else torch.device("cpu"))
+        device = dynamic_lidar_pts.device if dynamic_lidar_pts.numel() else torch.device("cpu")
         return (
             torch.zeros(0, 3, dtype=dtype, device=device),
             torch.zeros(0, dtype=torch.long, device=device),
@@ -109,12 +107,13 @@ def init_dynamic_rigid_layer(
             pose = info["poses"][fi].to(dtype).to(device)
             pose_inv = torch.linalg.inv(pose)
             # (4,4) @ (4,M) → (4,M); slice xyz
-            local = (pose_inv @ pts_h.T).T[:, :3]                       # [M, 3]
+            local = (pose_inv @ pts_h.T).T[:, :3]  # [M, 3]
             inside = (local.abs() <= size_half).all(dim=-1)
             collected_local.append(local[inside])
 
-        track_pts = (torch.cat(collected_local, dim=0) if collected_local
-                     else torch.zeros(0, 3, dtype=dtype, device=device))
+        track_pts = (
+            torch.cat(collected_local, dim=0) if collected_local else torch.zeros(0, 3, dtype=dtype, device=device)
+        )
 
         # V3-L5: NuRec ``symmetric_axis`` augmentation. Concatenate the
         # axis-mirrored copy BEFORE max_pts_per_track subsample so that the
@@ -134,15 +133,15 @@ def init_dynamic_rigid_layer(
 
         info["pts"] = track_pts
         all_pts.append(track_pts)
-        all_ids.append(torch.full(
-            (track_pts.shape[0],),
-            name_to_id[tid],
-            dtype=torch.long,
-            device=device,
-        ))
+        all_ids.append(
+            torch.full(
+                (track_pts.shape[0],),
+                name_to_id[tid],
+                dtype=torch.long,
+                device=device,
+            )
+        )
 
-    positions = (torch.cat(all_pts, dim=0) if all_pts
-                 else torch.zeros(0, 3, dtype=dtype, device=device))
-    track_ids = (torch.cat(all_ids, dim=0) if all_ids
-                 else torch.zeros(0, dtype=torch.long, device=device))
+    positions = torch.cat(all_pts, dim=0) if all_pts else torch.zeros(0, 3, dtype=dtype, device=device)
+    track_ids = torch.cat(all_ids, dim=0) if all_ids else torch.zeros(0, dtype=torch.long, device=device)
     return positions, track_ids, track_keys

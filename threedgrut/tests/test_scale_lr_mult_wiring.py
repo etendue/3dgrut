@@ -21,6 +21,7 @@ Coverage:
         ``++layers.overrides.road.scale_lr_mult=...`` instead of having
         the default silently flip mid-baseline.
 """
+
 from __future__ import annotations
 
 import os
@@ -32,9 +33,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 _SCENE_EXTENT = 10.0
 
@@ -49,8 +48,11 @@ def _specs(road_mult: float) -> list[LayerSpec]:
     return [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
         LayerSpec(
-            name="road", layer_id=1, max_n_particles=200_000,
-            scale_prior=(0.1, 0.1, 0.001), scale_lr_mult=road_mult,
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
+            scale_prior=(0.1, 0.1, 0.001),
+            scale_lr_mult=road_mult,
             mask_field="road_mask",
         ),
     ]
@@ -59,9 +61,7 @@ def _specs(road_mult: float) -> list[LayerSpec]:
 def _init_model(conf, specs: list[LayerSpec]) -> LayeredGaussians:
     model = LayeredGaussians(conf, specs=specs, scene_extent=_SCENE_EXTENT)
     for s in specs:
-        model.init_layer_from_points(
-            s.name, torch.randn(8, 3), setup_optimizer=True
-        )
+        model.init_layer_from_points(s.name, torch.randn(8, 3), setup_optimizer=True)
     return model
 
 
@@ -91,13 +91,9 @@ def test_other_param_groups_untouched(real_conf):
     road_opt = model.layers["road"].optimizer
     params_conf = real_conf.optimizer.params
     # positions keeps the v1 scene_extent multiply -- and nothing else.
-    assert _group(road_opt, "positions")["lr"] == pytest.approx(
-        float(params_conf.positions.lr) * _SCENE_EXTENT
-    )
+    assert _group(road_opt, "positions")["lr"] == pytest.approx(float(params_conf.positions.lr) * _SCENE_EXTENT)
     for name in ("density", "rotation", "features_albedo", "features_specular"):
-        assert _group(road_opt, name)["lr"] == pytest.approx(
-            float(getattr(params_conf, name).lr)
-        ), name
+        assert _group(road_opt, name)["lr"] == pytest.approx(float(getattr(params_conf, name).lr)), name
 
 
 # --- (d) scheduled scale group + mult != 1 must fail loud ---------------------

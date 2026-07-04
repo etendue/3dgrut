@@ -14,6 +14,7 @@ so we test the ``LayeredGaussians`` surface engine relies on. The dispatch
 glue in ``engine._trace_scene_mog`` is a 5-line isinstance branch — passing
 these contracts is what matters.
 """
+
 import os
 
 import pytest
@@ -22,10 +23,7 @@ from hydra import compose, initialize_config_dir
 
 from threedgrut.layers.layer_spec import LayerSpec
 
-
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -43,10 +41,10 @@ def _viz4d_tracks_dict(F: int = 4) -> dict:
         # would yield clearly wrong positions.
         poses[:, 0, 3] = torch.arange(F, dtype=torch.float32) + i * 100.0
         tracks[tid] = {
-            "poses":      poses,
-            "size":       torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
+            "poses": poses,
+            "size": torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
             "frame_info": torch.ones(F, dtype=torch.bool),
-            "class":      "automobile" if i == 0 else "heavy_truck",
+            "class": "automobile" if i == 0 else "heavy_truck",
         }
     return tracks
 
@@ -109,9 +107,7 @@ def test_populate_tracks_idempotent_replace(real_conf):
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=1.0)
 
     tracks_v1 = _viz4d_tracks_dict(F=3)
-    tracks_v1[next(iter(tracks_v1))]["cam_timestamps_us"] = torch.tensor(
-        [100, 200, 300], dtype=torch.int64
-    )
+    tracks_v1[next(iter(tracks_v1))]["cam_timestamps_us"] = torch.tensor([100, 200, 300], dtype=torch.int64)
     model.populate_tracks(tracks_v1)
     assert model.tracks_poses["t0"].shape == (3, 4, 4)
 

@@ -1,14 +1,16 @@
 """E2.1: before/after comparison table from raw/fixed eval metrics jsons."""
-import argparse, json
+
+import argparse
+import json
 
 # (display, key_suffix, higher_is_better) — key = f"{suffix}_{mode}", matches
 # eval_frames_dir.evaluate_frames output keys.
 METRICS = [
     ("lane_grad_corr", "mean_novel_lane_grad_corr", True),
     ("lane_band_psnr", "mean_novel_lane_band_psnr", True),
-    ("NTA_IoU",        "mean_novel_nta_iou",        True),
-    ("FID",            "mean_novel_fid",            False),
-    ("KID",            "mean_novel_kid",            False),
+    ("NTA_IoU", "mean_novel_nta_iou", True),
+    ("FID", "mean_novel_fid", False),
+    ("KID", "mean_novel_kid", False),
 ]
 
 
@@ -17,8 +19,15 @@ def compare_metric(metric, mode, before, after, higher_is_better):
     improved = None
     if delta is not None:
         improved = (delta > 0) if higher_is_better else (delta < 0)
-    return {"metric": metric, "mode": mode, "before": before, "after": after,
-            "delta": delta, "improved": improved, "higher_is_better": higher_is_better}
+    return {
+        "metric": metric,
+        "mode": mode,
+        "before": before,
+        "after": after,
+        "delta": delta,
+        "improved": improved,
+        "higher_is_better": higher_is_better,
+    }
 
 
 def build_table_rows(before, after, modes):
@@ -47,7 +56,8 @@ def main():
     ap.add_argument("--after", nargs="+", required=True, help="fixed metrics json(s)")
     ap.add_argument("--modes", nargs="+", default=["lateral_3m", "lateral_6m"])
     a = ap.parse_args()
-    before = {}; after = {}
+    before = {}
+    after = {}
     for f in a.before:
         before.update(json.load(open(f)))
     for f in a.after:

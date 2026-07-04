@@ -26,6 +26,7 @@ Usage:
         --cell_size 0.5 --corridor_half_width 12 \\
         --opacity_floors 0.05,0.1,0.3
 """
+
 from __future__ import annotations
 
 import argparse
@@ -109,8 +110,7 @@ def _render_heatmaps(stats, ego_xy, out_dir: Path, tag: str, floor_for_cov: floa
         (axes[0], count_c, f"{tag}: road particle count / cell", None),
         (axes[1], maxop_c, f"{tag}: max opacity / cell (floor={floor_for_cov:g})", 1.0),
     ):
-        im = ax.imshow(grid, origin="lower", extent=extent, aspect="equal",
-                       cmap="viridis", vmax=vmax)
+        im = ax.imshow(grid, origin="lower", extent=extent, aspect="equal", cmap="viridis", vmax=vmax)
         ax.plot(ego_xy[:, 0], ego_xy[:, 1], "-", color="red", lw=1.2, label="ego")
         ax.set_title(title, fontsize=11)
         ax.set_xlabel("world X (m)")
@@ -125,8 +125,8 @@ def _render_heatmaps(stats, ego_xy, out_dir: Path, tag: str, floor_for_cov: floa
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    from threedgrut_playground.utils.diag_ckpt import load_ckpt_cpu
     from threedgrut_playground.utils.bev_holes import compute_bev_hole_stats
+    from threedgrut_playground.utils.diag_ckpt import load_ckpt_cpu
 
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--gs_object", required=True, type=str)
@@ -155,12 +155,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 3
     bg_xy, bg_op = _extract_layer_xy_opacity(ckpt, "background")
 
-    kw = dict(cell_size=args.cell_size,
-              corridor_half_width=args.corridor_half_width,
-              opacity_floors=floors)
+    kw = dict(cell_size=args.cell_size, corridor_half_width=args.corridor_half_width, opacity_floors=floors)
 
-    print(f"[road-holes] ego frames={ego_xy.shape[0]}  road N={road_xy.shape[0]}  "
-          f"bg N={0 if bg_xy is None else bg_xy.shape[0]}", flush=True)
+    print(
+        f"[road-holes] ego frames={ego_xy.shape[0]}  road N={road_xy.shape[0]}  "
+        f"bg N={0 if bg_xy is None else bg_xy.shape[0]}",
+        flush=True,
+    )
 
     results = {}
     results["road"] = compute_bev_hole_stats(road_xy, road_op, ego_xy, **kw)
@@ -174,21 +175,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     f0 = floors[0]
     fkey = f"{f0:g}"
     print("\n=== Phase 2A BEV road-hole quantification ===", flush=True)
-    print(f"cell={args.cell_size}m  corridor=±{args.corridor_half_width}m  "
-          f"floors={list(floors)}\n", flush=True)
+    print(f"cell={args.cell_size}m  corridor=±{args.corridor_half_width}m  " f"floors={list(floors)}\n", flush=True)
     rd = results["road"]
     print("road layer opacity percentiles (sigmoid(density)):", flush=True)
-    print("  " + "  ".join(f"{k}={v:.4f}" for k, v in rd.opacity_percentiles.items()),
-          flush=True)
-    print(f"\n{'pass':<16}{'corr_cells':>11}{'B_geom_hole':>13}"
-          f"{'A_transp@'+fkey:>13}{'opaque_cov@'+fkey:>14}", flush=True)
+    print("  " + "  ".join(f"{k}={v:.4f}" for k, v in rd.opacity_percentiles.items()), flush=True)
+    print(
+        f"\n{'pass':<16}{'corr_cells':>11}{'B_geom_hole':>13}" f"{'A_transp@'+fkey:>13}{'opaque_cov@'+fkey:>14}",
+        flush=True,
+    )
     for name in ("road", "bg", "road_union_bg"):
         s = results.get(name)
         if s is None:
             continue
-        print(f"{name:<16}{s.n_corridor_cells:>11d}{s.b_geometry_hole_rate:>13.3f}"
-              f"{s.a_transparency_hole_rate[fkey]:>13.3f}{s.opaque_coverage[fkey]:>14.3f}",
-              flush=True)
+        print(
+            f"{name:<16}{s.n_corridor_cells:>11d}{s.b_geometry_hole_rate:>13.3f}"
+            f"{s.a_transparency_hole_rate[fkey]:>13.3f}{s.opaque_coverage[fkey]:>14.3f}",
+            flush=True,
+        )
     # full opaque-coverage sweep across floors for the road & combined passes
     print("\nopaque coverage by floor (fraction of corridor rendered opaque):", flush=True)
     for name in ("road", "road_union_bg"):

@@ -12,6 +12,7 @@ return because (a) NCore multi-camera training always has ≥ 2 cameras and (b)
 even for single-camera fallback the zero-init forward is identical to ``img``
 already.
 """
+
 from __future__ import annotations
 
 import torch
@@ -49,9 +50,7 @@ class ExposureModel(nn.Module):
             Same-shape tensor clamped to [0, 1].
         """
         if not (0 <= idx < self.num_camera):
-            raise IndexError(
-                f"camera idx {idx} out of range [0, {self.num_camera})"
-            )
-        a = self.exposure_a[idx]   # [1]
-        b = self.exposure_b[idx]   # [1]
+            raise IndexError(f"camera idx {idx} out of range [0, {self.num_camera})")
+        a = self.exposure_a[idx]  # [1]
+        b = self.exposure_b[idx]  # [1]
         return (torch.exp(a) * image + b).clamp(0.0, 1.0)

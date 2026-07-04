@@ -13,6 +13,7 @@ Usage:
   python scripts/convert_align_nurec.py \
       --usdz <last.usdz> --out /tmp/nurec_baseline_aligned.pt --layers road
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,8 +30,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="NuRec USDZ → aligned 3dgrut2 .pt")
     ap.add_argument("--usdz", required=True)
     ap.add_argument("--out", required=True, help="output ALIGNED .pt")
-    ap.add_argument("--layers", default="road",
-                    help="comma list; road-only eval needs just 'road'")
+    ap.add_argument("--layers", default="road", help="comma list; road-only eval needs just 'road'")
     args = ap.parse_args()
     layers = tuple(s.strip() for s in args.layers.split(",") if s.strip())
 

@@ -20,6 +20,7 @@ CUDA tracer，故本测试以 **纯函数公式复刻** + **mock criterion** 验
 
 trainer.py L671-704 的 T6F.2 段代码与下方 `_compute_masked_metrics` 一字一句对齐.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Optional
@@ -27,8 +28,8 @@ from typing import Callable, Optional
 import pytest
 import torch
 
-
 # --- 复刻 trainer.compute_metrics 中的 T6F.2 段（保持一一对应） ----------
+
 
 def _compute_masked_metrics(
     rgb_pred: torch.Tensor,
@@ -50,14 +51,10 @@ def _compute_masked_metrics(
         diff_sq = (rgb_pred - rgb_gt).pow(2) * mask
         denom = mask.sum().clamp(min=1.0) * 3
         mse_masked = diff_sq.sum() / denom
-        psnr_masked = (
-            -10.0 * torch.log10(mse_masked.clamp(min=1e-10))
-        ).item()
+        psnr_masked = (-10.0 * torch.log10(mse_masked.clamp(min=1e-10))).item()
         m4d = mask.permute(0, 3, 1, 2)
         rgb_pred_filled = pred_rgb_full * m4d + rgb_gt_full * (1.0 - m4d)
-        rgb_pred_filled_clipped = (
-            pred_rgb_full_clipped * m4d + rgb_gt_full * (1.0 - m4d)
-        )
+        rgb_pred_filled_clipped = pred_rgb_full_clipped * m4d + rgb_gt_full * (1.0 - m4d)
         ssim_masked = ssim_fn(rgb_pred_filled, rgb_gt_full).item()
         lpips_masked = lpips_fn(rgb_pred_filled_clipped, rgb_gt_full).item()
     else:
@@ -92,6 +89,7 @@ def _mse_lpips_fn(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
 
 # --- 测试 ----------------------------------------------------------------
 
+
 def test_masked_metrics_equal_full_when_mask_none():
     """T6F.2 byte-identical 回归：mask=None → 三 masked 指标 ≡ 全图指标.
 
@@ -103,9 +101,14 @@ def test_masked_metrics_equal_full_when_mask_none():
     psnr_full, ssim_full, lpips_full = 26.3, 0.88, 0.27
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=None,
-        psnr_full=psnr_full, ssim_full=ssim_full, lpips_full=lpips_full,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=None,
+        psnr_full=psnr_full,
+        ssim_full=ssim_full,
+        lpips_full=lpips_full,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
     assert out["psnr_masked"] == psnr_full
     assert out["ssim_masked"] == ssim_full
@@ -128,16 +131,19 @@ def test_masked_metrics_equal_full_when_mask_all_ones():
     rgb_gt_full = rgb_gt.permute(0, 3, 1, 2)
     pred_full = rgb_pred.permute(0, 3, 1, 2)
     pred_full_clipped = rgb_pred.clip(0, 1).permute(0, 3, 1, 2)
-    psnr_ref = (
-        -10.0 * torch.log10(((rgb_pred - rgb_gt).pow(2)).mean().clamp(min=1e-10))
-    ).item()
+    psnr_ref = (-10.0 * torch.log10(((rgb_pred - rgb_gt).pow(2)).mean().clamp(min=1e-10))).item()
     ssim_ref = _mse_ssim_fn(pred_full, rgb_gt_full).item()
     lpips_ref = _mse_lpips_fn(pred_full_clipped, rgb_gt_full).item()
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=mask,
-        psnr_full=psnr_ref, ssim_full=ssim_ref, lpips_full=lpips_ref,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=mask,
+        psnr_full=psnr_ref,
+        ssim_full=ssim_ref,
+        lpips_full=lpips_ref,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
 
     assert out["psnr_masked"] == pytest.approx(psnr_ref, abs=1e-4)
@@ -157,9 +163,14 @@ def test_psnr_masked_uniform_error_matches_analytic_formula():
     mask = torch.ones(1, H, W, 1, dtype=torch.float32)
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=mask,
-        psnr_full=99.0, ssim_full=1.0, lpips_full=0.0,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=mask,
+        psnr_full=99.0,
+        ssim_full=1.0,
+        lpips_full=0.0,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
     assert out["psnr_masked"] == pytest.approx(20.0, abs=1e-4)
 
@@ -174,19 +185,23 @@ def test_psnr_masked_ignores_error_in_masked_region():
     H, W = 8, 8
     rgb_gt = torch.zeros(1, H, W, 3)
     rgb_pred = torch.zeros(1, H, W, 3)
-    rgb_pred[:, H // 2:, :, :] = 1.0  # 下半图最大误差
+    rgb_pred[:, H // 2 :, :, :] = 1.0  # 下半图最大误差
     mask = torch.ones(1, H, W, 1, dtype=torch.float32)
-    mask[:, H // 2:, :, :] = 0.0  # 下半图被排除
+    mask[:, H // 2 :, :, :] = 0.0  # 下半图被排除
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=mask,
-        psnr_full=3.01, ssim_full=0.5, lpips_full=0.5,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=mask,
+        psnr_full=3.01,
+        ssim_full=0.5,
+        lpips_full=0.5,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
     # mask=True 区域误差 = 0 → mse → 1e-10 clamp → -10·log10(1e-10) = 100 dB
     assert out["psnr_masked"] >= 99.0, (
-        f"psnr_masked={out['psnr_masked']} 应 ≥ 99 dB（mask 区无误差），"
-        f"实际 < 99 表明 mask 没把误差排除掉"
+        f"psnr_masked={out['psnr_masked']} 应 ≥ 99 dB（mask 区无误差），" f"实际 < 99 表明 mask 没把误差排除掉"
     )
 
 
@@ -201,18 +216,23 @@ def test_ssim_masked_via_gt_fill_better_than_full_ssim():
     H, W = 8, 8
     rgb_gt = torch.zeros(1, H, W, 3)
     rgb_pred = torch.full((1, H, W, 3), 0.5)
-    rgb_pred[:, H // 2:, :, :] = 0.9  # ego 区大误差
+    rgb_pred[:, H // 2 :, :, :] = 0.9  # ego 区大误差
     mask = torch.ones(1, H, W, 1, dtype=torch.float32)
-    mask[:, H // 2:, :] = 0.0
+    mask[:, H // 2 :, :] = 0.0
 
     rgb_gt_full = rgb_gt.permute(0, 3, 1, 2)
     pred_full = rgb_pred.permute(0, 3, 1, 2)
     ssim_full = _mse_ssim_fn(pred_full, rgb_gt_full).item()
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=mask,
-        psnr_full=10.0, ssim_full=ssim_full, lpips_full=0.5,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=mask,
+        psnr_full=10.0,
+        ssim_full=ssim_full,
+        lpips_full=0.5,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
     assert out["ssim_masked"] > ssim_full, (
         f"ssim_masked ({out['ssim_masked']}) 应 > ssim_full ({ssim_full})；"
@@ -232,18 +252,23 @@ def test_lpips_masked_via_gt_fill_better_than_full_lpips():
     H, W = 8, 8
     rgb_gt = torch.zeros(1, H, W, 3)
     rgb_pred = torch.full((1, H, W, 3), 0.5)
-    rgb_pred[:, H // 2:, :, :] = 0.9
+    rgb_pred[:, H // 2 :, :, :] = 0.9
     mask = torch.ones(1, H, W, 1, dtype=torch.float32)
-    mask[:, H // 2:, :] = 0.0
+    mask[:, H // 2 :, :] = 0.0
 
     rgb_gt_full = rgb_gt.permute(0, 3, 1, 2)
     pred_full_clipped = rgb_pred.clip(0, 1).permute(0, 3, 1, 2)
     lpips_full = _mse_lpips_fn(pred_full_clipped, rgb_gt_full).item()
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=mask,
-        psnr_full=10.0, ssim_full=0.5, lpips_full=lpips_full,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=mask,
+        psnr_full=10.0,
+        ssim_full=0.5,
+        lpips_full=lpips_full,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
     assert out["lpips_masked"] < lpips_full, (
         f"lpips_masked ({out['lpips_masked']}) 应 < lpips_full ({lpips_full})；"
@@ -263,9 +288,14 @@ def test_psnr_masked_mask_shape_broadcast_to_rgb():
     mask = torch.ones(1, H, W, 1, dtype=torch.float32)
 
     out = _compute_masked_metrics(
-        rgb_pred, rgb_gt, mask=mask,
-        psnr_full=20.0, ssim_full=0.9, lpips_full=0.1,
-        ssim_fn=_mse_ssim_fn, lpips_fn=_mse_lpips_fn,
+        rgb_pred,
+        rgb_gt,
+        mask=mask,
+        psnr_full=20.0,
+        ssim_full=0.9,
+        lpips_full=0.1,
+        ssim_fn=_mse_ssim_fn,
+        lpips_fn=_mse_lpips_fn,
     )
     # 全 mask + uniform δ=0.1 → 同 test_psnr_masked_uniform_error
     assert out["psnr_masked"] == pytest.approx(20.0, abs=1e-4)

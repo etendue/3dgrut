@@ -3,6 +3,7 @@
 
 CPU / Mac runnable, no real ckpt required.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -76,8 +77,8 @@ def test_detect_sharp_turn_kink():
     poses = np.tile(np.eye(4, dtype=np.float32), (n, 1, 1))
     R = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]], dtype=np.float32)
     poses[:, :3, :3] = R
-    poses[:5, 0, 3] = np.arange(5, dtype=np.float32)   # (0..4, 0)
-    poses[5:, 0, 3] = 4.0                              # x stays at 4
+    poses[:5, 0, 3] = np.arange(5, dtype=np.float32)  # (0..4, 0)
+    poses[5:, 0, 3] = 4.0  # x stays at 4
     poses[5:, 1, 3] = np.arange(1, n - 4, dtype=np.float32)  # (4, 1), (4, 2), ...
     ts = (np.arange(n) * 100_000).astype(np.int64)
     r = diag._detect_problems(poses, ts, outlier_k=5.0)

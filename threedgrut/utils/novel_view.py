@@ -30,6 +30,7 @@ and shutter-end poses) must both be perturbed by the SAME delta to keep the
 shutter window consistent; otherwise the renderer interprets it as a wildly
 distorted intra-frame motion. Use ``perturb_shutter_pair`` for that pair.
 """
+
 from __future__ import annotations
 
 from typing import Tuple
@@ -42,21 +43,21 @@ import torch
 # anchor (B3 0.5962) depends on this field meaning exactly this average.
 # E1.1 adds extrapolation modes below; they go into mean_novel_lpips_avg6.
 LEGACY_NOVEL_AVG_MODES: Tuple[str, ...] = (
-    "lateral_1m",   # +1 m along camera right axis
-    "lateral_2m",   # +2 m along camera right axis
-    "yaw_5deg",     # +5° rotation around camera up axis (world-up under AV convention)
-    "yaw_10deg",    # +10° rotation around camera up axis
+    "lateral_1m",  # +1 m along camera right axis
+    "lateral_2m",  # +2 m along camera right axis
+    "yaw_5deg",  # +5° rotation around camera up axis (world-up under AV convention)
+    "yaw_10deg",  # +10° rotation around camera up axis
 )
 
 # Order matters: render.py writes metrics under mean_novel_lpips_<mode_name>.
 NOVEL_VIEW_MODES: Tuple[str, ...] = LEGACY_NOVEL_AVG_MODES + (
-    "lateral_3m",   # +3 m along camera right axis (E1.1 extrapolation gate)
-    "lateral_6m",   # +6 m along camera right axis (E1.1 extrapolation gate)
+    "lateral_3m",  # +3 m along camera right axis (E1.1 extrapolation gate)
+    "lateral_6m",  # +6 m along camera right axis (E1.1 extrapolation gate)
     # Road off-track rotation gate: 30°/60° (10° already in the legacy set).
     # These extend the yaw sweep for the off-track KPI without touching the
     # legacy avg anchor above.
-    "yaw_30deg",    # +30° rotation around camera up axis
-    "yaw_60deg",    # +60° rotation around camera up axis
+    "yaw_30deg",  # +30° rotation around camera up axis
+    "yaw_60deg",  # +60° rotation around camera up axis
 )
 
 
@@ -77,7 +78,7 @@ def _yaw_deg_from_mode(mode: str) -> float:
     """
     if not (mode.startswith("yaw_") and mode.endswith("deg")):
         raise ValueError(f"not a yaw mode: {mode!r}")
-    return float(mode[len("yaw_"):-len("deg")])
+    return float(mode[len("yaw_") : -len("deg")])
 
 
 def _to_numpy_44(c2w) -> np.ndarray:
@@ -102,9 +103,7 @@ def perturb_c2w(c2w, mode: str) -> np.ndarray:
     direction from the same point.
     """
     if mode not in NOVEL_VIEW_MODES:
-        raise ValueError(
-            f"mode '{mode}' not in NOVEL_VIEW_MODES {NOVEL_VIEW_MODES}"
-        )
+        raise ValueError(f"mode '{mode}' not in NOVEL_VIEW_MODES {NOVEL_VIEW_MODES}")
     m = _to_numpy_44(c2w)
     out = m.copy()
     if mode == "lateral_1m":
@@ -126,7 +125,9 @@ def perturb_c2w(c2w, mode: str) -> np.ndarray:
 
 
 def perturb_shutter_pair(
-    c2w_start, c2w_end, mode: str,
+    c2w_start,
+    c2w_end,
+    mode: str,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Apply the same perturbation delta to both shutter-start and shutter-end
     poses (rolling-shutter integrity). Returns (start_new, end_new) float64.
@@ -171,9 +172,7 @@ def perturb_batch_shutter_pair_torch(
     same shape, same dtype, same device.
     """
     if T_to_world.shape != (1, 4, 4):
-        raise ValueError(
-            f"T_to_world must be (1,4,4); got {tuple(T_to_world.shape)}"
-        )
+        raise ValueError(f"T_to_world must be (1,4,4); got {tuple(T_to_world.shape)}")
     s, e = perturb_shutter_pair(T_to_world, T_to_world_end, mode)
     new_start = torch.from_numpy(s).to(T_to_world.device, dtype=T_to_world.dtype).unsqueeze(0)
     new_end = torch.from_numpy(e).to(T_to_world_end.device, dtype=T_to_world_end.dtype).unsqueeze(0)
@@ -183,6 +182,7 @@ def perturb_batch_shutter_pair_torch(
 # ---------------------------------------------------------------------------
 # E2.1 Harmonizer frame-alignment helpers
 # ---------------------------------------------------------------------------
+
 
 def novel_frame_key(camera_id: str, timestamp_us) -> str:
     """E2.1 frame-alignment key, must match eval_frames_dir.resolve_pred_path's

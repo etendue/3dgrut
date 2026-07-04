@@ -21,6 +21,7 @@ Covers:
 
 The conftest pattern matches test_layered_gaussians.py (real Hydra conf).
 """
+
 from __future__ import annotations
 
 import os
@@ -32,9 +33,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -46,16 +45,24 @@ def real_conf():
 def _two_track_dict(F: int = 5) -> dict:
     eye = torch.eye(4).expand(F, 4, 4).clone()
     return {
-        "alice": {"poses": eye.clone(), "active": torch.ones(F, dtype=torch.bool),
-                  "class": "automobile", "size": torch.tensor([4.0, 2.0, 1.5])},
-        "bob":   {"poses": eye.clone(), "active": torch.ones(F, dtype=torch.bool),
-                  "class": "automobile", "size": torch.tensor([4.0, 2.0, 1.5])},
+        "alice": {
+            "poses": eye.clone(),
+            "active": torch.ones(F, dtype=torch.bool),
+            "class": "automobile",
+            "size": torch.tensor([4.0, 2.0, 1.5]),
+        },
+        "bob": {
+            "poses": eye.clone(),
+            "active": torch.ones(F, dtype=torch.bool),
+            "class": "automobile",
+            "size": torch.tensor([4.0, 2.0, 1.5]),
+        },
     }
 
 
-def _build_model(real_conf, *, albedo: bool, scale: bool,
-                 n_pts_per_track: int = 4,
-                 n_fourier: int | None = None) -> tuple[LayeredGaussians, list[str]]:
+def _build_model(
+    real_conf, *, albedo: bool, scale: bool, n_pts_per_track: int = 4, n_fourier: int | None = None
+) -> tuple[LayeredGaussians, list[str]]:
     """bg + dyn LayeredGaussians with V3-L8/L9 toggles, 2 tracks, n_pts each.
 
     Returns (model, sorted_track_names).
@@ -69,37 +76,32 @@ def _build_model(real_conf, *, albedo: bool, scale: bool,
         extra["optimize_track_scale"] = True
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000,
-                  scale_prior=(0.05, 0.05, 0.05), extra=extra),
+        LayerSpec(
+            name="dynamic_rigids", layer_id=2, max_n_particles=200_000, scale_prior=(0.05, 0.05, 0.05), extra=extra
+        ),
     ]
     tracks = _two_track_dict()
-    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0, tracks=tracks)
     # bg init (small)
-    model.init_layer_from_points("background", torch.randn(5, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(5, 3), setup_optimizer=False)
     # dyn init: n_pts_per_track local-origin points per track
     track_names = sorted(tracks.keys())
     all_pts = []
     all_ids = []
     for tid in track_names:
         all_pts.append(torch.zeros(n_pts_per_track, 3))
-        all_ids.append(torch.full((n_pts_per_track,),
-                                  track_names.index(tid), dtype=torch.long))
-    model.init_layer_from_points("dynamic_rigids",
-                                 torch.cat(all_pts),
-                                 track_ids=torch.cat(all_ids),
-                                 setup_optimizer=False)
+        all_ids.append(torch.full((n_pts_per_track,), track_names.index(tid), dtype=torch.long))
+    model.init_layer_from_points(
+        "dynamic_rigids", torch.cat(all_pts), track_ids=torch.cat(all_ids), setup_optimizer=False
+    )
     return model, track_names
 
 
 # --- (a) OFF: no tables registered (regression pin) -------------------------
 def test_tables_not_registered_when_both_off(real_conf):
     model, _ = _build_model(real_conf, albedo=False, scale=False)
-    assert not hasattr(model, "_track_albedo_table"), \
-        "OFF mode must NOT register _track_albedo_table"
-    assert not hasattr(model, "_track_log_scale_table"), \
-        "OFF mode must NOT register _track_log_scale_table"
+    assert not hasattr(model, "_track_albedo_table"), "OFF mode must NOT register _track_albedo_table"
+    assert not hasattr(model, "_track_log_scale_table"), "OFF mode must NOT register _track_log_scale_table"
     # state_dict roundtrip-equivalence: keys shouldn't contain new params.
     param_names = list(dict(model.named_parameters()).keys())
     assert all("_track_albedo_table" not in n for n in param_names)
@@ -115,8 +117,7 @@ def test_albedo_table_shape_and_init(real_conf):
     # P1.3b: albedo table is [K, 3, k] Fourier coefficients; default k=1.
     assert t.shape == (len(names), 3, 1)
     assert torch.equal(t, torch.zeros_like(t)), "albedo table must zero-init"
-    assert t.requires_grad is False, \
-        "warmup gate: requires_grad starts False; trainer flips at step 500"
+    assert t.requires_grad is False, "warmup gate: requires_grad starts False; trainer flips at step 500"
 
 
 # --- (c) ON scale: registered + zero-init + requires_grad=False -------------
@@ -153,24 +154,25 @@ def test_fused_view_identity_under_zero_init(real_conf):
 
     fv_off = model_off.fused_view()
     fv_on = model_on.fused_view()
-    assert torch.allclose(fv_off["features_albedo"], fv_on["features_albedo"]), \
-        "zero albedo bias must not change DC SH"
-    assert torch.allclose(fv_off["scale"], fv_on["scale"]), \
-        "zero log-scale offset must not change scale"
+    assert torch.allclose(fv_off["features_albedo"], fv_on["features_albedo"]), "zero albedo bias must not change DC SH"
+    assert torch.allclose(fv_off["scale"], fv_on["scale"]), "zero log-scale offset must not change scale"
 
 
 # --- (e) non-zero albedo → per-track shift ----------------------------------
 def test_albedo_table_shifts_features_per_track(real_conf):
-    model, names = _build_model(real_conf, albedo=True, scale=False,
-                                n_pts_per_track=3)
+    model, names = _build_model(real_conf, albedo=True, scale=False, n_pts_per_track=3)
     with torch.no_grad():
         # Distinct per-track bias so we can identify them in the output.
         # P1.3b: table is [K, 3, k]; default k=1 so the DC slot is [..., 0].
         # A constant (frame-independent) bias = only the DC Fourier term.
-        model._track_albedo_table.copy_(torch.tensor([
-            [0.10, 0.20, 0.30],   # track 0 = alice
-            [-0.10, -0.20, -0.30],  # track 1 = bob
-        ]).unsqueeze(-1))
+        model._track_albedo_table.copy_(
+            torch.tensor(
+                [
+                    [0.10, 0.20, 0.30],  # track 0 = alice
+                    [-0.10, -0.20, -0.30],  # track 1 = bob
+                ]
+            ).unsqueeze(-1)
+        )
     layer = model.layers["dynamic_rigids"]
     # Zero out the layer's own features_albedo so only the bias appears.
     with torch.no_grad():
@@ -181,16 +183,13 @@ def test_albedo_table_shifts_features_per_track(real_conf):
     # the last 2*3=6 dyn rows.
     dyn_feat = fv["features_albedo"][-6:]
     # alice rows = first 3 (track_id 0); bob rows = last 3.
-    assert torch.allclose(dyn_feat[:3], torch.tensor([0.10, 0.20, 0.30]).expand(3, 3),
-                          atol=1e-6)
-    assert torch.allclose(dyn_feat[3:], torch.tensor([-0.10, -0.20, -0.30]).expand(3, 3),
-                          atol=1e-6)
+    assert torch.allclose(dyn_feat[:3], torch.tensor([0.10, 0.20, 0.30]).expand(3, 3), atol=1e-6)
+    assert torch.allclose(dyn_feat[3:], torch.tensor([-0.10, -0.20, -0.30]).expand(3, 3), atol=1e-6)
 
 
 # --- (f) non-zero log-scale → per-track log-space add -----------------------
 def test_log_scale_table_shifts_scale_per_track(real_conf):
-    model, names = _build_model(real_conf, albedo=False, scale=True,
-                                n_pts_per_track=3)
+    model, names = _build_model(real_conf, albedo=False, scale=True, n_pts_per_track=3)
     with torch.no_grad():
         model._track_log_scale_table.copy_(torch.tensor([[0.5], [-0.5]]))
         # Zero out the layer's own log-scale so only the offset appears.
@@ -207,8 +206,7 @@ def test_table_application_is_post_gather_not_mutation(real_conf):
     """V3 design §D: per-track scale offset is a fused-view *post* shift;
     it must NOT mutate ``layer.scale`` (the nn.Parameter). MCMC perturb
     on ``layer.scale`` then runs against the un-shifted parameter."""
-    model, _ = _build_model(real_conf, albedo=True, scale=True,
-                            n_pts_per_track=3)
+    model, _ = _build_model(real_conf, albedo=True, scale=True, n_pts_per_track=3)
     with torch.no_grad():
         # P1.3b: albedo table is [K, 3, k] (default k=1).
         model._track_albedo_table.copy_(torch.full((2, 3, 1), 0.7))
@@ -217,10 +215,10 @@ def test_table_application_is_post_gather_not_mutation(real_conf):
     feat_before = layer.features_albedo.detach().clone()
     scale_before = layer.scale.detach().clone()
     _ = model.fused_view()  # discard; we only care about side effects.
-    assert torch.equal(layer.features_albedo.detach(), feat_before), \
-        "fused_view must not mutate the underlying features_albedo Parameter"
-    assert torch.equal(layer.scale.detach(), scale_before), \
-        "fused_view must not mutate the underlying scale Parameter"
+    assert torch.equal(
+        layer.features_albedo.detach(), feat_before
+    ), "fused_view must not mutate the underlying features_albedo Parameter"
+    assert torch.equal(layer.scale.detach(), scale_before), "fused_view must not mutate the underlying scale Parameter"
 
 
 # --- (h) ckpt save/load: tables ride along when enabled ---------------------
@@ -247,6 +245,7 @@ def test_tables_absent_in_state_dict_when_off(real_conf):
 # P1.3b — Fourier (4D-SH) time-varying albedo INTEGRATION (real model + fused_view)
 # ===========================================================================
 
+
 # --- (i) n_fourier=4 registers a [K, 3, 4] table ----------------------------
 def test_fourier_table_shape_k4(real_conf):
     model, names = _build_model(real_conf, albedo=True, scale=False, n_fourier=4)
@@ -259,42 +258,36 @@ def test_fourier_table_shape_k4(real_conf):
 # --- (j) k=1 fused_view is frame-independent (DC-only degeneracy) ------------
 def test_fourier_k1_frame_independent(real_conf):
     """k=1 → fused_view features_albedo identical across all frame_ids."""
-    model, _ = _build_model(real_conf, albedo=True, scale=False,
-                            n_pts_per_track=3, n_fourier=1)
+    model, _ = _build_model(real_conf, albedo=True, scale=False, n_pts_per_track=3, n_fourier=1)
     with torch.no_grad():
-        model._track_albedo_table.copy_(
-            torch.tensor([[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]]).unsqueeze(-1)
-        )
+        model._track_albedo_table.copy_(torch.tensor([[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]]).unsqueeze(-1))
         model.layers["dynamic_rigids"].features_albedo.zero_()
     # F=5 in _two_track_dict; sweep all frames.
     fv0 = model.fused_view(frame_id=0)["features_albedo"][-6:]
     for t in range(1, 5):
         fvt = model.fused_view(frame_id=t)["features_albedo"][-6:]
-        assert torch.allclose(fv0, fvt, atol=1e-6), \
-            f"k=1 must be frame-independent; differs at frame {t}"
+        assert torch.allclose(fv0, fvt, atol=1e-6), f"k=1 must be frame-independent; differs at frame {t}"
 
 
 # --- (k) k>1 fused_view varies with frame_id --------------------------------
 def test_fourier_k4_varies_with_frame(real_conf):
     """k=4 with a non-zero first harmonic → bias changes across frames."""
-    model, _ = _build_model(real_conf, albedo=True, scale=False,
-                            n_pts_per_track=3, n_fourier=4)
+    model, _ = _build_model(real_conf, albedo=True, scale=False, n_pts_per_track=3, n_fourier=4)
     with torch.no_grad():
         # track 0: DC=0.1 on R + first harmonic=0.5 on R.
         tab = torch.zeros(2, 3, 4)
-        tab[0, 0, 0] = 0.1   # DC
-        tab[0, 0, 1] = 0.5   # 1st harmonic, channel R
+        tab[0, 0, 0] = 0.1  # DC
+        tab[0, 0, 1] = 0.5  # 1st harmonic, channel R
         model._track_albedo_table.copy_(tab)
         model.layers["dynamic_rigids"].features_albedo.zero_()
     import math as _math
+
     N_t = 5
     # alice rows are the first 3 dyn rows (track 0).
     for t in range(N_t):
         fv = model.fused_view(frame_id=t)["features_albedo"][-6:]
         expected_r = 0.1 + 0.5 * _math.cos(_math.pi * t / N_t)
-        assert torch.allclose(
-            fv[:3, 0], torch.full((3,), expected_r), atol=1e-5
-        ), f"frame {t}: R channel mismatch"
+        assert torch.allclose(fv[:3, 0], torch.full((3,), expected_r), atol=1e-5), f"frame {t}: R channel mismatch"
         # G/B channels untouched → 0.
         assert torch.allclose(fv[:3, 1:], torch.zeros(3, 2), atol=1e-6)
 
@@ -316,9 +309,7 @@ def test_fourier_zero_init_identity(real_conf):
             layer_on.features_specular.copy_(layer_off.features_specular)
     fv_off = model_off.fused_view(frame_id=2)
     fv_on = model_on.fused_view(frame_id=2)
-    assert torch.allclose(
-        fv_off["features_albedo"], fv_on["features_albedo"], atol=1e-7
-    )
+    assert torch.allclose(fv_off["features_albedo"], fv_on["features_albedo"], atol=1e-7)
 
 
 # --- (m) ckpt back-compat: old [K,3] DC table loads into a k=4 model --------
@@ -337,10 +328,8 @@ def test_ckpt_backcompat_old_dc_into_fourier_model(real_conf):
     model.init_from_checkpoint(old_ckpt, setup_optimizer=False)
     t = model._track_albedo_table.detach().cpu()
     assert t.shape == (2, 3, 4)
-    assert torch.allclose(t[..., 0], dc_vals, atol=1e-6), \
-        "old DC values must land in Fourier term 0"
-    assert torch.allclose(t[..., 1:], torch.zeros(2, 3, 3), atol=1e-7), \
-        "higher harmonics must be zero after upgrade"
+    assert torch.allclose(t[..., 0], dc_vals, atol=1e-6), "old DC values must land in Fourier term 0"
+    assert torch.allclose(t[..., 1:], torch.zeros(2, 3, 3), atol=1e-7), "higher harmonics must be zero after upgrade"
 
 
 # --- (n) warmup gate still flips the [K,3,k] table --------------------------
