@@ -1,0 +1,49 @@
+# @package _global_
+#
+# ===========================================================================
+# v5 任务A baseline — inceptio 多相机 multilayer 配方（2026-07-04 固化）
+#
+# 在 ncore_3dgut_mcmc_multilayer 之上叠两个经实测验证的修正：
+#   1. dataset.camera_ids  = inceptio 12 相机车型的 6-cam 子集
+#      （3 前向 + 2 朝地侧相机 + 1 后视；road lidar-sseg 覆盖 40.1%，
+#        修复链见 v5_plan.md 2026-07-02/03 Done Log，road 点 2117×）
+#   2. loss.use_opacity    = false —— base_mcmc 默认的全局 opacity 正则
+#      （λ=0.01 无可见性加权）在 6-cam 采样稀释下压死全部非豁免层
+#      （bg 100% / dyn 84-99% 死亡，A800 双卡单变量 S-c/S-d 坐实）；
+#      multilayer 三粒子层语境下关闭 ≈ 全层豁免。
+#      已知权衡：3-cam 域实测关闭后 mean_psnr −0.46（失去修剪红利）但
+#      lpips −0.018、automobile +0.33；6-cam 域为必要条件（否则整层坍塌）。
+#      精调方向（issue I4）：分层 λ / dyn 豁免 / 可见性加权。
+#
+# 机器相关键不进本文件，按 CLAUDE.md 铁律 CLI 覆盖：
+#   inceptio：trainer.use_lidar_depth=false trainer.use_depth_prior=false
+#             dataset.load_lidar_depth_map=false dataset.load_depth_prior=false
+#             num_workers=10 trainer.sky_backend=mlp
+#   A800    ：num_workers=24；depth 开关任意（A800 干净 A/B 实测 depth 中性，
+#             lidaron 20.22 vs depthoff 20.17 @30k，2026-07-03）
+#
+# baseline 锚（R2p = 本配方原样，30k，inceptio depth-off + nw=10，2026-07-04）：
+#   mean 20.11 / cc 18.54 / ssim 0.640 / lpips 0.629 / road_crop 24.51
+#   automobile class_psnr 18.54（<15dB 记录 38/346）
+#   per-cam: front 21.16 / cross_l 20.18 / cross_r 19.90 /
+#            left_wide 18.44 / right_wide 21.24 / back_rear 19.58
+#   单变量佐证：A5 cuboid mask on vs off = automobile +1.15、road_crop +0.63
+#   ⚠️ 与 3-cam 锚（R0 21.04）跨相机集不可直接比（新相机拉低全图平均）；
+#     同 3 台守护线对锚 −0.4~0.9，等比步数欠训（issue I1，候选 60k）
+# ===========================================================================
+
+defaults:
+  - /apps/ncore_3dgut_mcmc_multilayer
+  - _self_
+
+dataset:
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_left_wide_90fov
+    - camera_right_wide_90fov
+    - camera_back_rear_wide_90fov
+
+loss:
+  use_opacity: false

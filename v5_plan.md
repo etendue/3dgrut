@@ -225,6 +225,22 @@ flowchart TD
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
 
+- **2026-07-04 ★ baseline 固化（大g 决策：先立 baseline 再逐个解 issue）+ R2p/A800 depth A/B 出数**：
+  - **baseline = `configs/apps/ncore_3dgut_mcmc_multilayer_multicam.yaml`**（compose multilayer + 6-cam camera_ids + `loss.use_opacity=false`；`# @package _global_` 头必需，Mac compose 验证 6 相机/正则off/mask on）。**锚 = R2p 30k：mean 20.11 / cc 18.54 / ssim 0.640 / lpips 0.629 / road_crop 24.51 / automobile 18.54（<15dB 38/346）**；per-cam front 21.16 / cross 20.18/19.90 / left 18.44 / right 21.24 / back 19.58。
+  - **A5 单变量增益坐实（R2p vs R1p）**：automobile **+1.15**、劣质记录 73→38（−48%）、road_crop +0.63，mean/ssim/lpips 持平，front −0.43（监督预算向 dyn 重分配）——cuboid mask 留在 baseline（默认 on）。
+  - **A800 depth A/B v2（正则off 干净版）**：lidaron 20.22/road 24.38/auto 18.19/lidar_psnr 25.22 vs depthoff 20.17/24.24/18.41 → **depth 监督对 b6a9 6-cam@30k 中性**（差异噪声级）；A800 20.2 与 inceptio 20.1-20.2 跨机咬合（健康互证，不作跨机锚）。
+  - 事故记录：7/3 夜 R2p/R3p 未跑——/tmp sed 裁剪驱动继承 `cd $(dirname $0)/..` 落到根目录（`python //train.py` 秒死）；教训＝发射后必须验证进程存活；正式驱动 `fc93bd3` 入库。
+  - **Issues 清单（baseline 之上逐个解，带证据与优先级）**：
+    | # | issue | 证据 | 候选解 | 优先级 |
+    |---|---|---|---|---|
+    | I1 | 6-cam 守护线对 3-cam 锚退 0.4~0.9（欠训） | 6-cam 数据×2、30k=每相机有效步数减半 | **R2p 配方 60k 等比重训** | ★高 |
+    | I2 | 车辆仍糊（18.54，虽 +1.15） | dyn 层 30k + 36 tracks | R3p（A2 interp，跑数中）→ D1 poseopt | ★高 |
+    | I3 | road 层颜色贡献度不足（road-only 偏暗） | road-only 渲染图 2026-07-03 | E3.6 takeover 完整版（bg init 剔 road 点 + road 补密） | 中 |
+    | I4 | opacity 正则修剪红利丢失（3-cam mean −0.46） | R0c vs R0b | 分层 λ / dyn 豁免 / 可见性加权 | 中 |
+    | I5 | viser OPCV 初始 fov 未同步（涂抹） | 2026-07-03 终审 | 一行修（芯片 task_aed6e22a） | 低（有使用姿势绕过） |
+    | I6 | left_wide 极点像素 + 最弱相机（18.44） | ray 极点已防护；per-cam 表 | 去畸变 shader 修（上游）+ C1 telew 权重 | 低 |
+    | I7 | B 阶段：NRE 同 clip gap 未实测 | B1 未跑（A800 无 nre-ga 容器） | 拉容器或 inceptio 夜间挂机 | 中 |
+
 - **2026-07-02/03 任务A 主体执行（A2/A3/A4/A5 ✅ + A1 根因改写与 aux 修复 + 三类训练 NaN 排障；branch `claude/laughing-lichterman-a52733`）**：
   - **A1 步骤0 诊断（`2f55017` diag_lidar_sseg_vs_proj.py）推翻 E5.0 结论**：thinkpad lidar-cam 投影图（大g 提供，已存 `inceptio:~/work/data/inc_b6a9ed61_20s/proj_ref/`）× camvis × 几何重投影三方对照——前向 3-cam 明明看得到大量路面点（front_wide 每 sweep ~7 万点落 road 像素却 100% 被标 ignore），`P(ignore|camvis>0)=0.875`。真根因＝**nre-tools lidar-seg 遮挡检查**（`estimators.py` spin-mesh 射线求交 1mm 容差 × 掠射路面几何 × 聚合 multi-lidar 破坏 spin 有序性 → 误杀）；vegetation/building 近垂直入射不受害，故 E5.0 误判为相机覆盖问题。
   - **aux 修复（容器 bind-mount 补丁 `NRE_LIDARSEG_OCCLUSION=off`，补丁文件 `inceptio:/tmp/estimators_patched.py`）**：road+sidewalk **21460（0.019%）→ 45,423,991（40.08%），2117×**；`P(ignore|camvis>0)` 0.875→**0.0069**；附带解锁速度 105s/帧→0.7s/帧（60×，慢的元凶就是求交）——多容器并行 runbook 对 lidar-seg 不再必要。6-cam aux（原生重跑 sseg+egomask 13min + lidar-seg 200 帧 2min）已入 clip 目录，旧 3-cam aux 备份 `aux_3cam_backup/`；merge_lidar_aux 修跨相机集并集 bug（`2c18848`）；⚠️ 自写 merge itar 缺 `.zmetadata.cbor.xz`（consolidated metadata）会让 nre-tools 容器 KeyError——容器输入一律用原生 itar，训练侧读非 consolidated 路径不受影响。
