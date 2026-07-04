@@ -247,6 +247,7 @@ flowchart TD
   - **A5 单变量增益坐实（R2p vs R1p）**：automobile **+1.15**、劣质记录 73→38（−48%）、road_crop +0.63，mean/ssim/lpips 持平，front −0.43（监督预算向 dyn 重分配）——cuboid mask 留在 baseline（默认 on）。
   - **A800 depth A/B v2（正则off 干净版）**：lidaron 20.22/road 24.38/auto 18.19/lidar_psnr 25.22 vs depthoff 20.17/24.24/18.41 → **depth 监督对 b6a9 6-cam@30k 中性**（差异噪声级）；A800 20.2 与 inceptio 20.1-20.2 跨机咬合（健康互证，不作跨机锚）。
   - 事故记录：7/3 夜 R2p/R3p 未跑——/tmp sed 裁剪驱动继承 `cd $(dirname $0)/..` 落到根目录（`python //train.py` 秒死）；教训＝发射后必须验证进程存活；正式驱动 `fc93bd3` 入库。
+  - **PAI 数据回归 A/B 通过（PR #44 合并前证据，大g 提问触发）**：inceptio 双 worktree（main `5819316` vs branch `a3a4ecf`），PAI 9ae clip、multilayer 原配方、5s 窗 5k 步（快测约定首秀）、depth-off+nw=10 双侧同覆盖。**main 22.499/lpips 0.4462 vs branch 22.587/lpips 0.4496 → Δpsnr +0.09（<0.3 判据，run-to-run 噪声级）**，branch 侧 dead=0/nonfinite=0（新守卫在 FTheta 路径全程未触发 = no-op 实证）。配置层：resolved config diff 仅一个默认等价新键 `cuboid_ts_mode: ref_nearest`。结论：**分支对 PAI 线无回归**；inceptio 配方改名 `_inceptio.yaml` 与 PAI multilayer 完全分离。
   - **lattice v2 收官（12:20 ALL COMPLETE）**：R3p（+A2 interp）**20.25 / cc 18.72 / lpips 0.627 / road_crop 24.47 / automobile 18.53**，front +0.47 / back +0.54（vs R2p），无回退项（唯 <15dB 记录 38→48），告警仅 left_wide 极点修复预期 3 次。**判定：`cuboid_ts_mode=per_camera_interp` 升级进 baseline，锚改记 R3p**（yaml 头注释同步）。lattice v2 单变量全链完整：aux 修复 +0.26（R0b）→ 正则权衡（R0c）→ 相机集（R1p）→ A5 +1.15 auto（R2p）→ A2 +0.15 mean（R3p）。
   - **Issues 清单（baseline 之上逐个解，带证据与优先级）**：
     | # | issue | 证据 | 候选解 | 优先级 |
