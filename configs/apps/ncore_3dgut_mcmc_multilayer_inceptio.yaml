@@ -1,7 +1,7 @@
 # @package _global_
 #
 # ===========================================================================
-# v5 任务A baseline — inceptio 多相机 multilayer 配方（2026-07-04 固化）
+# v5 任务A baseline — inceptio 车型（12-cam 平台）multilayer 配方——相机子集可按 C 阶梯扩减，PAI 线继续用 ncore_3dgut_mcmc_multilayer 不受影响（2026-07-04 固化）
 #
 # 在 ncore_3dgut_mcmc_multilayer 之上叠两个经实测验证的修正：
 #   1. dataset.camera_ids  = inceptio 12 相机车型的 6-cam 子集
