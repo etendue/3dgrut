@@ -22,6 +22,7 @@ image edges, painting whole columns as dyn mask. The FTheta path applies
 in well-bounded AABBs. Behind-camera corners (``z ≤ 0``) are excluded from
 the AABB; tracks with all 8 corners behind are skipped.
 """
+
 from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
@@ -30,10 +31,14 @@ import torch
 
 # 8 cuboid corner sign template: ±1 along each of (x, y, z). Generated once
 # at module load.
-_CORNER_SIGNS = torch.tensor(
-    [[(i & 1), ((i >> 1) & 1), ((i >> 2) & 1)] for i in range(8)],
-    dtype=torch.float32,
-) * 2.0 - 1.0  # [8, 3]; values in {-1, +1}
+_CORNER_SIGNS = (
+    torch.tensor(
+        [[(i & 1), ((i >> 1) & 1), ((i >> 2) & 1)] for i in range(8)],
+        dtype=torch.float32,
+    )
+    * 2.0
+    - 1.0
+)  # [8, 3]; values in {-1, +1}
 
 
 def _horner_ascending_torch(poly: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -50,7 +55,8 @@ def _horner_ascending_torch(poly: torch.Tensor, x: torch.Tensor) -> torch.Tensor
 
 
 def _normalize_ftheta_params(
-    ftheta_params: Dict[str, object], device: torch.device | str,
+    ftheta_params: Dict[str, object],
+    device: torch.device | str,
 ) -> Dict[str, torch.Tensor]:
     """Normalize ``ftheta_params`` (numpy or torch) → torch tensors on device.
 
@@ -72,7 +78,8 @@ def _normalize_ftheta_params(
 
 
 def _corners_to_pixels_pinhole(
-    corners_cam: torch.Tensor, K: torch.Tensor,
+    corners_cam: torch.Tensor,
+    K: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Pinhole projection. ``corners_cam`` shape ``[T, 8, 4]`` (homogeneous)."""
     z = corners_cam[..., 2].clamp(min=0.1)
@@ -81,8 +88,76 @@ def _corners_to_pixels_pinhole(
     return u, v
 
 
+def _aabb_from_visible_corners(
+    u: torch.Tensor,
+    v: torch.Tensor,
+    z_pos: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per-track AABB reduction over corners, ignoring behind-camera ones.
+
+    Behind-camera corners (``z ≤ 0``) project to unbounded (FTheta) or
+    z-clamped huge-magnitude (pinhole) pixels; letting them into the min/max
+    smears the AABB across the image. A track with all 8 corners behind is
+    flagged invisible so the caller skips it entirely.
+    """
+    per_track_visible = z_pos.any(dim=-1)  # [T]
+    big = torch.full_like(u, float("inf"))
+    u_for_min = torch.where(z_pos, u, big)
+    u_for_max = torch.where(z_pos, u, -big)
+    v_for_min = torch.where(z_pos, v, big)
+    v_for_max = torch.where(z_pos, v, -big)
+    return (
+        per_track_visible,
+        u_for_min.min(dim=-1).values,
+        u_for_max.max(dim=-1).values,
+        v_for_min.min(dim=-1).values,
+        v_for_max.max(dim=-1).values,
+    )
+
+
+def resolve_batch_cuboid_intrinsics(gpu_batch) -> Tuple[
+    Optional[torch.Tensor],
+    Optional[Dict[str, object]],
+]:
+    """Batch → ``(K, ftheta_params)`` for :func:`project_cuboids_to_mask`.
+
+    Shared by ``trainer._maybe_fill_cuboid_mask`` and render.py's class_psnr
+    eval so training and eval dispatch camera models identically (A5).
+    FTheta wins when both are present, keeping FTheta clips byte-identical.
+    The OpenCVPinhole path builds a distortion-free K from ``focal_length`` /
+    ``principal_point``; radial/tangential/thin-prism coeffs are ignored —
+    acceptable at AABB-mask granularity for 90/120° pinhole rigs.
+    """
+    ftheta = getattr(gpu_batch, "intrinsics_FThetaCameraModelParameters", None)
+    if ftheta is not None:
+        return None, ftheta
+    pinhole = getattr(
+        gpu_batch,
+        "intrinsics_OpenCVPinholeCameraModelParameters",
+        None,
+    )
+    if pinhole is None:
+        return None, None
+
+    def _pair(val) -> Tuple[float, float]:
+        if torch.is_tensor(val):
+            flat = val.detach().cpu().reshape(-1).tolist()
+        else:
+            flat = torch.as_tensor(val, dtype=torch.float64).reshape(-1).tolist()
+        return float(flat[0]), float(flat[1] if len(flat) > 1 else flat[0])
+
+    fx, fy = _pair(pinhole["focal_length"])
+    cx, cy = _pair(pinhole["principal_point"])
+    K = torch.tensor(
+        [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+        dtype=torch.float32,
+    )
+    return K, None
+
+
 def _corners_to_pixels_ftheta(
-    corners_cam: torch.Tensor, ftheta_params: Dict[str, torch.Tensor],
+    corners_cam: torch.Tensor,
+    ftheta_params: Dict[str, torch.Tensor],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """FTheta polynomial projection. ``corners_cam`` shape ``[T, 8, 4]``.
 
@@ -109,10 +184,10 @@ def _corners_to_pixels_ftheta(
 
 
 def project_cuboids_to_mask(
-    tracks_poses: torch.Tensor,    # [T, 4, 4] active tracks at this frame
-    tracks_size: torch.Tensor,     # [T, 3] full extent (NOT half)
-    K: Optional[torch.Tensor],     # [3, 3] pinhole intrinsics; pass None when ftheta_params is set
-    T_world2cam: torch.Tensor,     # [4, 4]
+    tracks_poses: torch.Tensor,  # [T, 4, 4] active tracks at this frame
+    tracks_size: torch.Tensor,  # [T, 3] full extent (NOT half)
+    K: Optional[torch.Tensor],  # [3, 3] pinhole intrinsics; pass None when ftheta_params is set
+    T_world2cam: torch.Tensor,  # [4, 4]
     H: int,
     W: int,
     device: torch.device | str = "cpu",
@@ -147,47 +222,36 @@ def project_cuboids_to_mask(
     poses = tracks_poses.to(device=device, dtype=torch.float32)
     sizes = tracks_size.to(device=device, dtype=torch.float32)
     T_w2c = T_world2cam.to(device=device, dtype=torch.float32)
-    signs = _CORNER_SIGNS.to(device=device)                        # [8, 3]
+    signs = _CORNER_SIGNS.to(device=device)  # [8, 3]
 
     # 1. 8 cuboid corners in object-local frame: half-extent × ±sign
     corners_local = signs.unsqueeze(0) * (sizes.unsqueeze(1) * 0.5)  # [T, 8, 3]
     ones = torch.ones(T, 8, 1, dtype=torch.float32, device=device)
-    corners_h = torch.cat([corners_local, ones], dim=-1)             # [T, 8, 4]
+    corners_h = torch.cat([corners_local, ones], dim=-1)  # [T, 8, 4]
 
     # 2. local → world (per-track pose) → camera (single T_w2c)
-    world = torch.einsum("tij,tkj->tki", poses, corners_h)           # [T, 8, 4]
-    cam = torch.einsum("ij,tkj->tki", T_w2c, world)                  # [T, 8, 4]
+    world = torch.einsum("tij,tkj->tki", poses, corners_h)  # [T, 8, 4]
+    cam = torch.einsum("ij,tkj->tki", T_w2c, world)  # [T, 8, 4]
 
     # 3. project corners to pixels via the requested intrinsics model
     if ftheta_params is not None:
         ftheta = _normalize_ftheta_params(ftheta_params, device)
         u, v = _corners_to_pixels_ftheta(cam, ftheta)
-        # FTheta: ignore behind-camera corners when computing AABB. If all 8
-        # corners are behind, skip that track (per_track_visible == False).
-        z_pos = cam[..., 2] > 0                                       # [T, 8]
-        per_track_visible = z_pos.any(dim=-1)                         # [T]
-        big = torch.full_like(u, float("inf"))
-        u_for_min = torch.where(z_pos, u, big)
-        u_for_max = torch.where(z_pos, u, -big)
-        v_for_min = torch.where(z_pos, v, big)
-        v_for_max = torch.where(z_pos, v, -big)
-        u_min_f = u_for_min.min(dim=-1).values
-        u_max_f = u_for_max.max(dim=-1).values
-        v_min_f = v_for_min.min(dim=-1).values
-        v_max_f = v_for_max.max(dim=-1).values
     else:
         if K is None:
             raise ValueError("project_cuboids_to_mask: pass K or ftheta_params")
         K_dev = K.to(device=device, dtype=torch.float32)
         u, v = _corners_to_pixels_pinhole(cam, K_dev)
-        per_track_visible = torch.ones(T, dtype=torch.bool, device=device)
-        u_min_f = u.min(dim=-1).values
-        u_max_f = u.max(dim=-1).values
-        v_min_f = v.min(dim=-1).values
-        v_max_f = v.max(dim=-1).values
+    # Ignore behind-camera corners when computing the AABB; a track with all
+    # 8 corners behind is skipped (per_track_visible == False). A5: applied
+    # to BOTH branches — the pinhole z.clamp(min=0.1) otherwise projects
+    # behind corners at huge |u|,|v| and smears the AABB across the image
+    # (the T8/B3 column smear that originally made the trainer skip pinhole).
+    z_pos = cam[..., 2] > 0  # [T, 8]
+    per_track_visible, u_min_f, u_max_f, v_min_f, v_max_f = _aabb_from_visible_corners(u, v, z_pos)
 
     # 4. clip 2D AABB to image bounds
-    u_min = u_min_f.clamp(0, W - 1).long()                            # [T]
+    u_min = u_min_f.clamp(0, W - 1).long()  # [T]
     u_max = u_max_f.clamp(0, W - 1).long()
     v_min = v_min_f.clamp(0, H - 1).long()
     v_max = v_max_f.clamp(0, H - 1).long()
@@ -199,5 +263,5 @@ def project_cuboids_to_mask(
     for i in range(T):
         if not bool(per_track_visible[i]):
             continue
-        mask[v_min[i]:v_max[i] + 1, u_min[i]:u_max[i] + 1] = True
+        mask[v_min[i] : v_max[i] + 1, u_min[i] : u_max[i] + 1] = True
     return mask

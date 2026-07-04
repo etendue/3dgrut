@@ -31,6 +31,41 @@ from threedgrut.strategy.base import BaseStrategy
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import _multinomial_sample, check_step_condition
 
+
+@torch.no_grad()
+def _sanitize_relocation(
+    new_densities: torch.Tensor,  # [N, 1] kernel output (activated space)
+    new_scales: torch.Tensor,  # [N, 3] kernel output (activated space)
+    donor_densities: torch.Tensor,  # [N, 1] donor originals (activated space)
+    donor_scales: torch.Tensor,  # [N, 3] donor originals (activated space)
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    """A1 — contain non-finite/non-positive relocation-kernel outputs.
+
+    compute_relocation_tensor (MCMC Eq.9 binomial math) can emit NaN/Inf or
+    zero/negative densities/scales at opacity→1 boundaries. The log inverse
+    activations downstream turn those into NaN/-inf parameters, silently
+    poisoning the layer (observed inc_b6a9 6-cam R1 2026-07-02: 60% of
+    background densities NaN by ~3k steps; the poison never crosses the loss
+    so pred-based guards can't catch it). Any bad ROW (density or any scale
+    component non-finite or ≤0) falls back to the donor's original values —
+    relocation degenerates to a plain copy for that row.
+
+    Returns (densities, scales, n_bad_rows); inputs are not modified.
+    """
+    bad = (
+        ~torch.isfinite(new_densities).all(dim=-1)
+        | (new_densities <= 0).any(dim=-1)
+        | ~torch.isfinite(new_scales).all(dim=-1)
+        | (new_scales <= 0).any(dim=-1)
+    )  # [N]
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return new_densities, new_scales, 0
+    out_d = torch.where(bad.unsqueeze(-1), donor_densities, new_densities)
+    out_s = torch.where(bad.unsqueeze(-1), donor_scales, new_scales)
+    return out_d, out_s, n_bad
+
+
 _mcmc_plugin = None
 
 
@@ -114,6 +149,7 @@ class MCMCStrategy(BaseStrategy):
         dead_idxs = torch.where(densities <= self.conf.strategy.opacity_threshold)[0]
         alive_idxs = torch.where(densities > self.conf.strategy.opacity_threshold)[0]
         n_dead_gaussians = len(dead_idxs)
+        n_dead_total = n_dead_gaussians  # pre-cap count, for truthful logging
 
         # Cap relocation to avoid super-dense clusters when a layer collapses
         # (e.g. dynamic_rigids at 90% dead → 630k particles crammed into 70k spots
@@ -125,6 +161,24 @@ class MCMCStrategy(BaseStrategy):
                 perm = torch.randperm(n_dead_gaussians, device=dead_idxs.device)
                 dead_idxs = dead_idxs[perm[:cap]]
                 n_dead_gaussians = cap
+
+        # A1-guard: a fully-dead layer has no alive donors — multinomial over
+        # an empty probability tensor aborts with CUDA invalid-configuration
+        # (observed 2026-07-02 inc_b6a9 6-cam R1, layer collapsed by the first
+        # relocation step). Skip relocation and surface the collapse loudly;
+        # the layer size in the log identifies which layer it is.
+        if n_dead_gaussians and len(alive_idxs) == 0:
+            # NOTE: report the PRE-cap dead count — n_dead_gaussians may have
+            # been subsampled to max_relocation_fraction above, which reads
+            # misleadingly (e.g. "400000/1000000" when ALL 1M are dead).
+            logger.warning(
+                f"[A1] relocate skipped: layer fully dead "
+                f"({n_dead_total}/{len(densities)} particles at or below "
+                f"opacity_threshold={self.conf.strategy.opacity_threshold}) — "
+                f"no alive donors to sample from; layer will not recover via "
+                f"MCMC this step"
+            )
+            return
 
         if n_dead_gaussians:
             sampled_idxs, new_densities, new_scales = self.sample_new_gaussians(n_dead_gaussians, alive_idxs)
@@ -200,18 +254,14 @@ class MCMCStrategy(BaseStrategy):
             # touches Parameter fields. Without this, fused_view sees a layer
             # whose positions.shape[0] > track_ids.shape[0] → crash.
             if hasattr(self.model, "track_ids") and self.model.track_ids is not None:
-                self.model.track_ids = torch.cat(
-                    [self.model.track_ids, self.model.track_ids[sampled_idxs]]
-                )
+                self.model.track_ids = torch.cat([self.model.track_ids, self.model.track_ids[sampled_idxs]])
 
         if self.conf.strategy.print_stats:
             # Guard div-by-zero: an empty particle layer has
             # current_num_gaussians==0 (and num_gaussians_to_add==0), but the
             # per-layer LayeredMCMC sub-strategy still runs add every step.
             pct = (num_gaussians_to_add / current_num_gaussians * 100) if current_num_gaussians else 0.0
-            logger.info(
-                f"Added {num_gaussians_to_add} ({pct:.2f}%) gaussians"
-            )
+            logger.info(f"Added {num_gaussians_to_add} ({pct:.2f}%) gaussians")
 
     @torch.no_grad()
     def perturb_gaussians(self) -> None:
@@ -258,13 +308,37 @@ class MCMCStrategy(BaseStrategy):
             (torch.bincount(sampled_idxs)[sampled_idxs] + 1).clamp_(min=1, max=self.conf.strategy.binom_n_max).int()
         )
 
+        # A1-guard (input): donor opacity can saturate to exactly 1.0 in
+        # float; the relocation kernel's (1-o) terms then divide by zero.
+        donor_densities = densities[sampled_idxs].clamp(max=1.0 - torch.finfo(torch.float32).eps)
+        donor_scales = scales[sampled_idxs]
+
         new_densities, new_scales = _mcmc_plugin.compute_relocation_tensor(
-            densities[sampled_idxs].contiguous(),
-            scales[sampled_idxs].contiguous(),
+            donor_densities.contiguous(),
+            donor_scales.contiguous(),
             ratios.contiguous(),
             self.binoms,
             self.conf.strategy.binom_n_max,
         )
+
+        # A1-guard (output): the kernel's Eq.9 binomial math can still emit
+        # non-finite / non-positive values at opacity boundaries; the log
+        # inverse activations below turn those into NaN/-inf PARAMETERS,
+        # silently poisoning the layer (inc_b6a9 6-cam R1: 60% of background
+        # densities NaN by ~3k steps — never crosses the loss, so the
+        # pred-based drop guard can't see it). Bad rows fall back to the
+        # donor's original values (plain copy semantics).
+        new_densities, new_scales, n_bad = _sanitize_relocation(
+            new_densities,
+            new_scales,
+            donor_densities,
+            donor_scales,
+        )
+        if n_bad:
+            logger.warning(
+                f"[A1] relocation kernel emitted {n_bad}/{int(ratios.shape[0])} "
+                f"non-finite/non-positive rows — fell back to donor copy"
+            )
 
         new_densities = self.model.density_activation_inv(
             torch.clamp(

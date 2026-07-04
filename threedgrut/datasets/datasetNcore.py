@@ -50,13 +50,16 @@ from threedgrut.datasets.protocols import (
     BoundedMultiViewDataset,
     DatasetVisualization,
 )
-from threedgrut.datasets.tracks_loader import load_tracks_from_manifest  # T4.1.b re-export
+from threedgrut.datasets.tracks_loader import (
+    load_tracks_from_manifest,  # T4.1.b re-export
+)
 from threedgrut.datasets.utils import (
     PointCloud,
     create_camera_visualization,
     create_pixel_coords,
     get_center_and_diag,
     get_worker_id,
+    repair_nonfinite_rays,
 )
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import to_torch
@@ -450,6 +453,28 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     self.sequence_cameras_pixels_subsample[sequence_id][camera_id]
                 ).numpy()
             }
+
+            # A1 — rational-distortion pole guard: pixels_to_camera_rays can
+            # emit non-finite directions where the undistortion diverges
+            # (inc_b6a9 camera_left_wide_90fov: 1 px/frame at the pole radius
+            # → one NaN ray poisoned the whole model per training step).
+            # Repair the cached rays and flag those pixels ego-invalid so
+            # they never supervise training (see repair_nonfinite_rays).
+            _n_bad = repair_nonfinite_rays(
+                self.sequence_cameras_all_rays[sequence_id][camera_id],
+                camera_valid_pixels_ego_mask,
+            )
+            _n_bad_sub = repair_nonfinite_rays(
+                self.sequence_cameras_rays_subsample[sequence_id][camera_id],
+                None,
+            )
+            if _n_bad or _n_bad_sub:
+                logger.warning(
+                    f"[A1] {camera_id}: repaired {_n_bad} non-finite camera "
+                    f"ray(s) (+{_n_bad_sub} in val subsample) and masked the "
+                    f"pixel(s) invalid — rational-distortion pole, see "
+                    f"repair_nonfinite_rays"
+                )
 
         # Pre-compute per-camera resolutions for the current split (used for GPU ray cache lookup)
         self._camera_resolutions: dict[str, tuple[int, int]] = {}
@@ -908,9 +933,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             # T4.5: absolute camera END timestamp (microseconds) — universal
             # time coordinate for dyn pose lookup, sseg key alignment, etc.
             batch_dict["timestamp_us"] = int(
-                camera_sensor.frames_timestamps_us[
-                    camera_frame_index, ncore.data.FrameTimepoint.END
-                ]
+                camera_sensor.frames_timestamps_us[camera_frame_index, ncore.data.FrameTimepoint.END]
             )
 
             # T6F.1: ego mask (per-frame, cached at __init__) → batch_dict["valid"].
@@ -923,15 +946,12 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 and sequence_id in self.sequence_cameras_frame_valid_pixels_masks
                 and sampled_camera_id in self.sequence_cameras_frame_valid_pixels_masks[sequence_id]
             ):
-                _frame_valid_mask = self.sequence_cameras_frame_valid_pixels_masks[sequence_id][
-                    sampled_camera_id
-                ].get(int(camera_frame_index))
+                _frame_valid_mask = self.sequence_cameras_frame_valid_pixels_masks[sequence_id][sampled_camera_id].get(
+                    int(camera_frame_index)
+                )
                 if _frame_valid_mask is not None:
                     w_render, h_render = self._camera_resolutions[sampled_camera_id]
-                    if (
-                        _frame_valid_mask.shape[0] != h_render
-                        or _frame_valid_mask.shape[1] != w_render
-                    ):
+                    if _frame_valid_mask.shape[0] != h_render or _frame_valid_mask.shape[1] != w_render:
                         _frame_valid_mask = cv2.resize(
                             _frame_valid_mask.astype(np.uint8),
                             (w_render, h_render),
@@ -946,18 +966,12 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             # match camera.frames_timestamps_us[:, END] exactly (A800 2026-05-19).
             if self.load_aux_masks and sampled_camera_id is not None:
                 self._ensure_aux_readers()
-                ts_us = int(
-                    camera_sensor.frames_timestamps_us[
-                        camera_frame_index, ncore.data.FrameTimepoint.END
-                    ]
-                )
+                ts_us = int(camera_sensor.frames_timestamps_us[camera_frame_index, ncore.data.FrameTimepoint.END])
                 sseg = self._sseg_reader.read(sampled_camera_id, ts_us)  # [H_full, W_full] uint8
                 if self.downsample < 1.0:
                     target_w = int(round(sseg.shape[1] * self.downsample))
                     target_h = int(round(sseg.shape[0] * self.downsample))
-                    sseg = cv2.resize(
-                        sseg, (target_w, target_h), interpolation=cv2.INTER_NEAREST
-                    )
+                    sseg = cv2.resize(sseg, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
                 # Build per-region masks as float32 [H, W] (loss expects float).
                 sky_mask = (sseg == SKY_CLASS_ID).astype(np.float32)
                 road_mask = np.isin(sseg, np.asarray(list(ROAD_CLASS_IDS))).astype(np.float32)
@@ -983,9 +997,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                         if self.downsample < 1.0:
                             _lw = int(round(lane.shape[1] * self.downsample))
                             _lh = int(round(lane.shape[0] * self.downsample))
-                            lane = cv2.resize(
-                                lane, (_lw, _lh), interpolation=cv2.INTER_NEAREST
-                            )
+                            lane = cv2.resize(lane, (_lw, _lh), interpolation=cv2.INTER_NEAREST)
                         batch_dict["semantic_lane_sseg"] = to_torch(lane, device="cpu")
 
             # T11.C1: per-frame LiDAR depth map → batch["lidar_depth_map"].
@@ -993,42 +1005,26 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             # sseg key convention). Resized to render resolution like sky_mask.
             if self.load_lidar_depth_map and sampled_camera_id is not None:
                 self._ensure_lidar_depth_reader()
-                ts_us = int(
-                    camera_sensor.frames_timestamps_us[
-                        camera_frame_index, ncore.data.FrameTimepoint.END
-                    ]
-                )
+                ts_us = int(camera_sensor.frames_timestamps_us[camera_frame_index, ncore.data.FrameTimepoint.END])
                 depth_map = self._lidar_depth_reader.read(sampled_camera_id, ts_us)  # [H_full, W_full]
                 w_render, h_render = self._camera_resolutions[sampled_camera_id]
                 if depth_map.shape[0] != h_render or depth_map.shape[1] != w_render:
                     # Nearest interp keeps sparse hits crisp (no depth blending).
-                    depth_map = cv2.resize(
-                        depth_map, (w_render, h_render), interpolation=cv2.INTER_NEAREST
-                    )
-                batch_dict["lidar_depth_map"] = to_torch(
-                    depth_map.astype(np.float32), device="cpu"
-                )
+                    depth_map = cv2.resize(depth_map, (w_render, h_render), interpolation=cv2.INTER_NEAREST)
+                batch_dict["lidar_depth_map"] = to_torch(depth_map.astype(np.float32), device="cpu")
 
             # T11.D1: per-frame DepthAnythingV2 metric depth prior → batch["depth_prior"].
             # Same END-timestamp key + render-res resize as lidar_depth_map above.
             # Dense metric map (no sparse hits) → bilinear resize is fine.
             if self.load_depth_prior and sampled_camera_id is not None:
                 self._ensure_depth_prior_reader()
-                ts_us = int(
-                    camera_sensor.frames_timestamps_us[
-                        camera_frame_index, ncore.data.FrameTimepoint.END
-                    ]
-                )
+                ts_us = int(camera_sensor.frames_timestamps_us[camera_frame_index, ncore.data.FrameTimepoint.END])
                 depth_prior = self._depth_prior_reader.read(sampled_camera_id, ts_us)  # [H_full, W_full]
                 w_render, h_render = self._camera_resolutions[sampled_camera_id]
                 if depth_prior.shape[0] != h_render or depth_prior.shape[1] != w_render:
                     # Bilinear: dense metric depth, no sparse hits to preserve.
-                    depth_prior = cv2.resize(
-                        depth_prior, (w_render, h_render), interpolation=cv2.INTER_LINEAR
-                    )
-                batch_dict["depth_prior"] = to_torch(
-                    depth_prior.astype(np.float32), device="cpu"
-                )
+                    depth_prior = cv2.resize(depth_prior, (w_render, h_render), interpolation=cv2.INTER_LINEAR)
+                batch_dict["depth_prior"] = to_torch(depth_prior.astype(np.float32), device="cpu")
 
             return batch_dict
 
@@ -1086,11 +1082,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 frame_time_ms = self._compute_frame_time_ms(camera_sensor, camera_frame_index)
                 camera_index = self.camera_ids.index(camera_id)
 
-                val_ts_us = int(
-                    camera_sensor.frames_timestamps_us[
-                        camera_frame_index, ncore.data.FrameTimepoint.END
-                    ]
-                )
+                val_ts_us = int(camera_sensor.frames_timestamps_us[camera_frame_index, ncore.data.FrameTimepoint.END])
                 val_batch = {
                     "rgb": to_torch(rgb, device="cpu"),
                     "valid": to_torch(valid, device="cpu"),
@@ -1117,22 +1109,14 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                         self._ensure_lidar_depth_reader()
                         dmap = self._lidar_depth_reader.read(camera_id, val_ts_us)
                         if dmap.shape[0] != h_render or dmap.shape[1] != w_render:
-                            dmap = cv2.resize(
-                                dmap, (w_render, h_render), interpolation=cv2.INTER_NEAREST
-                            )
-                        val_batch["lidar_depth_map"] = to_torch(
-                            dmap.astype(np.float32), device="cpu"
-                        )
+                            dmap = cv2.resize(dmap, (w_render, h_render), interpolation=cv2.INTER_NEAREST)
+                        val_batch["lidar_depth_map"] = to_torch(dmap.astype(np.float32), device="cpu")
                     if self.load_depth_prior:
                         self._ensure_depth_prior_reader()
                         dprior = self._depth_prior_reader.read(camera_id, val_ts_us)
                         if dprior.shape[0] != h_render or dprior.shape[1] != w_render:
-                            dprior = cv2.resize(
-                                dprior, (w_render, h_render), interpolation=cv2.INTER_LINEAR
-                            )
-                        val_batch["depth_prior"] = to_torch(
-                            dprior.astype(np.float32), device="cpu"
-                        )
+                            dprior = cv2.resize(dprior, (w_render, h_render), interpolation=cv2.INTER_LINEAR)
+                        val_batch["depth_prior"] = to_torch(dprior.astype(np.float32), device="cpu")
 
                 # P0.2/P0.3: the val/test split must ALSO load the sseg masks.
                 # The T3.1.b sseg injection lived ONLY in the train branch above
@@ -1147,12 +1131,8 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     w_render, h_render = self._camera_resolutions[camera_id]
                     sseg = self._sseg_reader.read(camera_id, val_ts_us)  # [H_full, W_full] uint8
                     if sseg.shape[0] != h_render or sseg.shape[1] != w_render:
-                        sseg = cv2.resize(
-                            sseg, (w_render, h_render), interpolation=cv2.INTER_NEAREST
-                        )
-                    val_batch["sky_mask"] = to_torch(
-                        (sseg == SKY_CLASS_ID).astype(np.float32), device="cpu"
-                    )
+                        sseg = cv2.resize(sseg, (w_render, h_render), interpolation=cv2.INTER_NEAREST)
+                    val_batch["sky_mask"] = to_torch((sseg == SKY_CLASS_ID).astype(np.float32), device="cpu")
                     val_batch["road_mask"] = to_torch(
                         np.isin(sseg, np.asarray(list(ROAD_CLASS_IDS))).astype(np.float32),
                         device="cpu",
@@ -1175,9 +1155,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                             lane = None
                         if lane is not None:
                             if lane.shape[0] != h_render or lane.shape[1] != w_render:
-                                lane = cv2.resize(
-                                    lane, (w_render, h_render), interpolation=cv2.INTER_NEAREST
-                                )
+                                lane = cv2.resize(lane, (w_render, h_render), interpolation=cv2.INTER_NEAREST)
                             val_batch["semantic_lane_sseg"] = to_torch(lane, device="cpu")
 
                 return val_batch
@@ -1365,13 +1343,10 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # Use the first camera's full resolution as the zeros fallback shape.
         first_cam = self.camera_ids[0]
         w_full, h_full = self._camera_resolutions[first_cam]
-        self._lidar_depth_reader = LidarDepthAuxReader(
-            root, default_shape=(h_full, w_full), cache_maxsize=256
-        )
+        self._lidar_depth_reader = LidarDepthAuxReader(root, default_shape=(h_full, w_full), cache_maxsize=256)
         self._lidar_depth_reader_initialized = True
         logger.info(
-            f"NCoreDataset[{self.split}] lidar depth reader ready: root={root} "
-            f"default_shape=({h_full},{w_full})"
+            f"NCoreDataset[{self.split}] lidar depth reader ready: root={root} " f"default_shape=({h_full},{w_full})"
         )
 
     # ---- T11.D1: lazy DepthAnythingV2 depth-prior reader init ----
@@ -1399,18 +1374,16 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # (mirrors _ensure_lidar_depth_reader for cross-reader consistency).
         first_cam = self.camera_ids[0]
         w_full, h_full = self._camera_resolutions[first_cam]
-        self._depth_prior_reader = DepthV2AuxReader(
-            root, default_shape=(h_full, w_full), cache_maxsize=256
-        )
+        self._depth_prior_reader = DepthV2AuxReader(root, default_shape=(h_full, w_full), cache_maxsize=256)
         self._depth_prior_reader_initialized = True
         logger.info(
-            f"NCoreDataset[{self.split}] depth prior reader ready: root={root} "
-            f"default_shape=({h_full},{w_full})"
+            f"NCoreDataset[{self.split}] depth prior reader ready: root={root} " f"default_shape=({h_full},{w_full})"
         )
 
     # ---- T3.2.b: per-semantic-class LiDAR aggregators (v2 Stage 3 / 4 init) ----
     def _get_semantic_lidar_points(
-        self, class_ids: frozenset[int],
+        self,
+        class_ids: frozenset[int],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Aggregate world-frame LiDAR points whose per-point lidar-sseg class
         label is in ``class_ids``.
@@ -1467,10 +1440,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                         f"labels={labels_np.shape[0]}; skipping frame."
                     )
                     continue
-                xyz_wg = (
-                    self.T_world_to_world_global[:3, :3] @ xyz_w.T
-                    + self.T_world_to_world_global[:3, 3:4]
-                ).T
+                xyz_wg = (self.T_world_to_world_global[:3, :3] @ xyz_w.T + self.T_world_to_world_global[:3, 3:4]).T
 
                 labels = torch.from_numpy(labels_np.astype(np.int64))
                 mask = torch.isin(labels, class_tensor).numpy()

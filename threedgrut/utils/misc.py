@@ -200,3 +200,27 @@ def check_step_condition(step: int, start: int, end: int, freq: int) -> bool:
     if (start >= 0 and step > start) and (step < end or end == -1) and step % freq == 0:
         return True
     return False
+
+
+def replace_nonfinite_pixels(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+) -> tuple[torch.Tensor, int]:
+    """Replace non-finite pred pixels with the GT pixel (zero error, zero grad).
+
+    The CUDA renderer can emit isolated non-finite pixels (per-pixel ray
+    singularity; first observed 2026-07-02 inc_b6a9 camera_left_wide_90fov —
+    a single NaN pixel per frame). One such pixel poisons full-image
+    L1/SSIM/LPIPS and, through Adam, every parameter within one step. GT
+    substitution contributes zero error and zero gradient at that pixel,
+    i.e. the pixel is skipped.
+
+    Returns:
+        (cleaned pred — same tensor object when already finite, count of
+        replaced pixels).
+    """
+    finite = torch.isfinite(pred)
+    if bool(finite.all()):
+        return pred, 0
+    n_bad = int((~finite).any(dim=-1).sum())
+    return torch.where(finite, pred, gt.detach()), n_bad

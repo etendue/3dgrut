@@ -382,7 +382,20 @@ echo y | /Users/etendue/repo/ncore/.venv/bin/vastai destroy instance <ID> \
 
 ## 训练配置约定（重要）
 
-**v2 多层训练统一使用 `configs/apps/ncore_3dgut_mcmc_multilayer.yaml`**，这是 dynfix 7 层递归链 (`dynfix → 4dviz → exposure → sky → full → road → ncore_3dgut_mcmc`) 的字节等价扁平版（Hydra compose 递归 diff 0 差异，A800 1k smoke 验证通过，详见 v2_plan.md § 5 Done Log 2026-05-26 "Config 重构"条目）。
+### ⚡ 快速实验一律用 5 秒数据窗（2026-07-04 大g 决策）
+
+**凡是机制验证 / 诊断 / A/B 快测（非正式锚点跑），一律把数据裁到 5 秒**，迭代速度约 ×4：
+
+```bash
+python train.py ... dataset.train.duration_sec=5.0 dataset.val.duration_sec=5.0
+```
+
+- 键位：`dataset.train.duration_sec` / `dataset.val.duration_sec`（`-1`=全量；配套 `seek_offset_sec` 选起始秒）。
+- **快测数字与全量（20s）锚不可比**——5s 窗只用于「机制是否生效 / 相对好坏」判断；正式锚点、Done Log 入档数字仍须全量跑。
+- **b6a9 clip 的车辆集中在后段**（前 ~10s 基本空路）：动态层相关实验用 `dataset.train.seek_offset_sec=15 dataset.train.duration_sec=5`（f185/19.9s 时段有 23 个活跃 cuboid）；road/bg 实验用默认前 5s 即可。
+- 步数等比降：5s 窗帧数 ≈ 1/4，快测建议 5k-8k 步（30k 会过拟合小窗）。
+
+**v2 多层训练统一使用 `configs/apps/ncore_3dgut_mcmc_multilayer.yaml`**，这是 dynfix 7 层递归链 (`dynfix → 4dviz → exposure → sky → full → road → ncore_3dgut_mcmc`) 的字节等价扁平版（Hydra compose 递归 diff 0 差异，A800 1k smoke 验证通过，详见 v2_plan.md § 5 Done Log 2026-05-26 "Config 重构"条目）。**inceptio b6a9 多相机线用 `configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml`**（v5 任务A baseline：6-cam + use_opacity=false，锚数字见该 yaml 头注释）。
 
 **后续所有训练（smoke / 5k / 30k / 全量）默认用 multilayer**：
 

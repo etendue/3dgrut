@@ -19,6 +19,7 @@ itar layouts handled (auto — shape is read from the source, not hard-coded):
 Usage:
     python merge_lidar_aux.py <out.itar> <seg0.itar> <seg1.itar> ...
 """
+
 import sys
 
 import zarr
@@ -31,14 +32,29 @@ def merge(out_path: str, seg_paths: list[str]) -> None:
     out_store = stores.IndexedTarStore(out_path, mode="w")
     out_root = zarr.open(store=out_store, mode="w")
 
-    # discover /aux/<component>/<sensor> groups from the first segment
-    aux0 = roots[0]["aux"]
+    # discover /aux/<component>/<sensor> groups as the UNION across all inputs —
+    # seg0-only discovery drops cameras when merging sseg itars generated for
+    # different camera sets (A1: original 3-cam + side 3-cam → 6-cam).
+    comp_sensors: dict[str, list[str]] = {}
+    for root in roots:
+        aux = root["aux"]
+        for comp in list(aux.group_keys()):
+            known = comp_sensors.setdefault(comp, [])
+            for sensor in list(aux[comp].group_keys()):
+                if sensor not in known:
+                    known.append(sensor)
     total = 0
-    for comp in list(aux0.group_keys()):
-        for sensor in list(aux0[comp].group_keys()):
+    for comp, sensors in comp_sensors.items():
+        for sensor in sensors:
             out_grp = out_root.create_group(f"aux/{comp}/{sensor}")
-            # group .zattrs are identical across segments — write once from seg0
-            out_grp.attrs.put(dict(roots[0]["aux"][comp][sensor].attrs))
+            # group .zattrs are identical across segments — write once from the
+            # first input that has this group
+            for root in roots:
+                try:
+                    out_grp.attrs.put(dict(root["aux"][comp][sensor].attrs))
+                    break
+                except KeyError:
+                    continue
             seen: set[str] = set()
             for root in roots:
                 try:
@@ -54,8 +70,7 @@ def merge(out_path: str, seg_paths: list[str]) -> None:
                     # use src.shape — do NOT hard-code shape=(); camvis is a
                     # (N_pts, 1) array and shape=() raises "setting an array
                     # element with a sequence".
-                    ds = out_grp.create_dataset(
-                        ts, shape=src.shape, dtype=src.dtype, compressor=None)
+                    ds = out_grp.create_dataset(ts, shape=src.shape, dtype=src.dtype, compressor=None)
                     ds[...] = data
                     ds.attrs.put(dict(src.attrs))
                     total += 1

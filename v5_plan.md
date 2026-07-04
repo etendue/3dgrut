@@ -31,7 +31,7 @@
 |---|---|---|---|
 | 全图质量 | mean_psnr **21.04** / cc 19.70 / ssim 0.578 / **lpips 0.645** | `render.py` metrics.json | 对 NRE 锚 gap 收敛（B1 回填） |
 | road / 车道线 | road_crop_psnr 25.99 / lpips 0.254；**road 层稀疏无色**；lane 指标**未测** | per_class_eval + `compute_lane_metrics` | A1 后 road 有色非稀疏；B2 立 lane grad_corr 锚 |
-| 车辆 class_psnr（动态区） | **未测**（有 36 真 track，工具现成没跑） | [`class_psnr.py`](threedgrut/model/class_psnr.py) | A3 立锚 → A2/D1 闭合 |
+| 车辆 class_psnr（动态区） | **17.53**（A3 已立锚 2026-07-02：automobile，299 records，72 条 <15dB） | [`class_psnr.py`](threedgrut/model/class_psnr.py) | A2/D1 闭合 |
 | 行人 per-class（监控） | person 15.40（13 rec，无专属模型，同 v3 结论） | `per_class_eval.py` | 仅监控，不主动做（v5 不做行人建模） |
 | NRE 同 clip gap | **未测**（4cab 锚 28.99 不可跨 clip 比） | B1（双臂）：nre-ga 官方配方 ± difix 蒸馏 | 把"落后多少"变实测数字 + C 路线天花板 |
 | **off-track 质量（2026-07-03 新主轴）** | **未测**（现锚全部 on-track 口径） | B4 held-out 侧相机真 GT + B5 novel 档 FID/KID | B4/B5 立锚 → 战役门 1/2 后定目标 |
@@ -68,10 +68,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [A1 road 相机选择修复（＝v4 E5.1 移交）：补侧相机 aux → 5-cam 30k 重训，road 点 0.3%→数量级↑]
-        [A2 cuboid 时间戳对齐（＝v4 E5.2 移交）：per-camera END ts 精化 cuboid pose，消 cross 相机 100ms 漂移]
-        [A3 per-class eval 立锚：class_psnr + person 在 b6a9 ckpt 上跑通，车辆锚首次入档]
-        [A4 LiDAR ray 监督确认：metrics 无 lidar_psnr，查配置定生效与否，必要时单变量 A/B]
         [B1 NRE 同 clip 对照锚（升级双臂）：官方 baseline 臂 + difix 蒸馏臂（Harmonizer IPC），gap 实测化 + C 路线天花板]
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
         [B3 文档勘误：vs_nre 报告 20.2 伪造结论撤回 + inceptio_5cam_task 结果回填]
@@ -89,6 +85,11 @@ kanban
     "Review"
 
     "Done"
+        [A1 road 修复 ✅ 2026-07-04（aux 遮挡 bug 2117× ＋ opacity 正则根治 ＋ lattice v2 收官；baseline 锚 R3p 20.25，inceptio 配方 yaml 入库）]
+        [A5 pinhole cuboid mask 修复簇 ✅ 297a0bc（2026-07-02 新增：三处 FTheta-only gate ＋ behind-camera 过滤）]
+        [A2 cuboid ts 插值 ✅ 6983018（per-camera END ts ＋ lerp、slerp 插值；wireframe 目检 cross 相机套准）]
+        [A3 车辆锚 ✅（automobile class_psnr 17.53，299 records；person 15.40）]
+        [A4 lidar 监督定论 ✅（30k 锚 parsed.yaml 实测 depth 全关＝铁律 CLI 覆盖，未生效属预期）]
         [继承: E5.0 inc_b6a9 onboarding ✅ 2026-07-02（PR 42：30k 锚 21.04 + viser exposure 修复 + aux 并行 6×）]
         [继承: cuboids ppn_fusion 数据打通（50 tracks 进 dynamic_rigids）]
         [继承: multi-cam 假崩溃勘误 + telew 实验证据（2026-06-25 调查）]
@@ -99,10 +100,11 @@ kanban
 
 | ID | Phase | 主题 | 继承来源 | 估时(d) | 状态 | gate / 备注 |
 |---|---|---|---|---:|:---:|---|
-| **A1** ★ | A | **road 相机选择修复** — 用 PR #42 并行 runbook 给 `camera_left_wide_90fov` / `camera_right_wide_90fov`（可选 `camera_back_rear_wide_90fov`）补 sseg + lidar-sseg/camvis aux → 5-cam multilayer 30k 重训 → road 层从"稀疏无色冻结"变"密集有色可用" | **v4 E5.1 移交** | 1 | ⬜ | 一石三鸟：road 覆盖 + 扩相机第一步 + 动态车多视角；备选＝解冻 road 学色 / 几何法挑地面点 |
-| **A2** ★ | A | **cuboid 时间戳对齐** — [`tracks_loader.py`](threedgrut/datasets/tracks_loader.py) 按 per-camera END 时间戳精化 cuboid pose，消 cross 相机 ~100ms 漂移 | **v4 E5.2 移交** | 1 | ⬜ | 与 A1 正交可并行；离线可验（`validate_cuboid_pretrain.py`） |
-| **A3** ★ | A | **per-class eval 立锚** — 现成 [`class_psnr.py`](threedgrut/model/class_psnr.py)（cuboid-based 车辆）+ `per_class_eval.py`（person/rider）在 b6a9 ckpt 跑 eval → inceptio 首个车辆 per-class 锚 | v3 P0 工具复用 | 0.5 | ⬜ | 纯 eval 零训练；A1/A2 的验收读数来源 |
-| **A4** | A | **LiDAR ray 监督确认** — b6a9 metrics 无 lidar_psnr 字段；查 multilayer resolved config + 训练 log 定生效与否，若关则单变量 A/B 打开 | E0.5 借鉴点⑤ | 0.5 | ⬜ | 结论入档即算完成（生效/不生效+原因） |
+| **A1** ★ | A | **road 修复（根因改写）** — 步骤0 诊断推翻 E5.1 假设：非相机覆盖问题，系 **nre-tools lidar-seg 遮挡检查 bug**（1mm 容差×掠射路面×聚合 lidar spin mesh 误杀）；`NRE_LIDARSEG_OCCLUSION=off` 容器补丁后 road+sidewalk 21460（0.019%）→ **45.4M（40.08%），2117×**；6-cam aux 入 clip 目录；lattice v2 收官 → **baseline 配方 [`ncore_3dgut_mcmc_multilayer_inceptio.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml) 入库**（锚 R3p 20.25 / road_crop 24.47 / automobile 18.53） | **v4 E5.1 移交** | 1 | ✅ | 诊断脚本 `diag_lidar_sseg_vs_proj.py`（2f55017）；opacity 正则根治（`loss.use_opacity=false`，A800 双卡单变量坐实）；另修三类训练 NaN（ray 极点 52224b3 / 死层守卫 5f62cb0 / relocation 消毒 0b960eb）；PAI 线 multilayer 配方不动 |
+| **A2** ★ | A | **cuboid 时间戳对齐** — [`tracks_loader.py`](threedgrut/datasets/tracks_loader.py) 按 per-camera END 时间戳精化 cuboid pose，消 cross 相机 ~100ms 漂移 | **v4 E5.2 移交** | 1 | ✅ | `6983018`：interp_pose_to_ts（lerp+slerp）+ `dataset.cuboid_ts_mode` 键（默认 ref_nearest 字节等价）；wireframe 目检 cross 相机 Δt=100ms 拖后 ~1m → 套准；训练收益走 R3 |
+| **A3** ★ | A | **per-class eval 立锚** — 现成 [`class_psnr.py`](threedgrut/model/class_psnr.py)（cuboid-based 车辆）+ `per_class_eval.py`（person/rider）在 b6a9 ckpt 跑 eval → inceptio 首个车辆 per-class 锚 | v3 P0 工具复用 | 0.5 | ✅ | **automobile 17.53**（299 records，72 条 <15dB）/ person 15.40；依赖 A5 修 render.py FTheta-only gate 后才出字段 |
+| **A4** | A | **LiDAR ray 监督确认** — b6a9 metrics 无 lidar_psnr 字段；查 multilayer resolved config + 训练 log 定生效与否 | E0.5 借鉴点⑤ | 0.5 | ✅ | 定论：**未生效**——parsed.yaml 实测 `use_lidar_depth=false`/`load_lidar_depth_map=false`（inceptio depth-off 铁律 CLI 覆盖），metrics 无字段属预期；A800 lidar-on 配方不受影响 |
+| **A5** ★ | A | **pinhole cuboid mask 修复簇**（2026-07-02 大g 发现新增）— 三处 FTheta-only gate 在 pinhole clip 静默失效：trainer `_maybe_fill_cuboid_mask`（训练 dyn_mask_cuboid 从未生成）、render.py class_psnr eval gate（A3 缺字段根因）、共享 `project_cuboids_to_mask` pinhole 分支缺 behind-camera 过滤 | 大g 代码审查 | 0.5 | ✅ | `297a0bc`：z>0 corner 过滤两分支共用 + `resolve_batch_cuboid_intrinsics` 双模型 dispatch（FTheta 字节等价）；3D 路径（bg_cuboid_penalty/clamp）不受影响；旧行为可 `++trainer.bg_dyn_cuboid_penalty.use_cuboid_mask=false` 复现 |
 | **B1** ★ | B | **NRE 同 clip 对照锚（双臂）** — 臂 1＝nre-ga car2sim 官方配方 baseline；臂 2＝同配方 + `difix.training.enabled=true`（Harmonizer IPC，单变量）→ 官方口径 + `nre render` lateral 3m/6m 帧 FID → **v5 gap 表首行实测化 + C 路线 off-track 天花板（门 1 输入）** | 4cab runbook + E0.7 IPC 架构 | 1.5 | ⬜ | 夜间 docker 挂机；**前置＝IPC 实物验证**（inceptio `~/work/nurec_e0/e07/` flags/日志/USDZ）；⚠️ 口径陷阱（官方 val 每 3 帧 + 1/4 res），对锚须统一口径或显式标注 |
 | **B2** | B | **lane 指标立锚** — [`gen_lane_sseg.py`](scripts/gen_lane_sseg.py) 自跑 Mapillary lane sseg → `compute_lane_metrics`（grad_corr / band_psnr）前视立锚，验证朝地 LiDAR 车道线优势 | v3 P3.0 工具复用 | 1 | ⬜ | gate＝A1（侧相机进来 road 覆盖才够意义）；不跨 clip 比 PAI 锚 0.693 |
 | **B3** | B | **文档勘误** — [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) 加勘误段（20.2 崩溃 + rational×MCMC 假设撤回，真实 6cam 23.2-24.0）；[`inceptio_5cam_task.md`](inceptio_5cam_task.md) 状态回填（已执行，5cam ~24.9@7k） | 2026-06-25 调查结论 | 0.5 | ⬜ | 防伪造数字再误导下游判断（本轮分析已被误导一次） |
@@ -119,11 +121,11 @@ kanban
 
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
-| **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法） | 0/4 | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 | 3-cam per-cam psnr 不退 | ⬜ |
+| **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
 | **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 0/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | ⬜ |
 | **C** | 扩相机阶梯 3→12 | 0/4 | 12 相机全量纳入或明确收口点 | 每步原相机不退 | ⬜ |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
-| **总计** | — | **0/15** | — | — | — |
+| **总计** | — | **5/16** | — | — | — |
 
 ### 1.4 任务依赖图
 
@@ -220,7 +222,7 @@ flowchart TD
 
 | # | 风险 | 触发条件 | 缓解 | 状态 |
 |---|---|---|---|---|
-| R1 | 加侧相机后 road 覆盖仍不足 | A1 验收不过 | 备选：解冻 road 学色 / 几何法（高度+平面拟合）挑地面点绕开 lidar-sseg | ⬜ |
+| R1 | 加侧相机后 road 覆盖仍不足 | A1 验收不过 | **已解除（2026-07-02）**：根因根本不是相机覆盖——nre-tools lidar-seg 遮挡检查 bug 修复后 road 点 40.08%，无需备选路线 | ✅ 解除 |
 | R2 | 跨相机曝光/白平衡差异随相机数放大 | C2-C4 cc 与 raw psnr 差扩大 | C1 telew + BilateralGrid exposure（已默认开）；per-cam 光度监控 | ⬜ |
 | R3 | 注入伪造数字（已踩两次） | 任何训练数字入档前 | rich log × metrics.json 交叉验证；只认两源一致的数字 | 长期 |
 | R4 | 单卡 4090 排队 | A1/B1/C2 训练冲突 | 长任务 setsid 驱动脚本串行；B1 docker 可夜间挂机 | ⬜ |
@@ -239,6 +241,40 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-04 ★ baseline 固化（大g 决策：先立 baseline 再逐个解 issue）+ R2p/A800 depth A/B 出数**：
+  - **baseline = `configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml`**（compose multilayer + 6-cam camera_ids + `loss.use_opacity=false`；`# @package _global_` 头必需，Mac compose 验证 6 相机/正则off/mask on）。**锚 = R2p 30k：mean 20.11 / cc 18.54 / ssim 0.640 / lpips 0.629 / road_crop 24.51 / automobile 18.54（<15dB 38/346）**；per-cam front 21.16 / cross 20.18/19.90 / left 18.44 / right 21.24 / back 19.58。
+  - **A5 单变量增益坐实（R2p vs R1p）**：automobile **+1.15**、劣质记录 73→38（−48%）、road_crop +0.63，mean/ssim/lpips 持平，front −0.43（监督预算向 dyn 重分配）——cuboid mask 留在 baseline（默认 on）。
+  - **A800 depth A/B v2（正则off 干净版）**：lidaron 20.22/road 24.38/auto 18.19/lidar_psnr 25.22 vs depthoff 20.17/24.24/18.41 → **depth 监督对 b6a9 6-cam@30k 中性**（差异噪声级）；A800 20.2 与 inceptio 20.1-20.2 跨机咬合（健康互证，不作跨机锚）。
+  - 事故记录：7/3 夜 R2p/R3p 未跑——/tmp sed 裁剪驱动继承 `cd $(dirname $0)/..` 落到根目录（`python //train.py` 秒死）；教训＝发射后必须验证进程存活；正式驱动 `fc93bd3` 入库。
+  - **PAI 数据回归 A/B 通过（PR #44 合并前证据，大g 提问触发）**：inceptio 双 worktree（main `5819316` vs branch `a3a4ecf`），PAI 9ae clip、multilayer 原配方、5s 窗 5k 步（快测约定首秀）、depth-off+nw=10 双侧同覆盖。**main 22.499/lpips 0.4462 vs branch 22.587/lpips 0.4496 → Δpsnr +0.09（<0.3 判据，run-to-run 噪声级）**，branch 侧 dead=0/nonfinite=0（新守卫在 FTheta 路径全程未触发 = no-op 实证）。配置层：resolved config diff 仅一个默认等价新键 `cuboid_ts_mode: ref_nearest`。结论：**分支对 PAI 线无回归**；inceptio 配方改名 `_inceptio.yaml` 与 PAI multilayer 完全分离。
+  - **lattice v2 收官（12:20 ALL COMPLETE）**：R3p（+A2 interp）**20.25 / cc 18.72 / lpips 0.627 / road_crop 24.47 / automobile 18.53**，front +0.47 / back +0.54（vs R2p），无回退项（唯 <15dB 记录 38→48），告警仅 left_wide 极点修复预期 3 次。**判定：`cuboid_ts_mode=per_camera_interp` 升级进 baseline，锚改记 R3p**（yaml 头注释同步）。lattice v2 单变量全链完整：aux 修复 +0.26（R0b）→ 正则权衡（R0c）→ 相机集（R1p）→ A5 +1.15 auto（R2p）→ A2 +0.15 mean（R3p）。
+  - **Issues 清单（baseline 之上逐个解，带证据与优先级）**：
+    | # | issue | 证据 | 候选解 | 优先级 |
+    |---|---|---|---|---|
+    | I1 | 6-cam 守护线对 3-cam 锚退 0.4~0.9（欠训） | 6-cam 数据×2、30k=每相机有效步数减半 | **R2p 配方 60k 等比重训** | ★高 |
+    | I2 | 车辆仍糊（18.54，虽 +1.15） | dyn 层 30k + 36 tracks | R3p（A2 interp，跑数中）→ D1 poseopt | ★高 |
+    | I3 | road 层颜色贡献度不足（road-only 偏暗） | road-only 渲染图 2026-07-03 | E3.6 takeover 完整版（bg init 剔 road 点 + road 补密） | 中 |
+    | I4 | opacity 正则修剪红利丢失（3-cam mean −0.46） | R0c vs R0b | 分层 λ / dyn 豁免 / 可见性加权 | 中 |
+    | I5 | viser OPCV 初始 fov 未同步（涂抹） | 2026-07-03 终审 | 一行修（芯片 task_aed6e22a） | 低（有使用姿势绕过） |
+    | I6 | left_wide 极点像素 + 最弱相机（18.44） | ray 极点已防护；per-cam 表 | 去畸变 shader 修（上游）+ C1 telew 权重 | 低 |
+    | I7 | B 阶段：NRE 同 clip gap 未实测 | B1 未跑（A800 无 nre-ga 容器） | 拉容器或 inceptio 夜间挂机 | 中 |
+
+- **2026-07-02/03 任务A 主体执行（A2/A3/A4/A5 ✅ + A1 根因改写与 aux 修复 + 三类训练 NaN 排障；branch `claude/laughing-lichterman-a52733`）**：
+  - **A1 步骤0 诊断（`2f55017` diag_lidar_sseg_vs_proj.py）推翻 E5.0 结论**：thinkpad lidar-cam 投影图（大g 提供，已存 `inceptio:~/work/data/inc_b6a9ed61_20s/proj_ref/`）× camvis × 几何重投影三方对照——前向 3-cam 明明看得到大量路面点（front_wide 每 sweep ~7 万点落 road 像素却 100% 被标 ignore），`P(ignore|camvis>0)=0.875`。真根因＝**nre-tools lidar-seg 遮挡检查**（`estimators.py` spin-mesh 射线求交 1mm 容差 × 掠射路面几何 × 聚合 multi-lidar 破坏 spin 有序性 → 误杀）；vegetation/building 近垂直入射不受害，故 E5.0 误判为相机覆盖问题。
+  - **aux 修复（容器 bind-mount 补丁 `NRE_LIDARSEG_OCCLUSION=off`，补丁文件 `inceptio:/tmp/estimators_patched.py`）**：road+sidewalk **21460（0.019%）→ 45,423,991（40.08%），2117×**；`P(ignore|camvis>0)` 0.875→**0.0069**；附带解锁速度 105s/帧→0.7s/帧（60×，慢的元凶就是求交）——多容器并行 runbook 对 lidar-seg 不再必要。6-cam aux（原生重跑 sseg+egomask 13min + lidar-seg 200 帧 2min）已入 clip 目录，旧 3-cam aux 备份 `aux_3cam_backup/`；merge_lidar_aux 修跨相机集并集 bug（`2c18848`）；⚠️ 自写 merge itar 缺 `.zmetadata.cbor.xz`（consolidated metadata）会让 nre-tools 容器 KeyError——容器输入一律用原生 itar，训练侧读非 consolidated 路径不受影响。
+  - **A5（`297a0bc`，大g 发现）**：pinhole clip 三处 FTheta-only gate 静默失效（trainer cuboid mask / render class_psnr / 共享投影 behind-camera 过滤）全部修复；FTheta 字节等价（既有测试全绿证明）；sanity 日志 `[A5] dyn_mask_cuboid filled via OpenCVPinhole K` 确认训练接线。
+  - **A3 车辆锚**：旧 3-cam 30k ckpt 重跑 eval（A5 修复后字段才出现）——**automobile mean_class_psnr 17.53**（299 records，72 条 <15dB）、person 15.40；mean/cc/lpips 21.04/19.70/0.645 与锚双源一致。
+  - **A4 定论**：30k 锚 parsed.yaml 实测 `use_lidar_depth=false / load_lidar_depth_map=false`（inceptio depth-off 铁律 CLI 覆盖）→ lidar ray 监督未生效、metrics 无 lidar_psnr 属预期；A800 lidar-on 配方不受影响。
+  - **A2（`6983018`）**：`interp_pose_to_ts`（平移 lerp + 四元数 slerp 短弧）+ `dataset.cuboid_ts_mode`（默认 `ref_nearest` 字节等价 / `per_camera_interp` union 时间轴）+ trainer/viz inject/validate 三处接线；单测 11 例（40ms 偏移：nearest 0.8m 漂移 vs interp <1e-4m）；wireframe 目检 f185 cross_right Δt=100ms 线框拖后 ~1m → interp 套准。
+  - **三类训练 NaN 排障（6-cam 首训连环撞雷，全部修复+回归测试）**：① **ray 生成极点**（`52224b3`+哨兵 `8699b30`/`6ea5097`/`794e269`）——left_wide rational 畸变分母极点落图像角内，固定像素 (1917,1042) 每帧 1 个 NaN ray（三次复现同坐标坐实）→ `repair_nonfinite_rays` 预计算修复+像素永久 invalid；sanitize 实验证明 0·NaN=NaN 梯度穿透（1px→下帧全图 NaN），loss 侧掩蔽不可行。② **MCMC 全死层守卫**（`5f62cb0`）——空存活集 multinomial CUDA invalid-configuration。③ **relocation kernel 输出消毒**（`0b960eb`）——Eq.9 binomial 在 opacity→1 边界产非有限值经 log 逆激活直写参数（绕过 loss，bg 层 60% density NaN、死层告警 153 次、终致 illegal memory access）→ 输入 clamp + 坏行回退 donor。
+  - **lattice（单变量链，driver `4fc0f5d`/`8cf5e5b`）**：sanity ✅（ckpt 零 NaN + [A5]/road-init 接线证据）；**R0b（3-cam+新aux）✅：21.30 / cc 20.04 / ssim 0.585 / lpips 0.631 / road_crop 26.34 / automobile 17.59**——对锚 21.04/19.70/0.578/0.645/25.99 全线改善，per-cam 22.34/21.06/20.46 守护线零退（aux 修复单变量增益 +0.26 dB）。
+- **2026-07-03（下午）第四类训练故障根治：全局 opacity 正则杀死非豁免层（6-cam 拦路虎 + R0b 车辆糊的深层共因）**：
+  - **现象**：6-cam 30k 三个独立 run（inceptio R1 + A800 双卡）bg 层 100 万粒子在 iter 1000-3000 集体死亡（opacity≤0.005，死层守卫防崩但层不复活）→ 全图 18 dB 量级；TB `loss/opacity` 曲线 iter 2200-2600 悬崖（3-cam 同点位无事）。⚠️ 死层告警里 `400000/1000000` 是 max_relocation_fraction=0.4 截断显示（`80808cf` 已修文案）——实为全死，无 NaN。
+  - **A800 双卡二轮单变量（agent 托管）坐实**：S-b（bg_road_penalty off）死亡仅推迟 6k→7.9k（penalty 只是加速器，双向排除）；**S-c（`loss.use_opacity=false`）bg 0%→99.84%、dyn 15.8%→99.94%、8k 全指标最优（mean +1.84 / automobile +1.65）**；S-d（λ/10）bg 苟活但 **dyn 照死 87%**（降档救不了稀疏光度层）。机制＝`base_mcmc.yaml` 默认 λ=0.01 的无可见性加权 L1 每步全量下压 + 6-cam 采样稀释翻转力量对比 + road 豁免不对称（road 独活 opacity 0.91 takeover）。**尸检副产物：R0b/锚时代 dynamic 层其实 99.8% 死——车辆 class_psnr 只有 17.5 的深层原因，一直存在**。
+  - **修正配方 = `loss.use_opacity=false`**（multilayer 三粒子层语境等价全豁免；`3f081ab` 进 lattice v2）。3-cam 域 R0c 实测有权衡：mean 21.30→20.84 / road_crop −0.26（正则的修剪功能有真实价值）但 lpips 0.631→**0.613**、automobile→**17.92**（dyn 复活）；后续精调方向（不阻塞）＝分层 λ / dyn 豁免 / 可见性加权。
+  - **lattice v2 实测（进行中）**：R0c ✅ 20.84/0.613/17.92；**R1p（6-cam 首个健康 run）✅ 20.16 / ssim 0.640 / lpips 0.630 / automobile 17.39，死层告警 0，训练 51 min 恢复正常速度**；⚠️ 口径注记：mean/road_crop 系全相机平均（新相机 left_wide 18.1 天然难），跨相机集不可直接比；同 3 台守护线 21.59/20.34/20.05（对锚 −0.3~0.5，容量摊薄效应）；**公平对比需 per-camera 等比步数（6-cam 数据翻倍 → 30k 等于欠训一半），R1p-60k 列为达成 KPI 的第一候选**。R2p/R3p 过夜跑。A800 双卡并行重做 depth A/B（正则off 干净版，agent 托管）。
+  - **viser 涂抹一案终审（半天调查，结论入档）**：渲染管线全链无罪（曝光/渲染器/ckpt/代码版本/驱动/JIT/坐标约定逐层排除，PAI 对照 + 昨日 ckpt 对照 + Follow Camera 实验闭环）。真凶＝**OPCV 模式漏了 connect 时 `client.camera.fov = 训练相机 fov_y` 的一行同步**——服务端按训练内参渲 120° 广角图，浏览器端按默认 ~75° 贴合 → 全屏拉伸涂抹；FTheta 模式接线完整故 PAI 正常。**使用姿势（修复前）**：启动带 `--initial_cam_id <cam>`（激活 rational 光线路径）+ UI 勾一次 Follow Camera（校准 fov，之后自由飞行正常）。一行修复+分辨率锁已挂任务芯片（含验证协议）。历史教训：6/24"验证"只查非全黑、6/26 只查日志 active——**画面正确性从未被验证过**，伪完成识别再添一例。
 
 ---
 

@@ -12,11 +12,8 @@ import os
 import pytest
 from hydra import compose, initialize_config_dir
 
-
 # ----------------------------------------------------------------------- conf
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -75,8 +72,6 @@ def test_relocate_and_add_handle_empty_layer_without_zerodiv(real_conf):
     # Pre-fix: each of these raised ZeroDivisionError on the print_stats line.
     strat.relocate_gaussians()
     strat.add_new_gaussians()
-
-
 
 
 # --- T2.2: LayeredMCMCStrategy sub-strategy array ---
@@ -141,7 +136,6 @@ def test_layered_mcmc_single_bg_uses_one_sub_strategy(real_conf):
     assert strat.sub_strategies["background"].model is model.layers["background"]
 
 
-
 # --- T2.3: yaml inheritance ---
 def test_layered_mcmc_yaml_inherits_mcmc_defaults():
     """T2.3: layered_mcmc.yaml inherits mcmc.yaml; only `method` differs."""
@@ -167,6 +161,7 @@ def test_layered_mcmc_yaml_inherits_mcmc_defaults():
 def test_mcmc_get_perturb_mask_default_is_ones(real_conf):
     """T3.4: MCMCStrategy._get_perturb_mask() default = ones (v1 byte-identical)."""
     import torch
+
     from threedgrut.strategy.mcmc import MCMCStrategy
 
     strat = MCMCStrategy.__new__(MCMCStrategy)
@@ -184,9 +179,7 @@ def test_road_spec_has_perturb_scale_mask_z_zero():
     from threedgrut.layers.registry import STANDARD_LAYERS
 
     road = STANDARD_LAYERS["road"]
-    assert road.perturb_scale_mask == (1.0, 1.0, 0.0), (
-        f"road perturb mask leaked Z: {road.perturb_scale_mask}"
-    )
+    assert road.perturb_scale_mask == (1.0, 1.0, 0.0), f"road perturb mask leaked Z: {road.perturb_scale_mask}"
     # Background / dynamic_rigids should NOT override (free perturb)
     assert STANDARD_LAYERS["background"].perturb_scale_mask is None
     assert STANDARD_LAYERS["dynamic_rigids"].perturb_scale_mask is None
@@ -196,15 +189,20 @@ def test_layered_mcmc_installs_road_perturb_mask(real_conf):
     """T3.4 D1: LayeredMCMCStrategy injects road spec's perturb mask into
     sub-strategy['road']; background sub stays at default ones."""
     import torch
+
     from threedgrut.layers.layer_spec import LayerSpec
     from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road", layer_id=1, max_n_particles=200_000,
-                  scale_prior=(0.1, 0.1, 0.001),
-                  perturb_scale_mask=(1.0, 1.0, 0.0)),
+        LayerSpec(
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
+            scale_prior=(0.1, 0.1, 0.001),
+            perturb_scale_mask=(1.0, 1.0, 0.0),
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     strat = LayeredMCMCStrategy(real_conf, model, specs)
@@ -231,7 +229,6 @@ def test_layered_mcmc_perturb_mask_skipped_when_spec_none(real_conf):
     assert not hasattr(sub, "_perturb_mask_override")
 
 
-
 # --- T2.4: invariants ---
 def test_no_cross_layer_migration_structural(real_conf):
     """T2.4: structural identity check — sub.model is pinned to its layer's MoG.
@@ -247,21 +244,23 @@ def test_no_cross_layer_migration_structural(real_conf):
     a layer boundary) requires a CUDA environment and is deferred to the A800
     controller batch at the end of Stage 2.
     """
-    from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.layer_spec import LayerSpec
+    from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
     from threedgrut.tests.test_layered_gaussians import _v1_shape_dict
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_from_checkpoint(
-        {"gaussians_nodes": {
-            "background": _v1_shape_dict(N=100, conf=real_conf),
-            "road":       _v1_shape_dict(N=50,  conf=real_conf),
-        }},
+        {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=100, conf=real_conf),
+                "road": _v1_shape_dict(N=50, conf=real_conf),
+            }
+        },
         setup_optimizer=False,
     )
     model.setup_optimizer_for_test()
@@ -275,23 +274,20 @@ def test_no_cross_layer_migration_structural(real_conf):
 
 def test_init_densification_buffer_dispatches_to_all_subs(real_conf, monkeypatch):
     """T2.4: init_densification_buffer must broadcast to every sub-strategy."""
-    from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.layers.layer_spec import LayerSpec
+    from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     strat = LayeredMCMCStrategy(real_conf, model, specs)
 
     call_log: list[str] = []
     for name, sub in strat.sub_strategies.items():
-        monkeypatch.setattr(
-            sub, "init_densification_buffer",
-            lambda ckpt, n=name: call_log.append(n)
-        )
+        monkeypatch.setattr(sub, "init_densification_buffer", lambda ckpt, n=name: call_log.append(n))
     strat.init_densification_buffer(checkpoint=None)
     assert sorted(call_log) == ["background", "road"]
 
@@ -326,7 +322,7 @@ def test_relocation_cap_subsamples_dead_indices():
     max_frac = 0.5
 
     densities = torch.zeros(N)
-    densities[:N - dead] = 0.5  # first 10 alive
+    densities[: N - dead] = 0.5  # first 10 alive
 
     dead_idxs = torch.where(densities <= 0.005)[0]
     assert len(dead_idxs) == dead
@@ -354,3 +350,31 @@ def test_make_sub_conf_does_not_mutate_parent(real_conf):
     sub = LayeredMCMCStrategy._make_sub_conf(real_conf, spec)
     assert sub.strategy.add.max_n_gaussians == 123_456
     assert real_conf.strategy.add.max_n_gaussians == original_cap
+
+
+def test_relocate_skips_when_layer_fully_dead(real_conf):
+    """Regression (inc_b6a9 6-cam R1 crash, 2026-07-02).
+
+    A layer whose particles are ALL at/below opacity_threshold has no alive
+    donors: ``alive_idxs`` is empty and ``torch.multinomial`` over the empty
+    probability tensor aborts with CUDA invalid-configuration (RuntimeError
+    on CPU). relocate_gaussians must skip (with a loud warning) instead.
+    """
+    import torch
+
+    from threedgrut.strategy.mcmc import MCMCStrategy
+
+    class _DeadLayer:
+        num_gaussians = 8
+
+        def get_density(self):  # all below any positive opacity threshold
+            return torch.zeros((8, 1))
+
+        def get_scale(self):  # must NOT be reached (guard returns first)
+            raise AssertionError("sample_new_gaussians must not run on a dead layer")
+
+    strat = MCMCStrategy.__new__(MCMCStrategy)
+    strat.conf = real_conf
+    strat.model = _DeadLayer()
+
+    strat.relocate_gaussians()  # pre-fix: crashed in _multinomial_sample
