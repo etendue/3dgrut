@@ -8,6 +8,7 @@ NaN ray at px (u=1917, v=1042) on every frame). The guard repairs the cached
 ray (nearest finite same-row neighbour) and flags the pixel invalid so it
 never supervises training — upstream of the trainer's drop-batch fuse.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -38,8 +39,7 @@ def test_single_nan_ray_repaired_from_row_neighbour_and_masked():
     assert n == 1
     assert np.isfinite(rays).all()
     # nearest finite same-row neighbour (u=3 or u=5)
-    assert (np.array_equal(rays[2, 4], rays[2, 3])
-            or np.array_equal(rays[2, 4], rays[2, 5]))
+    assert np.array_equal(rays[2, 4], rays[2, 3]) or np.array_equal(rays[2, 4], rays[2, 5])
     assert not mask[2, 4]
     assert mask.sum() == mask.size - 1  # only the bad pixel flipped
 

@@ -9,6 +9,7 @@ steps (bypassing the pred-based drop guard entirely, since the poison never
 crosses the loss). Sanitize: any bad row falls back to the donor's original
 values (relocation degenerates to a plain copy for that row).
 """
+
 from __future__ import annotations
 
 import torch

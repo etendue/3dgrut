@@ -36,6 +36,7 @@ NCore manifest shape (T3a.2 verified empty for current clip — tracks field
 needs separate generation). When tracks field is missing → returns empty dict
 (not a crash; trainer.init_model logs and skips dynamic_rigids layer).
 """
+
 from __future__ import annotations
 
 import json
@@ -72,9 +73,9 @@ def euler_xyz_to_rotation_matrix(rx: float, ry: float, rz: float) -> np.ndarray:
     cz, sz = float(np.cos(rz)), float(np.sin(rz))
     return np.array(
         [
-            [cy * cz,  cz * sy * sx - sz * cx,  cz * sy * cx + sz * sx],
-            [sz * cy,  sz * sy * sx + cz * cx,  sz * sy * cx - cz * sx],
-            [-sy,      cy * sx,                 cy * cx],
+            [cy * cz, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+            [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+            [-sy, cy * sx, cy * cx],
         ],
         dtype=np.float64,
     )
@@ -108,28 +109,16 @@ def load_tracks_from_manifest(manifest_path: Union[str, Path]) -> Dict[str, dict
             raise ValueError(f"track missing 'id' field: keys={list(trk.keys())}")
         for required in ("poses", "extent", "active_frames"):
             if required not in trk:
-                raise ValueError(
-                    f"track '{tid}' missing required field '{required}'; "
-                    f"keys={list(trk.keys())}"
-                )
+                raise ValueError(f"track '{tid}' missing required field '{required}'; " f"keys={list(trk.keys())}")
         poses = torch.tensor(trk["poses"], dtype=torch.float32)
         if poses.ndim != 3 or poses.shape[-2:] != (4, 4):
-            raise ValueError(
-                f"track '{tid}' poses shape invalid: {tuple(poses.shape)}, "
-                f"expected [F, 4, 4]"
-            )
+            raise ValueError(f"track '{tid}' poses shape invalid: {tuple(poses.shape)}, " f"expected [F, 4, 4]")
         size = torch.tensor(trk["extent"], dtype=torch.float32)
         if size.shape != (3,):
-            raise ValueError(
-                f"track '{tid}' extent shape invalid: {tuple(size.shape)}, "
-                f"expected [3]"
-            )
+            raise ValueError(f"track '{tid}' extent shape invalid: {tuple(size.shape)}, " f"expected [3]")
         frame_info = torch.tensor(trk["active_frames"], dtype=torch.bool)
         if frame_info.shape[0] != poses.shape[0]:
-            raise ValueError(
-                f"track '{tid}' active_frames len {frame_info.shape[0]} "
-                f"!= poses F {poses.shape[0]}"
-            )
+            raise ValueError(f"track '{tid}' active_frames len {frame_info.shape[0]} " f"!= poses F {poses.shape[0]}")
         out[str(tid)] = {
             "pts": None,
             "colors": None,
@@ -150,46 +139,57 @@ def _rotmat_to_quat_wxyz(R: np.ndarray) -> np.ndarray:
     t = float(np.trace(R))
     if t > 0.0:
         s = float(np.sqrt(t + 1.0)) * 2.0
-        q = np.array([
-            0.25 * s,
-            (R[2, 1] - R[1, 2]) / s,
-            (R[0, 2] - R[2, 0]) / s,
-            (R[1, 0] - R[0, 1]) / s,
-        ])
+        q = np.array(
+            [
+                0.25 * s,
+                (R[2, 1] - R[1, 2]) / s,
+                (R[0, 2] - R[2, 0]) / s,
+                (R[1, 0] - R[0, 1]) / s,
+            ]
+        )
     elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
         s = float(np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])) * 2.0
-        q = np.array([
-            (R[2, 1] - R[1, 2]) / s,
-            0.25 * s,
-            (R[0, 1] + R[1, 0]) / s,
-            (R[0, 2] + R[2, 0]) / s,
-        ])
+        q = np.array(
+            [
+                (R[2, 1] - R[1, 2]) / s,
+                0.25 * s,
+                (R[0, 1] + R[1, 0]) / s,
+                (R[0, 2] + R[2, 0]) / s,
+            ]
+        )
     elif R[1, 1] > R[2, 2]:
         s = float(np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])) * 2.0
-        q = np.array([
-            (R[0, 2] - R[2, 0]) / s,
-            (R[0, 1] + R[1, 0]) / s,
-            0.25 * s,
-            (R[1, 2] + R[2, 1]) / s,
-        ])
+        q = np.array(
+            [
+                (R[0, 2] - R[2, 0]) / s,
+                (R[0, 1] + R[1, 0]) / s,
+                0.25 * s,
+                (R[1, 2] + R[2, 1]) / s,
+            ]
+        )
     else:
         s = float(np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])) * 2.0
-        q = np.array([
-            (R[1, 0] - R[0, 1]) / s,
-            (R[0, 2] + R[2, 0]) / s,
-            (R[1, 2] + R[2, 1]) / s,
-            0.25 * s,
-        ])
+        q = np.array(
+            [
+                (R[1, 0] - R[0, 1]) / s,
+                (R[0, 2] + R[2, 0]) / s,
+                (R[1, 2] + R[2, 1]) / s,
+                0.25 * s,
+            ]
+        )
     return q / np.linalg.norm(q)
 
 
 def _quat_wxyz_to_rotmat(q: np.ndarray) -> np.ndarray:
     w, x, y, z = (q / np.linalg.norm(q)).tolist()
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-    ], dtype=np.float64)
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
 
 
 def _slerp_wxyz(q0: np.ndarray, q1: np.ndarray, alpha: float) -> np.ndarray:
@@ -260,8 +260,8 @@ def interp_pose_to_ts(
 
 # A2: config value (dataset.cuboid_ts_mode) → load_tracks pose_time_mode.
 CUBOID_TS_MODES: Dict[str, str] = {
-    "ref_nearest": "nearest",        # legacy: ref-camera END ts + nearest obs
-    "per_camera_interp": "interp",   # A2: union END ts + lerp/slerp refinement
+    "ref_nearest": "nearest",  # legacy: ref-camera END ts + nearest obs
+    "per_camera_interp": "interp",  # A2: union END ts + lerp/slerp refinement
 }
 
 
@@ -282,16 +282,13 @@ def build_cuboid_frame_timeline_us(dataset, mode: str = "ref_nearest") -> np.nda
 
     if mode not in CUBOID_TS_MODES:
         raise ValueError(
-            f"build_cuboid_frame_timeline_us: unknown mode {mode!r} "
-            f"(expected one of {sorted(CUBOID_TS_MODES)})"
+            f"build_cuboid_frame_timeline_us: unknown mode {mode!r} " f"(expected one of {sorted(CUBOID_TS_MODES)})"
         )
     sid = dataset.sequence_id
     if mode == "per_camera_interp":
         arrays = [
             np.asarray(
-                dataset.sequence_camera_sensors[sid][cam].frames_timestamps_us[
-                    :, _nd.FrameTimepoint.END
-                ],
+                dataset.sequence_camera_sensors[sid][cam].frames_timestamps_us[:, _nd.FrameTimepoint.END],
                 dtype=np.int64,
             )
             for cam in dataset.camera_ids
@@ -299,11 +296,7 @@ def build_cuboid_frame_timeline_us(dataset, mode: str = "ref_nearest") -> np.nda
         ts = np.unique(np.concatenate(arrays))
     else:
         ref_cam = dataset.camera_ids[0]
-        ts = np.asarray(
-            dataset.sequence_camera_sensors[sid][ref_cam].frames_timestamps_us[
-                :, _nd.FrameTimepoint.END
-            ]
-        )
+        ts = np.asarray(dataset.sequence_camera_sensors[sid][ref_cam].frames_timestamps_us[:, _nd.FrameTimepoint.END])
     time_range = dataset.time_range_us
     in_window = np.array([int(t) in time_range for t in ts])
     return ts[in_window]
@@ -313,9 +306,13 @@ def build_cuboid_frame_timeline_us(dataset, mode: str = "ref_nearest") -> np.nda
 # v2 Stage 4 focuses on vehicle / large-rigid actors only (matches
 # dynamic_rigids layer scope). Pedestrians and animals are higher-order
 # rigid-deformable and handled in dynamic_deformables (v3).
-DEFAULT_VEHICLE_CLASSES: frozenset[str] = frozenset({
-    "automobile", "heavy_truck", "bus",
-})
+DEFAULT_VEHICLE_CLASSES: frozenset[str] = frozenset(
+    {
+        "automobile",
+        "heavy_truck",
+        "bus",
+    }
+)
 
 
 def load_tracks_from_ncore_cuboids(
@@ -474,8 +471,6 @@ def load_tracks_from_ncore_cuboids(
             # T4.5: per-pose absolute camera END timestamp (shared across all
             # tracks in this call). Consumers (LayeredGaussians.populate_tracks)
             # store ONE shared timestamp buffer rather than per-track copies.
-            "cam_timestamps_us": torch.from_numpy(
-                np.asarray(camera_frame_timestamps_us, dtype=np.int64)
-            ),
+            "cam_timestamps_us": torch.from_numpy(np.asarray(camera_frame_timestamps_us, dtype=np.int64)),
         }
     return out

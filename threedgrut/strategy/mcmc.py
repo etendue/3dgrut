@@ -34,10 +34,10 @@ from threedgrut.utils.misc import _multinomial_sample, check_step_condition
 
 @torch.no_grad()
 def _sanitize_relocation(
-    new_densities: torch.Tensor,   # [N, 1] kernel output (activated space)
-    new_scales: torch.Tensor,      # [N, 3] kernel output (activated space)
+    new_densities: torch.Tensor,  # [N, 1] kernel output (activated space)
+    new_scales: torch.Tensor,  # [N, 3] kernel output (activated space)
     donor_densities: torch.Tensor,  # [N, 1] donor originals (activated space)
-    donor_scales: torch.Tensor,     # [N, 3] donor originals (activated space)
+    donor_scales: torch.Tensor,  # [N, 3] donor originals (activated space)
 ) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """A1 — contain non-finite/non-positive relocation-kernel outputs.
 
@@ -64,6 +64,7 @@ def _sanitize_relocation(
     out_d = torch.where(bad.unsqueeze(-1), donor_densities, new_densities)
     out_s = torch.where(bad.unsqueeze(-1), donor_scales, new_scales)
     return out_d, out_s, n_bad
+
 
 _mcmc_plugin = None
 
@@ -253,18 +254,14 @@ class MCMCStrategy(BaseStrategy):
             # touches Parameter fields. Without this, fused_view sees a layer
             # whose positions.shape[0] > track_ids.shape[0] → crash.
             if hasattr(self.model, "track_ids") and self.model.track_ids is not None:
-                self.model.track_ids = torch.cat(
-                    [self.model.track_ids, self.model.track_ids[sampled_idxs]]
-                )
+                self.model.track_ids = torch.cat([self.model.track_ids, self.model.track_ids[sampled_idxs]])
 
         if self.conf.strategy.print_stats:
             # Guard div-by-zero: an empty particle layer has
             # current_num_gaussians==0 (and num_gaussians_to_add==0), but the
             # per-layer LayeredMCMC sub-strategy still runs add every step.
             pct = (num_gaussians_to_add / current_num_gaussians * 100) if current_num_gaussians else 0.0
-            logger.info(
-                f"Added {num_gaussians_to_add} ({pct:.2f}%) gaussians"
-            )
+            logger.info(f"Added {num_gaussians_to_add} ({pct:.2f}%) gaussians")
 
     @torch.no_grad()
     def perturb_gaussians(self) -> None:
@@ -313,9 +310,7 @@ class MCMCStrategy(BaseStrategy):
 
         # A1-guard (input): donor opacity can saturate to exactly 1.0 in
         # float; the relocation kernel's (1-o) terms then divide by zero.
-        donor_densities = densities[sampled_idxs].clamp(
-            max=1.0 - torch.finfo(torch.float32).eps
-        )
+        donor_densities = densities[sampled_idxs].clamp(max=1.0 - torch.finfo(torch.float32).eps)
         donor_scales = scales[sampled_idxs]
 
         new_densities, new_scales = _mcmc_plugin.compute_relocation_tensor(
@@ -334,7 +329,10 @@ class MCMCStrategy(BaseStrategy):
         # pred-based drop guard can't see it). Bad rows fall back to the
         # donor's original values (plain copy semantics).
         new_densities, new_scales, n_bad = _sanitize_relocation(
-            new_densities, new_scales, donor_densities, donor_scales,
+            new_densities,
+            new_scales,
+            donor_densities,
+            donor_scales,
         )
         if n_bad:
             logger.warning(

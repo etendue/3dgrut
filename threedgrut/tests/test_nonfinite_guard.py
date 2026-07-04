@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """A1 — replace_nonfinite_pixels guard (renderer NaN-pixel containment)."""
+
 from __future__ import annotations
 
 import torch
@@ -48,13 +49,12 @@ def test_where_guard_cannot_stop_grad_poison_hence_train_drops_batch():
     semantics and the batch drop could be revisited.
     """
     pred = torch.rand(1, 2, 2, 3, requires_grad=True)
-    mask = torch.ones_like(pred); mask[0, 0, 0, :] = float("nan")
+    mask = torch.ones_like(pred)
+    mask[0, 0, 0, :] = float("nan")
     bad = pred * mask  # NaN-producing upstream op with NaN local jacobian
     gt = torch.rand(1, 2, 2, 3)
     out, n = replace_nonfinite_pixels(bad, gt)
     assert n == 1
     assert torch.isfinite(out).all()  # loss VALUE is protected...
     (out - gt).abs().mean().backward()
-    assert torch.isnan(pred.grad[0, 0, 0]).all(), (
-        "0·NaN=NaN leak expected — if gone, torch changed where() semantics"
-    )
+    assert torch.isnan(pred.grad[0, 0, 0]).all(), "0·NaN=NaN leak expected — if gone, torch changed where() semantics"

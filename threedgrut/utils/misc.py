@@ -203,7 +203,8 @@ def check_step_condition(step: int, start: int, end: int, freq: int) -> bool:
 
 
 def replace_nonfinite_pixels(
-    pred: torch.Tensor, gt: torch.Tensor,
+    pred: torch.Tensor,
+    gt: torch.Tensor,
 ) -> tuple[torch.Tensor, int]:
     """Replace non-finite pred pixels with the GT pixel (zero error, zero grad).
 

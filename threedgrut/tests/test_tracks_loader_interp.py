@@ -12,13 +12,14 @@ Default (``pose_time_mode="nearest"``) must stay byte-identical — pinned here
 by comparing against an explicit-default call; the pre-existing rotation tests
 in test_tracks_loader_rotation.py are the wider regression net.
 """
+
 from __future__ import annotations
 
 import math
+from unittest.mock import MagicMock
 
 import numpy as np
 import torch
-from unittest.mock import MagicMock
 
 from threedgrut.datasets.tracks_loader import (
     euler_xyz_to_rotation_matrix,
@@ -26,8 +27,8 @@ from threedgrut.datasets.tracks_loader import (
     load_tracks_from_ncore_cuboids,
 )
 
-
 # --- fixtures (mirror test_tracks_loader_rotation.py) -----------------------
+
 
 class _FakeBBox3:
     def __init__(self, centroid, dim, rot):
@@ -53,7 +54,6 @@ class _FakeLoader:
         self._obs = observations
         self.pose_graph = MagicMock()
 
-
     def get_cuboid_track_observations(self):
         return iter(self._obs)
 
@@ -71,15 +71,19 @@ def _uniform_track_obs(track_id="t1", speed=20.0, yaw_rate=0.2, n=11, dt_us=100_
     for i in range(n):
         ts = i * dt_us
         t_s = ts * 1e-6
-        obs.append(_FakeObs(
-            track_id, "automobile", ts,
-            _FakeBBox3((speed * t_s, 0.0, 1.0), (4.5, 2.0, 1.7),
-                       (0.0, 0.0, yaw_rate * t_s)),
-        ))
+        obs.append(
+            _FakeObs(
+                track_id,
+                "automobile",
+                ts,
+                _FakeBBox3((speed * t_s, 0.0, 1.0), (4.5, 2.0, 1.7), (0.0, 0.0, yaw_rate * t_s)),
+            )
+        )
     return obs
 
 
 # --- interp_pose_to_ts pure function ----------------------------------------
+
 
 def test_interp_linear_translation_and_yaw():
     """Uniform motion: query between obs → exact lerp position + slerp yaw."""
@@ -135,16 +139,15 @@ def test_interp_single_obs_within_tolerance():
 
 # --- load_tracks_from_ncore_cuboids pose_time_mode --------------------------
 
+
 def test_interp_mode_fixes_known_camera_offset():
     """Camera ts = obs grid + 40ms. nearest → 0.8m stale error @20 m/s;
     interp → exact position (uniform motion ⇒ lerp is exact)."""
     obs = _uniform_track_obs()
     cam_ts = np.asarray([40_000, 140_000, 240_000], dtype=np.int64)
 
-    out_nearest = load_tracks_from_ncore_cuboids(
-        _FakeLoader(obs), cam_ts, pose_time_mode="nearest")
-    out_interp = load_tracks_from_ncore_cuboids(
-        _FakeLoader(obs), cam_ts, pose_time_mode="interp")
+    out_nearest = load_tracks_from_ncore_cuboids(_FakeLoader(obs), cam_ts, pose_time_mode="nearest")
+    out_interp = load_tracks_from_ncore_cuboids(_FakeLoader(obs), cam_ts, pose_time_mode="interp")
 
     # nearest snaps query 40ms → obs at 0ms → x=0 (0.8m stale)
     x_nearest = out_nearest["t1"]["poses"][0, 0, 3].item()
@@ -154,8 +157,7 @@ def test_interp_mode_fixes_known_camera_offset():
     assert abs(x_interp - 0.8) < 1e-4
     # yaw likewise: 0.2 rad/s * 0.04 s = 0.008
     R_interp = out_interp["t1"]["poses"][0, :3, :3].numpy()
-    assert np.allclose(
-        R_interp, euler_xyz_to_rotation_matrix(0.0, 0.0, 0.008), atol=1e-5)
+    assert np.allclose(R_interp, euler_xyz_to_rotation_matrix(0.0, 0.0, 0.008), atol=1e-5)
     # all frames active in both modes (40ms < 50ms tolerance)
     assert out_interp["t1"]["frame_info"].numpy().all()
     assert out_nearest["t1"]["frame_info"].numpy().all()
@@ -166,13 +168,11 @@ def test_default_mode_is_nearest_and_identical():
     obs = _uniform_track_obs()
     cam_ts = np.asarray([40_000, 140_000, 940_000], dtype=np.int64)
     out_default = load_tracks_from_ncore_cuboids(_FakeLoader(obs), cam_ts)
-    out_nearest = load_tracks_from_ncore_cuboids(
-        _FakeLoader(obs), cam_ts, pose_time_mode="nearest")
+    out_nearest = load_tracks_from_ncore_cuboids(_FakeLoader(obs), cam_ts, pose_time_mode="nearest")
     for tid in out_default:
         assert torch.equal(out_default[tid]["poses"], out_nearest[tid]["poses"])
         assert torch.equal(out_default[tid]["frame_info"], out_nearest[tid]["frame_info"])
-        assert torch.equal(out_default[tid]["cam_timestamps_us"],
-                           out_nearest[tid]["cam_timestamps_us"])
+        assert torch.equal(out_default[tid]["cam_timestamps_us"], out_nearest[tid]["cam_timestamps_us"])
 
 
 def test_interp_mode_inactive_outside_obs_range():
@@ -180,8 +180,7 @@ def test_interp_mode_inactive_outside_obs_range():
     some frames in range keeps those active."""
     obs = _uniform_track_obs(n=3)  # obs at 0 / 100ms / 200ms
     cam_ts = np.asarray([100_000, 400_000], dtype=np.int64)
-    out = load_tracks_from_ncore_cuboids(
-        _FakeLoader(obs), cam_ts, pose_time_mode="interp")
+    out = load_tracks_from_ncore_cuboids(_FakeLoader(obs), cam_ts, pose_time_mode="interp")
     active = out["t1"]["frame_info"].numpy()
     assert active.tolist() == [True, False]
     # inactive frame keeps the eye(4) sentinel (same convention as nearest)
@@ -192,8 +191,7 @@ def test_interp_mode_unknown_mode_raises():
     obs = _uniform_track_obs(n=2)
     cam_ts = np.asarray([0], dtype=np.int64)
     try:
-        load_tracks_from_ncore_cuboids(
-            _FakeLoader(obs), cam_ts, pose_time_mode="banana")
+        load_tracks_from_ncore_cuboids(_FakeLoader(obs), cam_ts, pose_time_mode="banana")
         raised = False
     except ValueError:
         raised = True

@@ -19,6 +19,7 @@ itar layouts handled (auto — shape is read from the source, not hard-coded):
 Usage:
     python merge_lidar_aux.py <out.itar> <seg0.itar> <seg1.itar> ...
 """
+
 import sys
 
 import zarr
@@ -69,8 +70,7 @@ def merge(out_path: str, seg_paths: list[str]) -> None:
                     # use src.shape — do NOT hard-code shape=(); camvis is a
                     # (N_pts, 1) array and shape=() raises "setting an array
                     # element with a sequence".
-                    ds = out_grp.create_dataset(
-                        ts, shape=src.shape, dtype=src.dtype, compressor=None)
+                    ds = out_grp.create_dataset(ts, shape=src.shape, dtype=src.dtype, compressor=None)
                     ds[...] = data
                     ds.attrs.put(dict(src.attrs))
                     total += 1

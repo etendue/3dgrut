@@ -25,21 +25,21 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threedgrut.datasets as datasets
+from threedgrut.correction.difix import DifixPostProcessor
 from threedgrut.layers.dynamic_mask import resolve_batch_cuboid_intrinsics
 from threedgrut.model.class_psnr import (
     collect_active_tracks_for_frame,
     compute_class_psnr,
 )
+from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.model.per_class_eval import (
     DEFAULT_ACTOR_CLASS_SPECS,
-    ROAD_CLASS_IDS,
-    compute_per_class_metrics,
-    compute_lane_metrics,
-    LANE_CLASS_IDS,
     DEFAULT_LANE_BAND_PX,
+    LANE_CLASS_IDS,
+    ROAD_CLASS_IDS,
+    compute_lane_metrics,
+    compute_per_class_metrics,
 )
-from threedgrut.correction.difix import DifixPostProcessor
-from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.utils.color_correct import color_correct_affine
 from threedgrut.utils.eval_metrics import (  # T11.F1 / E1.4
     compute_lidar_psnr,
@@ -276,6 +276,7 @@ class Renderer:
         # a brand-new key raises ConfigKeyError — open the struct first.
         if load_lane_masks or lane_band_px is not None or render_only:
             from omegaconf import OmegaConf
+
             OmegaConf.set_struct(conf, False)
         if load_lane_masks:
             conf["dataset"]["load_lane_masks"] = True
@@ -320,11 +321,11 @@ class Renderer:
                 specs = specs_from_config(conf)
                 # V3-E4.1 fix: pass the saved scene_extent (live trainer does
                 # the same) instead of None — mirrors engine.py:1340-1344.
-                scene_extent = float(
-                    checkpoint.get("model", {}).get("scene_extent", 1.0)
-                )
+                scene_extent = float(checkpoint.get("model", {}).get("scene_extent", 1.0))
                 model = LayeredGaussians(
-                    conf, specs=specs, scene_extent=scene_extent,
+                    conf,
+                    specs=specs,
+                    scene_extent=scene_extent,
                 )
                 # V3 Stage A/B/D.2 bugfix: ``populate_tracks`` MUST run BEFORE
                 # ``init_from_checkpoint`` for learnable_pose ckpts. Reason:
@@ -424,17 +425,18 @@ class Renderer:
                 N, twelve, L_z, L_y, L_x = grids.shape
                 assert twelve == 12, f"unexpected grids shape {grids.shape}"
                 exposure_model = BilateralGrid(
-                    num_camera=N, grid_X=L_x, grid_Y=L_y, grid_W=L_z,
+                    num_camera=N,
+                    grid_X=L_x,
+                    grid_Y=L_y,
+                    grid_W=L_z,
                 ).to("cuda")
                 exposure_model.load_state_dict(module_state, strict=True)
                 exposure_model.eval()
-                logger.info(
-                    f"📷 BilateralGrid loaded from checkpoint: "
-                    f"{N} cameras, grid={L_x}x{L_y}x{L_z}"
-                )
+                logger.info(f"📷 BilateralGrid loaded from checkpoint: " f"{N} cameras, grid={L_x}x{L_y}x{L_z}")
             else:
                 legacy_keys = set(module_state.keys()) & {
-                    "exposure_a", "exposure_b",
+                    "exposure_a",
+                    "exposure_b",
                 }
                 if legacy_keys:
                     logger.warning(
@@ -526,8 +528,7 @@ class Renderer:
                 )
             else:
                 logger.warning(
-                    "[road-only eval] requested but model has no 'road' layer "
-                    "— falling back to full render."
+                    "[road-only eval] requested but model has no 'road' layer " "— falling back to full render."
                 )
 
         # Criterions that we log during training
@@ -616,6 +617,7 @@ class Renderer:
         # by parallax shift so we report LPIPS only (perceptual robust to
         # small content shifts). Empty when self.novel_view=False so
         # metrics.json stays byte-identical for the default eval path.
+        from threedgrut.model.plane_warp import build_plane_warp, warp_image
         from threedgrut.utils.novel_view import (
             LEGACY_NOVEL_AVG_MODES,
             NOVEL_VIEW_MODES,
@@ -623,18 +625,13 @@ class Renderer:
             novel_frame_relpath,
             perturb_batch_shutter_pair_torch,
         )
-        from threedgrut.model.plane_warp import build_plane_warp, warp_image
-        novel_lpips: dict[str, list] = (
-            {m: [] for m in NOVEL_VIEW_MODES} if self.novel_view else {}
-        )
+
+        novel_lpips: dict[str, list] = {m: [] for m in NOVEL_VIEW_MODES} if self.novel_view else {}
         # E2.1: save up to novel_save_n frames per mode (-1 = all frames).
         # Default novel_save_n=5 keeps historical visual-sample count.
         # Per-camera subdir naming + frames_map.json are written regardless
         # of n — they don't affect metrics.json (LPIPS etc.) at all.
-        novel_save_first_n = (
-            (self.novel_save_n if self.novel_save_n >= 0 else 10**9)
-            if self.novel_view else 0
-        )
+        novel_save_first_n = (self.novel_save_n if self.novel_save_n >= 0 else 10**9) if self.novel_view else 0
         # E2.1: per-mode {ts:<cam>:<ts> -> relpath} maps, written after the loop.
         novel_frames_map: dict[str, dict] = {m: {} for m in NOVEL_VIEW_MODES} if self.novel_view else {}
         novel_save_counter: dict[str, int] = {m: 0 for m in NOVEL_VIEW_MODES} if self.novel_view else {}
@@ -648,6 +645,7 @@ class Renderer:
         if bool(self.conf.render.get("enable_nta_iou", True)):
             try:
                 from threedgrut.model.vehicle_detector import get_vehicle_detector
+
                 _nta_detector = get_vehicle_detector(device="cuda")
             except Exception as e:  # ultralytics missing / weights offline
                 logger.warning(f"[E1.2 NTA-IoU] detector unavailable, skipping: {e}")
@@ -684,8 +682,7 @@ class Renderer:
         if self.novel_view:
             for m in NOVEL_VIEW_MODES:
                 os.makedirs(
-                    os.path.join(self.out_dir, f"ours_{int(self.global_step)}",
-                                 "novel_view", m),
+                    os.path.join(self.out_dir, f"ours_{int(self.global_step)}", "novel_view", m),
                     exist_ok=True,
                 )
             logger.info(
@@ -708,20 +705,19 @@ class Renderer:
         plane_warp_height_field = None
         if self.novel_view:
             _layers = getattr(self.model, "layers", None)
-            if (_layers is not None and "road" in _layers
-                    and _layers["road"].positions.numel() > 0):
+            if _layers is not None and "road" in _layers and _layers["road"].positions.numel() > 0:
                 from threedgrut.model.road_region import build_road_height_field
+
                 plane_warp_height_field = build_road_height_field(
-                    _layers["road"].positions.detach(), cell_size=1.0,
+                    _layers["road"].positions.detach(),
+                    cell_size=1.0,
                 )
                 logger.info(
                     f"[E1.1] plane-warp height field: "
                     f"{int(plane_warp_height_field['occupied'].sum())} occupied cells @ 1.0m"
                 )
             else:
-                logger.warning(
-                    "[E1.1] no road layer on model — novel-view lane metrics skipped"
-                )
+                logger.warning("[E1.1] no road layer on model — novel-view lane metrics skipped")
 
         # T8.5.7 / V3-E4 — per-camera metric aggregation. keys = camera_id
         # strings (set by NCoreDataset's __getitem__); each value mirrors the
@@ -730,10 +726,18 @@ class Renderer:
         # metrics.json byte-identical to pre-V3-E4 for those datasets.
         per_cam: dict[str, dict[str, list]] = {}
         _per_cam_keys = (
-            "psnr", "ssim", "lpips",
-            "cc_psnr", "cc_ssim", "cc_lpips",
-            "psnr_masked", "ssim_masked", "lpips_masked",
-            "cc_psnr_masked", "cc_ssim_masked", "cc_lpips_masked",
+            "psnr",
+            "ssim",
+            "lpips",
+            "cc_psnr",
+            "cc_ssim",
+            "cc_lpips",
+            "psnr_masked",
+            "ssim_masked",
+            "lpips_masked",
+            "cc_psnr_masked",
+            "cc_ssim_masked",
+            "cc_lpips_masked",
         )
 
         best_psnr = -1.0
@@ -782,7 +786,8 @@ class Renderer:
                 _cidx = getattr(gpu_batch, "camera_idx", None)
                 if _cidx is not None:
                     outputs["pred_rgb"] = self.exposure_model(
-                        int(_cidx), outputs["pred_rgb"],
+                        int(_cidx),
+                        outputs["pred_rgb"],
                     )
 
             # A1-NaN containment (eval): isolated non-finite renderer pixels
@@ -790,7 +795,8 @@ class Renderer:
             # Sanitize in place so every downstream consumer sees the clean
             # tensor; total replaced px reported in metrics.json.
             outputs["pred_rgb"], _n_bad_px = replace_nonfinite_pixels(
-                outputs["pred_rgb"], gpu_batch.rgb_gt,
+                outputs["pred_rgb"],
+                gpu_batch.rgb_gt,
             )
             nonfinite_pred_px_total += _n_bad_px
 
@@ -848,9 +854,7 @@ class Renderer:
             # pre-T15.2 metrics.json.
             if self.difix.enabled:
                 pred_rgb_difix = self.difix(pred_rgb_full)
-                psnr_difix.append(
-                    criterions["psnr"](pred_rgb_difix, rgb_gt_full).item()
-                )
+                psnr_difix.append(criterions["psnr"](pred_rgb_difix, rgb_gt_full).item())
                 ssim_difix.append(
                     criterions["ssim"](
                         pred_rgb_difix.permute(0, 3, 1, 2),
@@ -891,15 +895,11 @@ class Renderer:
                 diff_sq = (pred_rgb_full - rgb_gt_full).pow(2) * mask
                 denom = mask.sum().clamp(min=1.0) * 3
                 mse_masked = diff_sq.sum() / denom
-                psnr_masked.append(
-                    (-10.0 * torch.log10(mse_masked.clamp(min=1e-10))).item()
-                )
+                psnr_masked.append((-10.0 * torch.log10(mse_masked.clamp(min=1e-10))).item())
                 # PSNR_masked (cc)
                 diff_sq_cc = (pred_rgb_cc - rgb_gt_full).pow(2) * mask
                 mse_masked_cc = diff_sq_cc.sum() / denom
-                cc_psnr_masked.append(
-                    (-10.0 * torch.log10(mse_masked_cc.clamp(min=1e-10))).item()
-                )
+                cc_psnr_masked.append((-10.0 * torch.log10(mse_masked_cc.clamp(min=1e-10))).item())
                 # SSIM / LPIPS via GT-fill
                 m4d = mask.permute(0, 3, 1, 2)  # [B, 1, H, W]
                 rgb_gt_perm = rgb_gt_full.permute(0, 3, 1, 2)
@@ -935,11 +935,7 @@ class Renderer:
             # skip so it doesn't pull the mean down to -inf.
             _image_infos = getattr(gpu_batch, "image_infos", None) or {}
             _pred_dist = outputs.get("pred_dist") if isinstance(outputs, dict) else None
-            if (
-                _pred_dist is not None
-                and isinstance(_image_infos, dict)
-                and "lidar_depth_map" in _image_infos
-            ):
+            if _pred_dist is not None and isinstance(_image_infos, dict) and "lidar_depth_map" in _image_infos:
                 _lidar_gt = _image_infos["lidar_depth_map"]  # [B, H, W]
                 _hit = (_lidar_gt > 0).float()
                 _lp = compute_lidar_psnr(_pred_dist, _lidar_gt, _hit)
@@ -978,8 +974,7 @@ class Renderer:
             tp = getattr(self.model, "tracks_poses", None)
             K_pin, ftheta_params = resolve_batch_cuboid_intrinsics(gpu_batch)
             active = []
-            if tp and (ftheta_params is not None or K_pin is not None) \
-                    and hasattr(self.model, "_resolve_pose_idx"):
+            if tp and (ftheta_params is not None or K_pin is not None) and hasattr(self.model, "_resolve_pose_idx"):
                 _pose_idx = self.model._resolve_pose_idx(
                     int(getattr(gpu_batch, "timestamp_us", -1)),
                     int(getattr(gpu_batch, "frame_idx", -1)) if int(getattr(gpu_batch, "frame_idx", -1)) >= 0 else None,
@@ -1000,7 +995,9 @@ class Renderer:
                 _novel_modes = ("lateral_3m", "lateral_6m") if self.novel_only else NOVEL_VIEW_MODES
                 for mode in _novel_modes:
                     nT, nTe = perturb_batch_shutter_pair_torch(
-                        orig_T, orig_T_end, mode,
+                        orig_T,
+                        orig_T_end,
+                        mode,
                     )
                     gpu_batch.T_to_world = nT
                     gpu_batch.T_to_world_end = nTe
@@ -1019,12 +1016,16 @@ class Renderer:
                         novel_save_counter[mode] += 1
                         _rel = novel_frame_relpath(_cam, _sidx)
                         _dst = os.path.join(
-                            self.out_dir, f"ours_{int(self.global_step)}",
-                            "novel_view", mode, _rel,
+                            self.out_dir,
+                            f"ours_{int(self.global_step)}",
+                            "novel_view",
+                            mode,
+                            _rel,
                         )
                         os.makedirs(os.path.dirname(_dst), exist_ok=True)
                         torchvision.utils.save_image(
-                            pred_novel.squeeze(0).permute(2, 0, 1), _dst,
+                            pred_novel.squeeze(0).permute(2, 0, 1),
+                            _dst,
                         )
                         if _ts >= 0:
                             novel_frames_map[mode][novel_frame_key(_cam, _ts)] = _rel
@@ -1034,9 +1035,7 @@ class Renderer:
                     # road-plane content). Same camera whitelist as the
                     # interpolated lane block; rays must be camera-frame
                     # (NCore default) for build_plane_warp.
-                    _lane_nv = (getattr(gpu_batch, "image_infos", None) or {}).get(
-                        "semantic_lane_sseg"
-                    )
+                    _lane_nv = (getattr(gpu_batch, "image_infos", None) or {}).get("semantic_lane_sseg")
                     if (
                         plane_warp_height_field is not None
                         and _lane_nv is not None
@@ -1046,17 +1045,26 @@ class Renderer:
                     ):
                         lane_one_nv = _lane_nv[0] if _lane_nv.dim() == 3 else _lane_nv
                         wgrid, wvalid = build_plane_warp(
-                            gpu_batch.rays_dir[0], nT[0], orig_T[0], ftheta_params,
+                            gpu_batch.rays_dir[0],
+                            nT[0],
+                            orig_T[0],
+                            ftheta_params,
                             height_field=plane_warp_height_field,
                         )
                         gt_warp = warp_image(rgb_gt_full[0].float(), wgrid, wvalid)
                         lane_warp = warp_image(
-                            lane_one_nv.unsqueeze(-1).float(), wgrid, wvalid,
+                            lane_one_nv.unsqueeze(-1).float(),
+                            wgrid,
+                            wvalid,
                             mode="nearest",
                         )[..., 0].long()
                         lm_nv = compute_lane_metrics(
-                            pred_novel[0], gt_warp, lane_warp, LANE_CLASS_IDS,
-                            band_px=lane_band_px, restrict_mask=wvalid,
+                            pred_novel[0],
+                            gt_warp,
+                            lane_warp,
+                            LANE_CLASS_IDS,
+                            band_px=lane_band_px,
+                            restrict_mask=wvalid,
                             lpips_fn=criterions.get("lpips"),
                         )
                         _acc = novel_lane_acc.setdefault(mode, {})
@@ -1064,21 +1072,25 @@ class Renderer:
                             if lm_nv[_k] is not None:
                                 _acc.setdefault(_k, []).append(lm_nv[_k])
                         novel_lane_frames[mode] = novel_lane_frames.get(mode, 0) + 1
-                        novel_lane_valid_ratio.setdefault(mode, []).append(
-                            float(wvalid.float().mean())
-                        )
+                        novel_lane_valid_ratio.setdefault(mode, []).append(float(wvalid.float().mean()))
 
                     # E1.2 — NTA-IoU at the novel pose: GT cuboids stay at
                     # their world-frame GT pose (timestamp unchanged), only
                     # the camera moves → T_w2c = inv(perturbed c2w).
                     if _nta_detector is not None and active:
                         from threedgrut.model.nta_iou import compute_frame_nta_iou
+
                         H_nv = int(pred_novel.shape[1])
                         W_nv = int(pred_novel.shape[2])
                         nta_nv = compute_frame_nta_iou(
-                            pred_novel[0], active, _nta_detector,
-                            K=None, ftheta_params=ftheta_params,
-                            T_w2c=torch.linalg.inv(nT[0]), H=H_nv, W=W_nv,
+                            pred_novel[0],
+                            active,
+                            _nta_detector,
+                            K=None,
+                            ftheta_params=ftheta_params,
+                            T_w2c=torch.linalg.inv(nT[0]),
+                            H=H_nv,
+                            W=W_nv,
                         )
                         if nta_nv is not None:
                             novel_nta_records.setdefault(mode, []).append(nta_nv)
@@ -1103,9 +1115,15 @@ class Renderer:
                 T_w2c = torch.linalg.inv(gpu_batch.T_to_world[0])
                 H_, W_ = int(pred_rgb_full.shape[1]), int(pred_rgb_full.shape[2])
                 cp = compute_class_psnr(
-                    pred_rgb_full, rgb_gt_full, mask,
-                    active, T_world2cam=T_w2c, H=H_, W=W_,
-                    K=K_pin, ftheta_params=ftheta_params,
+                    pred_rgb_full,
+                    rgb_gt_full,
+                    mask,
+                    active,
+                    T_world2cam=T_w2c,
+                    H=H_,
+                    W=W_,
+                    K=K_pin,
+                    ftheta_params=ftheta_params,
                 )
                 for r in cp["per_track"]:
                     r["frame"] = int(iteration)
@@ -1115,10 +1133,16 @@ class Renderer:
                 # class_psnr; exactly one of K / ftheta_params is set).
                 if _nta_detector is not None:
                     from threedgrut.model.nta_iou import compute_frame_nta_iou
+
                     nta = compute_frame_nta_iou(
-                        pred_rgb_full[0], active, _nta_detector,
-                        K=K_pin, ftheta_params=ftheta_params,
-                        T_w2c=T_w2c, H=H_, W=W_,
+                        pred_rgb_full[0],
+                        active,
+                        _nta_detector,
+                        K=K_pin,
+                        ftheta_params=ftheta_params,
+                        T_w2c=T_w2c,
+                        H=H_,
+                        W=W_,
                     )
                     if nta is not None:
                         nta_iou_records.append(nta)
@@ -1133,8 +1157,11 @@ class Renderer:
             if _sseg is not None:
                 sseg_one = _sseg[0] if _sseg.dim() == 3 else _sseg  # [H, W]
                 pcm = compute_per_class_metrics(
-                    pred_rgb_full[0], rgb_gt_full[0], sseg_one,
-                    per_class_eval_specs, lpips_fn=criterions.get("lpips"),
+                    pred_rgb_full[0],
+                    rgb_gt_full[0],
+                    sseg_one,
+                    per_class_eval_specs,
+                    lpips_fn=criterions.get("lpips"),
                 )
                 for _name, _d in pcm.items():
                     if _d["psnr"] is not None:
@@ -1149,8 +1176,12 @@ class Renderer:
             if _lane is not None and _cam_id in lane_eval_cameras:
                 lane_one = _lane[0] if _lane.dim() == 3 else _lane  # [H, W]
                 lm = compute_lane_metrics(
-                    pred_rgb_full[0], rgb_gt_full[0], lane_one, LANE_CLASS_IDS,
-                    band_px=lane_band_px, lpips_fn=criterions.get("lpips"),
+                    pred_rgb_full[0],
+                    rgb_gt_full[0],
+                    lane_one,
+                    LANE_CLASS_IDS,
+                    band_px=lane_band_px,
+                    lpips_fn=criterions.get("lpips"),
                 )
                 for _k in lane_metric_keys:
                     if lm[_k] is not None:
@@ -1248,8 +1279,9 @@ class Renderer:
         if self.novel_view:
             for _m, _fm in novel_frames_map.items():
                 if _fm:
-                    _mp = os.path.join(self.out_dir, f"ours_{int(self.global_step)}",
-                                       "novel_view", _m, "frames_map.json")
+                    _mp = os.path.join(
+                        self.out_dir, f"ours_{int(self.global_step)}", "novel_view", _m, "frames_map.json"
+                    )
                     with open(_mp, "w") as _f:
                         json.dump(_fm, _f)
 
@@ -1281,8 +1313,7 @@ class Renderer:
             logger.info(
                 f"[T8.5.3 / V3-E3] novel-view LPIPS — "
                 + " | ".join(
-                    f"{m}={novel_lpips and np.mean(novel_lpips[m]):.4f}"
-                    for m in NOVEL_VIEW_MODES if novel_lpips[m]
+                    f"{m}={novel_lpips and np.mean(novel_lpips[m]):.4f}" for m in NOVEL_VIEW_MODES if novel_lpips[m]
                 )
             )
 
@@ -1296,24 +1327,17 @@ class Renderer:
                 _acc = novel_lane_acc.get(mode, {})
                 for _k in lane_metric_keys:
                     _v = _acc.get(_k, [])
-                    metrics_json[f"mean_novel_{_k}_{mode}"] = (
-                        float(np.mean(_v)) if _v else None
-                    )
-                metrics_json[f"novel_lane_n_records_{mode}"] = int(
-                    novel_lane_frames[mode]
-                )
-                metrics_json[f"novel_lane_warp_valid_ratio_{mode}"] = float(
-                    np.mean(novel_lane_valid_ratio[mode])
-                )
+                    metrics_json[f"mean_novel_{_k}_{mode}"] = float(np.mean(_v)) if _v else None
+                metrics_json[f"novel_lane_n_records_{mode}"] = int(novel_lane_frames[mode])
+                metrics_json[f"novel_lane_warp_valid_ratio_{mode}"] = float(np.mean(novel_lane_valid_ratio[mode]))
             _gc = {
                 m: metrics_json.get(f"mean_novel_lane_grad_corr_{m}")
-                for m in NOVEL_VIEW_MODES if m in novel_lane_frames
+                for m in NOVEL_VIEW_MODES
+                if m in novel_lane_frames
             }
             logger.info(
                 "[E1.1] novel-view lane grad_corr — "
-                + " | ".join(
-                    f"{m}={v:.4f}" for m, v in _gc.items() if v is not None
-                )
+                + " | ".join(f"{m}={v:.4f}" for m, v in _gc.items() if v is not None)
             )
 
         # V3-T15.2: append DiFix aggregates only when the lists were populated
@@ -1363,9 +1387,7 @@ class Renderer:
                     )
                     for cid, m in per_camera_summary.items()
                 }
-                logger.log_table(
-                    f"📷 Per-Camera Metrics - Step {self.global_step}", record=pc_table
-                )
+                logger.log_table(f"📷 Per-Camera Metrics - Step {self.global_step}", record=pc_table)
 
         # T8/B3 Phase E.6 — append per-cuboid PSNR aggregates when available.
         # ``class_psnr_records`` stays empty when the ckpt has no dyn tracks
@@ -1378,13 +1400,9 @@ class Renderer:
                 if r["psnr"] is not None:
                     by_class.setdefault(r["class"], []).append(r["psnr"])
             metrics_json["mean_class_psnr"] = float(np.mean(cp_values))
-            metrics_json["class_psnr_by_class"] = {
-                cls: float(np.mean(vals)) for cls, vals in by_class.items()
-            }
+            metrics_json["class_psnr_by_class"] = {cls: float(np.mean(vals)) for cls, vals in by_class.items()}
             metrics_json["class_psnr_n_records"] = int(len(cp_values))
-            metrics_json["class_psnr_n_low_15db"] = int(
-                sum(1 for v in cp_values if v < 15.0)
-            )
+            metrics_json["class_psnr_n_low_15db"] = int(sum(1 for v in cp_values if v < 15.0))
             table["mean_class_psnr"] = float(np.mean(cp_values))
 
         # P0.2 / P0.3 — per-class (sseg-based) PSNR/LPIPS aggregates. Every
@@ -1414,11 +1432,14 @@ class Renderer:
                 # (metric name BEFORE mode, consistent with mean_novel_lpips_<mode>).
                 if _pk == "render":
                     _k_fid, _k_kid, _k_kid_std = (
-                        "mean_render_fid", "mean_render_kid", "mean_render_kid_std",
+                        "mean_render_fid",
+                        "mean_render_kid",
+                        "mean_render_kid_std",
                     )
                 else:
                     _k_fid, _k_kid, _k_kid_std = (
-                        f"mean_novel_fid_{_pk}", f"mean_novel_kid_{_pk}",
+                        f"mean_novel_fid_{_pk}",
+                        f"mean_novel_kid_{_pk}",
                         f"mean_novel_kid_std_{_pk}",
                     )
                 try:
@@ -1426,9 +1447,7 @@ class Renderer:
                 except Exception as e:
                     logger.warning(f"[E1.4] FID compute failed for {_pk}: {e}")
                 try:
-                    _pair["kid"].subset_size = kid_subset_size(
-                        min(_fid_counts["real"], _n_fake)
-                    )
+                    _pair["kid"].subset_size = kid_subset_size(min(_fid_counts["real"], _n_fake))
                     _kid_mean, _kid_std = _pair["kid"].compute()
                     metrics_json[_k_kid] = float(_kid_mean)
                     metrics_json[_k_kid_std] = float(_kid_std)
@@ -1436,8 +1455,7 @@ class Renderer:
                     logger.warning(f"[E1.4] KID compute failed for {_pk}: {e}")
                 metrics_json[f"fid_n_fake_{_pk}"] = int(_n_fake)
             metrics_json["fid_n_real"] = int(_fid_counts["real"])
-            _fid_log = {k: v for k, v in metrics_json.items()
-                        if k.startswith("mean_") and ("_fid" in k or "_kid" in k)}
+            _fid_log = {k: v for k, v in metrics_json.items() if k.startswith("mean_") and ("_fid" in k or "_kid" in k)}
             logger.info(f"[E1.4] FID/KID — {_fid_log}")
 
         # E1.2 — NTA-IoU aggregation (interpolated + per novel mode). Keys
@@ -1451,14 +1469,11 @@ class Renderer:
             for mode in NOVEL_VIEW_MODES:
                 _recs = novel_nta_records.get(mode, [])
                 if _recs:
-                    metrics_json[f"mean_novel_nta_iou_{mode}"] = float(
-                        np.mean([r["mean_nta_iou"] for r in _recs])
-                    )
+                    metrics_json[f"mean_novel_nta_iou_{mode}"] = float(np.mean([r["mean_nta_iou"] for r in _recs]))
                     metrics_json[f"novel_nta_iou_n_frames_{mode}"] = int(len(_recs))
             logger.info(
                 "[E1.2] NTA-IoU — interp="
-                + (f"{metrics_json.get('mean_nta_iou'):.4f}"
-                   if nta_iou_records else "n/a")
+                + (f"{metrics_json.get('mean_nta_iou'):.4f}" if nta_iou_records else "n/a")
                 + " | "
                 + " | ".join(
                     f"{m}={metrics_json[f'mean_novel_nta_iou_{m}']:.4f}"
@@ -1487,8 +1502,7 @@ class Renderer:
             metrics_json["mean_lidar_psnr"] = float(np.mean(lidar_psnrs))
             table["mean_lidar_psnr"] = float(np.mean(lidar_psnrs))
             logger.info(
-                f"[T11.F1] mean_lidar_psnr={metrics_json['mean_lidar_psnr']:.3f} dB"
-                f" over {len(lidar_psnrs)} frames"
+                f"[T11.F1] mean_lidar_psnr={metrics_json['mean_lidar_psnr']:.3f} dB" f" over {len(lidar_psnrs)} frames"
             )
 
         # A1: renderer NaN px replaced with GT during eval — surface the count
@@ -1514,16 +1528,13 @@ class Renderer:
                 sym_axis_val = (getattr(dyn, "extra", {}) or {}).get("symmetric_axis")
         metrics_json["symmetric_axis"] = sym_axis_val  # 'Y' / 'X' / 'Z' / null
         metrics_json["track_albedo_l2_mean"] = (
-            float(albedo_t.detach().norm(dim=-1).mean().cpu())
-            if albedo_t is not None else None
+            float(albedo_t.detach().norm(dim=-1).mean().cpu()) if albedo_t is not None else None
         )
         metrics_json["track_log_scale_mean"] = (
-            float(log_scale_t.detach().mean().cpu())
-            if log_scale_t is not None else None
+            float(log_scale_t.detach().mean().cpu()) if log_scale_t is not None else None
         )
         metrics_json["track_log_scale_std"] = (
-            float(log_scale_t.detach().std().cpu())
-            if log_scale_t is not None and log_scale_t.numel() > 1 else None
+            float(log_scale_t.detach().std().cpu()) if log_scale_t is not None and log_scale_t.numel() > 1 else None
         )
 
         metrics_path = os.path.join(self.out_dir, "metrics.json")

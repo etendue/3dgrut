@@ -30,31 +30,31 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 import threedgrut.datasets as datasets
+from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
 from threedgrut.datasets.protocols import BoundedMultiViewDataset
 from threedgrut.datasets.utils import DEFAULT_DEVICE, MultiEpochsDataLoader, PointCloud
+from threedgrut.layers.dynamic_mask import (
+    project_cuboids_to_mask,
+    resolve_batch_cuboid_intrinsics,
+)
 from threedgrut.model.bg_cuboid_loss import (
     collect_active_cuboids_for_frame,
     compute_bg_cuboid_opacity_penalty,
     lambda_schedule,
 )
-from threedgrut.layers.dynamic_mask import (
-    project_cuboids_to_mask,
-    resolve_batch_cuboid_intrinsics,
-)
 from threedgrut.model.layered_loss import compute_layered_l1_loss, compute_sky_loss
-from threedgrut.model.road_reg import compute_effective_rank_loss
-from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
+from threedgrut.model.losses import ssim
+from threedgrut.model.model import MixtureOfGaussians
 from threedgrut.model.pose_anchor import (
     compute_pose_boundary_loss,
     compute_pose_prior_loss,
 )
-from threedgrut.model.losses import ssim
-from threedgrut.correction.depth_prior import DepthLoss, compute_bg_lidar_loss
-from threedgrut.model.model import MixtureOfGaussians
-from threedgrut.utils.eval_metrics import compute_lidar_psnr  # T11.F1
+from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
+from threedgrut.model.road_reg import compute_effective_rank_loss
 from threedgrut.optimizers import SelectiveAdam
 from threedgrut.render import Renderer
 from threedgrut.strategy.base import BaseStrategy
+from threedgrut.utils.eval_metrics import compute_lidar_psnr  # T11.F1
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import (
     check_step_condition,
@@ -278,9 +278,7 @@ class Trainer3DGRUT:
                 from threedgrut.layers.layered_model import LayeredGaussians
                 from threedgrut.strategy.layered_mcmc import LayeredMCMCStrategy
 
-                assert isinstance(self.model, LayeredGaussians), (
-                    "LayeredMCMCStrategy requires use_layered_model=true"
-                )
+                assert isinstance(self.model, LayeredGaussians), "LayeredMCMCStrategy requires use_layered_model=true"
                 self.strategy = LayeredMCMCStrategy(conf, self.model, self.model.specs)
                 logger.info("🔆 Using LayeredMCMC strategy")
             case _:
@@ -391,6 +389,7 @@ class Trainer3DGRUT:
                     # to background via __getattr__ bridge (byte-identical with v1).
                     # Multi-layer: explicitly init each particle layer.
                     from threedgrut.layers.layered_model import LayeredGaussians
+
                     if isinstance(model, LayeredGaussians) and model._single_bg_layer() is None:
                         # multi-layer: per-spec init dispatcher
                         layer_names = [s.name for s in model.specs]
@@ -404,6 +403,7 @@ class Trainer3DGRUT:
                         # 2. road: BEV-grid + LiDAR-Z KNN from road-semantic LiDAR
                         if "road" in model.layers:
                             from threedgrut.layers.road_init import init_road_layer
+
                             road_pts, road_rgb = train_dataset.get_road_lidar_points()
                             traj = torch.tensor(
                                 train_dataset.get_observer_points(),
@@ -411,7 +411,8 @@ class Trainer3DGRUT:
                             )
                             road_spec = next(s for s in model.specs if s.name == "road")
                             r_pos, r_rot, r_sca, r_den, r_col = init_road_layer(
-                                road_pts, traj,
+                                road_pts,
+                                traj,
                                 max_n=road_spec.max_n_particles,
                                 knn_k=road_spec.road_init_knn_k,  # E3.2.5①
                             )
@@ -441,23 +442,28 @@ class Trainer3DGRUT:
                             from threedgrut.layers.dynamic_rigid_init import (
                                 init_dynamic_rigid_layer,
                             )
-                            loader = train_dataset.sequence_loaders[
-                                train_dataset.sequence_id
-                            ]
+
+                            loader = train_dataset.sequence_loaders[train_dataset.sequence_id]
                             # A2: timeline + pose matching mode. Default
                             # "ref_nearest" = legacy ref-camera END ts +
                             # nearest-obs snap (byte-identical);
                             # "per_camera_interp" = union of all training
                             # cameras' END ts + lerp/slerp pose refinement
                             # (kills the ~100ms cross-camera cuboid skew).
-                            cuboid_ts_mode = str(getattr(
-                                self.conf.dataset, "cuboid_ts_mode", "ref_nearest",
-                            ))
+                            cuboid_ts_mode = str(
+                                getattr(
+                                    self.conf.dataset,
+                                    "cuboid_ts_mode",
+                                    "ref_nearest",
+                                )
+                            )
                             cam_ts_active = build_cuboid_frame_timeline_us(
-                                train_dataset, cuboid_ts_mode,
+                                train_dataset,
+                                cuboid_ts_mode,
                             )
                             tracks = load_tracks_from_ncore_cuboids(
-                                loader, cam_ts_active,
+                                loader,
+                                cam_ts_active,
                                 pose_time_mode=CUBOID_TS_MODES[cuboid_ts_mode],
                             )
                             logger.info(
@@ -503,21 +509,19 @@ class Trainer3DGRUT:
                                 # None → baseline (no mirror), 'Y' → vehicle
                                 # left-right symmetry init augmentation.
                                 _dyn_spec = next(
-                                    (s for s in model.specs
-                                     if s.name == "dynamic_rigids"),
+                                    (s for s in model.specs if s.name == "dynamic_rigids"),
                                     None,
                                 )
                                 _sym_axis = (
-                                    (getattr(_dyn_spec, "extra", {}) or {})
-                                    .get("symmetric_axis")
-                                    if _dyn_spec is not None else None
+                                    (getattr(_dyn_spec, "extra", {}) or {}).get("symmetric_axis")
+                                    if _dyn_spec is not None
+                                    else None
                                 )
-                                d_pos, d_track_ids, _track_names = (
-                                    init_dynamic_rigid_layer(
-                                        tracks, dyn_pts,
-                                        max_pts_per_track=5_000,
-                                        symmetric_axis=_sym_axis,
-                                    )
+                                d_pos, d_track_ids, _track_names = init_dynamic_rigid_layer(
+                                    tracks,
+                                    dyn_pts,
+                                    max_pts_per_track=5_000,
+                                    symmetric_axis=_sym_axis,
                                 )
                                 device = model.layers["dynamic_rigids"].device
                                 model.init_layer_from_points(
@@ -531,8 +535,7 @@ class Trainer3DGRUT:
                                     f"{d_pos.shape[0]} particles "
                                     f"(from {dyn_pts.shape[0]} dyn LiDAR pts × "
                                     f"{len(tracks)} cuboids)"
-                                    + (f" [V3-L5 symmetric_axis={_sym_axis!r}]"
-                                       if _sym_axis else "")
+                                    + (f" [V3-L5 symmetric_axis={_sym_axis!r}]" if _sym_axis else "")
                                 )
                     else:
                         # single-bg or v1: original byte-identical path
@@ -559,6 +562,7 @@ class Trainer3DGRUT:
                 road_layer = layers["road"]
                 if road_layer.positions.numel() > 0:
                     from threedgrut.model.road_region import build_road_height_field
+
                     self.road_height_field = build_road_height_field(
                         road_layer.positions.detach(), cell_size=brp["cell_size"]
                     )
@@ -698,8 +702,11 @@ class Trainer3DGRUT:
         trainer_conf = getattr(conf, "trainer", None)
         if trainer_conf is None:
             return
-        use_exposure = trainer_conf.get("use_exposure", False) if hasattr(trainer_conf, "get") \
+        use_exposure = (
+            trainer_conf.get("use_exposure", False)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "use_exposure", False)
+        )
         if not use_exposure:
             return
 
@@ -708,30 +715,35 @@ class Trainer3DGRUT:
         num_camera = len(self.train_dataset.get_frames_per_camera())
         if num_camera < 1:
             logger.warning(
-                "📷 BilateralGrid requested but dataset reports 0 cameras; "
-                "skipping (use_exposure=true → no-op)."
+                "📷 BilateralGrid requested but dataset reports 0 cameras; " "skipping (use_exposure=true → no-op)."
             )
             return
         # T9.1: 1x1x1 grid by default (NuRec parsed_config). Future ablations
         # can override via conf.trainer.bilateral_grid_X / _Y / _W.
         grid_X = int(
-            trainer_conf.get("bilateral_grid_X", 1) if hasattr(trainer_conf, "get")
+            trainer_conf.get("bilateral_grid_X", 1)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "bilateral_grid_X", 1)
         )
         grid_Y = int(
-            trainer_conf.get("bilateral_grid_Y", 1) if hasattr(trainer_conf, "get")
+            trainer_conf.get("bilateral_grid_Y", 1)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "bilateral_grid_Y", 1)
         )
         grid_W = int(
-            trainer_conf.get("bilateral_grid_W", 1) if hasattr(trainer_conf, "get")
+            trainer_conf.get("bilateral_grid_W", 1)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "bilateral_grid_W", 1)
         )
         self.exposure_model = BilateralGrid(
             num_camera=num_camera,
-            grid_X=grid_X, grid_Y=grid_Y, grid_W=grid_W,
+            grid_X=grid_X,
+            grid_Y=grid_Y,
+            grid_W=grid_W,
         ).to(self.device)
         exposure_lr = float(
-            trainer_conf.get("exposure_lr", 1e-3) if hasattr(trainer_conf, "get")
+            trainer_conf.get("exposure_lr", 1e-3)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "exposure_lr", 1e-3)
         )
         # T9.2 / V3-P1.b: L2 reg (weight_decay) + 2-stage freeze + cosine LR
@@ -779,7 +791,8 @@ class Trainer3DGRUT:
         n_iters = int(getattr(conf, "n_iterations", 30000))
         T_max = max(n_iters - self.exposure_freeze_until_iter, 1)
         self.exposure_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.exposure_optimizer, T_max=T_max,
+            self.exposure_optimizer,
+            T_max=T_max,
         )
         logger.info(
             f"📷 BilateralGrid initialized: {num_camera} cameras, "
@@ -796,9 +809,7 @@ class Trainer3DGRUT:
                 module_state = ckpt["exposure_state"]["module"]
                 try:
                     self.exposure_model.load_state_dict(module_state, strict=True)
-                    self.exposure_optimizer.load_state_dict(
-                        ckpt["exposure_state"]["optimizer"]
-                    )
+                    self.exposure_optimizer.load_state_dict(ckpt["exposure_state"]["optimizer"])
                     # T9.2: scheduler state is optional (older T9.1 ckpts
                     # didn't save it). Resume without it just continues
                     # cosine from current global_step; resume with it
@@ -814,7 +825,8 @@ class Trainer3DGRUT:
                     # T9.1: v2 ckpts store {exposure_a, exposure_b} which
                     # don't fit BilateralGrid.grids. Keep identity init.
                     legacy_keys = set(module_state.keys()) & {
-                        "exposure_a", "exposure_b",
+                        "exposure_a",
+                        "exposure_b",
                     }
                     if legacy_keys:
                         logger.warning(
@@ -839,6 +851,7 @@ class Trainer3DGRUT:
         Set lidar_w_decay <= 0 to disable decay.
         """
         trainer_conf = conf.trainer
+
         def _get(name, default):
             if hasattr(trainer_conf, "get"):
                 return trainer_conf.get(name, default)
@@ -879,6 +892,7 @@ class Trainer3DGRUT:
     def _lidar_lambda_decayed(self) -> float:
         """drivestudio L678-682: λ_lidar * exp(-step/8000 * decay_rate)."""
         import math
+
         if self.lambda_lidar_decay_rate <= 0:
             return self.lambda_lidar_depth_base
         decay = math.exp(-self.global_step / 8000.0 * self.lambda_lidar_decay_rate)
@@ -899,21 +913,22 @@ class Trainer3DGRUT:
         trainer_conf = getattr(conf, "trainer", None)
         if trainer_conf is None:
             return
-        lp_conf = trainer_conf.get("learnable_pose", None) if hasattr(trainer_conf, "get") \
+        lp_conf = (
+            trainer_conf.get("learnable_pose", None)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "learnable_pose", None)
+        )
         if lp_conf is None:
             return
-        enabled = lp_conf.get("enabled", False) if hasattr(lp_conf, "get") \
-            else getattr(lp_conf, "enabled", False)
+        enabled = lp_conf.get("enabled", False) if hasattr(lp_conf, "get") else getattr(lp_conf, "enabled", False)
         if not enabled:
             return
         # Only LayeredGaussians registers per-track Parameters; vanilla MoG
         # has no pose state to optimize. Quietly no-op otherwise.
         from threedgrut.layers.layered_model import LayeredGaussians
+
         if not isinstance(self.model, LayeredGaussians):
-            logger.warning(
-                "🛞 learnable_pose enabled but model is not LayeredGaussians; skipping"
-            )
+            logger.warning("🛞 learnable_pose enabled but model is not LayeredGaussians; skipping")
             return
         # Source of truth for which tids exist: tracks_active property keys
         # (one entry per registered _track_active_<tid> buffer, mode-agnostic).
@@ -932,19 +947,22 @@ class Trainer3DGRUT:
             )
             return
         lr_rotation = float(
-            lp_conf.get("lr_rotation", 1.0e-5) if hasattr(lp_conf, "get")
-            else getattr(lp_conf, "lr_rotation", 1.0e-5)
+            lp_conf.get("lr_rotation", 1.0e-5) if hasattr(lp_conf, "get") else getattr(lp_conf, "lr_rotation", 1.0e-5)
         )
         lr_translation = float(
-            lp_conf.get("lr_translation", 1.0e-4) if hasattr(lp_conf, "get")
+            lp_conf.get("lr_translation", 1.0e-4)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "lr_translation", 1.0e-4)
         )
-        self.pose_optimizer = torch.optim.Adam([
-            {"params": quat_params,  "lr": lr_rotation,    "name": "track_quat"},
-            {"params": trans_params, "lr": lr_translation, "name": "track_trans"},
-        ])
+        self.pose_optimizer = torch.optim.Adam(
+            [
+                {"params": quat_params, "lr": lr_rotation, "name": "track_quat"},
+                {"params": trans_params, "lr": lr_translation, "name": "track_trans"},
+            ]
+        )
         self.pose_freeze_until_iter = int(
-            lp_conf.get("freeze_until_iter", 5000) if hasattr(lp_conf, "get")
+            lp_conf.get("freeze_until_iter", 5000)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "freeze_until_iter", 5000)
         )
         logger.info(
@@ -959,9 +977,7 @@ class Trainer3DGRUT:
         if conf.resume:
             ckpt = torch.load(conf.resume, weights_only=False, map_location=self.device)
             if "learnable_pose_state" in ckpt:
-                self.pose_optimizer.load_state_dict(
-                    ckpt["learnable_pose_state"]["optimizer"]
-                )
+                self.pose_optimizer.load_state_dict(ckpt["learnable_pose_state"]["optimizer"])
                 logger.info("🛞 LearnablePose optimizer state restored from checkpoint")
 
     @torch.cuda.nvtx.range("get_metrics")
@@ -1046,19 +1062,13 @@ class Trainer3DGRUT:
                 diff_sq = (rgb_pred - rgb_gt).pow(2) * mask  # broadcast last dim 1→3
                 denom = mask.sum().clamp(min=1.0) * 3
                 mse_masked = diff_sq.sum() / denom
-                metrics["psnr_masked"] = (
-                    -10.0 * torch.log10(mse_masked.clamp(min=1e-10))
-                ).item()
+                metrics["psnr_masked"] = (-10.0 * torch.log10(mse_masked.clamp(min=1e-10))).item()
                 # SSIM_masked / LPIPS_masked via GT-fill
                 m4d = mask.permute(0, 3, 1, 2)  # [B, 1, H, W]
                 rgb_pred_filled = pred_rgb_full * m4d + rgb_gt_full * (1.0 - m4d)
-                rgb_pred_filled_clipped = (
-                    pred_rgb_full_clipped * m4d + rgb_gt_full * (1.0 - m4d)
-                )
+                rgb_pred_filled_clipped = pred_rgb_full_clipped * m4d + rgb_gt_full * (1.0 - m4d)
                 metrics["ssim_masked"] = ssim(rgb_pred_filled, rgb_gt_full).item()
-                metrics["lpips_masked"] = lpips(
-                    rgb_pred_filled_clipped, rgb_gt_full
-                ).item()
+                metrics["lpips_masked"] = lpips(rgb_pred_filled_clipped, rgb_gt_full).item()
             else:
                 # byte-identical 回归：mask=None → masked 指标 ≡ 全图指标
                 metrics["psnr_masked"] = metrics["psnr"]
@@ -1073,14 +1083,13 @@ class Trainer3DGRUT:
             # log_validation_pass as exposure/raw_minus_cc_db_val.
             if self.exposure_model is not None:
                 from threedgrut.utils.color_correct import color_correct_affine
+
                 rgb_pred_cc = color_correct_affine(rgb_pred, rgb_gt)
                 metrics["cc_psnr"] = psnr(rgb_pred_cc, rgb_gt).item()
                 if mask is not None:
                     diff_sq_cc = (rgb_pred_cc - rgb_gt).pow(2) * mask
                     mse_masked_cc = diff_sq_cc.sum() / denom
-                    metrics["cc_psnr_masked"] = (
-                        -10.0 * torch.log10(mse_masked_cc.clamp(min=1e-10))
-                    ).item()
+                    metrics["cc_psnr_masked"] = (-10.0 * torch.log10(mse_masked_cc.clamp(min=1e-10))).item()
                 else:
                     metrics["cc_psnr_masked"] = metrics["cc_psnr"]
 
@@ -1092,11 +1101,7 @@ class Trainer3DGRUT:
             # uses "lidar_psnr" in metrics guard before np.mean).
             _image_infos_v = getattr(gpu_batch, "image_infos", None) or {}
             _pred_dist_v = outputs.get("pred_dist") if isinstance(outputs, dict) else None
-            if (
-                _pred_dist_v is not None
-                and isinstance(_image_infos_v, dict)
-                and "lidar_depth_map" in _image_infos_v
-            ):
+            if _pred_dist_v is not None and isinstance(_image_infos_v, dict) and "lidar_depth_map" in _image_infos_v:
                 _lidar_gt_v = _image_infos_v["lidar_depth_map"]
                 _hit_v = (_lidar_gt_v > 0).float()
                 _lp_v = compute_lidar_psnr(_pred_dist_v, _lidar_gt_v, _hit_v)
@@ -1159,11 +1164,15 @@ class Trainer3DGRUT:
         lambda_l1 = 0.0
         if self.conf.loss.use_l1:
             with torch.cuda.nvtx.range(f"loss-l1"):
-                use_layered = trainer_conf.get("layered_loss", False) if hasattr(trainer_conf, "get") \
+                use_layered = (
+                    trainer_conf.get("layered_loss", False)
+                    if hasattr(trainer_conf, "get")
                     else getattr(trainer_conf, "layered_loss", False)
+                )
                 if use_layered and image_infos is not None:
                     loss_l1 = compute_layered_l1_loss(
-                        rgb_pred, rgb_gt,
+                        rgb_pred,
+                        rgb_gt,
                         image_infos=image_infos,
                         valid_mask=mask,
                     )
@@ -1221,15 +1230,20 @@ class Trainer3DGRUT:
         # without NaN when sky_mask is empty (D6 min_pixels guard).
         loss_sky = torch.zeros(1, device=self.device)
         lambda_sky = 0.0
-        use_sky = trainer_conf.get("use_sky_envmap", False) if hasattr(trainer_conf, "get") \
+        use_sky = (
+            trainer_conf.get("use_sky_envmap", False)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "use_sky_envmap", False)
+        )
         if use_sky and "rgb_sky" in outputs and image_infos is not None:
-            sky_mask = image_infos.get("sky_mask") if hasattr(image_infos, "get") \
-                else getattr(image_infos, "sky_mask", None)
+            sky_mask = (
+                image_infos.get("sky_mask") if hasattr(image_infos, "get") else getattr(image_infos, "sky_mask", None)
+            )
             with torch.cuda.nvtx.range(f"loss-sky"):
                 loss_sky = compute_sky_loss(outputs["rgb_sky"], gpu_batch.rgb_gt, sky_mask)
                 lambda_sky = float(
-                    trainer_conf.get("lambda_sky", 0.1) if hasattr(trainer_conf, "get")
+                    trainer_conf.get("lambda_sky", 0.1)
+                    if hasattr(trainer_conf, "get")
                     else getattr(trainer_conf, "lambda_sky", 0.1)
                 )
 
@@ -1317,18 +1331,13 @@ class Trainer3DGRUT:
         # camera direction). No-op unless lambda > 0 AND a road layer exists.
         loss_road_eff_rank = torch.zeros(1, device=self.device)
         lambda_road_eff_rank = float(
-            trainer_conf.get("lambda_road_eff_rank", 0.0) if hasattr(trainer_conf, "get")
+            trainer_conf.get("lambda_road_eff_rank", 0.0)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "lambda_road_eff_rank", 0.0)
         )
-        if (
-            lambda_road_eff_rank > 0.0
-            and hasattr(self.model, "layers")
-            and "road" in self.model.layers
-        ):
+        if lambda_road_eff_rank > 0.0 and hasattr(self.model, "layers") and "road" in self.model.layers:
             with torch.cuda.nvtx.range("loss-road-eff-rank"):
-                loss_road_eff_rank = compute_effective_rank_loss(
-                    self.model.layers["road"].scale
-                )
+                loss_road_eff_rank = compute_effective_rank_loss(self.model.layers["road"].scale)
 
         # Total loss
         loss = (
@@ -1382,25 +1391,19 @@ class Trainer3DGRUT:
         )
         if cfg is None:
             return {"enabled": False}
-        enabled = (
-            cfg.get("enabled", False) if hasattr(cfg, "get")
-            else getattr(cfg, "enabled", False)
-        )
+        enabled = cfg.get("enabled", False) if hasattr(cfg, "get") else getattr(cfg, "enabled", False)
         if not enabled:
             return {"enabled": False}
         return {
             "enabled": True,
-            "lambda_max": float(
-                cfg.get("lambda", 0.05) if hasattr(cfg, "get")
-                else getattr(cfg, "lambda", 0.05)
-            ),
+            "lambda_max": float(cfg.get("lambda", 0.05) if hasattr(cfg, "get") else getattr(cfg, "lambda", 0.05)),
             "warmup_iters": int(
-                cfg.get("lambda_warmup_iters", 5000) if hasattr(cfg, "get")
+                cfg.get("lambda_warmup_iters", 5000)
+                if hasattr(cfg, "get")
                 else getattr(cfg, "lambda_warmup_iters", 5000)
             ),
             "use_cuboid_mask": bool(
-                cfg.get("use_cuboid_mask", True) if hasattr(cfg, "get")
-                else getattr(cfg, "use_cuboid_mask", True)
+                cfg.get("use_cuboid_mask", True) if hasattr(cfg, "get") else getattr(cfg, "use_cuboid_mask", True)
             ),
         }
 
@@ -1409,14 +1412,16 @@ class Trainer3DGRUT:
         """Pull the bg_road_penalty sub-dict from trainer conf with safe defaults.
         Returns {"enabled": False, ...} when absent."""
         cfg = (
-            trainer_conf.get("bg_road_penalty", None) if hasattr(trainer_conf, "get")
+            trainer_conf.get("bg_road_penalty", None)
+            if hasattr(trainer_conf, "get")
             else getattr(trainer_conf, "bg_road_penalty", None)
         )
         if cfg is None:
-            return {"enabled": False, "lambda_max": 0.0, "warmup_iters": 0,
-                    "cell_size": 1.0, "z_band": 0.4}
+            return {"enabled": False, "lambda_max": 0.0, "warmup_iters": 0, "cell_size": 1.0, "z_band": 0.4}
+
         def g(k, d):
             return cfg.get(k, d) if hasattr(cfg, "get") else getattr(cfg, k, d)
+
         return {
             "enabled": bool(g("enabled", False)),
             "lambda_max": float(g("lambda", 0.0)),
@@ -1438,6 +1443,7 @@ class Trainer3DGRUT:
         if hf is None:
             return zero
         from threedgrut.model.bg_cuboid_loss import lambda_schedule
+
         lam = lambda_schedule(self.global_step, cfg["lambda_max"], cfg["warmup_iters"])
         if lam == 0.0:
             return zero
@@ -1445,9 +1451,14 @@ class Trainer3DGRUT:
         if layers is None or "background" not in layers:
             return zero
         from threedgrut.model.road_region import compute_bg_road_opacity_penalty
+
         bg = layers["background"]
         return compute_bg_road_opacity_penalty(
-            bg.positions, bg.density, hf, z_band=cfg["z_band"], lambda_val=lam,
+            bg.positions,
+            bg.density,
+            hf,
+            z_band=cfg["z_band"],
+            lambda_val=lam,
         ).reshape(1)
 
     def _gather_active_tracks_for_batch(self, gpu_batch):
@@ -1492,7 +1503,10 @@ class Trainer3DGRUT:
         frame_idx = int(getattr(gpu_batch, "frame_idx", -1))
         idx = model._resolve_pose_idx(timestamp_us, frame_idx if frame_idx >= 0 else None)
         poses, sizes = collect_active_cuboids_for_frame(
-            tracks_poses, tracks_active, size_map, idx,
+            tracks_poses,
+            tracks_active,
+            size_map,
+            idx,
         )
         if poses.shape[0] == 0:
             return None, None
@@ -1532,8 +1546,12 @@ class Trainer3DGRUT:
         H = int(gpu_batch.rgb_gt.shape[1])
         W = int(gpu_batch.rgb_gt.shape[2])
         mask = project_cuboids_to_mask(
-            poses, sizes,
-            K=K, T_world2cam=T_w2c, H=H, W=W,
+            poses,
+            sizes,
+            K=K,
+            T_world2cam=T_w2c,
+            H=H,
+            W=W,
             device=self.device,
             ftheta_params=ftheta_params,
         )
@@ -1570,8 +1588,10 @@ class Trainer3DGRUT:
             return zero
         bg_layer = layers["background"]
         return compute_bg_cuboid_opacity_penalty(
-            bg_layer.positions, bg_layer.density,
-            poses.to(self.device), sizes.to(self.device),
+            bg_layer.positions,
+            bg_layer.density,
+            poses.to(self.device),
+            sizes.to(self.device),
             lambda_val=lam,
         )
 
@@ -1609,7 +1629,10 @@ class Trainer3DGRUT:
         if lam_t <= 0.0 and lam_r <= 0.0:
             return zero
         return compute_pose_smoothness_loss(
-            self.model, lam_t, lam_r, device=self.device,
+            self.model,
+            lam_t,
+            lam_r,
+            device=self.device,
         )
 
     def _compute_pose_boundary_term(self, trainer_conf) -> torch.Tensor:
@@ -1629,23 +1652,29 @@ class Trainer3DGRUT:
         if lp_conf is None:
             return zero
         fix = bool(
-            lp_conf.get("fix_first_last", False) if hasattr(lp_conf, "get")
+            lp_conf.get("fix_first_last", False)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "fix_first_last", False)
         )
         if not fix:
             return zero
         lam_t = float(
-            lp_conf.get("lambda_pose_boundary_trans", 0.0) if hasattr(lp_conf, "get")
+            lp_conf.get("lambda_pose_boundary_trans", 0.0)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "lambda_pose_boundary_trans", 0.0)
         )
         lam_r = float(
-            lp_conf.get("lambda_pose_boundary_rot", 0.0) if hasattr(lp_conf, "get")
+            lp_conf.get("lambda_pose_boundary_rot", 0.0)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "lambda_pose_boundary_rot", 0.0)
         )
         if lam_t <= 0.0 and lam_r <= 0.0:
             return zero
         return compute_pose_boundary_loss(
-            self.model, lam_t, lam_r, device=self.device,
+            self.model,
+            lam_t,
+            lam_r,
+            device=self.device,
         )
 
     def _compute_pose_prior_term(self, trainer_conf) -> torch.Tensor:
@@ -1662,17 +1691,22 @@ class Trainer3DGRUT:
         if lp_conf is None:
             return zero
         lam_t = float(
-            lp_conf.get("lambda_pose_prior_trans", 0.0) if hasattr(lp_conf, "get")
+            lp_conf.get("lambda_pose_prior_trans", 0.0)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "lambda_pose_prior_trans", 0.0)
         )
         lam_r = float(
-            lp_conf.get("lambda_pose_prior_rot", 0.0) if hasattr(lp_conf, "get")
+            lp_conf.get("lambda_pose_prior_rot", 0.0)
+            if hasattr(lp_conf, "get")
             else getattr(lp_conf, "lambda_pose_prior_rot", 0.0)
         )
         if lam_t <= 0.0 and lam_r <= 0.0:
             return zero
         return compute_pose_prior_loss(
-            self.model, lam_t, lam_r, device=self.device,
+            self.model,
+            lam_t,
+            lam_r,
+            device=self.device,
         )
 
     @torch.cuda.nvtx.range("log_validation_iter")
@@ -1772,7 +1806,9 @@ class Trainer3DGRUT:
             writer.add_scalar("cc_psnr/val", mean_cc_psnr, global_step)
             writer.add_scalar("cc_psnr_masked/val", mean_cc_psnr_masked, global_step)
             writer.add_scalar(
-                "exposure/raw_minus_cc_db_val", -gap_db, global_step,
+                "exposure/raw_minus_cc_db_val",
+                -gap_db,
+                global_step,
             )
             writer.add_scalar(
                 "exposure/raw_minus_cc_db_masked_val",
@@ -1783,10 +1819,7 @@ class Trainer3DGRUT:
             # past the freeze window + a small buffer. Catches退化 mode if
             # raw vs cc drifts apart > 2 dB late in training.
             warn_after = self.exposure_freeze_until_iter + 500
-            if (
-                global_step > warn_after
-                and abs(gap_db_masked) > 2.0
-            ):
+            if global_step > warn_after and abs(gap_db_masked) > 2.0:
                 logger.warning(
                     f"📷 [T9.4 alert] exposure raw_minus_cc gap = "
                     f"{-gap_db_masked:+.2f} dB at step {global_step} "
@@ -1804,8 +1837,7 @@ class Trainer3DGRUT:
             mean_lidar_psnr_val = float(np.mean(metrics["lidar_psnr"]))
             writer.add_scalar("lidar_psnr/val", mean_lidar_psnr_val, global_step)
             logger.info(
-                f"[T11.F1] lidar_psnr/val={mean_lidar_psnr_val:.3f} dB"
-                f" over {len(metrics['lidar_psnr'])} frames"
+                f"[T11.F1] lidar_psnr/val={mean_lidar_psnr_val:.3f} dB" f" over {len(metrics['lidar_psnr'])} frames"
             )
 
         loss = np.mean(metrics["losses"]["total_loss"])
@@ -1931,7 +1963,8 @@ class Trainer3DGRUT:
                     # Identity tile across all voxels; compute drift mean(|·|).
                     identity_3x4 = torch.tensor(
                         [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0]],
-                        device=grids.device, dtype=grids.dtype,
+                        device=grids.device,
+                        dtype=grids.dtype,
                     ).reshape(12, 1, 1, 1)
                     drift = (grids - identity_3x4).abs().mean().item()
                     writer.add_scalar(
@@ -2150,15 +2183,16 @@ class Trainer3DGRUT:
         # reordering at line 1095, but stay defensive).
         viz_conf = self.conf.get("viz_4d", {}) if hasattr(self.conf, "get") else {}
         train_ds = getattr(self, "train_dataset", None)
-        if (isinstance(self.model, LayeredGaussians)
-                and viz_conf
-                and bool(viz_conf.get("enabled", False) if hasattr(viz_conf, "get") else False)
-                and train_ds is not None):
+        if (
+            isinstance(self.model, LayeredGaussians)
+            and viz_conf
+            and bool(viz_conf.get("enabled", False) if hasattr(viz_conf, "get") else False)
+            and train_ds is not None
+        ):
             try:
                 from threedgrut.viz.metadata import extract_4d_metadata
-                parameters["viz_4d"] = extract_4d_metadata(
-                    self.model, train_ds, self.conf
-                )
+
+                parameters["viz_4d"] = extract_4d_metadata(self.model, train_ds, self.conf)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[viz_4d] extract_4d_metadata failed, skipping: {e}")
 
@@ -2242,9 +2276,7 @@ class Trainer3DGRUT:
         # per-camera tone, see test_sky_loss_zero_when_no_sky_pixels rationale.
         if self.exposure_model is not None:
             with torch.cuda.nvtx.range(f"train_{global_step}_exposure"):
-                outputs["pred_rgb"] = self.exposure_model(
-                    gpu_batch.camera_idx, outputs["pred_rgb"]
-                )
+                outputs["pred_rgb"] = self.exposure_model(gpu_batch.camera_idx, outputs["pred_rgb"])
 
         # A1-NaN containment: the renderer can emit isolated non-finite pixels
         # for specific rays (observed 2026-07-02 inc_b6a9 camera_left_wide_90fov:
@@ -2270,11 +2302,13 @@ class Trainer3DGRUT:
                 )
             if _policy == "sanitize":
                 outputs["pred_rgb"], _ = replace_nonfinite_pixels(
-                    outputs["pred_rgb"], gpu_batch.rgb_gt,
+                    outputs["pred_rgb"],
+                    gpu_batch.rgb_gt,
                 )
                 if "rgb_sky" in outputs and torch.is_tensor(outputs["rgb_sky"]):
                     outputs["rgb_sky"], _ = replace_nonfinite_pixels(
-                        outputs["rgb_sky"], gpu_batch.rgb_gt,
+                        outputs["rgb_sky"],
+                        gpu_batch.rgb_gt,
                     )
             else:
                 return
@@ -2303,16 +2337,10 @@ class Trainer3DGRUT:
         # NaN → ~99% of all geometry params NaN by iter 500, silent until
         # test eval). Fail fast with the batch identity instead of training on.
         if not bool(torch.isfinite(batch_losses["total_loss"])):
-            _terms = {
-                k: (float(v) if torch.is_tensor(v) and v.numel() == 1 else None)
-                for k, v in batch_losses.items()
-            }
+            _terms = {k: (float(v) if torch.is_tensor(v) and v.numel() == 1 else None) for k, v in batch_losses.items()}
             _pred = outputs.get("pred_rgb") if isinstance(outputs, dict) else None
             _n_nan_pred = int(torch.isnan(_pred).sum()) if torch.is_tensor(_pred) else -1
-            _nan_px = (
-                torch.isnan(_pred).any(dim=-1).nonzero()[:8].tolist()
-                if torch.is_tensor(_pred) else []
-            )
+            _nan_px = torch.isnan(_pred).any(dim=-1).nonzero()[:8].tolist() if torch.is_tensor(_pred) else []
             raise RuntimeError(
                 f"Non-finite total_loss at step {global_step}: "
                 f"camera_id={getattr(gpu_batch, 'camera_id', '?')} "
@@ -2518,9 +2546,7 @@ class Trainer3DGRUT:
                 # for the same ckpt; +13.5 dB BilateralGrid head-room
                 # invisible without this apply).
                 if self.exposure_model is not None:
-                    outputs["pred_rgb"] = self.exposure_model(
-                        gpu_batch.camera_idx, outputs["pred_rgb"]
-                    )
+                    outputs["pred_rgb"] = self.exposure_model(gpu_batch.camera_idx, outputs["pred_rgb"])
                 profilers["inference"].end()
 
                 batch_losses = self.get_losses(gpu_batch, outputs)
