@@ -37,6 +37,7 @@ The pure-python helpers (unpickler / key rename / albedo eval) carry no cuda /
 hydra import so they unit-test on a Mac. The model-build + ``torch.save``
 orchestration (:func:`convert_usdz_to_pt`) needs the 3dgrut env + GPU.
 """
+
 from __future__ import annotations
 
 import io
@@ -225,11 +226,7 @@ def nre_layer_tensors(
     if the layer is absent.
     """
     prefix = f"model.gaussians_nodes.{layer}."
-    raw = {
-        k[len(prefix):]: v
-        for k, v in state_dict.items()
-        if k.startswith(prefix)
-    }
+    raw = {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
     if "positions" not in raw:
         return {}
 
@@ -245,9 +242,7 @@ def nre_layer_tensors(
     )
     out["features_specular"] = raw["features_specular"].float().contiguous()
     n_active = raw.get("n_active_features")
-    out["n_active_features"] = (
-        int(n_active.item()) if torch.is_tensor(n_active) else int(n_active or 0)
-    )
+    out["n_active_features"] = int(n_active.item()) if torch.is_tensor(n_active) else int(n_active or 0)
     if "gaussian_cuboid_ids" in raw:
         out["cuboid_ids"] = raw["gaussian_cuboid_ids"].long().contiguous()
     return out
@@ -288,11 +283,12 @@ _TRACK_PRIM_RE = re.compile(r"bounding_boxes/track_\d+_(\d+)/cuboid")
 @dataclass
 class TrackRaw:
     """One dynamic-object track from sequence_tracks.json."""
+
     tid: str
-    poses7: np.ndarray      # (F_i, 7) [x,y,z, qx,qy,qz,qw] xyzw
-    ts_us: np.ndarray       # (F_i,) int64
+    poses7: np.ndarray  # (F_i, 7) [x,y,z, qx,qy,qz,qw] xyzw
+    ts_us: np.ndarray  # (F_i,) int64
     label_class: str
-    dims: np.ndarray        # (3,) L,W,H
+    dims: np.ndarray  # (3,) L,W,H
 
 
 def _quat_wxyz_to_rotmat(q: np.ndarray) -> np.ndarray:
@@ -365,8 +361,7 @@ def resample_track_to_timeline(
     timeline = np.asarray(timeline_us, dtype=np.int64).reshape(-1)
     n_frames = timeline.shape[0]
 
-    frame_info = ((timeline >= ts[0] - tolerance_us)
-                  & (timeline <= ts[-1] + tolerance_us))
+    frame_info = (timeline >= ts[0] - tolerance_us) & (timeline <= ts[-1] + tolerance_us)
 
     quats = p[:, [6, 3, 4, 5]]  # xyzw → wxyz
     quats = quats / np.maximum(np.linalg.norm(quats, axis=1, keepdims=True), 1e-12)
@@ -464,15 +459,17 @@ def parse_sequence_tracks(st_json: dict) -> list:
         dims_all = (chunk.get("cuboidtracks_data", {}) or {}).get("cuboids_dims", [])
         tids = td.get("tracks_id", [])
         for i, tid in enumerate(tids):
-            out.append(TrackRaw(
-                tid=str(tid),
-                poses7=np.asarray(td["tracks_poses"][i], dtype=np.float64).reshape(-1, 7),
-                ts_us=np.asarray(td["tracks_timestamps_us"][i], dtype=np.int64),
-                label_class=str(td["tracks_label_class"][i]),
-                dims=(np.asarray(dims_all[i], dtype=np.float32)
-                      if i < len(dims_all)
-                      else np.ones(3, dtype=np.float32)),
-            ))
+            out.append(
+                TrackRaw(
+                    tid=str(tid),
+                    poses7=np.asarray(td["tracks_poses"][i], dtype=np.float64).reshape(-1, 7),
+                    ts_us=np.asarray(td["tracks_timestamps_us"][i], dtype=np.int64),
+                    label_class=str(td["tracks_label_class"][i]),
+                    dims=(
+                        np.asarray(dims_all[i], dtype=np.float32) if i < len(dims_all) else np.ones(3, dtype=np.float32)
+                    ),
+                )
+            )
     return out
 
 
@@ -522,13 +519,12 @@ def build_dynamic_tracks_for_viz4d(
     last_err: Optional[Exception] = None
     for _member in ("volume.usda", "sequence_tracks.usda"):
         try:
-            _text = read_usdz_member_bytes(usdz_path, _member).decode(
-                "utf-8", errors="replace"
-            )
+            _text = read_usdz_member_bytes(usdz_path, _member).decode("utf-8", errors="replace")
             track_order = parse_volume_usda_track_order(_text)
             if track_order:
-                logger.info("dynamic_rigids: parsed track_order from %s "
-                            "(%d cuboid entries)", _member, len(track_order))
+                logger.info(
+                    "dynamic_rigids: parsed track_order from %s " "(%d cuboid entries)", _member, len(track_order)
+                )
                 break
         except FileNotFoundError as _e:
             last_err = _e
@@ -544,9 +540,7 @@ def build_dynamic_tracks_for_viz4d(
     # the int slot for each tid is deterministic & matches LayeredGaussians'
     # internal ordering.
     sorted_tids = sorted(set(track_order))
-    cid_to_sorted = np.array(
-        [sorted_tids.index(t) for t in track_order], dtype=np.int64
-    )
+    cid_to_sorted = np.array([sorted_tids.index(t) for t in track_order], dtype=np.int64)
     cuboid_ids = np.asarray(gaussian_cuboid_ids, dtype=np.int64)
     if cuboid_ids.size and cuboid_ids.max() >= len(track_order):
         raise IndexError(
@@ -556,9 +550,7 @@ def build_dynamic_tracks_for_viz4d(
         )
     track_ids = cid_to_sorted[cuboid_ids]
 
-    st_json = json.loads(
-        read_usdz_member_bytes(usdz_path, "sequence_tracks.json")
-    )
+    st_json = json.loads(read_usdz_member_bytes(usdz_path, "sequence_tracks.json"))
     raw_tracks = parse_sequence_tracks(st_json)
     by_tid = {tr.tid: tr for tr in raw_tracks}
 
@@ -566,9 +558,7 @@ def build_dynamic_tracks_for_viz4d(
     if world_translate is not None:
         translate = np.asarray(world_translate, dtype=np.float32).reshape(-1)
         if translate.shape != (3,):
-            raise ValueError(
-                f"world_translate must be (3,) — got shape {translate.shape}"
-            )
+            raise ValueError(f"world_translate must be (3,) — got shape {translate.shape}")
 
     tracks_dict: dict = {}
     n_missing = 0
@@ -576,13 +566,16 @@ def build_dynamic_tracks_for_viz4d(
         tr = by_tid.get(tid)
         if tr is None:
             logger.warning(
-                "dynamic_rigids tid '%s' from volume.usda not in "
-                "sequence_tracks.json — skipped", tid,
+                "dynamic_rigids tid '%s' from volume.usda not in " "sequence_tracks.json — skipped",
+                tid,
             )
             n_missing += 1
             continue
         poses, frame_info = resample_track_to_timeline(
-            tr.poses7, tr.ts_us, shared_timeline_us, tolerance_us=tolerance_us,
+            tr.poses7,
+            tr.ts_us,
+            shared_timeline_us,
+            tolerance_us=tolerance_us,
         )
         if translate is not None:
             poses = poses.copy()
@@ -597,7 +590,8 @@ def build_dynamic_tracks_for_viz4d(
         logger.warning(
             "dynamic_rigids: %d/%d tids missing from sequence_tracks.json — "
             "their gaussians will render at the parent group's default pose",
-            n_missing, len(sorted_tids),
+            n_missing,
+            len(sorted_tids),
         )
     return track_ids, tracks_dict
 
@@ -643,10 +637,7 @@ def clip_floater_gaussians(
         keep &= scale_m <= clip_scale_m
     if bool(keep.all()):
         return t, 0
-    masked = {
-        k: (v[keep] if (torch.is_tensor(v) and v.dim() >= 1 and v.shape[0] == N) else v)
-        for k, v in t.items()
-    }
+    masked = {k: (v[keep] if (torch.is_tensor(v) and v.dim() >= 1 and v.shape[0] == N) else v) for k, v in t.items()}
     return masked, int((~keep).sum().item())
 
 
@@ -717,13 +708,13 @@ def build_native_ckpt(
         if not t:
             print(f"[nre-usdz] layer '{layer}' absent in NRE state_dict — skipping")
             continue
-        t, n_drop = clip_floater_gaussians(
-            t, clip_radius_m=clip_radius_m, clip_scale_m=clip_scale_m
-        )
+        t, n_drop = clip_floater_gaussians(t, clip_radius_m=clip_radius_m, clip_scale_m=clip_scale_m)
         if n_drop:
-            print(f"[nre-usdz] {layer}: clipped {n_drop} floater gaussians "
-                  f"(radius>{clip_radius_m}m or scale>{clip_scale_m}m) "
-                  f"→ {t['positions'].shape[0]} kept")
+            print(
+                f"[nre-usdz] {layer}: clipped {n_drop} floater gaussians "
+                f"(radius>{clip_radius_m}m or scale>{clip_scale_m}m) "
+                f"→ {t['positions'].shape[0]} kept"
+            )
         all_positions.append(t["positions"])
         nodes[layer] = t
     if not nodes:
@@ -759,12 +750,8 @@ def build_native_ckpt(
         }
         if progressive:
             # init_from_checkpoint reads these when self.progressive_training.
-            node["feature_dim_increase_interval"] = int(
-                getattr(ref, "feature_dim_increase_interval", 1)
-            )
-            node["feature_dim_increase_step"] = int(
-                getattr(ref, "feature_dim_increase_step", 1)
-            )
+            node["feature_dim_increase_interval"] = int(getattr(ref, "feature_dim_increase_interval", 1))
+            node["feature_dim_increase_step"] = int(getattr(ref, "feature_dim_increase_step", 1))
         if cuboid_ids is not None:
             # Phase C will turn this into track_ids; for now ride along so the
             # data isn't lost (init_from_checkpoint reads node['track_ids']).
@@ -822,20 +809,24 @@ def _cli() -> None:
     ap = argparse.ArgumentParser(description="Convert NRE usdz → 3dgrut2 .pt")
     ap.add_argument("usdz", type=str)
     ap.add_argument("out_pt", type=str)
-    ap.add_argument("--config-name", type=str,
-                    default="apps/ncore_3dgut_mcmc_multilayer")
-    ap.add_argument("--layers", type=str, nargs="+",
-                    default=list(("background", "road")))
+    ap.add_argument("--config-name", type=str, default="apps/ncore_3dgut_mcmc_multilayer")
+    ap.add_argument("--layers", type=str, nargs="+", default=list(("background", "road")))
     ap.add_argument("--albedo-mode", type=str, default="dc", choices=["dc", "eval"])
-    ap.add_argument("--clip-radius-m", type=float, default=1500.0,
-                    help="Drop background gaussians beyond this radius (0=off).")
-    ap.add_argument("--clip-scale-m", type=float, default=20.0,
-                    help="Drop gaussians whose max scale exceeds this (0=off).")
+    ap.add_argument(
+        "--clip-radius-m", type=float, default=1500.0, help="Drop background gaussians beyond this radius (0=off)."
+    )
+    ap.add_argument(
+        "--clip-scale-m", type=float, default=20.0, help="Drop gaussians whose max scale exceeds this (0=off)."
+    )
     a = ap.parse_args()
     convert_usdz_to_pt(
-        a.usdz, a.out_pt, config_name=a.config_name,
-        layers=tuple(a.layers), albedo_mode=a.albedo_mode,
-        clip_radius_m=a.clip_radius_m, clip_scale_m=a.clip_scale_m,
+        a.usdz,
+        a.out_pt,
+        config_name=a.config_name,
+        layers=tuple(a.layers),
+        albedo_mode=a.albedo_mode,
+        clip_radius_m=a.clip_radius_m,
+        clip_scale_m=a.clip_scale_m,
     )
 
 

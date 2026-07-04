@@ -5,6 +5,7 @@ This module intentionally avoids viser / kaolin / engine imports so it can be
 unit-tested on a Mac without GUI dependencies. ``viser_gui_4d.py`` imports
 ``FourDMetadata`` from here and wires it into the viser scene graph.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -32,10 +33,11 @@ class FourDMetadata:
     All tensors are kept as ``np.ndarray`` (CPU) so render-loop math doesn't
     bounce between torch and numpy. Construct via ``from_ckpt``.
     """
+
     schema_version: int
     sequence_id: str
-    ego_poses_c2w: np.ndarray             # (N, 4, 4) float32
-    ego_frame_timestamps_us: np.ndarray   # (N,) int64
+    ego_poses_c2w: np.ndarray  # (N, 4, 4) float32
+    ego_frame_timestamps_us: np.ndarray  # (N,) int64
     ego_primary_camera_id: str
     ego_primary_fov_y_rad: float
     ego_primary_aspect: float
@@ -46,18 +48,18 @@ class FourDMetadata:
     # rasterizer fisheye projection (matching render.py's geometry).
     ego_primary_intrinsics_ftheta: Optional[dict]
     ego_primary_resolution: Optional[tuple]  # (W, H) int tuple
-    tracks: dict[str, dict]               # tid → {poses, size, frame_info, class}
+    tracks: dict[str, dict]  # tid → {poses, size, frame_info, class}
     tracks_camera_timestamps_us: np.ndarray  # (F,) int64
     road_xyz: Optional[np.ndarray]
     road_rgb: Optional[np.ndarray]
-    dyn_xyz:  Optional[np.ndarray]           # legacy world-frame union
-    dyn_rgb:  Optional[np.ndarray]
+    dyn_xyz: Optional[np.ndarray]  # legacy world-frame union
+    dyn_rgb: Optional[np.ndarray]
     road_n_total: Optional[int]
     dyn_n_total: Optional[int]
     # T8.11 per-track local-frame dyn LiDAR (None for pre-T8.11 ckpts)
-    dyn_local_xyz: Optional[np.ndarray]      # (N, 3) float32, object-local
-    dyn_track_ids: Optional[np.ndarray]      # (N,) int64, index into dyn_track_names
-    dyn_track_names: Optional[list]          # [K] tid strings, idx → name
+    dyn_local_xyz: Optional[np.ndarray]  # (N, 3) float32, object-local
+    dyn_track_ids: Optional[np.ndarray]  # (N,) int64, index into dyn_track_names
+    dyn_track_names: Optional[list]  # [K] tid strings, idx → name
     initial_c2w: np.ndarray
     t_us_first: int
     t_us_last: int
@@ -76,10 +78,10 @@ class FourDMetadata:
         tracks: dict[str, dict] = {}
         for tid, t in tracks_in.items():
             tracks[tid] = {
-                "poses":      _to_np(t.get("poses")),
-                "size":       _to_np(t.get("size")),
+                "poses": _to_np(t.get("poses")),
+                "size": _to_np(t.get("size")),
                 "frame_info": _to_np(t.get("frame_info")).astype(bool),
-                "class":      str(t.get("class", "unknown")),
+                "class": str(t.get("class", "unknown")),
             }
         shared_ts = _to_np(viz.get("tracks_camera_timestamps_us"))
         if shared_ts is None or shared_ts.size == 0:
@@ -137,8 +139,13 @@ class FourDMetadata:
         and pinhole fallback (kaolin ``Camera.from_args`` fov approx).
         """
         REQUIRED_KEYS = {
-            "resolution", "shutter_type", "principal_point", "reference_poly",
-            "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+            "resolution",
+            "shutter_type",
+            "principal_point",
+            "reference_poly",
+            "pixeldist_to_angle_poly",
+            "angle_to_pixeldist_poly",
+            "max_angle",
             "linear_cde",
         }
         d = self.ego_primary_intrinsics_ftheta
@@ -151,11 +158,7 @@ class FourDMetadata:
         return True
 
     def has_lidar(self) -> bool:
-        return (
-            self.road_xyz is not None
-            or self.dyn_xyz is not None
-            or self.dyn_local_xyz is not None
-        )
+        return self.road_xyz is not None or self.dyn_xyz is not None or self.dyn_local_xyz is not None
 
     def has_per_track_dyn_lidar(self) -> bool:
         """True if T8.11 per-track object-local dyn LiDAR is present.

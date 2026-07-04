@@ -12,6 +12,7 @@ Three loss heads exposed:
       Sky-region anchor: target = max_depth, MSE on normalized depth.
       Stops sky Gaussians from collapsing into mid-range when no LiDAR returns.
 """
+
 from __future__ import annotations
 
 import torch
@@ -30,6 +31,7 @@ class DepthLoss(nn.Module):
         max_depth:        far clip (also used for normalize). default 80m.
         eps:              gt values in (eps, max_depth) are valid. default 0.01.
     """
+
     def __init__(
         self,
         loss_type: str = "l1",
@@ -50,8 +52,8 @@ class DepthLoss(nn.Module):
     def forward(
         self,
         pred_depth: torch.Tensor,  # [B, H, W, 1] tracer ray-depth
-        gt_depth: torch.Tensor,    # [B, H, W] or [B, H, W, 1]
-        hit_mask: torch.Tensor,    # [B, H, W] {0, 1}
+        gt_depth: torch.Tensor,  # [B, H, W] or [B, H, W, 1]
+        hit_mask: torch.Tensor,  # [B, H, W] {0, 1}
     ) -> torch.Tensor:
         pd = pred_depth.squeeze(-1)
         gd = gt_depth.squeeze(-1) if gt_depth.dim() == pd.dim() + 1 else gt_depth
@@ -85,7 +87,7 @@ class DepthLoss(nn.Module):
 
 def compute_bg_lidar_loss(
     pred_depth: torch.Tensor,  # [B, H, W, 1]
-    sky_mask: torch.Tensor,    # [B, H, W] {0, 1}
+    sky_mask: torch.Tensor,  # [B, H, W] {0, 1}
     max_depth: float = 80.0,
 ) -> torch.Tensor:
     """Background LiDAR loss — anchor sky pixels at max_depth (NRE car2sim_6cam pattern).

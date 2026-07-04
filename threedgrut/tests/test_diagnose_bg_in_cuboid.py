@@ -6,6 +6,7 @@ the core algorithm (per-track cuboid containment in world frame, plus the
 local-frame "outside own cuboid" leak detector) is a pair of pure tensor
 functions we can exercise on CPU with hand-built inputs.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -44,6 +45,7 @@ def _translation_pose(tx: float, ty: float, tz: float) -> torch.Tensor:
 # _select_sample_frames
 # -----------------------------------------------------------------------------
 
+
 def test_select_sample_frames_empty(diag_module):
     active = torch.zeros(10, dtype=torch.bool)
     out = diag_module._select_sample_frames(active, max_frames=5)
@@ -73,24 +75,29 @@ def test_select_sample_frames_evenly_spaced(diag_module):
 # count_world_positions_in_any_active_cuboid
 # -----------------------------------------------------------------------------
 
+
 def test_count_inside_identity_pose_unit_cuboid(diag_module):
     # Cuboid at world origin, size [2, 2, 2] → half-extent 1
     tracks = {
         "t0": {
-            "poses": _identity_pose().unsqueeze(0),       # [1, 4, 4]
+            "poses": _identity_pose().unsqueeze(0),  # [1, 4, 4]
             "active": torch.tensor([True]),
             "size": torch.tensor([2.0, 2.0, 2.0]),
         }
     }
-    positions = torch.tensor([
-        [0.0, 0.0, 0.0],     # inside (center)
-        [0.5, 0.5, 0.5],     # inside
-        [-0.99, 0.99, 0.0],  # inside (edge)
-        [1.01, 0.0, 0.0],    # outside (just past x boundary)
-        [5.0, 0.0, 0.0],     # outside (far)
-    ])
+    positions = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # inside (center)
+            [0.5, 0.5, 0.5],  # inside
+            [-0.99, 0.99, 0.0],  # inside (edge)
+            [1.01, 0.0, 0.0],  # outside (just past x boundary)
+            [5.0, 0.0, 0.0],  # outside (far)
+        ]
+    )
     mask, records = diag_module.count_world_positions_in_any_active_cuboid(
-        positions, tracks, max_frames_per_track=5,
+        positions,
+        tracks,
+        max_frames_per_track=5,
     )
     assert mask.tolist() == [True, True, True, False, False]
     assert len(records) == 1
@@ -110,14 +117,18 @@ def test_count_inside_translated_cuboid(diag_module):
             "size": torch.tensor([2.0, 2.0, 2.0]),
         }
     }
-    positions = torch.tensor([
-        [0.0, 0.0, 0.0],   # outside (origin is far from cuboid)
-        [10.0, 0.5, 0.0],  # inside
-        [9.5, 0.0, 0.0],   # inside (within half-extent)
-        [11.5, 0.0, 0.0],  # outside (past x boundary at 11)
-    ])
+    positions = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # outside (origin is far from cuboid)
+            [10.0, 0.5, 0.0],  # inside
+            [9.5, 0.0, 0.0],  # inside (within half-extent)
+            [11.5, 0.0, 0.0],  # outside (past x boundary at 11)
+        ]
+    )
     mask, records = diag_module.count_world_positions_in_any_active_cuboid(
-        positions, tracks, max_frames_per_track=5,
+        positions,
+        tracks,
+        max_frames_per_track=5,
     )
     assert mask.tolist() == [False, True, True, False]
     assert records[0]["n_inside_any_sampled_frame"] == 2
@@ -137,13 +148,17 @@ def test_count_inside_two_tracks_or_aggregation(diag_module):
             "size": torch.tensor([2.0, 2.0, 2.0]),
         },
     }
-    positions = torch.tensor([
-        [0.5, 0.0, 0.0],  # inside t0
-        [10.5, 0.0, 0.0],  # inside t1
-        [5.0, 0.0, 0.0],  # outside both
-    ])
+    positions = torch.tensor(
+        [
+            [0.5, 0.0, 0.0],  # inside t0
+            [10.5, 0.0, 0.0],  # inside t1
+            [5.0, 0.0, 0.0],  # outside both
+        ]
+    )
     mask, records = diag_module.count_world_positions_in_any_active_cuboid(
-        positions, tracks, max_frames_per_track=5,
+        positions,
+        tracks,
+        max_frames_per_track=5,
     )
     assert mask.tolist() == [True, True, False]
     by_tid = {r["track_id"]: r for r in records}
@@ -161,7 +176,9 @@ def test_count_inside_inactive_track_contributes_nothing(diag_module):
     }
     positions = torch.tensor([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
     mask, records = diag_module.count_world_positions_in_any_active_cuboid(
-        positions, tracks, max_frames_per_track=5,
+        positions,
+        tracks,
+        max_frames_per_track=5,
     )
     assert mask.tolist() == [False, False]
     assert records[0]["n_inside_any_sampled_frame"] == 0
@@ -170,11 +187,13 @@ def test_count_inside_inactive_track_contributes_nothing(diag_module):
 
 def test_count_inside_moving_cuboid_across_frames(diag_module):
     # Track has 3 active frames; cuboid moves x = 0 → 5 → 10.
-    poses = torch.stack([
-        _translation_pose(0.0, 0.0, 0.0),
-        _translation_pose(5.0, 0.0, 0.0),
-        _translation_pose(10.0, 0.0, 0.0),
-    ])
+    poses = torch.stack(
+        [
+            _translation_pose(0.0, 0.0, 0.0),
+            _translation_pose(5.0, 0.0, 0.0),
+            _translation_pose(10.0, 0.0, 0.0),
+        ]
+    )
     tracks = {
         "t0": {
             "poses": poses,
@@ -182,14 +201,18 @@ def test_count_inside_moving_cuboid_across_frames(diag_module):
             "size": torch.tensor([2.0, 2.0, 2.0]),
         }
     }
-    positions = torch.tensor([
-        [0.5, 0.0, 0.0],   # inside at frame 0
-        [5.5, 0.0, 0.0],   # inside at frame 1
-        [9.5, 0.0, 0.0],   # inside at frame 2
-        [3.0, 0.0, 0.0],   # outside all three (between cuboids 0 and 1)
-    ])
+    positions = torch.tensor(
+        [
+            [0.5, 0.0, 0.0],  # inside at frame 0
+            [5.5, 0.0, 0.0],  # inside at frame 1
+            [9.5, 0.0, 0.0],  # inside at frame 2
+            [3.0, 0.0, 0.0],  # outside all three (between cuboids 0 and 1)
+        ]
+    )
     mask, records = diag_module.count_world_positions_in_any_active_cuboid(
-        positions, tracks, max_frames_per_track=5,
+        positions,
+        tracks,
+        max_frames_per_track=5,
     )
     assert mask.tolist() == [True, True, True, False]
     assert records[0]["n_inside_any_sampled_frame"] == 3
@@ -206,7 +229,9 @@ def test_count_inside_empty_positions(diag_module):
     }
     empty = torch.zeros(0, 3)
     mask, records = diag_module.count_world_positions_in_any_active_cuboid(
-        empty, tracks, max_frames_per_track=5,
+        empty,
+        tracks,
+        max_frames_per_track=5,
     )
     assert mask.shape == (0,)
     assert mask.dtype == torch.bool
@@ -218,6 +243,7 @@ def test_count_inside_empty_positions(diag_module):
 # count_local_positions_outside_own_cuboid
 # -----------------------------------------------------------------------------
 
+
 def test_outside_own_cuboid_all_inside(diag_module):
     # 4 particles in local frame, all within size/2; no leaks.
     tracks = {
@@ -227,15 +253,20 @@ def test_outside_own_cuboid_all_inside(diag_module):
             "size": torch.tensor([2.0, 2.0, 2.0]),
         }
     }
-    positions = torch.tensor([
-        [0.0, 0.0, 0.0],
-        [0.99, 0.0, 0.0],
-        [-0.5, 0.5, -0.5],
-        [0.0, -0.99, 0.99],
-    ])
+    positions = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [0.99, 0.0, 0.0],
+            [-0.5, 0.5, -0.5],
+            [0.0, -0.99, 0.99],
+        ]
+    )
     track_ids = torch.zeros(4, dtype=torch.long)
     n_out = diag_module.count_local_positions_outside_own_cuboid(
-        positions, track_ids, ["t0"], tracks,
+        positions,
+        track_ids,
+        ["t0"],
+        tracks,
     )
     assert n_out == 0
 
@@ -248,15 +279,20 @@ def test_outside_own_cuboid_some_leaks(diag_module):
             "size": torch.tensor([2.0, 2.0, 2.0]),
         }
     }
-    positions = torch.tensor([
-        [0.0, 0.0, 0.0],     # inside
-        [1.01, 0.0, 0.0],    # outside x
-        [0.0, -1.5, 0.0],    # outside y
-        [0.5, 0.5, 0.5],     # inside
-    ])
+    positions = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],  # inside
+            [1.01, 0.0, 0.0],  # outside x
+            [0.0, -1.5, 0.0],  # outside y
+            [0.5, 0.5, 0.5],  # inside
+        ]
+    )
     track_ids = torch.zeros(4, dtype=torch.long)
     n_out = diag_module.count_local_positions_outside_own_cuboid(
-        positions, track_ids, ["t0"], tracks,
+        positions,
+        track_ids,
+        ["t0"],
+        tracks,
     )
     assert n_out == 2
 
@@ -267,7 +303,7 @@ def test_outside_own_cuboid_per_track_routing(diag_module):
         "t0": {
             "poses": _identity_pose().unsqueeze(0),
             "active": torch.tensor([True]),
-            "size": torch.tensor([2.0, 2.0, 2.0]),   # half = 1.0
+            "size": torch.tensor([2.0, 2.0, 2.0]),  # half = 1.0
         },
         "t1": {
             "poses": _identity_pose().unsqueeze(0),
@@ -276,15 +312,20 @@ def test_outside_own_cuboid_per_track_routing(diag_module):
         },
     }
     keys_sorted = ["t0", "t1"]  # name_to_id: t0→0, t1→1
-    positions = torch.tensor([
-        [0.5, 0.0, 0.0],   # owner t0, inside
-        [3.0, 0.0, 0.0],   # owner t0, outside (would be inside t1's bigger box)
-        [0.5, 0.0, 0.0],   # owner t1, inside
-        [4.99, 0.0, 0.0],  # owner t1, inside
-    ])
+    positions = torch.tensor(
+        [
+            [0.5, 0.0, 0.0],  # owner t0, inside
+            [3.0, 0.0, 0.0],  # owner t0, outside (would be inside t1's bigger box)
+            [0.5, 0.0, 0.0],  # owner t1, inside
+            [4.99, 0.0, 0.0],  # owner t1, inside
+        ]
+    )
     track_ids = torch.tensor([0, 0, 1, 1], dtype=torch.long)
     n_out = diag_module.count_local_positions_outside_own_cuboid(
-        positions, track_ids, keys_sorted, tracks,
+        positions,
+        track_ids,
+        keys_sorted,
+        tracks,
     )
     # Only one leak: index 1 has owner t0 but at x=3.0 (outside t0's half=1.0).
     assert n_out == 1
@@ -299,6 +340,9 @@ def test_outside_own_cuboid_empty(diag_module):
         }
     }
     n_out = diag_module.count_local_positions_outside_own_cuboid(
-        torch.zeros(0, 3), torch.zeros(0, dtype=torch.long), ["t0"], tracks,
+        torch.zeros(0, 3),
+        torch.zeros(0, dtype=torch.long),
+        ["t0"],
+        tracks,
     )
     assert n_out == 0

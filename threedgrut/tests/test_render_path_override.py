@@ -9,6 +9,7 @@ name before the override was applied, so ``python render.py --checkpoint
 packed_ckpt.pt --path manifest.json`` crashed with MissingMandatoryValue even
 though ``--path`` was given. Pins the override helper used by from_checkpoint.
 """
+
 from omegaconf import OmegaConf
 
 from threedgrut.render import _override_conf_path

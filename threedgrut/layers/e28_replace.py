@@ -4,6 +4,7 @@
 Task 2 = 纯数据分配（Mac 可测）；Task 3 = 加 PLY align + 调
 e25_inject.replace_tracks_in_dyn_node 做粒子替换。
 """
+
 from __future__ import annotations
 
 import logging
@@ -12,6 +13,8 @@ from pathlib import Path
 
 import torch
 
+from threedgrut.layers.asset_bank import BankMiss, query_bank
+from threedgrut.layers.e25_inject import flip_forward_180, replace_tracks_in_dyn_node
 from threedgrut.layers.warmstart_metadata import AssetSpec, resolve_ply_path
 from threedgrut.layers.warmstart_ply import (
     AlignedAsset,
@@ -21,8 +24,6 @@ from threedgrut.layers.warmstart_ply import (
     load_warmstart_ply,
     subsample_asset,
 )
-from threedgrut.layers.e25_inject import flip_forward_180, replace_tracks_in_dyn_node
-from threedgrut.layers.asset_bank import query_bank, BankMiss
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,16 @@ logger = logging.getLogger(__name__)
 # 类标记。**子串**匹配（非精确）—— 真实 autolabel 含 ``heavy_truck`` /
 # ``pickup_truck`` 等复合类（E2.5 实测），精确匹配会漏替（E2.8 inceptio convert
 # 实测：dynamic_rigids 同时含 automobile + heavy_truck + person）。
-VEHICLE_CLASSES = frozenset({
-    "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
-})
+VEHICLE_CLASSES = frozenset(
+    {
+        "automobile",
+        "bus",
+        "truck",
+        "consumer_vehicles",
+        "car",
+        "vehicle",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -78,7 +86,10 @@ def assign_assets_to_tracks(
 
 
 def select_vehicle_tracks_to_place(
-    catalog: dict, *, min_active_frames: int = 20, max_dist_m: float = 40.0,
+    catalog: dict,
+    *,
+    min_active_frames: int = 20,
+    max_dist_m: float = 40.0,
 ) -> tuple[dict, dict]:
     """E2.8 insert: pick which vehicle tracks get an AH car (replace ∪ insert).
 
@@ -94,10 +105,7 @@ def select_vehicle_tracks_to_place(
     recon: dict = {}
     name_to_id: dict = {}
     for tid, info in catalog.items():
-        keep = info["present"] or (
-            info["active_frames"] >= min_active_frames
-            and info["min_dist_to_ego"] <= max_dist_m
-        )
+        keep = info["present"] or (info["active_frames"] >= min_active_frames and info["min_dist_to_ego"] <= max_dist_m)
         if keep:
             recon[tid] = (info["class"], tuple(info["dims"]))
             name_to_id[tid] = info["slot"]
@@ -134,8 +142,15 @@ def _align_asset(
 
 
 def replace_all_vehicle_tracks(
-    ckpt: dict, *, bundle_root, bundle, recon, name_to_id, on_miss="global",
-    max_pts: int | None = None, seed: int = 0,
+    ckpt: dict,
+    *,
+    bundle_root,
+    bundle,
+    recon,
+    name_to_id,
+    on_miss="global",
+    max_pts: int | None = None,
+    seed: int = 0,
 ) -> tuple[dict, list[AssignRow]]:
     """全 vehicle track 批替换。``recon``: {track_name:(class,dims)}；
     ``name_to_id``: build_name_to_int_id(tracks)。返回 (ckpt, report)。
@@ -155,8 +170,7 @@ def replace_all_vehicle_tracks(
             spec, Path(bundle_root), dims, max_pts=max_pts, generator=gen
         )
     if aligned_by_id:
-        ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = \
-            replace_tracks_in_dyn_node(dyn, aligned_by_id)
+        ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = replace_tracks_in_dyn_node(dyn, aligned_by_id)
     return ckpt, report
 
 
@@ -167,8 +181,13 @@ def replace_all_vehicle_tracks(
 # poses match (0.4°) → no frame correction (verified |axis·vel|=0.99).
 # ---------------------------------------------------------------------------
 _DYN_PARTICLE_KEYS = (
-    "positions", "rotation", "scale", "density",
-    "features_albedo", "features_specular", "track_ids",
+    "positions",
+    "rotation",
+    "scale",
+    "density",
+    "features_albedo",
+    "features_specular",
+    "track_ids",
 )
 
 
@@ -181,8 +200,11 @@ def _sorted_dims_ratio(a, b) -> float:
 
 
 def split_vehicle_tracks_by_ah_match(
-    recon_sel: dict, bundle: dict, *,
-    max_size_ratio: float = 1.5, on_miss: str = "global",
+    recon_sel: dict,
+    bundle: dict,
+    *,
+    max_size_ratio: float = 1.5,
+    on_miss: str = "global",
 ) -> tuple[dict, list[str]]:
     """Route each selected vehicle track to AH vs cross-source recon by size.
 
@@ -203,8 +225,12 @@ def split_vehicle_tracks_by_ah_match(
             ah_recon[tid] = (cls, dims)
         else:
             recon_tids.append(tid)
-            logger.info("e28: track %r (%s, dims=%s) → recon (AH size mismatch)",
-                        tid, cls, tuple(round(float(x), 1) for x in dims))
+            logger.info(
+                "e28: track %r (%s, dims=%s) → recon (AH size mismatch)",
+                tid,
+                cls,
+                tuple(round(float(x), 1) for x in dims),
+            )
     return ah_recon, recon_tids
 
 
@@ -220,17 +246,11 @@ def place_tracks_in_dyn_node(dyn_node: dict, node_tensors_by_id: dict) -> dict:
     target_ids = sorted(int(t) for t in node_tensors_by_id)
     keep = ~torch.isin(track_ids, torch.tensor(target_ids, dtype=track_ids.dtype))
     new: dict = {}
-    for key in ("positions", "rotation", "scale", "density",
-                "features_albedo", "features_specular"):
+    for key in ("positions", "rotation", "scale", "density", "features_albedo", "features_specular"):
         kept = dyn_node[key][keep]
         parts = [node_tensors_by_id[t][key] for t in target_ids]
-        new[key] = torch.nn.Parameter(
-            torch.cat([kept, *parts], dim=0), requires_grad=False)
-    ah_ids = [
-        torch.full((node_tensors_by_id[t]["positions"].shape[0],), t,
-                   dtype=track_ids.dtype)
-        for t in target_ids
-    ]
+        new[key] = torch.nn.Parameter(torch.cat([kept, *parts], dim=0), requires_grad=False)
+    ah_ids = [torch.full((node_tensors_by_id[t]["positions"].shape[0],), t, dtype=track_ids.dtype) for t in target_ids]
     new["track_ids"] = torch.cat([track_ids[keep], *ah_ids], dim=0)
     for k, v in dyn_node.items():
         if k not in _DYN_PARTICLE_KEYS:
@@ -239,7 +259,10 @@ def place_tracks_in_dyn_node(dyn_node: dict, node_tensors_by_id: dict) -> dict:
 
 
 def extract_recon_node_tensors(
-    recon_dyn: dict, recon_sorted_tids: list, tid_to_slot: dict, spec_dim: int,
+    recon_dyn: dict,
+    recon_sorted_tids: list,
+    tid_to_slot: dict,
+    spec_dim: int,
 ) -> dict:
     """Pull object-local node tensors for ``tids`` from a recon ckpt's
     dynamic_rigids, keyed by the TARGET (USDZ) slot. ``features_specular`` is
@@ -250,7 +273,7 @@ def extract_recon_node_tensors(
     for tid, usdz_slot in tid_to_slot.items():
         if tid not in recon_sorted_tids:
             continue
-        mask = (rtids == recon_sorted_tids.index(tid))
+        mask = rtids == recon_sorted_tids.index(tid)
         n = int(mask.sum())
         if n == 0:
             continue
@@ -268,7 +291,10 @@ def extract_recon_node_tensors(
 
 
 def inject_recon_tracks(
-    ckpt: dict, recon_ckpt: dict, recon_tids: list, name_to_id: dict,
+    ckpt: dict,
+    recon_ckpt: dict,
+    recon_tids: list,
+    name_to_id: dict,
 ) -> tuple[dict, list[str]]:
     """Inject sibling-ckpt recon gaussians at the USDZ slots for ``recon_tids``.
 
@@ -283,8 +309,7 @@ def inject_recon_tracks(
     tid_to_slot = {tid: name_to_id[tid] for tid in recon_tids if tid in name_to_id}
     node_tensors = extract_recon_node_tensors(rdyn, rsorted, tid_to_slot, spec_dim)
     if node_tensors:
-        ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = \
-            place_tracks_in_dyn_node(dyn, node_tensors)
+        ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = place_tracks_in_dyn_node(dyn, node_tensors)
     placed = [tid for tid, slot in tid_to_slot.items() if int(slot) in node_tensors]
     return ckpt, placed
 
@@ -304,10 +329,8 @@ def keep_only_track_slots(dyn_node: dict, keep_slots) -> dict:
         torch.tensor(sorted(int(s) for s in keep_slots), dtype=track_ids.dtype),
     )
     new: dict = {}
-    for key in ("positions", "rotation", "scale", "density",
-                "features_albedo", "features_specular"):
-        new[key] = torch.nn.Parameter(
-            dyn_node[key][keep].contiguous(), requires_grad=False)
+    for key in ("positions", "rotation", "scale", "density", "features_albedo", "features_specular"):
+        new[key] = torch.nn.Parameter(dyn_node[key][keep].contiguous(), requires_grad=False)
     new["track_ids"] = track_ids[keep]
     for k, v in dyn_node.items():
         if k not in _DYN_PARTICLE_KEYS:
@@ -315,8 +338,9 @@ def keep_only_track_slots(dyn_node: dict, keep_slots) -> dict:
     return new
 
 
-def qa_sanity(dyn_node_after: dict, report: list[AssignRow],
-              *, opacity_floor: float = 0.02, replaced_slots=None) -> dict:
+def qa_sanity(
+    dyn_node_after: dict, report: list[AssignRow], *, opacity_floor: float = 0.02, replaced_slots=None
+) -> dict:
     """廉价 sanity 闸（Mac 可跑）。覆盖率 + opacity 防退化 + skip 计数。
 
     opacity_floor 0.02（anti-degenerate）：E2.8 inceptio 实测——NRE 重建的 dynamic

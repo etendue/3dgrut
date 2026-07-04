@@ -35,6 +35,7 @@ CLI:
         --device cuda \
         --max-frames 1            # sanity run first
 """
+
 import argparse
 import logging
 from pathlib import Path
@@ -58,7 +59,9 @@ def _load_model(weights: str, device: str):
     model = model.to(device).eval()
     logger.info(
         "loaded DepthAnythingV2 model from %s on %s (%s)",
-        weights, device, type(model).__name__,
+        weights,
+        device,
+        type(model).__name__,
     )
     return model, processor
 
@@ -133,7 +136,11 @@ def dump_clip(
 
     logger.info(
         "dump_clip(DepthV2): seq=%s cameras=%s weights=%s device=%s out=%s",
-        sid, list(camera_ids), weights, device, out_root,
+        sid,
+        list(camera_ids),
+        weights,
+        device,
+        out_root,
     )
 
     summary: dict[str, tuple[int, float]] = {}  # camera_id -> (n_frames, mean_median_depth)
@@ -153,9 +160,7 @@ def dump_clip(
 
         median_total = 0.0
         for frame_idx in range(n_frames):
-            ts_end_us = int(
-                camera_sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.END]
-            )
+            ts_end_us = int(camera_sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.END])
             # Native full-resolution RGB (uint8, HWC). get_frame_image_array is the
             # full-res decode path the dataset's PIL fallback uses (downsample=1.0
             # → no resize); matches the (H, W) we save at.
@@ -169,6 +174,7 @@ def dump_clip(
             # Guard: model output must match native (H, W) the reader expects.
             if depth.shape[0] != H or depth.shape[1] != W:
                 import cv2
+
                 depth = cv2.resize(depth, (W, H), interpolation=cv2.INTER_LINEAR)
 
             med = float(np.median(depth))
@@ -178,15 +184,23 @@ def dump_clip(
             if frame_idx % 50 == 0 or frame_idx == n_frames - 1:
                 logger.info(
                     "  [%s] frame %d/%d ts=%d shape=%s min=%.2f med=%.2f max=%.2f",
-                    camera_id, frame_idx + 1, n_frames, ts_end_us, depth.shape,
-                    float(depth.min()), med, float(depth.max()),
+                    camera_id,
+                    frame_idx + 1,
+                    n_frames,
+                    ts_end_us,
+                    depth.shape,
+                    float(depth.min()),
+                    med,
+                    float(depth.max()),
                 )
 
         mean_med = median_total / max(n_frames, 1)
         summary[camera_id] = (n_frames, mean_med)
         logger.info(
             "dump_clip(DepthV2): camera %s done — %d frames, mean median depth=%.2fm",
-            camera_id, n_frames, mean_med,
+            camera_id,
+            n_frames,
+            mean_med,
         )
 
     logger.info("=== dump_clip(DepthV2) summary (seq=%s) ===", sid)
@@ -199,20 +213,25 @@ if __name__ == "__main__":
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--camera-ids", nargs="+", required=True)
     p.add_argument(
-        "--weights", type=str, default="models/depth_anything_v2",
-        help="Local DepthAnythingV2 snapshot dir (from "
-             "scripts/download_depth_anything_v2.sh) or a HF repo id.",
+        "--weights",
+        type=str,
+        default="models/depth_anything_v2",
+        help="Local DepthAnythingV2 snapshot dir (from " "scripts/download_depth_anything_v2.sh) or a HF repo id.",
     )
     p.add_argument("--out-root", type=Path, required=True)
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument(
-        "--max-frames", type=int, default=None,
+        "--max-frames",
+        type=int,
+        default=None,
         help="Cap frames per camera (smoke / sanity-check). Default: all.",
     )
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO)
     dump_clip(
-        args.manifest, args.camera_ids, args.out_root,
+        args.manifest,
+        args.camera_ids,
+        args.out_root,
         weights=args.weights,
         device=args.device,
         max_frames=args.max_frames,

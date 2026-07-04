@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage 6 unit tests: per-camera ExposureModel."""
+
 from __future__ import annotations
 
 import pytest
@@ -41,7 +42,7 @@ def test_clamp_to_unit_range():
 
     m = ExposureModel(num_camera=2)
     with torch.no_grad():
-        m.exposure_a.fill_(5.0)   # exp(5) ≈ 148× gain
+        m.exposure_a.fill_(5.0)  # exp(5) ≈ 148× gain
         m.exposure_b.fill_(2.0)
     img = torch.rand(1, 4, 4, 3)
     out = m(0, img)

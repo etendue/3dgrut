@@ -16,6 +16,7 @@ render.py L233-562's logic exactly.
 The code blocks below mirror render.py's V3-E4 sections one-to-one; whenever
 those sections in render.py change, this test must be updated in lockstep.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -23,14 +24,21 @@ from typing import Optional
 import numpy as np
 import pytest
 
-
 # --- Replicas of render.py V3-E4 sections (keep one-to-one with render.py) ---
 
 _PER_CAM_KEYS = (
-    "psnr", "ssim", "lpips",
-    "cc_psnr", "cc_ssim", "cc_lpips",
-    "psnr_masked", "ssim_masked", "lpips_masked",
-    "cc_psnr_masked", "cc_ssim_masked", "cc_lpips_masked",
+    "psnr",
+    "ssim",
+    "lpips",
+    "cc_psnr",
+    "cc_ssim",
+    "cc_lpips",
+    "psnr_masked",
+    "ssim_masked",
+    "lpips_masked",
+    "cc_psnr_masked",
+    "cc_ssim_masked",
+    "cc_lpips_masked",
 )
 
 
@@ -67,6 +75,7 @@ def _summarize_per_cam(per_cam):
 
 # --- Tests ---------------------------------------------------------------
 
+
 def _mk_metric_tuple(rng, base: float = 25.0):
     """Synthetic 12-tuple of metrics with small jitter (deterministic via rng)."""
     return tuple(float(base + rng.uniform(-1, 1)) for _ in _PER_CAM_KEYS)
@@ -102,9 +111,7 @@ def test_per_camera_single_camera_matches_global_mean():
     assert set(summary.keys()) == {cid}
     assert summary[cid]["n_frames"] == 8
     for k in _PER_CAM_KEYS:
-        assert summary[cid][f"mean_{k}"] == pytest.approx(
-            float(np.mean(global_lists[k])), abs=1e-10
-        )
+        assert summary[cid][f"mean_{k}"] == pytest.approx(float(np.mean(global_lists[k])), abs=1e-10)
 
 
 def test_per_camera_two_cameras_weighted_average_equals_global():
@@ -131,8 +138,7 @@ def test_per_camera_two_cameras_weighted_average_equals_global():
     total_n = sum(counts.values())
     for k in _PER_CAM_KEYS:
         weighted = (
-            summary["cam_a"][f"mean_{k}"] * counts["cam_a"]
-            + summary["cam_b"][f"mean_{k}"] * counts["cam_b"]
+            summary["cam_a"][f"mean_{k}"] * counts["cam_a"] + summary["cam_b"][f"mean_{k}"] * counts["cam_b"]
         ) / total_n
         assert weighted == pytest.approx(float(np.mean(global_lists[k])), abs=1e-9)
 
@@ -195,9 +201,12 @@ def test_eval_cameras_filter_zero_hits_raises_in_render_py():
     """
     eval_cameras_filter = ["camera_nonexistent_xxx"]
     seven_cams = [
-        "camera_front_wide_120fov", "camera_rear_tele_30fov",
-        "camera_cross_left_120fov", "camera_cross_right_120fov",
-        "camera_rear_left_70fov", "camera_front_tele_30fov",
+        "camera_front_wide_120fov",
+        "camera_rear_tele_30fov",
+        "camera_cross_left_120fov",
+        "camera_cross_right_120fov",
+        "camera_rear_left_70fov",
+        "camera_front_tele_30fov",
         "camera_rear_right_70fov",
     ]
     psnr: list = []

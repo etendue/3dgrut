@@ -5,7 +5,15 @@ harmonizer_server (nontemporal, socket length-prefixed protocol), applies
 Reinhard color_transfer(fixed -> raw) to match nre DifixModel behaviour, writes
 fixed frames to <fixed_dir>/<mode>/ with an identical frames_map.json.
 """
-import argparse, io, json, os, shutil, socket, struct
+
+import argparse
+import io
+import json
+import os
+import shutil
+import socket
+import struct
+
 import torch
 import torchvision
 
@@ -48,8 +56,10 @@ def color_transfer(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return source
     src = kornia.color.rgb_to_lab(source.permute(2, 0, 1)).permute(1, 2, 0)
     tgt = kornia.color.rgb_to_lab(target.permute(2, 0, 1)).permute(1, 2, 0)
-    sm = src.reshape(-1, 1, 3).mean(0, keepdim=True); ss = src.reshape(-1, 1, 3).std(0, keepdim=True)
-    tm = tgt.reshape(-1, 1, 3).mean(0, keepdim=True); ts = tgt.reshape(-1, 1, 3).std(0, keepdim=True)
+    sm = src.reshape(-1, 1, 3).mean(0, keepdim=True)
+    ss = src.reshape(-1, 1, 3).std(0, keepdim=True)
+    tm = tgt.reshape(-1, 1, 3).mean(0, keepdim=True)
+    ts = tgt.reshape(-1, 1, 3).std(0, keepdim=True)
     lab = (src - sm) * (ts / (ss + 1e-8)) + tm
     lab = lab.clamp(-128, 127)
     return kornia.color.lab_to_rgb(lab.permute(2, 0, 1)).permute(1, 2, 0).clamp(0, 1)
@@ -75,8 +85,7 @@ def fix_mode(raw_dir, fixed_dir, mode, host, port, do_ct=True):
         torchvision.utils.save_image(fixed.permute(2, 0, 1).clamp(0, 1), dst)
         if (i + 1) % 50 == 0:
             print(f"[{mode}] {i + 1}/{len(fmap)}", flush=True)
-    shutil.copy(os.path.join(src_root, "frames_map.json"),
-                os.path.join(dst_root, "frames_map.json"))
+    shutil.copy(os.path.join(src_root, "frames_map.json"), os.path.join(dst_root, "frames_map.json"))
     print(f"[{mode}] done {len(fmap)} frames -> {dst_root}", flush=True)
 
 

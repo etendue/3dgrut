@@ -22,11 +22,8 @@ from omegaconf import OmegaConf
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.utils.misc import sh_degree_to_specular_dim
 
-
 # ----------------------------------------------------------------------- conf
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -48,19 +45,19 @@ def _v1_shape_dict(N: int, conf) -> dict:
     sh_deg = conf.model.progressive_training.max_n_features
     specular_dim = sh_degree_to_specular_dim(sh_deg)
     return {
-        "positions":             torch.nn.Parameter(torch.randn(N, 3)),
-        "rotation":              torch.nn.Parameter(torch.randn(N, 4)),
-        "scale":                 torch.nn.Parameter(torch.randn(N, 3)),
-        "density":               torch.nn.Parameter(torch.randn(N, 1)),
-        "features_albedo":       torch.nn.Parameter(torch.randn(N, 3)),
-        "features_specular":     torch.nn.Parameter(torch.randn(N, specular_dim)),
-        "background":            {},
-        "n_active_features":     0,
-        "max_n_features":        sh_deg,
-        "scene_extent":          10.0,
+        "positions": torch.nn.Parameter(torch.randn(N, 3)),
+        "rotation": torch.nn.Parameter(torch.randn(N, 4)),
+        "scale": torch.nn.Parameter(torch.randn(N, 3)),
+        "density": torch.nn.Parameter(torch.randn(N, 1)),
+        "features_albedo": torch.nn.Parameter(torch.randn(N, 3)),
+        "features_specular": torch.nn.Parameter(torch.randn(N, specular_dim)),
+        "background": {},
+        "n_active_features": 0,
+        "max_n_features": sh_deg,
+        "scene_extent": 10.0,
         # progressive_training=True when n_active < max_n_features, so these are required
         "feature_dim_increase_interval": conf.model.progressive_training.increase_frequency,
-        "feature_dim_increase_step":     conf.model.progressive_training.increase_step,
+        "feature_dim_increase_step": conf.model.progressive_training.increase_step,
     }
 
 
@@ -82,7 +79,7 @@ def test_layered_gaussians_init_with_multiple_layers(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     assert set(model.layers.keys()) == {"background", "road"}
@@ -122,7 +119,7 @@ def test_load_v2_checkpoint_dispatches_per_layer(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=1_000_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     v2_ckpt = {
@@ -130,7 +127,7 @@ def test_load_v2_checkpoint_dispatches_per_layer(real_conf):
         "model": {
             "gaussians_nodes": {
                 "background": _v1_shape_dict(N=600, conf=real_conf),
-                "road":       _v1_shape_dict(N=200, conf=real_conf),
+                "road": _v1_shape_dict(N=200, conf=real_conf),
             },
         },
     }
@@ -145,7 +142,7 @@ def test_load_v2_checkpoint_warns_on_missing_layer(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=1_000_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     v2_ckpt = {
@@ -181,7 +178,7 @@ def test_v1_ckpt_resume_with_background_layer_works(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
 
@@ -206,7 +203,7 @@ def test_multi_layer_ckpt_roundtrip(real_conf):
         "model": {
             "gaussians_nodes": {
                 "background": _v1_shape_dict(N=300, conf=real_conf),
-                "road":       _v1_shape_dict(N=150, conf=real_conf),
+                "road": _v1_shape_dict(N=150, conf=real_conf),
             },
         },
     }
@@ -230,14 +227,17 @@ def test_multi_layer_ckpt_roundtrip(real_conf):
 
     for layer_name in ["background", "road"]:
         for attr in [
-            "positions", "rotation", "scale", "density",
-            "features_albedo", "features_specular",
+            "positions",
+            "rotation",
+            "scale",
+            "density",
+            "features_albedo",
+            "features_specular",
         ]:
             t_a = getattr(model_a.layers[layer_name], attr)
             t_b = getattr(model_b.layers[layer_name], attr)
             assert torch.equal(t_a.data, t_b.data), (
-                f"Roundtrip mismatch at {layer_name}.{attr}: "
-                f"shapes {t_a.shape} vs {t_b.shape}"
+                f"Roundtrip mismatch at {layer_name}.{attr}: " f"shapes {t_a.shape} vs {t_b.shape}"
             )
 
 
@@ -254,11 +254,10 @@ def test_fused_view_single_bg_passes_through(real_conf):
     model.init_from_checkpoint(v1_ckpt, setup_optimizer=False)
 
     fused = model.fused_view()
-    for attr in ["positions", "rotation", "scale", "density",
-                 "features_albedo", "features_specular"]:
-        assert fused[attr] is getattr(model.layers["background"], attr), (
-            f"single-bg fused_view must short-circuit to bg layer's {attr}"
-        )
+    for attr in ["positions", "rotation", "scale", "density", "features_albedo", "features_specular"]:
+        assert fused[attr] is getattr(
+            model.layers["background"], attr
+        ), f"single-bg fused_view must short-circuit to bg layer's {attr}"
 
 
 def test_fused_view_two_layers_concat_shape(real_conf):
@@ -267,14 +266,16 @@ def test_fused_view_two_layers_concat_shape(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_from_checkpoint(
-        {"gaussians_nodes": {
-            "background": _v1_shape_dict(N=100, conf=real_conf),
-            "road":       _v1_shape_dict(N=50,  conf=real_conf),
-        }},
+        {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=100, conf=real_conf),
+                "road": _v1_shape_dict(N=50, conf=real_conf),
+            }
+        },
         setup_optimizer=False,
     )
 
@@ -310,20 +311,16 @@ def test_empty_dynamic_rigids_layer_is_device_consistent(real_conf):
     from threedgrut.layers.layered_model import LayeredGaussians
 
     specs = [
-        LayerSpec(name="background",     layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",           layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
         LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     dev = torch.device("cuda")
 
     # Populate background + road on CUDA (mirrors the real trainer init path).
-    model.init_layer_from_points(
-        "background", torch.randn(100, 3, device=dev), setup_optimizer=False
-    )
-    model.init_layer_from_points(
-        "road", torch.randn(50, 3, device=dev), setup_optimizer=False
-    )
+    model.init_layer_from_points("background", torch.randn(100, 3, device=dev), setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(50, 3, device=dev), setup_optimizer=False)
 
     # --- pre-fix bug state: dynamic_rigids still at MoG.__init__ (CPU, 0 rows) ---
     dyn = model.layers["dynamic_rigids"]
@@ -356,14 +353,16 @@ def test_get_layer_mask_partitions_two_layers(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_from_checkpoint(
-        {"gaussians_nodes": {
-            "background": _v1_shape_dict(N=100, conf=real_conf),
-            "road":       _v1_shape_dict(N=50,  conf=real_conf),
-        }},
+        {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=100, conf=real_conf),
+                "road": _v1_shape_dict(N=50, conf=real_conf),
+            }
+        },
         setup_optimizer=False,
     )
 
@@ -396,8 +395,9 @@ def _two_layer_model(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
-                  scale_prior=(0.1, 0.1, 0.001), mask_field="road_mask"),
+        LayerSpec(
+            name="road", layer_id=1, max_n_particles=200_000, scale_prior=(0.1, 0.1, 0.001), mask_field="road_mask"
+        ),
     ]
     return LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
 
@@ -425,8 +425,7 @@ def test_init_layer_from_points_unknown_layer_raises(real_conf):
     """T3.0: unknown layer name raises ValueError listing enabled layers."""
     model = _two_layer_model(real_conf)
     with pytest.raises(ValueError, match="unknown layer"):
-        model.init_layer_from_points("sky_envmap", torch.randn(10, 3),
-                                     setup_optimizer=False)
+        model.init_layer_from_points("sky_envmap", torch.randn(10, 3), setup_optimizer=False)
 
 
 def test_init_layer_from_points_track_ids_registered_as_buffer(real_conf):
@@ -450,33 +449,30 @@ def test_optimizer_property_single_bg_passthrough(real_conf):
 
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=600_000)]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
-    model.init_layer_from_points("background", torch.randn(30, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(30, 3), setup_optimizer=False)
     model.setup_optimizer_for_test()
 
     bg_opt = model.layers["background"].optimizer
-    assert model.optimizer is bg_opt, (
-        "single-bg mode must return the bg layer's optimizer identity"
-    )
+    assert model.optimizer is bg_opt, "single-bg mode must return the bg layer's optimizer identity"
 
 
 def test_optimizer_wrapper_steps_all_layers(real_conf, monkeypatch):
     """T3.0: multi-layer mode: model.optimizer.step() fans out to every layer's
     sub-optimizer; zero_grad / param_groups also aggregated."""
     model = _two_layer_model(real_conf)
-    model.init_layer_from_points("background", torch.randn(50, 3),
-                                 setup_optimizer=False)
-    model.init_layer_from_points("road",       torch.randn(50, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(50, 3), setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(50, 3), setup_optimizer=False)
     model.setup_optimizer_for_test()
 
     calls: list[str] = []
     monkeypatch.setattr(
-        model.layers["background"].optimizer, "step",
+        model.layers["background"].optimizer,
+        "step",
         lambda *a, **kw: calls.append("bg"),
     )
     monkeypatch.setattr(
-        model.layers["road"].optimizer, "step",
+        model.layers["road"].optimizer,
+        "step",
         lambda *a, **kw: calls.append("road"),
     )
 
@@ -502,14 +498,13 @@ def test_layered_gaussians_holds_tracks_buffers(real_conf):
         LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000),
     ]
     tracks = {
-        "alice": {"poses": torch.eye(4).expand(20, 4, 4).clone(),
-                  "active": torch.ones(20, dtype=torch.bool)},
-        "bob":   {"poses": torch.eye(4).expand(20, 4, 4).clone(),
-                  "active": torch.cat([torch.zeros(5, dtype=torch.bool),
-                                       torch.ones(15, dtype=torch.bool)])},
+        "alice": {"poses": torch.eye(4).expand(20, 4, 4).clone(), "active": torch.ones(20, dtype=torch.bool)},
+        "bob": {
+            "poses": torch.eye(4).expand(20, 4, 4).clone(),
+            "active": torch.cat([torch.zeros(5, dtype=torch.bool), torch.ones(15, dtype=torch.bool)]),
+        },
     }
-    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0, tracks=tracks)
 
     # Mirror dicts populated
     assert set(model.tracks_poses.keys()) == {"alice", "bob"}
@@ -548,14 +543,11 @@ def _make_dyn_model(real_conf, tracks: dict, n_pts_per_track=10):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000,
-                  scale_prior=(0.05, 0.05, 0.05)),
+        LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000, scale_prior=(0.05, 0.05, 0.05)),
     ]
-    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0,
-                             tracks=tracks)
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0, tracks=tracks)
     # bg init
-    model.init_layer_from_points("background", torch.randn(5, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(5, 3), setup_optimizer=False)
     # dyn init: concat per-track points + track_ids
     track_names = sorted(tracks.keys())
     all_pts = []
@@ -563,25 +555,27 @@ def _make_dyn_model(real_conf, tracks: dict, n_pts_per_track=10):
     for tid in track_names:
         pts = torch.zeros(n_pts_per_track, 3)  # all at local origin for simplicity
         all_pts.append(pts)
-        all_ids.append(torch.full((n_pts_per_track,),
-                                  track_names.index(tid), dtype=torch.long))
-    model.init_layer_from_points("dynamic_rigids",
-                                 torch.cat(all_pts),
-                                 track_ids=torch.cat(all_ids),
-                                 setup_optimizer=False)
+        all_ids.append(torch.full((n_pts_per_track,), track_names.index(tid), dtype=torch.long))
+    model.init_layer_from_points(
+        "dynamic_rigids", torch.cat(all_pts), track_ids=torch.cat(all_ids), setup_optimizer=False
+    )
     return model
 
 
 def test_transform_means_identity_pose(real_conf):
     """T4.3: identity pose → world == local (no change)."""
-    tracks = {"v0": {
-        "poses": torch.eye(4).expand(5, 4, 4).clone(),
-        "active": torch.ones(5, dtype=torch.bool),
-    }}
+    tracks = {
+        "v0": {
+            "poses": torch.eye(4).expand(5, 4, 4).clone(),
+            "active": torch.ones(5, dtype=torch.bool),
+        }
+    }
     model = _make_dyn_model(real_conf, tracks, n_pts_per_track=3)
     local = model.layers["dynamic_rigids"].positions
     world = model._transform_means(
-        local, model.layers["dynamic_rigids"].track_ids, frame_id=2,
+        local,
+        model.layers["dynamic_rigids"].track_ids,
+        frame_id=2,
     )
     assert torch.allclose(world, local.to(world.dtype))
 
@@ -590,14 +584,18 @@ def test_transform_means_single_track_translation(real_conf):
     """T4.3: pose = identity rot + (1, 2, 3) translation → world = local + t."""
     pose = torch.eye(4)
     pose[:3, 3] = torch.tensor([1.0, 2.0, 3.0])
-    tracks = {"v0": {
-        "poses": pose.expand(5, 4, 4).clone(),
-        "active": torch.ones(5, dtype=torch.bool),
-    }}
+    tracks = {
+        "v0": {
+            "poses": pose.expand(5, 4, 4).clone(),
+            "active": torch.ones(5, dtype=torch.bool),
+        }
+    }
     model = _make_dyn_model(real_conf, tracks, n_pts_per_track=4)
     local = model.layers["dynamic_rigids"].positions  # all zeros
     world = model._transform_means(
-        local, model.layers["dynamic_rigids"].track_ids, frame_id=2,
+        local,
+        model.layers["dynamic_rigids"].track_ids,
+        frame_id=2,
     )
     expected = torch.tensor([1.0, 2.0, 3.0]).expand(4, 3)
     assert torch.allclose(world, expected.to(world.dtype))
@@ -605,19 +603,21 @@ def test_transform_means_single_track_translation(real_conf):
 
 def test_transform_means_multi_track_routing(real_conf):
     """T4.3: 2 tracks with different poses → particles routed correctly."""
-    pose_a = torch.eye(4); pose_a[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
-    pose_b = torch.eye(4); pose_b[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
+    pose_a = torch.eye(4)
+    pose_a[:3, 3] = torch.tensor([10.0, 0.0, 0.0])
+    pose_b = torch.eye(4)
+    pose_b[:3, 3] = torch.tensor([0.0, 20.0, 0.0])
     tracks = {
-        "alice": {"poses": pose_a.expand(5, 4, 4).clone(),
-                  "active": torch.ones(5, dtype=torch.bool)},
-        "bob":   {"poses": pose_b.expand(5, 4, 4).clone(),
-                  "active": torch.ones(5, dtype=torch.bool)},
+        "alice": {"poses": pose_a.expand(5, 4, 4).clone(), "active": torch.ones(5, dtype=torch.bool)},
+        "bob": {"poses": pose_b.expand(5, 4, 4).clone(), "active": torch.ones(5, dtype=torch.bool)},
     }
     model = _make_dyn_model(real_conf, tracks, n_pts_per_track=3)
     # _make_dyn_model assigns track_ids 0 to alice (sorted), 1 to bob
     local = model.layers["dynamic_rigids"].positions  # 6 zero pts (3 per track)
     world = model._transform_means(
-        local, model.layers["dynamic_rigids"].track_ids, frame_id=0,
+        local,
+        model.layers["dynamic_rigids"].track_ids,
+        frame_id=0,
     )
     # First 3 → alice translation, last 3 → bob translation
     assert torch.allclose(world[:3], torch.tensor([10.0, 0.0, 0.0]).expand(3, 3).to(world.dtype))
@@ -626,11 +626,14 @@ def test_transform_means_multi_track_routing(real_conf):
 
 def test_fused_view_dynamic_layer_applies_transform(real_conf):
     """T4.3: fused_view(frame_id=N) on bg+dyn → dyn positions transformed to world."""
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
-    tracks = {"v0": {
-        "poses": pose.expand(5, 4, 4).clone(),
-        "active": torch.ones(5, dtype=torch.bool),
-    }}
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
+    tracks = {
+        "v0": {
+            "poses": pose.expand(5, 4, 4).clone(),
+            "active": torch.ones(5, dtype=torch.bool),
+        }
+    }
     model = _make_dyn_model(real_conf, tracks, n_pts_per_track=2)
     fused = model.fused_view(frame_id=0)
     # bg: 5 pts (random); dyn: 2 pts (origin → transformed to (7,8,9))
@@ -649,11 +652,14 @@ def test_fused_view_dynamic_layer_frame_id_none_uses_first_active_fallback(real_
     With every frame active and identity rotations + translation (7,8,9),
     the first-active fallback picks frame 0 → world position = local + t.
     """
-    pose = torch.eye(4); pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
-    tracks = {"v0": {
-        "poses": pose.expand(5, 4, 4).clone(),
-        "active": torch.ones(5, dtype=torch.bool),
-    }}
+    pose = torch.eye(4)
+    pose[:3, 3] = torch.tensor([7.0, 8.0, 9.0])
+    tracks = {
+        "v0": {
+            "poses": pose.expand(5, 4, 4).clone(),
+            "active": torch.ones(5, dtype=torch.bool),
+        }
+    }
     model = _make_dyn_model(real_conf, tracks, n_pts_per_track=2)
     fused = model.fused_view(frame_id=None)
     # dyn local positions are zeros; world = R · 0 + t = (7, 8, 9)
@@ -673,14 +679,11 @@ def test_fused_view_object_exposes_full_mog_contract(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
-                  scale_prior=(0.1, 0.1, 0.001)),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000, scale_prior=(0.1, 0.1, 0.001)),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
-    model.init_layer_from_points("background", torch.randn(30, 3),
-                                 setup_optimizer=False)
-    model.init_layer_from_points("road", torch.randn(20, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(30, 3), setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(20, 3), setup_optimizer=False)
 
     fused = model.fused_view(frame_id=0)
     ref = model.layers["background"]
@@ -716,8 +719,7 @@ def test_fused_view_object_exposes_full_mog_contract(real_conf):
     # Features concat
     feat = view.get_features()
     assert feat.shape[0] == 50
-    assert feat.shape[1] == (view.features_albedo.shape[1]
-                              + view.features_specular.shape[1])
+    assert feat.shape[1] == (view.features_albedo.shape[1] + view.features_specular.shape[1])
 
     # get_positions = positions (no activation on positions)
     assert view.get_positions() is fused["positions"]
@@ -734,9 +736,11 @@ def test_forward_single_bg_passes_through_to_bg_layer(real_conf, monkeypatch):
     # Spy on bg layer __call__; intercept to avoid invoking real renderer.
     bg = model.layers["background"]
     calls: list = []
+
     def fake_call(self, gpu_batch, train=False, frame_id=0):
         calls.append((id(gpu_batch), train, frame_id))
         return {"pred_rgb": torch.zeros(1, 4, 4, 3)}
+
     monkeypatch.setattr(type(bg), "__call__", fake_call)
 
     out = model(object(), train=True, frame_id=42)  # gpu_batch sentinel
@@ -757,23 +761,22 @@ def test_forward_multi_layer_dispatches_to_ref_renderer(real_conf, monkeypatch):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
-                  scale_prior=(0.1, 0.1, 0.001)),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000, scale_prior=(0.1, 0.1, 0.001)),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
-    model.init_layer_from_points("background", torch.randn(30, 3),
-                                 setup_optimizer=False)
-    model.init_layer_from_points("road", torch.randn(20, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(30, 3), setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(20, 3), setup_optimizer=False)
 
     ref = next(iter(model.layers.values()))
     captured: dict = {}
+
     def fake_render(view, gpu_batch, train, frame_id):
         captured["view_type"] = type(view).__name__
         captured["num_gaussians"] = view.num_gaussians
         captured["train"] = train
         captured["frame_id"] = frame_id
         return {"pred_rgb": torch.zeros(1, 4, 4, 3)}
+
     monkeypatch.setattr(ref.renderer, "render", fake_render)
 
     out = model(object(), train=False, frame_id=7)
@@ -792,8 +795,10 @@ def _make_fake_batch(H: int = 4, W: int = 4):
 
     LayeredGaussians._blend_sky only touches these three attributes.
     """
+
     class _Batch:
         pass
+
     b = _Batch()
     # Camera-frame rays roughly forward; world-frame conversion goes through
     # T_to_world's rotation.
@@ -806,14 +811,19 @@ def _make_fake_batch(H: int = 4, W: int = 4):
 
 def test_layered_gaussians_holds_sky_module_mlp(real_conf):
     """T5.4: sky_envmap layer with backend='mlp' creates SkyEnvmapMLP module."""
-    from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.correction.sky_envmap import SkyEnvmapMLP
+    from threedgrut.layers.layered_model import LayeredGaussians
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     assert "sky_envmap" in model.layers
@@ -822,14 +832,19 @@ def test_layered_gaussians_holds_sky_module_mlp(real_conf):
 
 def test_layered_gaussians_holds_sky_module_cubemap(real_conf):
     """T5.4: backend='cubemap' creates SkyEnvmapCubemap with custom resolution."""
-    from threedgrut.layers.layered_model import LayeredGaussians
     from threedgrut.correction.sky_envmap import SkyEnvmapCubemap
+    from threedgrut.layers.layered_model import LayeredGaussians
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "cubemap", "resolution": 32}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "cubemap", "resolution": 32},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     sky = model.layers["sky_envmap"]
@@ -843,9 +858,14 @@ def test_blend_sky_alpha_zero_returns_sky_only(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     batch = _make_fake_batch(H=4, W=4)
@@ -865,9 +885,14 @@ def test_blend_sky_alpha_one_returns_gauss_only(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     batch = _make_fake_batch(H=4, W=4)
@@ -887,8 +912,7 @@ def test_blend_sky_passes_through_when_no_sky_layer(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
-                  scale_prior=(0.1, 0.1, 0.001)),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000, scale_prior=(0.1, 0.1, 0.001)),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     batch = _make_fake_batch()
@@ -913,20 +937,26 @@ def test_forward_multi_layer_with_sky_attaches_sky_outputs(real_conf, monkeypatc
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
-    model.init_layer_from_points("background", torch.randn(10, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(10, 3), setup_optimizer=False)
 
     ref = model.layers["background"]
+
     def fake_render(view, gpu_batch, train, frame_id):
         return {
-            "pred_rgb":     torch.zeros(1, 4, 4, 3),  # no gaussian contribution
+            "pred_rgb": torch.zeros(1, 4, 4, 3),  # no gaussian contribution
             "pred_opacity": torch.zeros(1, 4, 4, 1),  # transparent → sky only
         }
+
     monkeypatch.setattr(ref.renderer, "render", fake_render)
 
     out = model(_make_fake_batch(H=4, W=4), train=False, frame_id=0)
@@ -948,16 +978,20 @@ def test_sky_envmap_state_roundtrip_in_checkpoint(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     # Init the particle layer so get_model_parameters has something to emit.
     # setup_optimizer_for_test attaches a minimal Adam so each particle layer's
     # own get_model_parameters() (which asserts on self.optimizer) passes.
-    model.init_layer_from_points("background", torch.randn(8, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(8, 3), setup_optimizer=False)
     model.setup_optimizer_for_test()
 
     # Mutate sky weights so the round-trip can detect them.
@@ -972,8 +1006,8 @@ def test_sky_envmap_state_roundtrip_in_checkpoint(real_conf):
     # Save shape contract.
     assert "gaussians_nodes" in params
     assert "background" in params["gaussians_nodes"]
-    assert "sky_envmap" not in params["gaussians_nodes"]   # NOT under gaussians_nodes
-    assert "sky_envmap_state" in params                     # sibling key
+    assert "sky_envmap" not in params["gaussians_nodes"]  # NOT under gaussians_nodes
+    assert "sky_envmap_state" in params  # sibling key
 
     # Build a fresh container and round-trip through init_from_checkpoint.
     model2 = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
@@ -995,13 +1029,17 @@ def test_get_model_parameters_skips_non_particle_layers(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
-    model.init_layer_from_points("background", torch.randn(5, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(5, 3), setup_optimizer=False)
     model.setup_optimizer_for_test()
     params = model.get_model_parameters()
     assert list(params["gaussians_nodes"].keys()) == ["background"]
@@ -1019,16 +1057,24 @@ def test_enabled_layer_names_default_includes_all_contributing(real_conf):
     from threedgrut.layers.layered_model import LayeredGaussians
 
     specs = [
-        LayerSpec(name="background",    layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",          layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
         LayerSpec(name="dynamic_rigids", layer_id=2, max_n_particles=200_000),
-        LayerSpec(name="sky_envmap",    layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     assert model.enabled_layer_names == {
-        "background", "road", "dynamic_rigids", "sky_envmap",
+        "background",
+        "road",
+        "dynamic_rigids",
+        "sky_envmap",
     }
 
 
@@ -1039,21 +1085,24 @@ def test_fused_view_skips_disabled_layer(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_from_checkpoint(
-        {"gaussians_nodes": {
-            "background": _v1_shape_dict(N=100, conf=real_conf),
-            "road":       _v1_shape_dict(N=50,  conf=real_conf),
-        }},
+        {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=100, conf=real_conf),
+                "road": _v1_shape_dict(N=50, conf=real_conf),
+            }
+        },
         setup_optimizer=False,
     )
 
     assert model.fused_view()["positions"].shape == (150, 3)
     # Wholesale set replacement — mirrors the viser_gui_4d callback pattern.
     object.__setattr__(
-        model, "enabled_layer_names",
+        model,
+        "enabled_layer_names",
         model.enabled_layer_names - {"road"},
     )
     fused = model.fused_view()
@@ -1068,14 +1117,16 @@ def test_fused_view_all_disabled_returns_zero_particle(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_from_checkpoint(
-        {"gaussians_nodes": {
-            "background": _v1_shape_dict(N=100, conf=real_conf),
-            "road":       _v1_shape_dict(N=50,  conf=real_conf),
-        }},
+        {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=100, conf=real_conf),
+                "road": _v1_shape_dict(N=50, conf=real_conf),
+            }
+        },
         setup_optimizer=False,
     )
     object.__setattr__(model, "enabled_layer_names", set())
@@ -1097,23 +1148,19 @@ def test_forward_all_disabled_returns_empty_render(real_conf, monkeypatch):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="road",       layer_id=1, max_n_particles=200_000,
-                  scale_prior=(0.1, 0.1, 0.001)),
+        LayerSpec(name="road", layer_id=1, max_n_particles=200_000, scale_prior=(0.1, 0.1, 0.001)),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
-    model.init_layer_from_points("background", torch.randn(10, 3),
-                                 setup_optimizer=False)
-    model.init_layer_from_points("road", torch.randn(10, 3),
-                                 setup_optimizer=False)
+    model.init_layer_from_points("background", torch.randn(10, 3), setup_optimizer=False)
+    model.init_layer_from_points("road", torch.randn(10, 3), setup_optimizer=False)
 
     # Trip-wire on both layers' renderers — neither should be called when
     # everything is off.
     for layer in model.layers.values():
         monkeypatch.setattr(
-            layer.renderer, "render",
-            lambda *a, **kw: pytest.fail(
-                "renderer.render must not run when all particle layers disabled"
-            ),
+            layer.renderer,
+            "render",
+            lambda *a, **kw: pytest.fail("renderer.render must not run when all particle layers disabled"),
         )
     object.__setattr__(model, "enabled_layer_names", set())
 
@@ -1132,19 +1179,25 @@ def test_blend_sky_skipped_when_sky_disabled(real_conf):
 
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
-        LayerSpec(name="sky_envmap", layer_id=4, max_n_particles=0,
-                  scale_prior=(0.0, 0.0, 0.0), is_particle_layer=False,
-                  extra={"backend": "mlp"}),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     object.__setattr__(
-        model, "enabled_layer_names",
+        model,
+        "enabled_layer_names",
         model.enabled_layer_names - {"sky_envmap"},
     )
     batch = _make_fake_batch(H=4, W=4)
     rgb_gauss = torch.rand(1, 4, 4, 3)
     outputs = {
-        "pred_rgb":     rgb_gauss.clone(),
+        "pred_rgb": rgb_gauss.clone(),
         "pred_opacity": torch.zeros(1, 4, 4, 1),  # alpha=0 would normally pull sky in
     }
     out = model._blend_sky(outputs, batch)

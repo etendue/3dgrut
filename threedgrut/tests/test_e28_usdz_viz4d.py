@@ -5,6 +5,7 @@ Covers the ported fervent-knuth rig/viz4d logic + the cuboid→track_id remap th
 ``convert_usdz_to_ckpt_with_tracks`` relies on. The GPU orchestrator itself is
 validated end-to-end on inceptio with the real USDZ (driver run).
 """
+
 import numpy as np
 import pytest
 import torch
@@ -36,19 +37,22 @@ def _synth_rt():
     key = "camera_front_wide_120fov@clipgt-uuid"
     return {
         "world_to_nre": {"matrix": eye},
-        "rig_trajectories": [{
-            "sequence_id": "seqZ",
-            "cameras_frame_T_rig_worlds": {key: rig_pairs},
-            "cameras_frame_timestamps_us": {key: [[10, 20], [30, 40]]},
-            "T_rig_worlds": [],
-            "T_rig_world_timestamps_us": [],
-        }],
-        "camera_calibrations": {key: {
-            "T_sensor_rig": eye,
-            "logical_sensor_name": "camera_front_wide_120fov",
-            "camera_model": {"type": "pinhole",
-                             "parameters": {"resolution": [1920, 1080]}},
-        }},
+        "rig_trajectories": [
+            {
+                "sequence_id": "seqZ",
+                "cameras_frame_T_rig_worlds": {key: rig_pairs},
+                "cameras_frame_timestamps_us": {key: [[10, 20], [30, 40]]},
+                "T_rig_worlds": [],
+                "T_rig_world_timestamps_us": [],
+            }
+        ],
+        "camera_calibrations": {
+            key: {
+                "T_sensor_rig": eye,
+                "logical_sensor_name": "camera_front_wide_120fov",
+                "camera_model": {"type": "pinhole", "parameters": {"resolution": [1920, 1080]}},
+            }
+        },
     }
 
 
@@ -59,7 +63,7 @@ def test_short_cam_id_strips_suffix():
 
 def test_parse_rig_takes_exposure_end_pose_and_ts():
     rig = parse_rig_trajectories(_synth_rt())
-    assert "camera_front_wide_120fov" in rig.cams        # keyed by short logical name
+    assert "camera_front_wide_120fov" in rig.cams  # keyed by short logical name
     cam = rig.cams["camera_front_wide_120fov"]
     assert cam["c2w"].shape == (2, 4, 4)
     # END poses: frame0 tx=1.0, frame1 tx=3.0 (start poses 0.0/2.0 discarded)
@@ -78,9 +82,7 @@ def test_resolve_primary_cam_fallback():
 
 def test_cuboid_ids_to_track_ids_remap():
     # track_order declares cuboid idx -> tid; sorted_tids = ["3","9"]
-    track_ids, sorted_tids = cuboid_ids_to_track_ids(
-        np.array([0, 1, 2, 0]), track_order=["9", "3", "9"]
-    )
+    track_ids, sorted_tids = cuboid_ids_to_track_ids(np.array([0, 1, 2, 0]), track_order=["9", "3", "9"])
     assert sorted_tids == ["3", "9"]
     # cid_to_sorted: idx0 "9"->1, idx1 "3"->0, idx2 "9"->1
     assert track_ids.tolist() == [1, 0, 1, 1]
@@ -95,11 +97,9 @@ def test_cuboid_ids_basis_matches_viz_keys_superset():
     # REGRESSION (2026-06-17 大g viser catch): viz_4d.tracks carries MORE tids
     # (deformable/static for wireframes) than the cuboid track_order. The slot
     # basis MUST be sorted(viz keys), else gaussians get the wrong track's pose.
-    track_order = ["9", "3", "9"]                 # only cuboid (rigid) tids
-    viz_keys = ["1", "2", "3", "5", "9"]          # full viz_4d.tracks (superset)
-    track_ids, sorted_tids = cuboid_ids_to_track_ids(
-        np.array([0, 1, 2]), track_order, basis_tids=sorted(viz_keys)
-    )
+    track_order = ["9", "3", "9"]  # only cuboid (rigid) tids
+    viz_keys = ["1", "2", "3", "5", "9"]  # full viz_4d.tracks (superset)
+    track_ids, sorted_tids = cuboid_ids_to_track_ids(np.array([0, 1, 2]), track_order, basis_tids=sorted(viz_keys))
     assert sorted_tids == ["1", "2", "3", "5", "9"]
     # cuboid idx0 "9"→slot4, idx1 "3"→slot2, idx2 "9"→slot4 (viz basis, NOT 0/1)
     assert track_ids.tolist() == [4, 2, 4]
@@ -121,37 +121,40 @@ def test_build_vehicle_catalog_filters_class_and_computes_dist():
     def trk(cls, tx):
         poses = np.stack([np.eye(4) for _ in range(3)])
         poses[:, 0, 3] = tx
-        return {"class": cls, "poses": poses,
-                "frame_info": np.array([True, True, True]),
-                "size": np.array([4.0, 2.0, 1.5])}
+        return {
+            "class": cls,
+            "poses": poses,
+            "frame_info": np.array([True, True, True]),
+            "size": np.array([4.0, 2.0, 1.5]),
+        }
 
     viz = {
         "5": trk("automobile", [10.0, 10.0, 10.0]),  # far from ego (~8m)
-        "3": trk("automobile", [1.0, 1.0, 1.0]),      # on ego (~0m)
-        "9": trk("person", [1.0, 1.0, 1.0]),          # non-vehicle → excluded
+        "3": trk("automobile", [1.0, 1.0, 1.0]),  # on ego (~0m)
+        "9": trk("person", [1.0, 1.0, 1.0]),  # non-vehicle → excluded
     }
     cat = build_vehicle_catalog(viz, ["3", "5", "9"], present_slots={1}, ego_c2w=ego)
-    assert set(cat.keys()) == {"3", "5"}              # person excluded
+    assert set(cat.keys()) == {"3", "5"}  # person excluded
     assert cat["3"]["slot"] == 0 and cat["5"]["slot"] == 1
-    assert cat["5"]["present"] is True                # slot 1 ∈ present_slots
+    assert cat["5"]["present"] is True  # slot 1 ∈ present_slots
     assert cat["3"]["present"] is False
     assert cat["3"]["active_frames"] == 3
-    assert cat["3"]["min_dist_to_ego"] < 1.0          # sits on ego
-    assert cat["5"]["min_dist_to_ego"] > 7.0          # x=10 vs ego max x=2
+    assert cat["3"]["min_dist_to_ego"] < 1.0  # sits on ego
+    assert cat["5"]["min_dist_to_ego"] > 7.0  # x=10 vs ego max x=2
     assert cat["3"]["dims"] == (4.0, 2.0, 1.5)
 
 
 def test_add_sky_from_recon_carries_state_and_enables_layer():
     from omegaconf import OmegaConf
+
     from threedgrut_playground.utils.nre_usdz_viz4d import add_sky_from_recon
 
-    conf = OmegaConf.create({"layers": {"enabled": ["background", "road"]},
-                             "trainer": {"sky_backend": "cubemap"}})
+    conf = OmegaConf.create({"layers": {"enabled": ["background", "road"]}, "trainer": {"sky_backend": "cubemap"}})
     ckpt = {"model": {"gaussians_nodes": {}}, "config": conf}
     recon = {"model": {"sky_envmap_state": {"w": 1}}}
     assert add_sky_from_recon(ckpt, recon) is True
     assert "sky_envmap" in list(ckpt["config"].layers.enabled)
-    assert ckpt["config"].trainer.sky_backend == "mlp"        # cubemap→mlp (no nvdiffrast)
+    assert ckpt["config"].trainer.sky_backend == "mlp"  # cubemap→mlp (no nvdiffrast)
     assert ckpt["model"]["sky_envmap_state"] == {"w": 1}
     # recon without sky → no-op False
     assert add_sky_from_recon({"model": {}, "config": conf}, {"model": {}}) is False
@@ -165,8 +168,7 @@ def test_apply_nre_to_world_translate_static_only():
         "background": {"positions": torch.zeros(3, 3)},
         "road": {"positions": torch.ones(2, 3)},
         # dynamic_rigids object-local → 绝不平移（否则 double-translate 堆车）
-        "dynamic_rigids": {"positions": torch.full((4, 3), 7.0),
-                           "track_ids": torch.zeros(4)},
+        "dynamic_rigids": {"positions": torch.full((4, 3), 7.0), "track_ids": torch.zeros(4)},
     }
     dyn_before = gn["dynamic_rigids"]["positions"].clone()
     t = apply_nre_to_world_translate(gn, w2n)
@@ -174,7 +176,7 @@ def test_apply_nre_to_world_translate_static_only():
     exp = torch.tensor([38.0, -2.16, -0.28])
     assert torch.allclose(gn["background"]["positions"], torch.zeros(3, 3) + exp)
     assert torch.allclose(gn["road"]["positions"], torch.ones(2, 3) + exp)
-    assert torch.equal(gn["dynamic_rigids"]["positions"], dyn_before)   # object-local 不动
+    assert torch.equal(gn["dynamic_rigids"]["positions"], dyn_before)  # object-local 不动
 
 
 def test_apply_nre_to_world_translate_none_is_noop():
@@ -187,21 +189,22 @@ def test_apply_nre_to_world_translate_none_is_noop():
 
 def test_build_viz4d_dict_timeline_and_tracks():
     rig = parse_rig_trajectories(_synth_rt())
-    tracks = [TrackRaw(
-        tid="7",
-        poses7=np.array([[0, 0, 0, 0, 0, 0, 1.0],
-                         [5, 0, 0, 0, 0, 0, 1.0]], dtype=np.float64),
-        ts_us=np.array([20, 40], dtype=np.int64),
-        label_class="automobile",
-        dims=np.array([4.5, 1.8, 1.5], dtype=np.float32),
-    )]
+    tracks = [
+        TrackRaw(
+            tid="7",
+            poses7=np.array([[0, 0, 0, 0, 0, 0, 1.0], [5, 0, 0, 0, 0, 0, 1.0]], dtype=np.float64),
+            ts_us=np.array([20, 40], dtype=np.int64),
+            label_class="automobile",
+            dims=np.array([4.5, 1.8, 1.5], dtype=np.float32),
+        )
+    ]
     viz = build_viz4d_dict(rig, tracks, primary_cam="camera_front_wide_120fov")
     assert viz["schema_version"] == 2
     assert viz["tracks_camera_timestamps_us"].tolist() == [20, 40]
     assert set(viz["tracks"].keys()) == {"7"}
     t = viz["tracks"]["7"]
     # torch tensors (populate_tracks auto-hook needs .to()); engine/render path
-    assert tuple(t["poses"].shape) == (2, 4, 4)   # resampled onto 2-frame timeline
+    assert tuple(t["poses"].shape) == (2, 4, 4)  # resampled onto 2-frame timeline
     assert t["poses"].dtype == torch.float32
     assert t["frame_info"].dtype == torch.bool
     assert t["class"] == "automobile"

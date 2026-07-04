@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """V3-R1 unit tests for road_reg pure functions."""
+
 from __future__ import annotations
 
 import math
@@ -13,8 +14,12 @@ from threedgrut.model.road_reg import clamp_layer_scales
 
 def _make_road_spec(**kwargs):
     base = dict(
-        name="road", layer_id=1, max_n_particles=100,
-        scale_xy_max=0.3, scale_z_max=0.05, anisotropy_ratio_max=8.0,
+        name="road",
+        layer_id=1,
+        max_n_particles=100,
+        scale_xy_max=0.3,
+        scale_z_max=0.05,
+        anisotropy_ratio_max=8.0,
     )
     base.update(kwargs)
     return LayerSpec(**base)
@@ -45,8 +50,7 @@ def test_clamp_z_upper_bound():
 
 
 def test_clamp_anisotropy_ratio():
-    spec = _make_road_spec(scale_xy_max=None, scale_z_max=None,
-                            anisotropy_ratio_max=4.0)
+    spec = _make_road_spec(scale_xy_max=None, scale_z_max=None, anisotropy_ratio_max=4.0)
     scale_log = torch.tensor([[0.0, 0.0, math.log(0.05)]])  # ratio 20x
     out = clamp_layer_scales(scale_log, spec)
     out_exp = torch.exp(out)
@@ -56,11 +60,15 @@ def test_clamp_anisotropy_ratio():
 
 def test_clamp_combined_xy_z_anisotropy_road():
     spec = _make_road_spec()
-    scale_log = torch.log(torch.tensor([
-        [0.5, 0.5, 0.001],
-        [0.2, 0.2, 0.04],
-        [0.1, 0.1, 0.5],
-    ]))
+    scale_log = torch.log(
+        torch.tensor(
+            [
+                [0.5, 0.5, 0.001],
+                [0.2, 0.2, 0.04],
+                [0.1, 0.1, 0.5],
+            ]
+        )
+    )
     out = clamp_layer_scales(scale_log, spec)
     out_exp = torch.exp(out)
     assert torch.all(out_exp[:, :2] <= 0.3 + 1e-6)
@@ -86,8 +94,7 @@ def test_clamp_does_not_mutate_input():
 
 def test_clamp_hard_caps_win_over_tight_ratio():
     """When ratio < xy_max/z_max, the Z cap still holds (caps beat ratio)."""
-    spec = _make_road_spec(scale_xy_max=0.3, scale_z_max=0.05,
-                            anisotropy_ratio_max=4.0)  # 4 < 0.3/0.05=6 → tight
+    spec = _make_road_spec(scale_xy_max=0.3, scale_z_max=0.05, anisotropy_ratio_max=4.0)  # 4 < 0.3/0.05=6 → tight
     scale_log = torch.log(torch.tensor([[0.3, 0.3, 0.001]]))  # thin needle
     out = clamp_layer_scales(scale_log, spec)
     out_exp = torch.exp(out)
@@ -104,9 +111,7 @@ def test_effective_rank_loss_isotropic_minimum():
     needle = torch.tensor([[0.0, 0.0, -5.0]] * 4)  # huge anisotropy
     L_iso = compute_effective_rank_loss(iso)
     L_needle = compute_effective_rank_loss(needle)
-    assert L_iso.item() < L_needle.item(), (
-        f"isotropic loss {L_iso.item()} should be < needle loss {L_needle.item()}"
-    )
+    assert L_iso.item() < L_needle.item(), f"isotropic loss {L_iso.item()} should be < needle loss {L_needle.item()}"
 
 
 def test_effective_rank_loss_mask_selects_subset():

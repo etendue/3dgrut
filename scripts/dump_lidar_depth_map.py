@@ -17,6 +17,7 @@ CLI:
         --out-root /path/to/clip/aux/lidar_depth \
         --max-depth 80.0
 """
+
 import argparse
 import logging
 from pathlib import Path
@@ -37,9 +38,9 @@ def ray_depth_from_cam_pts(cam_pts: np.ndarray) -> np.ndarray:
 
 
 def project_pinhole(
-    cam_pts: np.ndarray,            # [N, 3] in camera frame (right-down-front)
-    intrinsics: dict,               # {fx, fy, cx, cy}
-    image_shape: Tuple[int, int],   # (H, W)
+    cam_pts: np.ndarray,  # [N, 3] in camera frame (right-down-front)
+    intrinsics: dict,  # {fx, fy, cx, cy}
+    image_shape: Tuple[int, int],  # (H, W)
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Project Nx3 camera-frame points to image UV. Returns (uv[N,2], valid[N]).
 
@@ -58,9 +59,9 @@ def project_pinhole(
 
 
 def scatter_depth_map(
-    uv: np.ndarray,        # [N, 2] float
-    ray_depth: np.ndarray, # [N]    float (ray-depth)
-    valid: np.ndarray,     # [N]    bool
+    uv: np.ndarray,  # [N, 2] float
+    ray_depth: np.ndarray,  # [N]    float (ray-depth)
+    valid: np.ndarray,  # [N]    bool
     H: int,
     W: int,
 ) -> np.ndarray:
@@ -147,8 +148,8 @@ def _accumulate_lidar_world_points(
 
 
 def _project_and_depth(
-    xyz_world: np.ndarray,   # [N, 3] world-global
-    c2w: np.ndarray,         # [4, 4] OpenCV camera-to-world
+    xyz_world: np.ndarray,  # [N, 3] world-global
+    c2w: np.ndarray,  # [4, 4] OpenCV camera-to-world
     params_dict: dict,
     model_type_name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
@@ -167,9 +168,7 @@ def _project_and_depth(
 
     # Camera-frame points for ray-depth (shared across all models; OpenCV c2w).
     w2c = np.linalg.inv(np.asarray(c2w, dtype=np.float64))
-    pts_h = np.concatenate(
-        [xyz_world, np.ones((len(xyz_world), 1), dtype=np.float64)], axis=1
-    )
+    pts_h = np.concatenate([xyz_world, np.ones((len(xyz_world), 1), dtype=np.float64)], axis=1)
     cam_pts = (w2c @ pts_h.T).T[:, :3]
     ray_depth = ray_depth_from_cam_pts(cam_pts)
 
@@ -250,7 +249,11 @@ def dump_clip(
 
     logger.info(
         "dump_clip: seq=%s cameras=%s time_window=±%dus max_depth=%.1fm out=%s",
-        sid, list(camera_ids), time_window_us, max_depth, out_root,
+        sid,
+        list(camera_ids),
+        time_window_us,
+        max_depth,
+        out_root,
     )
 
     summary: dict[str, tuple[int, float]] = {}  # camera_id -> (n_frames, mean_valid_px)
@@ -281,17 +284,13 @@ def dump_clip(
 
         valid_px_total = 0
         for frame_idx in range(n_frames):
-            ts_end_us = int(
-                camera_sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.END]
-            )
+            ts_end_us = int(camera_sensor.frames_timestamps_us[frame_idx, ncore.data.FrameTimepoint.END])
             xyz_world = _accumulate_lidar_world_points(dataset, ts_end_us, time_window_us)
             if len(xyz_world) == 0:
                 dmap = np.zeros((H, W), dtype=np.float32)
             else:
                 c2w = dataset._get_start_end_poses_world_global(camera_sensor, frame_idx)[0]
-                uv, ray_depth, visible, Hh, Ww = _project_and_depth(
-                    xyz_world, c2w, params_dict, model_type_name
-                )
+                uv, ray_depth, visible, Hh, Ww = _project_and_depth(xyz_world, c2w, params_dict, model_type_name)
                 # Clamp far returns to no-hit (depth > max_depth → drop).
                 visible = visible & (ray_depth <= max_depth)
                 dmap = scatter_depth_map(uv, ray_depth, visible, Hh, Ww)
@@ -303,15 +302,22 @@ def dump_clip(
             if frame_idx % 50 == 0 or frame_idx == n_frames - 1:
                 logger.info(
                     "  [%s] frame %d/%d ts=%d valid_px=%d (%.3f%%)",
-                    camera_id, frame_idx + 1, n_frames, ts_end_us,
-                    n_valid, 100.0 * n_valid / (H * W),
+                    camera_id,
+                    frame_idx + 1,
+                    n_frames,
+                    ts_end_us,
+                    n_valid,
+                    100.0 * n_valid / (H * W),
                 )
 
         mean_valid = valid_px_total / max(n_frames, 1)
         summary[camera_id] = (n_frames, mean_valid)
         logger.info(
             "dump_clip: camera %s done — %d frames, mean valid px/frame=%.0f (%.3f%%)",
-            camera_id, n_frames, mean_valid, 100.0 * mean_valid / (H * W),
+            camera_id,
+            n_frames,
+            mean_valid,
+            100.0 * mean_valid / (H * W),
         )
 
     logger.info("=== dump_clip summary (seq=%s) ===", sid)
@@ -326,19 +332,25 @@ if __name__ == "__main__":
     p.add_argument("--out-root", type=Path, required=True)
     p.add_argument("--max-depth", type=float, default=80.0)
     p.add_argument(
-        "--time-window-us", type=int, default=60000,
+        "--time-window-us",
+        type=int,
+        default=60000,
         help="±window (microseconds) around each camera frame to accumulate "
-             "LiDAR sweeps (default 60000 = ±60ms). Falls back to single "
-             "nearest sweep if none in window.",
+        "LiDAR sweeps (default 60000 = ±60ms). Falls back to single "
+        "nearest sweep if none in window.",
     )
     p.add_argument(
-        "--max-frames", type=int, default=None,
+        "--max-frames",
+        type=int,
+        default=None,
         help="Cap frames per camera (smoke / sanity-check). Default: all.",
     )
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO)
     dump_clip(
-        args.manifest, args.camera_ids, args.out_root,
+        args.manifest,
+        args.camera_ids,
+        args.out_root,
         max_depth=args.max_depth,
         time_window_us=args.time_window_us,
         max_frames=args.max_frames,

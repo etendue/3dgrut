@@ -27,6 +27,7 @@ Covered:
     4. frame_id boundaries (t=0 and t=N_t-1) stay in-bounds and correct;
        clamping handles out-of-range frame ids defensively.
 """
+
 from __future__ import annotations
 
 import math
@@ -47,7 +48,7 @@ def test_k1_degenerates_to_dc_only():
     K, N_t = 2, 7
     table = torch.tensor(
         [
-            [[0.10], [0.20], [0.30]],   # track 0: f_0 = (0.1, 0.2, 0.3)
+            [[0.10], [0.20], [0.30]],  # track 0: f_0 = (0.1, 0.2, 0.3)
             [[-0.40], [-0.50], [-0.60]],  # track 1
         ],
         dtype=torch.float32,
@@ -65,8 +66,7 @@ def test_k1_degenerates_to_dc_only():
     for t in range(N_t):
         bias = fourier_albedo_bias(table, track_ids, frame_id=t, n_frames=N_t)
         assert bias.shape == (4, 3)
-        assert torch.allclose(bias, dc_expected, atol=1e-7), \
-            f"k=1 must be DC-only (frame-independent); failed at t={t}"
+        assert torch.allclose(bias, dc_expected, atol=1e-7), f"k=1 must be DC-only (frame-independent); failed at t={t}"
 
 
 def test_k1_matches_plain_gather():
@@ -86,20 +86,28 @@ def test_fourier_sum_correct():
     """Σ_i f_i·cos(i·π·t/N) matches an explicit Python reference."""
     K, N_t, k = 1, 8, 4
     # f_0..f_3 for the single track, distinct per channel.
-    f = torch.tensor([[
-        [1.0, 0.5, 2.0, 0.25],   # R harmonics
-        [0.0, 1.0, 0.0, -1.0],   # G
-        [-1.0, 0.0, 0.5, 0.5],   # B
-    ]])  # [1, 3, 4]
+    f = torch.tensor(
+        [
+            [
+                [1.0, 0.5, 2.0, 0.25],  # R harmonics
+                [0.0, 1.0, 0.0, -1.0],  # G
+                [-1.0, 0.0, 0.5, 0.5],  # B
+            ]
+        ]
+    )  # [1, 3, 4]
     track_ids = torch.tensor([0], dtype=torch.long)
     t = 3
     # Reference: per channel sum_i f[c,i] * cos(i*pi*t/N)
     cos = [math.cos(i * math.pi * t / N_t) for i in range(k)]
-    ref = torch.tensor([[
-        sum(f[0, 0, i].item() * cos[i] for i in range(k)),
-        sum(f[0, 1, i].item() * cos[i] for i in range(k)),
-        sum(f[0, 2, i].item() * cos[i] for i in range(k)),
-    ]])
+    ref = torch.tensor(
+        [
+            [
+                sum(f[0, 0, i].item() * cos[i] for i in range(k)),
+                sum(f[0, 1, i].item() * cos[i] for i in range(k)),
+                sum(f[0, 2, i].item() * cos[i] for i in range(k)),
+            ]
+        ]
+    )
     bias = fourier_albedo_bias(f, track_ids, frame_id=t, n_frames=N_t)
     assert bias.shape == (1, 3)
     assert torch.allclose(bias, ref, atol=1e-6), f"got {bias}, want {ref}"
@@ -108,8 +116,8 @@ def test_fourier_sum_correct():
 def test_fourier_per_track_distinct():
     """Two tracks with different coefficients produce different biases."""
     f = torch.zeros(2, 3, 3)
-    f[0, :, 0] = torch.tensor([0.1, 0.2, 0.3])   # track 0: only DC
-    f[1, :, 1] = torch.tensor([1.0, 1.0, 1.0])   # track 1: only first harmonic
+    f[0, :, 0] = torch.tensor([0.1, 0.2, 0.3])  # track 0: only DC
+    f[1, :, 1] = torch.tensor([1.0, 1.0, 1.0])  # track 1: only first harmonic
     track_ids = torch.tensor([0, 1], dtype=torch.long)
     N_t = 4
     t = 1  # cos(1*pi*1/4) = cos(pi/4) = sqrt(2)/2
@@ -143,8 +151,7 @@ def test_upgrade_then_evaluate_equals_old_dc():
     N_t = 12
     for t in (0, 5, 11):
         bias = fourier_albedo_bias(up, track_ids, frame_id=t, n_frames=N_t)
-        assert torch.allclose(bias, old[track_ids], atol=1e-7), \
-            f"upgraded old table must reproduce DC gather at t={t}"
+        assert torch.allclose(bias, old[track_ids], atol=1e-7), f"upgraded old table must reproduce DC gather at t={t}"
 
 
 def test_upgrade_k1_is_noop_unsqueeze():
@@ -177,11 +184,15 @@ def test_upgrade_pads_when_target_larger():
 # ----------------------------------------------------------------------------
 def test_frame_boundaries_in_bounds_and_correct():
     """t=0 and t=N_t-1 are valid and numerically correct."""
-    f = torch.tensor([[
-        [0.0, 1.0],   # R: f0=0, f1=1
-        [0.0, 1.0],   # G
-        [0.0, 1.0],   # B
-    ]])  # [1, 3, 2]
+    f = torch.tensor(
+        [
+            [
+                [0.0, 1.0],  # R: f0=0, f1=1
+                [0.0, 1.0],  # G
+                [0.0, 1.0],  # B
+            ]
+        ]
+    )  # [1, 3, 2]
     track_ids = torch.tensor([0], dtype=torch.long)
     N_t = 6
     # t=0: cos(0)=1, cos(0)=1 → bias = f0 + f1 = (1,1,1)
@@ -227,5 +238,4 @@ def test_gradient_flows_to_coefficients():
     bias = fourier_albedo_bias(f, track_ids, frame_id=2, n_frames=8)
     bias.sum().backward()
     assert f.grad is not None
-    assert not torch.allclose(f.grad, torch.zeros_like(f.grad)), \
-        "gradient must reach the coefficient table"
+    assert not torch.allclose(f.grad, torch.zeros_like(f.grad)), "gradient must reach the coefficient table"

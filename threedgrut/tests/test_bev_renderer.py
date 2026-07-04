@@ -3,6 +3,7 @@
 
 Pure CPU / Mac-runnable. No torch, no GPU, no viser.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from threedgrut_playground.utils.bev_renderer import (
 @dataclass
 class _FakeMeta:
     """Minimal FourDMetadata stand-in for tests."""
+
     ego_poses_c2w: np.ndarray
     ego_frame_timestamps_us: np.ndarray
     sequence_id: str = "synthetic"
@@ -79,11 +81,14 @@ def test_build_inputs_z_filter_drops_high_points():
     meta = _FakeMeta(ego_poses_c2w=poses, ego_frame_timestamps_us=ts)
 
     layer_positions = {
-        "background": np.array([
-            [0.0, 0.0, 0.0],          # in-window
-            [0.0, 0.0, 50.0],         # sky-high, should drop
-            [0.0, 0.0, -50.0],        # sub-ground, should drop
-        ], dtype=np.float32),
+        "background": np.array(
+            [
+                [0.0, 0.0, 0.0],  # in-window
+                [0.0, 0.0, 50.0],  # sky-high, should drop
+                [0.0, 0.0, -50.0],  # sub-ground, should drop
+            ],
+            dtype=np.float32,
+        ),
     }
     inputs = build_inputs_from_metadata(meta, layer_positions, frame_idx=1, z_window_m=10.0)
     assert inputs.layer_positions_xy["background"].shape == (1, 2)
@@ -97,13 +102,16 @@ def test_build_inputs_active_cuboid_at_frame():
     track_poses[:, :2, 3] = np.array([[2.0, 1.0]] * n, dtype=np.float32)
     frame_info = np.array([False, True, True, False, False], dtype=bool)
     meta = _FakeMeta(
-        ego_poses_c2w=poses, ego_frame_timestamps_us=ts,
-        tracks={"42": {
-            "poses": track_poses,
-            "size": np.array([4.5, 1.8, 1.5], dtype=np.float32),
-            "frame_info": frame_info,
-            "class": "automobile",
-        }},
+        ego_poses_c2w=poses,
+        ego_frame_timestamps_us=ts,
+        tracks={
+            "42": {
+                "poses": track_poses,
+                "size": np.array([4.5, 1.8, 1.5], dtype=np.float32),
+                "frame_info": frame_info,
+                "class": "automobile",
+            }
+        },
     )
 
     inputs_f0 = build_inputs_from_metadata(meta, {}, frame_idx=0)

@@ -1,5 +1,8 @@
 """Inspect V3 Stage A ckpt: confirm learnable_pose_state + _track_quat_<tid>/_track_trans_<tid>/_track_pose_gt_<tid> rideshare."""
-import sys, re
+
+import re
+import sys
+
 import torch
 
 ckpt_path = sys.argv[1]
@@ -30,6 +33,8 @@ else:
 
 print()
 print("=== Track params in model state_dict ===")
+
+
 def find_track(obj, prefix=""):
     """Walk and emit (key, tensor) for keys containing 'track'."""
     if isinstance(obj, dict):
@@ -39,12 +44,17 @@ def find_track(obj, prefix=""):
         if re.search(r"track", prefix, re.IGNORECASE):
             yield prefix, obj
 
+
 count_quat = count_trans = count_pose_gt = count_active = 0
 for key, t in find_track(ckpt):
-    if "_track_quat_" in key: count_quat += 1
-    elif "_track_trans_" in key: count_trans += 1
-    elif "_track_pose_gt_" in key: count_pose_gt += 1
-    elif "_track_active_" in key: count_active += 1
+    if "_track_quat_" in key:
+        count_quat += 1
+    elif "_track_trans_" in key:
+        count_trans += 1
+    elif "_track_pose_gt_" in key:
+        count_pose_gt += 1
+    elif "_track_active_" in key:
+        count_active += 1
     if count_quat + count_trans + count_pose_gt + count_active <= 12:
         print(f"  {key}: {tuple(t.shape)} dtype={t.dtype} requires_grad={getattr(t,'requires_grad',False)}")
 

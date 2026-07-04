@@ -33,6 +33,7 @@ extractor returns an empty/None placeholder rather than raising so that an
 incomplete dataset (e.g. tracks not populated) still produces a partially-
 useful viz_4d block.
 """
+
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -129,14 +130,14 @@ def _detect_primary_camera(dataset):
                 # touching torch; the other fields (principal_point, polynomials,
                 # linear_cde) are already float32 so they round-trip fine.
                 ftheta_dict = {
-                    "resolution":              np.asarray(params.resolution, dtype=np.int64),
-                    "shutter_type":            params.shutter_type.name,
-                    "principal_point":         _to_cpu_float32(torch.as_tensor(params.principal_point)).numpy(),
-                    "reference_poly":          params.reference_poly.name,
+                    "resolution": np.asarray(params.resolution, dtype=np.int64),
+                    "shutter_type": params.shutter_type.name,
+                    "principal_point": _to_cpu_float32(torch.as_tensor(params.principal_point)).numpy(),
+                    "reference_poly": params.reference_poly.name,
                     "pixeldist_to_angle_poly": _to_cpu_float32(torch.as_tensor(params.pixeldist_to_angle_poly)).numpy(),
                     "angle_to_pixeldist_poly": _to_cpu_float32(torch.as_tensor(params.angle_to_pixeldist_poly)).numpy(),
-                    "max_angle":               float(params.max_angle),
-                    "linear_cde":              _to_cpu_float32(torch.as_tensor(params.linear_cde)).numpy(),
+                    "max_angle": float(params.max_angle),
+                    "linear_cde": _to_cpu_float32(torch.as_tensor(params.linear_cde)).numpy(),
                 }
             except Exception as e:
                 logger.warning(f"[viz_4d] FTheta intrinsics extraction failed: {e}; ftheta_dict=None")
@@ -181,19 +182,14 @@ def _extract_ego(dataset, conf) -> dict:
     ts_np = np.empty((0,), dtype=np.int64)
     try:
         seq_id = dataset.sequence_id
-        primary_frame_indices = dataset.camera_train_frame_indices.get(
-            primary_id
-        )
+        primary_frame_indices = dataset.camera_train_frame_indices.get(primary_id)
         if primary_frame_indices is not None and len(primary_frame_indices) > 0:
             n_primary = len(primary_frame_indices)
             sensor = dataset.sequence_camera_sensors[seq_id][primary_id]
-            ts_np = np.asarray(sensor.frames_timestamps_us)[
-                primary_frame_indices, end_idx
-            ].astype(np.int64)
+            ts_np = np.asarray(sensor.frames_timestamps_us)[primary_frame_indices, end_idx].astype(np.int64)
     except Exception as e:
         logger.warning(
-            f"[viz_4d] primary-camera timestamp extraction failed: {e}; "
-            f"falling back to empty ts + full poses"
+            f"[viz_4d] primary-camera timestamp extraction failed: {e}; " f"falling back to empty ts + full poses"
         )
 
     # Sanity: get_poses() places primary camera first when N_primary > 0.
@@ -204,16 +200,16 @@ def _extract_ego(dataset, conf) -> dict:
         poses_c2w = torch.from_numpy(poses_full)
 
     return {
-        "poses_c2w":                _to_cpu_float32(poses_c2w),
-        "frame_timestamps_us":      torch.from_numpy(ts_np),
-        "primary_camera_id":        primary_id,
+        "poses_c2w": _to_cpu_float32(poses_c2w),
+        "frame_timestamps_us": torch.from_numpy(ts_np),
+        "primary_camera_id": primary_id,
         "primary_camera_fov_y_rad": fov_y,
-        "primary_camera_aspect":    aspect,
+        "primary_camera_aspect": aspect,
         # T8.13: full FTheta polynomial intrinsics for viser_gui_4d → 3dgut UT
         # rasterizer fisheye projection. None for pinhole / non-FTheta cameras
         # (viewer falls back to existing pinhole approximation path).
         "primary_camera_intrinsics_FTheta": ftheta_dict,
-        "primary_camera_resolution":        resolution,
+        "primary_camera_resolution": resolution,
     }
 
 
@@ -238,15 +234,16 @@ def _extract_tracks(model) -> tuple[dict, Optional[torch.Tensor]]:
         active_buf = tracks_active.get(tid)
         meta = tracks_metadata.get(tid, {}) or {}
         out[tid] = {
-            "poses":      _to_cpu_float32(poses_buf),
-            "size":       _to_cpu_float32(meta.get("size", torch.zeros(3)))
-                            if not isinstance(meta.get("size"), torch.Tensor)
-                            or meta["size"].numel() > 0
-                            else _to_cpu_float32(meta["size"]),
-            "frame_info": _to_cpu_bool(active_buf)
-                            if active_buf is not None
-                            else torch.ones(poses_buf.shape[0], dtype=torch.bool),
-            "class":      str(meta.get("class", "unknown")),
+            "poses": _to_cpu_float32(poses_buf),
+            "size": (
+                _to_cpu_float32(meta.get("size", torch.zeros(3)))
+                if not isinstance(meta.get("size"), torch.Tensor) or meta["size"].numel() > 0
+                else _to_cpu_float32(meta["size"])
+            ),
+            "frame_info": (
+                _to_cpu_bool(active_buf) if active_buf is not None else torch.ones(poses_buf.shape[0], dtype=torch.bool)
+            ),
+            "class": str(meta.get("class", "unknown")),
         }
 
     shared_ts_buf = getattr(model, "tracks_camera_timestamps_us", None)
@@ -269,16 +266,14 @@ def _model_to_instance_pts_dict(model) -> dict:
         if size is None:
             size = torch.zeros(3, dtype=torch.float32)
         out[tid] = {
-            "poses":      poses,
-            "size":       size,
-            "frame_info": active if active is not None else torch.ones(
-                poses.shape[0], dtype=torch.bool),
+            "poses": poses,
+            "size": size,
+            "frame_info": active if active is not None else torch.ones(poses.shape[0], dtype=torch.bool),
         }
     return out
 
 
-def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int],
-                   dyn_pts_per_track: int) -> dict:
+def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int], dyn_pts_per_track: int) -> dict:
     """Pull road LiDAR (static) + dynamic LiDAR (per-track object-local).
 
     Road LiDAR stays in world frame (it IS the static ground). Dynamic LiDAR
@@ -296,16 +291,20 @@ def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int],
                                                 animated playback)
     """
     out: dict[str, Any] = {
-        "road_xyz": None, "road_rgb": None,
-        "road_n_total": None, "road_subsample": None,
+        "road_xyz": None,
+        "road_rgb": None,
+        "road_n_total": None,
+        "road_subsample": None,
         # New per-track local schema (T8.11)
         "dynamic_local_xyz": None,
         "dynamic_track_ids": None,
         "dynamic_track_names": None,
         "dynamic_pts_per_track": None,
         # Legacy world-frame (v1 viewer fallback)
-        "dynamic_xyz": None, "dynamic_rgb": None,
-        "dynamic_n_total": None, "dynamic_subsample": None,
+        "dynamic_xyz": None,
+        "dynamic_rgb": None,
+        "dynamic_n_total": None,
+        "dynamic_subsample": None,
     }
 
     # ---- road: world-frame static ----
@@ -318,9 +317,11 @@ def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int],
                 xyz_s = _subsample(xyz, road_subsample)
                 out["road_xyz"] = _to_cpu_float32(xyz_s)
                 if rgb is not None and rgb.numel() > 0:
-                    rgb_s = rgb[: xyz_s.shape[0]] if (
-                        road_subsample is None or n_total <= road_subsample
-                    ) else rgb[torch.randperm(n_total)[:road_subsample]]
+                    rgb_s = (
+                        rgb[: xyz_s.shape[0]]
+                        if (road_subsample is None or n_total <= road_subsample)
+                        else rgb[torch.randperm(n_total)[:road_subsample]]
+                    )
                     out["road_rgb"] = _to_cpu_float32(rgb_s)
                 out["road_n_total"] = n_total
                 out["road_subsample"] = int(xyz_s.shape[0])
@@ -339,6 +340,7 @@ def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int],
         # Populate per-track object-local via the same routine the trainer's
         # dynamic_rigid layer uses (mutates instance_pts_dict in place).
         from threedgrut.layers.dynamic_rigid_init import init_dynamic_rigid_layer
+
         instance_pts_dict = _model_to_instance_pts_dict(model)
         if not instance_pts_dict:
             # No tracks → keep just the legacy world-frame union for fallback.
@@ -347,7 +349,9 @@ def _extract_lidar(dataset, model, conf, *, road_subsample: Optional[int],
             out["dynamic_subsample"] = int(dyn_xyz_world.shape[0])
             return out
         local_pts, track_ids, track_names = init_dynamic_rigid_layer(
-            instance_pts_dict, dyn_xyz_world, max_pts_per_track=dyn_pts_per_track,
+            instance_pts_dict,
+            dyn_xyz_world,
+            max_pts_per_track=dyn_pts_per_track,
         )
         out["dynamic_local_xyz"] = _to_cpu_float32(local_pts)
         out["dynamic_track_ids"] = _to_cpu_int64(track_ids)
@@ -366,8 +370,7 @@ def _extract_defaults(ego: dict, conf) -> dict:
     """Build initial viewer config from ego trajectory + conf hints."""
     poses = ego.get("poses_c2w")
     ts = ego.get("frame_timestamps_us")
-    initial_c2w = (poses[0].clone() if poses is not None and poses.numel() > 0
-                   else torch.eye(4, dtype=torch.float32))
+    initial_c2w = poses[0].clone() if poses is not None and poses.numel() > 0 else torch.eye(4, dtype=torch.float32)
     t_first = int(ts[0].item()) if ts is not None and ts.numel() > 0 else 0
     t_last = int(ts[-1].item()) if ts is not None and ts.numel() > 0 else 0
     viz_conf = conf.get("viz_4d", {}) if hasattr(conf, "get") else {}
@@ -381,11 +384,11 @@ def _extract_defaults(ego: dict, conf) -> dict:
 
     return {
         "initial_c2w": initial_c2w,
-        "near":        _val("default_near", 0.1),
-        "far":         _val("default_far", 500.0),
-        "resolution":  int(_val("default_resolution", 1024)),
-        "t_us_first":  t_first,
-        "t_us_last":   t_last,
+        "near": _val("default_near", 0.1),
+        "far": _val("default_far", 500.0),
+        "resolution": int(_val("default_resolution", 1024)),
+        "t_us_first": t_first,
+        "t_us_last": t_last,
     }
 
 
@@ -406,28 +409,17 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
     """
     # Read sub-conf safely (DictConfig.get returns None on missing key).
     viz_conf = conf.get("viz_4d", {}) if hasattr(conf, "get") else {}
-    include_lidar = bool(
-        viz_conf.get("include_lidar", True) if hasattr(viz_conf, "get") else True
-    )
-    road_subsample = (
-        viz_conf.get("lidar_road_subsample", 200_000)
-        if hasattr(viz_conf, "get") else 200_000
-    )
+    include_lidar = bool(viz_conf.get("include_lidar", True) if hasattr(viz_conf, "get") else True)
+    road_subsample = viz_conf.get("lidar_road_subsample", 200_000) if hasattr(viz_conf, "get") else 200_000
     # T8.11: dynamic LiDAR is now per-track (object-local) so the cap is per
     # track, not total. 5000 pts/track × ~30-100 tracks ≈ 150-500K total, on
     # par with the old 100K total but enough headroom for dense long-active
     # tracks. Backward-compatible config key:
     # `lidar_dynamic_pts_per_track` first, fall back to legacy
     # `lidar_dynamic_subsample` / 20 as a heuristic if user only set total.
-    dyn_pts_per_track = (
-        viz_conf.get("lidar_dynamic_pts_per_track", None)
-        if hasattr(viz_conf, "get") else None
-    )
+    dyn_pts_per_track = viz_conf.get("lidar_dynamic_pts_per_track", None) if hasattr(viz_conf, "get") else None
     if dyn_pts_per_track is None:
-        legacy_total = (
-            viz_conf.get("lidar_dynamic_subsample", 100_000)
-            if hasattr(viz_conf, "get") else 100_000
-        )
+        legacy_total = viz_conf.get("lidar_dynamic_subsample", 100_000) if hasattr(viz_conf, "get") else 100_000
         # rough split — driving clips average ~30-50 tracks, want ~5K each
         dyn_pts_per_track = max(1_000, int(legacy_total) // 20)
 
@@ -438,7 +430,9 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
     tracks, shared_ts = _extract_tracks(model)
     if include_lidar:
         lidar = _extract_lidar(
-            dataset, model, conf,
+            dataset,
+            model,
+            conf,
             road_subsample=int(road_subsample),
             dyn_pts_per_track=int(dyn_pts_per_track),
         )
@@ -446,24 +440,30 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
         # include_lidar=False → skip LiDAR entirely; viewer renders without
         # ground-truth point clouds (Gaussian background still works).
         lidar = {
-            "road_xyz": None, "road_rgb": None,
-            "road_n_total": None, "road_subsample": None,
-            "dynamic_local_xyz": None, "dynamic_track_ids": None,
-            "dynamic_track_names": None, "dynamic_pts_per_track": None,
-            "dynamic_xyz": None, "dynamic_rgb": None,
-            "dynamic_n_total": None, "dynamic_subsample": None,
+            "road_xyz": None,
+            "road_rgb": None,
+            "road_n_total": None,
+            "road_subsample": None,
+            "dynamic_local_xyz": None,
+            "dynamic_track_ids": None,
+            "dynamic_track_names": None,
+            "dynamic_pts_per_track": None,
+            "dynamic_xyz": None,
+            "dynamic_rgb": None,
+            "dynamic_n_total": None,
+            "dynamic_subsample": None,
         }
     defaults = _extract_defaults(ego, conf)
 
     out = {
-        "schema_version":               SCHEMA_VERSION,
-        "dataset_type":                 dataset_type,
-        "sequence_id":                  sequence_id,
-        "ego":                          ego,
-        "tracks":                       tracks,
-        "tracks_camera_timestamps_us":  shared_ts,
-        "lidar":                        lidar,
-        "viewer_defaults":              defaults,
+        "schema_version": SCHEMA_VERSION,
+        "dataset_type": dataset_type,
+        "sequence_id": sequence_id,
+        "ego": ego,
+        "tracks": tracks,
+        "tracks_camera_timestamps_us": shared_ts,
+        "lidar": lidar,
+        "viewer_defaults": defaults,
     }
     logger.info(
         f"[viz_4d] packed schema_v{SCHEMA_VERSION} "

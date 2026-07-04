@@ -15,6 +15,7 @@ Design rules:
   * **Latency visibility.** ``last_rtt_ms`` exposes the round-trip time so the
     GUI can surface it next to the FPS counter.
 """
+
 from __future__ import annotations
 
 import socket
@@ -51,9 +52,7 @@ class DifixClient:
 
     def _connect(self) -> socket.socket:
         if self._sock is None:
-            s = socket.create_connection(
-                (self.host, self.port), timeout=self.timeout
-            )
+            s = socket.create_connection((self.host, self.port), timeout=self.timeout)
             s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self._sock = s
         return self._sock
@@ -96,8 +95,7 @@ class DifixClient:
             self.healthy = False
             if not self._warned:
                 print(
-                    f"[DiFix] client error → falling back to raw frame "
-                    f"({self.host}:{self.port}): {exc}",
+                    f"[DiFix] client error → falling back to raw frame " f"({self.host}:{self.port}): {exc}",
                     flush=True,
                 )
                 self._warned = True

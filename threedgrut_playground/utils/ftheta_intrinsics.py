@@ -12,6 +12,7 @@ pixeldist_to_angle_poly / angle_to_pixeldist_poly / max_angle /
 linear_cde) are forwarded verbatim to
 ``_3dgut_plugin.fromFThetaCameraModelParameters`` (bindings.cpp:79).
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -57,8 +58,7 @@ def ftheta_pixels_to_camera_rays(ftheta_dict: dict) -> np.ndarray:
     # cde = np.asarray(ftheta_dict["linear_cde"], dtype=np.float64)
 
     # Pixel grid: (H, W) with x=column (j), y=row (i).
-    js, is_ = np.meshgrid(np.arange(W, dtype=np.float64),
-                          np.arange(H, dtype=np.float64), indexing="xy")
+    js, is_ = np.meshgrid(np.arange(W, dtype=np.float64), np.arange(H, dtype=np.float64), indexing="xy")
     du = js - cx
     dv = is_ - cy
 
@@ -82,8 +82,7 @@ def ftheta_pixels_to_camera_rays(ftheta_dict: dict) -> np.ndarray:
     return rays  # (H, W, 3)
 
 
-def ftheta_dict_to_tensors(d: Optional[dict],
-                           device: torch.device | str = "cpu") -> Optional[dict]:
+def ftheta_dict_to_tensors(d: Optional[dict], device: torch.device | str = "cpu") -> Optional[dict]:
     """Normalize a numpy/tensor-stored FTheta intrinsics dict → the shape
     expected by ``_3dgut_plugin.fromFThetaCameraModelParameters``.
 
@@ -115,8 +114,7 @@ def ftheta_dict_to_tensors(d: Optional[dict],
                 out[k] = [float(x) for x in v.tolist()]
         elif torch.is_tensor(v):
             t = v.detach().cpu()
-            if t.dtype in (torch.int8, torch.int16, torch.int32, torch.int64,
-                           torch.uint8):
+            if t.dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
                 out[k] = [int(x) for x in t.tolist()]
             else:
                 out[k] = [float(x) for x in t.tolist()]

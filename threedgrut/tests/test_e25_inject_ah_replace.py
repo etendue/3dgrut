@@ -18,6 +18,7 @@ Pins the pure-CPU core of ``threedgrut/layers/e25_inject.py``:
 The alignment engine itself (warmstart_ply) is reused from PR #18; two smoke
 tests confirm it imports and aligns under this branch.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,7 +27,18 @@ import pytest
 import torch
 from hydra import compose, initialize_config_dir
 
-from threedgrut.layers.layered_model import LayeredGaussians, _SH_C0, _rotmat_to_quat_wxyz
+from threedgrut.layers.e25_inject import (
+    aligned_to_node_tensors,
+    build_name_to_int_id,
+    flip_forward_180,
+    match_assets_by_size,
+    replace_tracks_in_dyn_node,
+)
+from threedgrut.layers.layered_model import (
+    _SH_C0,
+    LayeredGaussians,
+    _rotmat_to_quat_wxyz,
+)
 from threedgrut.layers.registry import specs_from_config
 from threedgrut.layers.warmstart_ply import (
     AlignedAsset,
@@ -35,22 +47,14 @@ from threedgrut.layers.warmstart_ply import (
     asset_extent,
     compute_axis_alignment,
 )
-from threedgrut.layers.e25_inject import (
-    aligned_to_node_tensors,
-    build_name_to_int_id,
-    flip_forward_180,
-    match_assets_by_size,
-    replace_tracks_in_dyn_node,
-)
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 # -----------------------------------------------------------------------------
 # helpers
 # -----------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def real_conf():
@@ -60,6 +64,7 @@ def real_conf():
 
 def _with_dyn_layer(conf):
     from copy import deepcopy
+
     c = deepcopy(conf)
     c.layers = {"enabled": ["background", "dynamic_rigids"]}
     return c
@@ -112,17 +117,18 @@ def _forge_dyn_node(particles_per_id: dict[int, int], *, spec_dim: int = 45) -> 
 # 1. size matching
 # -----------------------------------------------------------------------------
 
+
 def test_match_assets_by_size_greedy_order_invariant():
     # recon cars (track_key -> [L,W,H]); AH assets (hash -> [L,W,H]) shuffled.
     recon = {
         "t_sedan": (4.2, 1.9, 1.6),
-        "t_van":   (5.8, 2.3, 1.9),
+        "t_van": (5.8, 2.3, 1.9),
         "t_compact": (4.0, 1.8, 1.4),
     }
     ah = {
-        "h_big":  (5.76, 2.25, 1.88),   # → t_van
-        "h_small": (4.0, 1.8, 1.43),    # → t_compact
-        "h_mid":  (4.23, 1.9, 1.61),    # → t_sedan
+        "h_big": (5.76, 2.25, 1.88),  # → t_van
+        "h_small": (4.0, 1.8, 1.43),  # → t_compact
+        "h_mid": (4.23, 1.9, 1.61),  # → t_sedan
     }
     out = match_assets_by_size(ah, recon)
     assert out == {"t_van": "h_big", "t_compact": "h_small", "t_sedan": "h_mid"}
@@ -141,6 +147,7 @@ def test_match_assets_by_size_more_recon_than_ah():
 #     used by _transform_means_and_active, else AH cars render on wrong tracks)
 # -----------------------------------------------------------------------------
 
+
 def test_build_name_to_int_id_is_sorted_enumerate():
     tracks = {
         "z_car@scene:1": {"size": (4, 2, 1)},
@@ -154,6 +161,7 @@ def test_build_name_to_int_id_is_sorted_enumerate():
 # -----------------------------------------------------------------------------
 # 2. aligned asset → node tensors
 # -----------------------------------------------------------------------------
+
 
 def test_aligned_to_node_tensors_specular_zero_filled():
     a = _synth_aligned(7)
@@ -183,6 +191,7 @@ def test_aligned_to_node_tensors_geometry_passthrough():
 # -----------------------------------------------------------------------------
 # 3. per-track subset replacement (the core surgery)
 # -----------------------------------------------------------------------------
+
 
 def test_replace_swaps_only_target_tracks():
     dyn = _forge_dyn_node({0: 6, 1: 4, 2: 5, 3: 7, 4: 3}, spec_dim=45)
@@ -228,8 +237,7 @@ def test_replace_track_ids_self_consistent():
     new = replace_tracks_in_dyn_node(dyn, aligned_by_id)
 
     n = new["positions"].shape[0]
-    for key in ("rotation", "scale", "density", "features_albedo",
-                "features_specular", "track_ids"):
+    for key in ("rotation", "scale", "density", "features_albedo", "features_specular", "track_ids"):
         assert new[key].shape[0] == n, f"{key} length != positions"
     # id set unchanged (3 kept + 2 replaced still cover {0,1,2,3})
     assert set(new["track_ids"].tolist()) == {0, 1, 2, 3}
@@ -255,6 +263,7 @@ def test_replace_ah_particles_carry_aligned_positions():
 # -----------------------------------------------------------------------------
 # 4. alignment engine smoke (PR #18 reuse under this branch)
 # -----------------------------------------------------------------------------
+
 
 def test_compute_axis_alignment_proper_rotation():
     half = torch.tensor([2.0, 1.0, 0.7])
@@ -335,15 +344,14 @@ def test_apply_alignment_fills_cuboid():
 # 5. surgically-edited ckpt reloads through LayeredGaussians and renders
 # -----------------------------------------------------------------------------
 
+
 def test_injected_ckpt_reloadable_and_transformable(real_conf):
     conf = _with_dyn_layer(real_conf)
     model = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
     model.init_layer_from_points("background", torch.randn(6, 3) * 0.1, setup_optimizer=False)
     recon_pos = torch.randn(30, 3) * 0.1
     recon_ids = torch.tensor([i % 5 for i in range(30)], dtype=torch.int64)  # 5 cars
-    model.init_layer_from_points(
-        "dynamic_rigids", recon_pos, track_ids=recon_ids, setup_optimizer=False
-    )
+    model.init_layer_from_points("dynamic_rigids", recon_pos, track_ids=recon_ids, setup_optimizer=False)
     model.setup_optimizer_for_test()
     ckpt = {"model": model.get_model_parameters()}
 
@@ -351,9 +359,7 @@ def test_injected_ckpt_reloadable_and_transformable(real_conf):
     spec_dim = dyn["features_specular"].shape[1]
     # replace ids 1 and 3 with synthetic AH assets
     aligned_by_id = {1: _synth_aligned(8, seed=1), 3: _synth_aligned(10, seed=3)}
-    ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = replace_tracks_in_dyn_node(
-        dyn, aligned_by_id
-    )
+    ckpt["model"]["gaussians_nodes"]["dynamic_rigids"] = replace_tracks_in_dyn_node(dyn, aligned_by_id)
 
     model_b = LayeredGaussians(conf, specs=specs_from_config(conf), scene_extent=10.0)
     model_b.init_from_checkpoint(ckpt, setup_optimizer=False)

@@ -14,6 +14,7 @@ Semantics (D6 D7):
   - SSIM is intentionally NOT region-weighted (D7); the caller keeps SSIM
     full-image.
 """
+
 from __future__ import annotations
 
 from typing import Optional

@@ -30,6 +30,7 @@ unavailable on a dev laptop and would break the Mac test purity this module is
 designed to preserve. ``test_per_class_eval.py`` pins the two tables together
 so drift is caught.
 """
+
 from __future__ import annotations
 
 from typing import Callable, Dict, Iterable, Optional, Tuple
@@ -90,9 +91,9 @@ def dilate_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:
 
 
 def compute_lpips_in_mask(
-    rgb_pred: torch.Tensor,   # [H, W, 3] in [0, 1]
-    rgb_gt: torch.Tensor,     # [H, W, 3]
-    mask: torch.Tensor,       # [H, W] float or bool — 1 inside the region
+    rgb_pred: torch.Tensor,  # [H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,  # [H, W, 3]
+    mask: torch.Tensor,  # [H, W] float or bool — 1 inside the region
     lpips_fn: LpipsFn,
     min_pixels: int = 50,
 ) -> Optional[float]:
@@ -129,8 +130,7 @@ def _grad_mag(img2d: torch.Tensor) -> torch.Tensor:
     使用 replicate padding，确保常数图梯度为全 0（边界不产生伪边缘）。
     """
     x = img2d.unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-    kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
-                      dtype=img2d.dtype, device=img2d.device)
+    kx = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]], dtype=img2d.dtype, device=img2d.device)
     ky = kx.t().contiguous()  # 转置即垂直 Sobel 核 [[-1,-2,-1],[0,0,0],[1,2,1]]
     x_pad = F.pad(x, (1, 1, 1, 1), mode="replicate")
     gx = F.conv2d(x_pad, kx.view(1, 1, 3, 3), padding=0)
@@ -139,9 +139,9 @@ def _grad_mag(img2d: torch.Tensor) -> torch.Tensor:
 
 
 def _grad_mag_corr_in_mask(
-    rgb_pred: torch.Tensor,   # [H, W, 3] in [0, 1]
-    rgb_gt: torch.Tensor,     # [H, W, 3]
-    mask: torch.Tensor,       # [H, W] bool/float
+    rgb_pred: torch.Tensor,  # [H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,  # [H, W, 3]
+    mask: torch.Tensor,  # [H, W] bool/float
     min_pixels: int = 50,
 ) -> Optional[float]:
     """mask 内 Sobel 梯度幅值（亮度）的 Pearson 相关。
@@ -164,9 +164,9 @@ def _grad_mag_corr_in_mask(
 
 
 def compute_per_class_metrics(
-    rgb_pred: torch.Tensor,   # [H, W, 3] in [0, 1]
-    rgb_gt: torch.Tensor,     # [H, W, 3]
-    sseg: torch.Tensor,       # [H, W] semantic class ids
+    rgb_pred: torch.Tensor,  # [H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,  # [H, W, 3]
+    sseg: torch.Tensor,  # [H, W] semantic class ids
     class_specs: Dict[str, Iterable[int]],
     *,
     lpips_fn: Optional[LpipsFn] = None,
@@ -204,9 +204,9 @@ def compute_per_class_metrics(
 
 
 def compute_lane_metrics(
-    rgb_pred: torch.Tensor,    # [H, W, 3] in [0, 1]
-    rgb_gt: torch.Tensor,      # [H, W, 3]
-    lane_sseg: torch.Tensor,   # [H, W] lane 产物类 id（**不是** semantic_sseg）
+    rgb_pred: torch.Tensor,  # [H, W, 3] in [0, 1]
+    rgb_gt: torch.Tensor,  # [H, W, 3]
+    lane_sseg: torch.Tensor,  # [H, W] lane 产物类 id（**不是** semantic_sseg）
     lane_ids: Iterable[int] = LANE_CLASS_IDS,
     *,
     band_px: int = DEFAULT_LANE_BAND_PX,
@@ -230,8 +230,8 @@ def compute_lane_metrics(
     ``lane_band_lpips, lane_band_psnr, lane_raw_psnr, lane_grad_corr,
     lane_n_pixels（raw 条纹）, lane_band_n_pixels（膨胀 band）``。
     """
-    raw_mask = class_mask_from_sseg(lane_sseg, lane_ids)   # [H,W] bool
-    band_mask = dilate_mask(raw_mask, band_px)             # [H,W] bool
+    raw_mask = class_mask_from_sseg(lane_sseg, lane_ids)  # [H,W] bool
+    band_mask = dilate_mask(raw_mask, band_px)  # [H,W] bool
     if restrict_mask is not None:
         rm = restrict_mask.to(torch.bool)
         raw_mask = raw_mask & rm
@@ -242,7 +242,8 @@ def compute_lane_metrics(
 
     band_lpips = (
         compute_lpips_in_mask(rgb_pred, rgb_gt, band_mask, lpips_fn, min_pixels=min_pixels)
-        if lpips_fn is not None else None
+        if lpips_fn is not None
+        else None
     )
     band_psnr = compute_psnr_in_mask(rgb_pred, rgb_gt, band_mask, min_pixels=min_pixels)
     raw_psnr = compute_psnr_in_mask(rgb_pred, rgb_gt, raw_mask, min_pixels=min_pixels)

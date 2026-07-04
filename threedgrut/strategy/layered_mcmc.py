@@ -13,6 +13,7 @@ note: structural identity only, not byte-identical training output).
 Non-particle layers (is_particle_layer=False, e.g. sky_envmap) are skipped:
 they have no MoG particles to densify.
 """
+
 from __future__ import annotations
 
 import torch
@@ -22,9 +23,9 @@ from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.model.bg_cuboid_loss import clamp_layer_positions_to_cuboids
 from threedgrut.model.road_reg import (
-    clamp_layer_scales,
-    build_road_bev_height,
     bg_in_road_slab_mask,
+    build_road_bev_height,
+    clamp_layer_scales,
     project_bg_road_hits,
 )
 from threedgrut.strategy.base import BaseStrategy
@@ -50,8 +51,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         # lazily on first use; road layer is ~frozen so it stays valid).
         self._road_bev = None
         logger.info(
-            f"LayeredMCMC: {len(self.sub_strategies)} sub-strategies for "
-            f"layers {list(self.sub_strategies.keys())}"
+            f"LayeredMCMC: {len(self.sub_strategies)} sub-strategies for " f"layers {list(self.sub_strategies.keys())}"
         )
 
     @staticmethod
@@ -86,9 +86,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         for sub in self.sub_strategies.values():
             sub.init_densification_buffer(checkpoint)
 
-    def _post_backward(
-        self, step: int, scene_extent: float, train_dataset, batch=None, writer=None
-    ) -> bool:
+    def _post_backward(self, step: int, scene_extent: float, train_dataset, batch=None, writer=None) -> bool:
         """E3.2.5③b: zero rotation grads for layers with freeze_rotation_grad.
 
         Runs after loss.backward() and BEFORE optimizer.step()/zero_grad()
@@ -115,23 +113,17 @@ class LayeredMCMCStrategy(BaseStrategy):
                 rot.grad.zero_()
         return False
 
-    def _post_optimizer_step(
-        self, step: int, scene_extent: float, train_dataset, batch=None, writer=None
-    ) -> bool:
+    def _post_optimizer_step(self, step: int, scene_extent: float, train_dataset, batch=None, writer=None) -> bool:
         # E3 road-freeze (NuRec `strategy.exclude_layer_ids`): layers listed here
         # are fully exempt from MCMC — no add/relocate/perturb/prune, so their
         # particle set stays exactly as initialized. Default empty → baseline
         # byte-identical. CLI: ++strategy.exclude_layer_ids=[road].
-        exclude = set(
-            getattr(getattr(self.conf, "strategy", None), "exclude_layer_ids", None) or []
-        )
+        exclude = set(getattr(getattr(self.conf, "strategy", None), "exclude_layer_ids", None) or [])
         any_updated = False
         for name, sub in self.sub_strategies.items():
             if name in exclude:
                 continue
-            updated = sub._post_optimizer_step(
-                step, scene_extent, train_dataset, batch, writer
-            )
+            updated = sub._post_optimizer_step(step, scene_extent, train_dataset, batch, writer)
             any_updated = any_updated or updated
         # T8/B3 — dynamic_rigids hard constraint: clamp positions back into
         # owner cuboid after MCMC perturb/add. Pure no-op when conf gate off
@@ -168,8 +160,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         if cfg is None:
             return
         enabled = (
-            cfg.get("dyn_clamp_to_cuboid", False) if hasattr(cfg, "get")
-            else getattr(cfg, "dyn_clamp_to_cuboid", False)
+            cfg.get("dyn_clamp_to_cuboid", False) if hasattr(cfg, "get") else getattr(cfg, "dyn_clamp_to_cuboid", False)
         )
         if not enabled:
             return
@@ -196,7 +187,10 @@ class LayeredMCMCStrategy(BaseStrategy):
         track_keys_sorted = sorted(tracks_poses.keys()) if tracks_poses else sorted(sizes_map.keys())
         with torch.no_grad():
             clamp_layer_positions_to_cuboids(
-                dyn.positions.data, track_ids_buf, track_keys_sorted, sizes_map,
+                dyn.positions.data,
+                track_ids_buf,
+                track_keys_sorted,
+                sizes_map,
             )
 
     def _maybe_clamp_road_scales(self) -> None:
@@ -213,11 +207,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         for spec in self.specs:
             if not spec.is_particle_layer:
                 continue
-            if (
-                spec.scale_xy_max is None
-                and spec.scale_z_max is None
-                and spec.anisotropy_ratio_max is None
-            ):
+            if spec.scale_xy_max is None and spec.scale_z_max is None and spec.anisotropy_ratio_max is None:
                 continue
             layer = layers.get(spec.name) if hasattr(layers, "get") else layers[spec.name]
             if layer is None or layer.scale.numel() == 0:
@@ -246,17 +236,11 @@ class LayeredMCMCStrategy(BaseStrategy):
 
         mode = str(getattr(cfg, "mode", "clamp"))
         if mode != "clamp":
-            raise NotImplementedError(
-                f"bg_road_slab_exclude.mode='{mode}' not implemented in A1 (use 'clamp')"
-            )
+            raise NotImplementedError(f"bg_road_slab_exclude.mode='{mode}' not implemented in A1 (use 'clamp')")
 
         if getattr(self, "_road_bev", None) is None:
-            self._road_bev = build_road_bev_height(
-                road.positions.detach(), cell=float(getattr(cfg, "cell", 0.20))
-            )
-        mask = bg_in_road_slab_mask(
-            bg.positions.detach(), self._road_bev, band_z=float(getattr(cfg, "band_z", 0.15))
-        )
+            self._road_bev = build_road_bev_height(road.positions.detach(), cell=float(getattr(cfg, "cell", 0.20)))
+        mask = bg_in_road_slab_mask(bg.positions.detach(), self._road_bev, band_z=float(getattr(cfg, "band_z", 0.15)))
         # Observability (review caveat): log how many bg gaussians are clamped so
         # the A/B run shows the exclusion is firing (and not fighting photometric
         # gradients). Throttled: first call + every 500th.
@@ -264,8 +248,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         self._bg_excl_calls = getattr(self, "_bg_excl_calls", 0) + 1
         if self._bg_excl_calls == 1 or self._bg_excl_calls % 500 == 0:
             logger.info(
-                f"[A1] bg_road_slab_exclude: clamped {n_excl} background gaussians "
-                f"(call #{self._bg_excl_calls})"
+                f"[A1] bg_road_slab_exclude: clamped {n_excl} background gaussians " f"(call #{self._bg_excl_calls})"
             )
         if n_excl == 0:
             return
@@ -307,10 +290,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         else:
             return
         # Projectors expect numpy arrays in the dict; coerce any tensor values.
-        intr_np = {
-            k: (v.detach().cpu().numpy() if torch.is_tensor(v) else v)
-            for k, v in intr.items()
-        }
+        intr_np = {k: (v.detach().cpu().numpy() if torch.is_tensor(v) else v) for k, v in intr.items()}
 
         rm = road_mask_t.detach().cpu().numpy()
         T_c2w = T_to_world[0].detach().cpu().numpy()
@@ -321,8 +301,7 @@ class LayeredMCMCStrategy(BaseStrategy):
         self._bg_proj_calls = getattr(self, "_bg_proj_calls", 0) + 1
         if self._bg_proj_calls == 1 or self._bg_proj_calls % 500 == 0:
             logger.info(
-                f"[A2] bg_road_proj_clamp: clamped {n_hit} background gaussians "
-                f"(call #{self._bg_proj_calls})"
+                f"[A2] bg_road_proj_clamp: clamped {n_hit} background gaussians " f"(call #{self._bg_proj_calls})"
             )
         if n_hit == 0:
             return

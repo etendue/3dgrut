@@ -1,6 +1,11 @@
 """E2.1: side-by-side raw|fixed montage for a few frames per mode."""
-import argparse, json, os
-import torch, torchvision
+
+import argparse
+import json
+import os
+
+import torch
+import torchvision
 
 
 def _load(path):
@@ -16,8 +21,8 @@ def montage(raw_dir, fixed_dir, mode, out_path, n=4):
     for key, rel in keys[::step][:n]:
         r = _load(os.path.join(raw_dir, mode, rel))
         x = _load(os.path.join(fixed_dir, mode, rel))
-        rows.append(torch.cat([r, x], dim=2))     # concat along width (raw | fixed)
-    grid = torch.cat(rows, dim=1)                  # stack rows along height
+        rows.append(torch.cat([r, x], dim=2))  # concat along width (raw | fixed)
+    grid = torch.cat(rows, dim=1)  # stack rows along height
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     torchvision.utils.save_image(grid, out_path)
     print(f"montage {mode} -> {out_path} ({len(rows)} rows raw|fixed)")

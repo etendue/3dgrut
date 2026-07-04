@@ -5,6 +5,7 @@ Mirrors the test approach for the bg-side diagnostic
 (test_diagnose_bg_in_cuboid.py): load the script as a module without invoking
 ``main()``, then exercise the pure tensor functions with hand-built inputs.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -31,21 +32,26 @@ def diag_module():
 # per_cuboid_counts_owner_aware
 # -----------------------------------------------------------------------------
 
+
 def test_owner_aware_two_tracks_basic_count(diag_module):
     """4 particles, 2 owned by t0 and 2 by t1, all inside their cuboid."""
-    positions_local = torch.tensor([
-        [0.1, 0.0, 0.0],   # owner t0
-        [-0.2, 0.0, 0.0],  # owner t0
-        [0.5, 0.0, 0.0],   # owner t1
-        [-0.5, 0.0, 0.0],  # owner t1
-    ])
+    positions_local = torch.tensor(
+        [
+            [0.1, 0.0, 0.0],  # owner t0
+            [-0.2, 0.0, 0.0],  # owner t0
+            [0.5, 0.0, 0.0],  # owner t1
+            [-0.5, 0.0, 0.0],  # owner t1
+        ]
+    )
     densities_raw = torch.zeros(4)  # sigmoid(0) = 0.5 → all alive
     track_ids = torch.tensor([0, 0, 1, 1], dtype=torch.int64)
-    sizes = {"t0": torch.tensor([2.0, 2.0, 2.0]),
-             "t1": torch.tensor([2.0, 2.0, 2.0])}
+    sizes = {"t0": torch.tensor([2.0, 2.0, 2.0]), "t1": torch.tensor([2.0, 2.0, 2.0])}
     out = diag_module.per_cuboid_counts_owner_aware(
-        positions_local, densities_raw, track_ids,
-        ["t0", "t1"], sizes,
+        positions_local,
+        densities_raw,
+        track_ids,
+        ["t0", "t1"],
+        sizes,
     )
     by_tid = {r["track_id"]: r for r in out}
     assert by_tid["t0"]["n_particles"] == 2
@@ -62,8 +68,12 @@ def test_owner_aware_detects_dead_particles(diag_module):
     track_ids = torch.tensor([0, 0], dtype=torch.int64)
     sizes = {"t0": torch.tensor([2.0, 2.0, 2.0])}
     out = diag_module.per_cuboid_counts_owner_aware(
-        positions_local, densities_raw, track_ids,
-        ["t0"], sizes, opacity_threshold=0.005,
+        positions_local,
+        densities_raw,
+        track_ids,
+        ["t0"],
+        sizes,
+        opacity_threshold=0.005,
     )
     assert out[0]["n_particles"] == 2
     assert out[0]["alive"] == 1
@@ -73,16 +83,22 @@ def test_owner_aware_detects_dead_particles(diag_module):
 
 def test_owner_aware_detects_out_of_cuboid_particles(diag_module):
     """3 particles owned by t0 with half=1.0: 2 inside, 1 outside x by 0.5."""
-    positions_local = torch.tensor([
-        [0.5, 0.0, 0.0],   # inside
-        [-0.5, 0.0, 0.0],  # inside
-        [1.5, 0.0, 0.0],   # outside x by 0.5
-    ])
+    positions_local = torch.tensor(
+        [
+            [0.5, 0.0, 0.0],  # inside
+            [-0.5, 0.0, 0.0],  # inside
+            [1.5, 0.0, 0.0],  # outside x by 0.5
+        ]
+    )
     densities_raw = torch.zeros(3)
     track_ids = torch.zeros(3, dtype=torch.int64)
     sizes = {"t0": torch.tensor([2.0, 2.0, 2.0])}  # half=1.0
     out = diag_module.per_cuboid_counts_owner_aware(
-        positions_local, densities_raw, track_ids, ["t0"], sizes,
+        positions_local,
+        densities_raw,
+        track_ids,
+        ["t0"],
+        sizes,
     )
     assert out[0]["out_of_cuboid"] == 1
     assert math.isclose(out[0]["outlier_max_dist"], 0.5, abs_tol=1e-5)
@@ -98,8 +114,11 @@ def test_owner_aware_track_with_zero_particles_reported(diag_module):
         "t1": torch.tensor([3.0, 3.0, 3.0]),
     }
     out = diag_module.per_cuboid_counts_owner_aware(
-        positions_local, densities_raw, track_ids,
-        ["t0", "t1"], sizes,
+        positions_local,
+        densities_raw,
+        track_ids,
+        ["t0", "t1"],
+        sizes,
     )
     by_tid = {r["track_id"]: r for r in out}
     assert by_tid["t1"]["n_particles"] == 0
@@ -116,16 +135,22 @@ def test_owner_aware_density_2d_shape_handled(diag_module):
     track_ids = torch.tensor([0], dtype=torch.int64)
     sizes = {"t0": torch.tensor([2.0, 2.0, 2.0])}
     out = diag_module.per_cuboid_counts_owner_aware(
-        positions_local, densities_raw, track_ids, ["t0"], sizes,
+        positions_local,
+        densities_raw,
+        track_ids,
+        ["t0"],
+        sizes,
     )
     assert out[0]["alive"] == 1
 
 
 def test_owner_aware_empty_positions(diag_module):
     out = diag_module.per_cuboid_counts_owner_aware(
-        torch.zeros(0, 3), torch.zeros(0),
+        torch.zeros(0, 3),
+        torch.zeros(0),
         torch.zeros(0, dtype=torch.int64),
-        ["t0"], {"t0": torch.tensor([2.0, 2.0, 2.0])},
+        ["t0"],
+        {"t0": torch.tensor([2.0, 2.0, 2.0])},
     )
     assert out == []
 
@@ -133,6 +158,7 @@ def test_owner_aware_empty_positions(diag_module):
 # -----------------------------------------------------------------------------
 # per_cuboid_counts_world_fallback
 # -----------------------------------------------------------------------------
+
 
 def test_world_fallback_reports_global_alive_count(diag_module):
     """Path (b) is degenerate per-owner but reports global alive across tracks."""
@@ -146,7 +172,10 @@ def test_world_fallback_reports_global_alive_count(diag_module):
         }
     }
     out = diag_module.per_cuboid_counts_world_fallback(
-        positions_local, densities_raw, tracks, frame_idx=0,
+        positions_local,
+        densities_raw,
+        tracks,
+        frame_idx=0,
     )
     assert len(out) == 1
     assert out[0]["track_id"] == "t0"
@@ -156,7 +185,10 @@ def test_world_fallback_reports_global_alive_count(diag_module):
 
 def test_world_fallback_empty(diag_module):
     out = diag_module.per_cuboid_counts_world_fallback(
-        torch.zeros(0, 3), torch.zeros(0), {}, frame_idx=0,
+        torch.zeros(0, 3),
+        torch.zeros(0),
+        {},
+        frame_idx=0,
     )
     assert out == []
 
@@ -164,6 +196,7 @@ def test_world_fallback_empty(diag_module):
 # -----------------------------------------------------------------------------
 # Sanity: script-level imports work
 # -----------------------------------------------------------------------------
+
 
 def test_script_module_imports_diagnose_function(diag_module):
     """The script's main entry point ``diagnose`` should be importable as a

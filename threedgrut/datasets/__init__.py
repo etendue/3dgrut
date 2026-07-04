@@ -265,7 +265,9 @@ def make_test(name: str, config):
                 lidar_color_generic_data_name=config.dataset.get("lidar_color_generic_data_name", "rgb"),
                 load_aux_masks=config.dataset.get("load_aux_masks", False),  # T11.F1 (test) — mirror make_train/val
                 load_lane_masks=config.dataset.get("load_lane_masks", False),  # Phase 3 lane
-                load_lidar_depth_map=config.dataset.get("load_lidar_depth_map", False),  # T11.F1 (test): feeds mean_lidar_psnr
+                load_lidar_depth_map=config.dataset.get(
+                    "load_lidar_depth_map", False
+                ),  # T11.F1 (test): feeds mean_lidar_psnr
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.F1 (test)
             )
         case _:

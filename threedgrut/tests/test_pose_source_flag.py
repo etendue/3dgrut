@@ -14,6 +14,7 @@ Pins:
 These guarantees back ``scripts/render_learned_vs_gt.py`` — the only
 consumer toggles this flag between two forward passes on the same model.
 """
+
 import os
 import sys
 
@@ -24,9 +25,7 @@ from hydra import compose, initialize_config_dir
 from threedgrut.layers.layer_spec import LayerSpec
 
 # Mirror test_learnable_pose_param.py layout.
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -55,14 +54,16 @@ def _viz4d_tracks_dict(F: int = 4) -> dict:
         for f in range(F):
             yaw = torch.tensor(0.1 * (f + 1) + 0.5 * i, dtype=torch.float32)
             c, s = torch.cos(yaw), torch.sin(yaw)
-            poses[f, 0, 0] =  c; poses[f, 0, 1] = -s
-            poses[f, 1, 0] =  s; poses[f, 1, 1] =  c
+            poses[f, 0, 0] = c
+            poses[f, 0, 1] = -s
+            poses[f, 1, 0] = s
+            poses[f, 1, 1] = c
             poses[f, 0, 3] = float(f) + i * 100.0
         tracks[tid] = {
-            "poses":      poses,
-            "size":       torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
+            "poses": poses,
+            "size": torch.tensor([2.0, 1.5, 4.5], dtype=torch.float32),
             "frame_info": torch.ones(F, dtype=torch.bool),
-            "class":      "automobile" if i == 0 else "heavy_truck",
+            "class": "automobile" if i == 0 else "heavy_truck",
         }
     return tracks
 
@@ -118,14 +119,16 @@ def test_compose_for_track_gt_returns_gt_buffer(conf_learnable_on):
     # learned route picks up the drift
     model.set_pose_source("learned")
     learned = model._compose_pose_for_track("t0", 2)
-    assert not torch.allclose(learned[:3, 3], pose_gt_t0_frame2[:3, 3], atol=1e-3), \
-        "drift should be visible in learned route"
+    assert not torch.allclose(
+        learned[:3, 3], pose_gt_t0_frame2[:3, 3], atol=1e-3
+    ), "drift should be visible in learned route"
 
     # gt route ignores the drift
     model.set_pose_source("gt")
     got_gt = model._compose_pose_for_track("t0", 2)
-    assert torch.allclose(got_gt, pose_gt_t0_frame2, atol=1e-6), \
-        f"gt route should match _track_pose_gt_t0[2] exactly, got\n{got_gt}\nvs\n{pose_gt_t0_frame2}"
+    assert torch.allclose(
+        got_gt, pose_gt_t0_frame2, atol=1e-6
+    ), f"gt route should match _track_pose_gt_t0[2] exactly, got\n{got_gt}\nvs\n{pose_gt_t0_frame2}"
 
 
 def test_compose_all_frames_gt_returns_full_gt_buffer(conf_learnable_on):
@@ -201,9 +204,7 @@ def test_gt_falls_through_in_buffer_mode(conf_learnable_off):
     specs = [LayerSpec(name="background", layer_id=0, max_n_particles=1000)]
     model = LayeredGaussians(conf_learnable_off, specs=specs, scene_extent=1.0)
     tracks = _viz4d_tracks_dict(F=4)
-    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor(
-        [1000, 2000, 3000, 4000], dtype=torch.int64
-    )
+    tracks[next(iter(tracks))]["cam_timestamps_us"] = torch.tensor([1000, 2000, 3000, 4000], dtype=torch.int64)
     model.populate_tracks(tracks)
 
     # No _track_pose_gt_t0 in buffer mode.

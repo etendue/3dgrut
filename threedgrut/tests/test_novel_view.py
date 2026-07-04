@@ -3,6 +3,7 @@
 
 Pure math; CPU only; runs in <50ms.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -12,9 +13,9 @@ import torch
 from threedgrut.utils.novel_view import (
     LEGACY_NOVEL_AVG_MODES,
     NOVEL_VIEW_MODES,
+    perturb_batch_shutter_pair_torch,
     perturb_c2w,
     perturb_shutter_pair,
-    perturb_batch_shutter_pair_torch,
 )
 
 
@@ -26,7 +27,10 @@ def _identity_c2w():
 def test_legacy_avg_modes_frozen_at_four():
     """E1.1: mean_novel_lpips_avg 历史口径永远只聚合这 4 档（B3 锚 0.5962）。"""
     assert LEGACY_NOVEL_AVG_MODES == (
-        "lateral_1m", "lateral_2m", "yaw_5deg", "yaw_10deg",
+        "lateral_1m",
+        "lateral_2m",
+        "yaw_5deg",
+        "yaw_10deg",
     )
 
 
@@ -34,9 +38,14 @@ def test_modes_constant_has_all_eight_modes():
     """E1.1 加 lateral_3m/6m 外推档 + PR #34 road off-track 加 yaw_30/60deg。
     前 4 元素保持历史顺序（LEGACY avg 锚），随后是 E1.1 两档与 off-track 两档。"""
     assert NOVEL_VIEW_MODES == (
-        "lateral_1m", "lateral_2m", "yaw_5deg", "yaw_10deg",
-        "lateral_3m", "lateral_6m",
-        "yaw_30deg", "yaw_60deg",
+        "lateral_1m",
+        "lateral_2m",
+        "yaw_5deg",
+        "yaw_10deg",
+        "lateral_3m",
+        "lateral_6m",
+        "yaw_30deg",
+        "yaw_60deg",
     )
     assert NOVEL_VIEW_MODES[:4] == LEGACY_NOVEL_AVG_MODES
 
@@ -61,11 +70,13 @@ def test_lateral_6m_shutter_pair_rigid():
     start = _identity_c2w()
     end = _identity_c2w()
     end[:3, 3] = [0.0, 0.0, 0.01]
-    R_end = np.array([
-        [np.cos(0.01), 0.0, np.sin(0.01)],
-        [0.0, 1.0, 0.0],
-        [-np.sin(0.01), 0.0, np.cos(0.01)],
-    ])
+    R_end = np.array(
+        [
+            [np.cos(0.01), 0.0, np.sin(0.01)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(0.01), 0.0, np.cos(0.01)],
+        ]
+    )
     end[:3, :3] = R_end
     new_s, new_e = perturb_shutter_pair(start, end, "lateral_6m")
     delta_s = new_s[:3, 3] - start[:3, 3]
@@ -98,11 +109,13 @@ def test_lateral_follows_camera_right_axis_when_rotated():
     now be -Z in world; lateral_1m must shift -Z by 1m."""
     # Build c2w that looks down +X: rotate identity 90° around world-up (-Y).
     theta = np.pi / 2
-    R = np.array([
-        [np.cos(theta), 0.0, np.sin(theta)],
-        [0.0, 1.0, 0.0],
-        [-np.sin(theta), 0.0, np.cos(theta)],
-    ])
+    R = np.array(
+        [
+            [np.cos(theta), 0.0, np.sin(theta)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(theta), 0.0, np.cos(theta)],
+        ]
+    )
     m = np.eye(4)
     m[:3, :3] = R
     # After rotating identity (which had right=+X) by R, new right = R @ +X
@@ -162,18 +175,18 @@ def test_shutter_pair_lateral_preserves_rigid_shift():
     end = _identity_c2w()
     end[:3, 3] = [0.0, 0.0, 0.01]  # tiny forward shutter motion
     # Rotate end slightly so end's right axis would differ from start's
-    R_end = np.array([
-        [np.cos(0.01), 0.0, np.sin(0.01)],
-        [0.0, 1.0, 0.0],
-        [-np.sin(0.01), 0.0, np.cos(0.01)],
-    ])
+    R_end = np.array(
+        [
+            [np.cos(0.01), 0.0, np.sin(0.01)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(0.01), 0.0, np.cos(0.01)],
+        ]
+    )
     end[:3, :3] = R_end
     new_s, new_e = perturb_shutter_pair(start, end, "lateral_1m")
     delta_s = new_s[:3, 3] - start[:3, 3]
     delta_e = new_e[:3, 3] - end[:3, 3]
-    assert np.allclose(delta_s, delta_e, atol=1e-9), (
-        "shutter-start and shutter-end must shift by the SAME world delta"
-    )
+    assert np.allclose(delta_s, delta_e, atol=1e-9), "shutter-start and shutter-end must shift by the SAME world delta"
 
 
 def test_shutter_pair_yaw_rotates_end_around_start_origin():

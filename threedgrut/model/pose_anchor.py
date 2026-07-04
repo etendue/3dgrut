@@ -29,6 +29,7 @@ Pure-function module (only ``getattr`` on the model + plain torch), so the
 unit tests in ``test_pose_anchor.py`` run on Mac without the CUDA/NCore stack,
 mirroring ``pose_smoothness.py``.
 """
+
 from __future__ import annotations
 
 from typing import Iterable, Optional
@@ -119,12 +120,12 @@ def _anchor_loss(
         n_sel = int(sel.numel())
 
         if lambda_trans > 0.0:
-            dt = t[sel] - gt_t[sel]                  # [n_sel, 3]
+            dt = t[sel] - gt_t[sel]  # [n_sel, 3]
             sum_t = sum_t + (dt * dt).sum().to(device)
             n_t += n_sel
 
         if lambda_rot > 0.0:
-            R = _quat_wxyz_to_rotmat(q[sel])         # [n_sel, 3, 3]
+            R = _quat_wxyz_to_rotmat(q[sel])  # [n_sel, 3, 3]
             dR = R - gt_R[sel]
             sum_r = sum_r + (dR * dR).sum().to(device)
             n_r += n_sel

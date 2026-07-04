@@ -32,6 +32,7 @@ Timestamp keys match the START-of-frame timestamp from
 (verified by manually matching 599 sseg keys against camera_front_wide_120fov
 frame START timestamps).
 """
+
 from __future__ import annotations
 
 import io
@@ -141,9 +142,7 @@ class LidarSsegAuxReader:
     def _lidar_group(self, lidar_id: str):
         if lidar_id not in self._lidar_groups:
             self._ensure_open()
-            self._lidar_groups[lidar_id] = (
-                self._root["aux/lidar_semantic_segmentation"][lidar_id]
-            )
+            self._lidar_groups[lidar_id] = self._root["aux/lidar_semantic_segmentation"][lidar_id]
         return self._lidar_groups[lidar_id]
 
     def has_frame(self, lidar_id: str, timestamp_us: int) -> bool:
@@ -181,10 +180,7 @@ def discover_aux_path(clip_dir: Union[str, Path], aux_type: str) -> Optional[Pat
     if not matches:
         return None
     if len(matches) > 1:
-        raise ValueError(
-            f"discover_aux_path: multiple aux.{aux_type}.zarr.itar files in "
-            f"{clip_dir}: {matches}"
-        )
+        raise ValueError(f"discover_aux_path: multiple aux.{aux_type}.zarr.itar files in " f"{clip_dir}: {matches}")
     return matches[0]
 
 
@@ -254,8 +250,7 @@ class LidarDepthAuxReader:
             with np.load(path) as f:
                 if "depth" not in f:
                     raise KeyError(
-                        f"{type(self).__name__}: npz at {path} has no 'depth' "
-                        f"key (found: {list(f.keys())})"
+                        f"{type(self).__name__}: npz at {path} has no 'depth' " f"key (found: {list(f.keys())})"
                     )
                 depth = f["depth"].astype(np.float32)
         self._cache_put(key, depth)
@@ -279,4 +274,5 @@ class DepthV2AuxReader(LidarDepthAuxReader):
     Kept as a distinct class so the dataset can hold two readers with clear
     names and so future DepthV2-specific handling has a home.
     """
+
     pass

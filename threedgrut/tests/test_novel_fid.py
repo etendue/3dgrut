@@ -6,6 +6,7 @@ subset-size adaptation (KID requires subset_size <= n samples; eval splits
 are ~74 frames/camera so the default 1000 would crash) and the uint8
 conversion feeding torchmetrics' update().
 """
+
 from __future__ import annotations
 
 import torch
@@ -41,8 +42,8 @@ def test_rgb01_to_uint8_chw_shape_dtype_range():
 def test_rgb01_to_uint8_chw_clamps_out_of_range():
     img = torch.tensor([[[[-0.5, 0.5, 1.7]]]])  # [1, 1, 1, 3]
     out = rgb01_to_uint8_chw(img)
-    assert out[0, 0, 0, 0] == 0      # clamped low
-    assert out[0, 2, 0, 0] == 255    # clamped high
+    assert out[0, 0, 0, 0] == 0  # clamped low
+    assert out[0, 2, 0, 0] == 255  # clamped high
 
 
 def test_torchmetrics_fid_kid_constructible():

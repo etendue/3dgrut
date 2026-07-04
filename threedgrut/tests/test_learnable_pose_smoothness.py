@@ -14,6 +14,7 @@ The helper is the unit under test; the trainer-method
 ``_compute_pose_smoothness_term`` is just gating + delegation, asserted by
 the active-mask + freeze-window cases below.
 """
+
 from __future__ import annotations
 
 import math
@@ -24,7 +25,6 @@ import torch
 import torch.nn as nn
 
 from threedgrut.model.pose_smoothness import compute_pose_smoothness_loss
-
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ class _ModelStub(nn.Module):
         self._tracks_active: dict[str, torch.Tensor] = {}
         for tid, d in tracks.items():
             t = d["trans"].clone()  # [F, 3]
-            q = d["quat"].clone()   # [F, 4]
+            q = d["quat"].clone()  # [F, 4]
             a = d["active"].clone().to(torch.bool)
             self.register_parameter(f"_track_trans_{tid}", nn.Parameter(t))
             self.register_parameter(f"_track_quat_{tid}", nn.Parameter(q))
@@ -56,7 +56,7 @@ class _ModelStub(nn.Module):
 
 def _linear_trans(F: int, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """t[f] = a + f·b  →  Δ²t ≡ 0."""
-    fs = torch.arange(F, dtype=torch.float32).unsqueeze(-1)   # [F, 1]
+    fs = torch.arange(F, dtype=torch.float32).unsqueeze(-1)  # [F, 1]
     return a.unsqueeze(0) + fs * b.unsqueeze(0)
 
 
@@ -116,8 +116,7 @@ def _build_tracks(
 
 def test_smoothness_zero_for_linear_trans():
     """t[f] = a + f·b → Δ²t = 0 → loss == 0."""
-    model = _ModelStub(_build_tracks(F=10, trans_init="linear",
-                                     quat_init="identity"))
+    model = _ModelStub(_build_tracks(F=10, trans_init="linear", quat_init="identity"))
     loss = compute_pose_smoothness_loss(model, lambda_trans=1.0, lambda_rot=0.0)
     assert loss.shape == (1,)
     assert loss.abs().item() < 1e-12, f"linear trans should give 0 loss, got {loss.item()}"
@@ -125,8 +124,7 @@ def test_smoothness_zero_for_linear_trans():
 
 def test_smoothness_zero_for_constant_quat():
     """All-frames identity quat → Δ²q = 0 → rot loss == 0."""
-    model = _ModelStub(_build_tracks(F=10, quat_init="identity",
-                                     trans_init="linear"))
+    model = _ModelStub(_build_tracks(F=10, quat_init="identity", trans_init="linear"))
     loss = compute_pose_smoothness_loss(model, lambda_trans=0.0, lambda_rot=1.0)
     assert loss.abs().item() < 1e-12
 
@@ -172,12 +170,8 @@ def test_active_mask_excludes_boundary():
     m_partial = _ModelStub({"t0": {"trans": t, "quat": q, "active": active_partial}})
     m_full = _ModelStub({"t0": {"trans": t, "quat": q, "active": active_full}})
 
-    loss_partial = compute_pose_smoothness_loss(
-        m_partial, lambda_trans=1.0, lambda_rot=0.0
-    ).item()
-    loss_full = compute_pose_smoothness_loss(
-        m_full, lambda_trans=1.0, lambda_rot=0.0
-    ).item()
+    loss_partial = compute_pose_smoothness_loss(m_partial, lambda_trans=1.0, lambda_rot=0.0).item()
+    loss_full = compute_pose_smoothness_loss(m_full, lambda_trans=1.0, lambda_rot=0.0).item()
     # Both > 0 (random noise) but partial uses only 1 of 3 valid triples.
     assert loss_partial > 0.0
     assert loss_full > 0.0
@@ -185,8 +179,8 @@ def test_active_mask_excludes_boundary():
     # ordered by inclusion. The point of the test is that the mask gate
     # does NOT raise and only nonzero-mask frames contribute. Verify by
     # explicitly computing the expected partial value.
-    d2 = t[2:] - 2.0 * t[1:-1] + t[:-2]      # [F-2, 3]
-    sq = (d2 * d2).sum(dim=-1)               # [F-2]
+    d2 = t[2:] - 2.0 * t[1:-1] + t[:-2]  # [F-2, 3]
+    sq = (d2 * d2).sum(dim=-1)  # [F-2]
     mask = active_partial[:-2] & active_partial[1:-1] & active_partial[2:]
     expected = (sq * mask.to(sq.dtype)).sum() / float(mask.sum().item())
     assert abs(loss_partial - expected.item()) < 1e-6
@@ -216,7 +210,7 @@ def test_quat_sign_alignment_zero_chord():
     F = 5
     q = torch.zeros(F, 4)
     q[:, 0] = 1.0
-    q[1::2] = -q[1::2]   # [+,-,+,-,+]
+    q[1::2] = -q[1::2]  # [+,-,+,-,+]
     tracks = {
         "t0": {
             "trans": torch.zeros(F, 3),
@@ -226,9 +220,7 @@ def test_quat_sign_alignment_zero_chord():
     }
     model = _ModelStub(tracks)
     loss = compute_pose_smoothness_loss(model, lambda_trans=0.0, lambda_rot=1.0)
-    assert loss.abs().item() < 1e-10, (
-        f"sign-aligned identical-rotation quats should give 0 loss, got {loss.item()}"
-    )
+    assert loss.abs().item() < 1e-10, f"sign-aligned identical-rotation quats should give 0 loss, got {loss.item()}"
 
 
 # ─── 5. lambda=0 path returns zero (byte-identical-loss invariant) ──────────
@@ -240,7 +232,7 @@ def test_lambda_zero_returns_zero():
     torch.manual_seed(99)
     tracks = {
         "t0": {
-            "trans": torch.randn(F, 3),    # nonzero Δ²
+            "trans": torch.randn(F, 3),  # nonzero Δ²
             "quat": _identity_quat(F),
             "active": torch.ones(F, dtype=torch.bool),
         }
@@ -262,8 +254,7 @@ def test_gradient_flows_to_trans_and_quat():
     tracks = {
         "t0": {
             "trans": torch.randn(F, 3),
-            "quat": _identity_quat(F)
-                + 0.01 * torch.randn(F, 4),  # break exact constancy
+            "quat": _identity_quat(F) + 0.01 * torch.randn(F, 4),  # break exact constancy
             "active": torch.ones(F, dtype=torch.bool),
         }
     }
@@ -315,8 +306,7 @@ def test_no_tracks_returns_zero():
 def _maybe_trainer():
     return pytest.importorskip(
         "threedgrut.trainer",
-        reason="Trainer-method tests need full training stack; helper-level "
-               "tests above already cover the math.",
+        reason="Trainer-method tests need full training stack; helper-level " "tests above already cover the math.",
     ).Trainer3DGRUT
 
 
@@ -341,9 +331,9 @@ def test_trainer_method_freeze_window_returns_zero():
     model = _ModelStub(tracks)
     fake = SimpleNamespace(
         device=torch.device("cpu"),
-        pose_optimizer=object(),         # truthy = enabled
+        pose_optimizer=object(),  # truthy = enabled
         global_step=10,
-        pose_freeze_until_iter=200,      # 10 < 200 → freeze
+        pose_freeze_until_iter=200,  # 10 < 200 → freeze
         model=model,
     )
     trainer_conf = SimpleNamespace(

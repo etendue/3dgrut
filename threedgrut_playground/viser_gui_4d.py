@@ -20,6 +20,7 @@ Three fallback modes (matches Task G):
   (c) v1 ckpt or fallback off         → static-3D mode (equivalent to the
                                         original viser_gui.py).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,9 +54,7 @@ from threedgrut_playground.utils.cuboid import (
     instance_color,
 )
 from threedgrut_playground.utils.difix_client import DifixClient
-from threedgrut_playground.utils.harmonizer_client import (
-    HarmonizerTemporalClient,
-)
+from threedgrut_playground.utils.harmonizer_client import HarmonizerTemporalClient
 from threedgrut_playground.utils.viser_math import mat_to_wxyz
 from threedgrut_playground.utils.viser_overlay_compositor import (
     PolylineLayerSpec,
@@ -100,8 +99,7 @@ def cam_rot_to_ypr(R) -> tuple[float, float, float]:
         zero_up = np.array([-math.sin(math.radians(yaw)), math.cos(math.radians(yaw)), 0.0])
     else:
         zero_up = proj / n
-    roll = math.degrees(math.atan2(float(np.dot(np.cross(zero_up, up), fwd)),
-                                   float(np.dot(zero_up, up))))
+    roll = math.degrees(math.atan2(float(np.dot(np.cross(zero_up, up), fwd)), float(np.dot(zero_up, up))))
     return yaw, pitch, roll
 
 
@@ -110,7 +108,7 @@ def ypr_to_cam_rot(yaw: float, pitch: float, roll: float) -> np.ndarray:
     fwd = np.array([math.cos(p) * math.cos(y), math.cos(p) * math.sin(y), math.sin(p)])
     proj = _WORLD_UP - fwd * float(np.dot(_WORLD_UP, fwd))
     n = np.linalg.norm(proj)
-    zero_up = (np.array([-math.sin(y), math.cos(y), 0.0]) if n < 1e-6 else proj / n)
+    zero_up = np.array([-math.sin(y), math.cos(y), 0.0]) if n < 1e-6 else proj / n
     w = np.cross(fwd, zero_up)
     cam_up = zero_up * math.cos(r) + w * math.sin(r)
     down = -cam_up
@@ -131,15 +129,20 @@ class Viser4DViewer:
     init, hence the bypass.
     """
 
-    def __init__(self, *, port: int, engine: "Engine3DGRUT | None",
-                 metadata: Optional[FourDMetadata],
-                 target_fps: float = 20.0,
-                 initial_fov_rad: Optional[float] = None,
-                 multi_cam_poses: Optional[dict] = None,
-                 difix_server: Optional[str] = None,
-                 harmonizer_temporal_server: Optional[str] = None,
-                 harmonizer_temporal_K: int = 4,
-                 initial_cam_id: Optional[str] = None):
+    def __init__(
+        self,
+        *,
+        port: int,
+        engine: "Engine3DGRUT | None",
+        metadata: Optional[FourDMetadata],
+        target_fps: float = 20.0,
+        initial_fov_rad: Optional[float] = None,
+        multi_cam_poses: Optional[dict] = None,
+        difix_server: Optional[str] = None,
+        harmonizer_temporal_server: Optional[str] = None,
+        harmonizer_temporal_K: int = 4,
+        initial_cam_id: Optional[str] = None,
+    ):
         self.engine = engine
         self.meta = metadata
         self.port = port
@@ -166,14 +169,10 @@ class Viser4DViewer:
         # W/H without re-scaling polynomial params would desync projection.
         # Pinhole / non-FTheta ckpts keep the user-resizable behavior.
         self.ftheta_intrinsics: Optional[dict] = (
-            metadata.ego_primary_intrinsics_ftheta
-            if metadata is not None and metadata.has_ftheta()
-            else None
+            metadata.ego_primary_intrinsics_ftheta if metadata is not None and metadata.has_ftheta() else None
         )
         self.ftheta_render_wh: Optional[tuple] = (
-            metadata.ego_primary_resolution
-            if metadata is not None and metadata.has_ftheta()
-            else None
+            metadata.ego_primary_resolution if metadata is not None and metadata.has_ftheta() else None
         )
         # E2.7-OPCV: OpenCVPinhole rational distortion path — same T8.13 fix
         # as FTheta. Active when ckpt camera is OpenCVPinhole and
@@ -184,9 +183,7 @@ class Viser4DViewer:
         self.opencv_pinhole_intrinsics: Optional[dict] = None
         self.opencv_pinhole_rays: Optional[np.ndarray] = None  # (H, W, 3)
         self.opencv_pinhole_render_wh: Optional[tuple] = None
-        if (self.ftheta_intrinsics is None
-                and initial_cam_id is not None
-                and initial_cam_id in self._multi_cam_poses):
+        if self.ftheta_intrinsics is None and initial_cam_id is not None and initial_cam_id in self._multi_cam_poses:
             entry = self._multi_cam_poses[initial_cam_id]
             opcv = entry.get("opencv_pinhole_dict")
             opcv_rays = entry.get("opencv_pinhole_rays")
@@ -194,9 +191,11 @@ class Viser4DViewer:
                 self.opencv_pinhole_intrinsics = opcv
                 self.opencv_pinhole_rays = opcv_rays
                 self.opencv_pinhole_render_wh = entry.get("resolution")
-                print(f"[viz_4d] OpenCVPinhole rational ray path active for "
-                      f"cam '{initial_cam_id}', W×H={self.opencv_pinhole_render_wh}",
-                      flush=True)
+                print(
+                    f"[viz_4d] OpenCVPinhole rational ray path active for "
+                    f"cam '{initial_cam_id}', W×H={self.opencv_pinhole_render_wh}",
+                    flush=True,
+                )
         # B2: FTheta cuboid overlay path — projects cuboid/track/ego_traj
         # polylines through the same FTheta polynomial used by the backdrop
         # and alpha-blends them into the rendered image before
@@ -211,8 +210,7 @@ class Viser4DViewer:
         # overlay can keep the per-class colors of the 3D primitive path.
         self._overlay_static_ego_polylines: list[np.ndarray] = []
         self._overlay_static_track_polylines: list[tuple[str, np.ndarray]] = []
-        if (self.ftheta_intrinsics is not None
-                and self.ftheta_render_wh is not None):
+        if self.ftheta_intrinsics is not None and self.ftheta_render_wh is not None:
             W_ft, H_ft = self.ftheta_render_wh
             # BUG-1 (2026-06-10): flip=identity, NOT the legacy
             # FLIP_VISER_TO_OPENCV. The c2w fed to composite() is the same
@@ -224,7 +222,9 @@ class Viser4DViewer:
             # symmetric. See Viser4DOverlayCompositor.__init__ docstring.
             self._overlay_compositor = Viser4DOverlayCompositor(
                 ftheta_dict=self.ftheta_intrinsics,
-                height=H_ft, width=W_ft, subdivide_n=20,
+                height=H_ft,
+                width=W_ft,
+                subdivide_n=20,
                 world_to_camera_flip=np.eye(4),
             )
             if metadata is not None:
@@ -239,8 +239,7 @@ class Viser4DViewer:
                         continue
                     centers = poses[mask, :3, 3].astype(np.float64)
                     if centers.shape[0] >= 2:
-                        self._overlay_static_track_polylines.append(
-                            (str(t.get("class", "unknown")), centers))
+                        self._overlay_static_track_polylines.append((str(t.get("class", "unknown")), centers))
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -283,9 +282,7 @@ class Viser4DViewer:
         # The toggle defaults OFF so DiFix costs nothing until the user opts in.
         # See difix_server.py / utils/difix_client.py. The connection is lazy —
         # nothing is contacted until the first frame is actually fixed.
-        self.difix_client: Optional[DifixClient] = (
-            DifixClient.from_addr(difix_server) if difix_server else None
-        )
+        self.difix_client: Optional[DifixClient] = DifixClient.from_addr(difix_server) if difix_server else None
         self.difix_enabled: bool = False
         self.difix_rtt = None  # viser text handle, populated in _build_static_gui
 
@@ -298,9 +295,9 @@ class Viser4DViewer:
         # frame is sent cold (V=1), preventing stale history leaking across a
         # discontinuous jump.
         self.harmonizer_temporal_client: Optional[HarmonizerTemporalClient] = (
-            HarmonizerTemporalClient.from_addr(
-                harmonizer_temporal_server, K=harmonizer_temporal_K
-            ) if harmonizer_temporal_server else None
+            HarmonizerTemporalClient.from_addr(harmonizer_temporal_server, K=harmonizer_temporal_K)
+            if harmonizer_temporal_server
+            else None
         )
         self._postproc_reset_flag: bool = True  # cold-start the first frame
         # Track the last-rendered resolution so a slider change forces a temporal
@@ -326,8 +323,7 @@ class Viser4DViewer:
             # meta.initial_c2w (legacy behavior) when no cam_id given or not
             # in the cam ring.
             snapped = False
-            if (self._initial_cam_id
-                    and self._initial_cam_id in self._multi_cam_poses):
+            if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
                 entry = self._multi_cam_poses[self._initial_cam_id]
                 c2w_arr = entry["c2w"]
                 ts_arr = entry["timestamps_us"]
@@ -346,18 +342,21 @@ class Viser4DViewer:
                     client.camera.look_at = c2w0[:3, 3] + 10.0 * forward
                     client.camera.up_direction = up
                     snapped = True
-                    print(f"[E2.7] client snapped to initial_cam_id="
-                          f"'{self._initial_cam_id}' (frame_idx={idx})",
-                          flush=True)
+                    print(
+                        f"[E2.7] client snapped to initial_cam_id=" f"'{self._initial_cam_id}' (frame_idx={idx})",
+                        flush=True,
+                    )
             if not snapped and self.meta is not None:
                 client.camera.wxyz = mat_to_wxyz(self.meta.initial_c2w)
                 client.camera.position = self.meta.initial_c2w[:3, 3]
             if self.initial_fov_rad is not None:
                 client.camera.fov = float(self.initial_fov_rad)
+
             @client.camera.on_update
             def _(_, _client=client):
                 self.need_update = True
                 self._sync_pose_gui_from_camera(_client.camera)
+
             # Initialise the pose controls to this client's starting camera.
             self._sync_pose_gui_from_camera(client.camera)
 
@@ -366,19 +365,19 @@ class Viser4DViewer:
         # uses the selected camera's projection. _snap_clients_to_camera
         # also iterates connected clients (none yet at this point — safe
         # no-op for client part; the FTheta swap is what we want here).
-        if (self._initial_cam_id
-                and self._initial_cam_id in self._multi_cam_poses):
-            self._snap_clients_to_camera(
-                self._initial_cam_id, self._t_us_current)
+        if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
+            self._snap_clients_to_camera(self._initial_cam_id, self._t_us_current)
             self._current_dropdown_cam = self._initial_cam_id
-            print(f"[E2.7] engine FTheta + dropdown locked to "
-                  f"'{self._initial_cam_id}'", flush=True)
+            print(f"[E2.7] engine FTheta + dropdown locked to " f"'{self._initial_cam_id}'", flush=True)
         elif self._initial_cam_id:
-            print(f"[E2.7-WARN] initial_cam_id='{self._initial_cam_id}' "
-                  f"not in multi_cam_poses "
-                  f"(have {list(self._multi_cam_poses.keys())[:5]}...); "
-                  f"viser will use meta.initial_c2w default — far-field "
-                  f"camera may produce 'unrecognizable artifacts'", flush=True)
+            print(
+                f"[E2.7-WARN] initial_cam_id='{self._initial_cam_id}' "
+                f"not in multi_cam_poses "
+                f"(have {list(self._multi_cam_poses.keys())[:5]}...); "
+                f"viser will use meta.initial_c2w default — far-field "
+                f"camera may produce 'unrecognizable artifacts'",
+                flush=True,
+            )
 
     # ---------------------------------------------------------------- engine
     def _clear_engine_meshes(self) -> None:
@@ -425,13 +424,15 @@ class Viser4DViewer:
             self.reset_view_button = self.server.gui.add_button("Reset View")
             if self.engine is not None:
                 self.resolution_slider = self.server.gui.add_slider(
-                    "Resolution", min=384, max=4096, step=2, initial_value=1024)
+                    "Resolution", min=384, max=4096, step=2, initial_value=1024
+                )
                 self.near_plane_slider = self.server.gui.add_slider(
-                    "Near", min=0.1, max=30, step=0.5, initial_value=0.1)
+                    "Near", min=0.1, max=30, step=0.5, initial_value=0.1
+                )
                 self.far_plane_slider = self.server.gui.add_slider(
-                    "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0)
-                self.fps = self.server.gui.add_text("FPS", initial_value="-1",
-                                                    disabled=True)
+                    "Far", min=30.0, max=1000.0, step=10.0, initial_value=1000.0
+                )
+                self.fps = self.server.gui.add_text("FPS", initial_value="-1", disabled=True)
                 # ---- Camera pose: world-referenced yaw/pitch/roll + position ----
                 # Absolute readout AND control, two-way synced with mouse orbit.
                 # yaw = heading about world up (+z), pitch = elevation
@@ -442,23 +443,23 @@ class Viser4DViewer:
                 # above / below the road.
                 self._pose_syncing = False
                 self.yaw_slider = self.server.gui.add_slider(
-                    "Yaw °", min=-180.0, max=180.0, step=0.5, initial_value=0.0)
+                    "Yaw °", min=-180.0, max=180.0, step=0.5, initial_value=0.0
+                )
                 self.pitch_slider = self.server.gui.add_slider(
-                    "Pitch °", min=-90.0, max=90.0, step=0.5, initial_value=0.0)
+                    "Pitch °", min=-90.0, max=90.0, step=0.5, initial_value=0.0
+                )
                 self.roll_slider = self.server.gui.add_slider(
-                    "Roll °", min=-180.0, max=180.0, step=0.5, initial_value=0.0)
+                    "Roll °", min=-180.0, max=180.0, step=0.5, initial_value=0.0
+                )
                 self.cam_x = self.server.gui.add_number("Cam X", initial_value=0.0, step=0.1)
                 self.cam_y = self.server.gui.add_number("Cam Y", initial_value=0.0, step=0.1)
                 self.cam_z = self.server.gui.add_number("Cam Z", initial_value=0.0, step=0.1)
 
                 def _apply_pose_from_gui(_self=self):
-                    if _self._pose_syncing:      # ignore echoes from camera→GUI sync
+                    if _self._pose_syncing:  # ignore echoes from camera→GUI sync
                         return
-                    R = ypr_to_cam_rot(_self.yaw_slider.value,
-                                       _self.pitch_slider.value,
-                                       _self.roll_slider.value)
-                    pos = np.array([_self.cam_x.value, _self.cam_y.value,
-                                    _self.cam_z.value], dtype=np.float32)
+                    R = ypr_to_cam_rot(_self.yaw_slider.value, _self.pitch_slider.value, _self.roll_slider.value)
+                    pos = np.array([_self.cam_x.value, _self.cam_y.value, _self.cam_z.value], dtype=np.float32)
                     c2w = np.eye(4, dtype=np.float32)
                     c2w[:3, :3] = R.astype(np.float32)
                     c2w[:3, 3] = pos
@@ -467,52 +468,48 @@ class Viser4DViewer:
                         client.camera.position = pos
                     _self.need_update = True
 
-                for _w in (self.yaw_slider, self.pitch_slider, self.roll_slider,
-                           self.cam_x, self.cam_y, self.cam_z):
+                for _w in (self.yaw_slider, self.pitch_slider, self.roll_slider, self.cam_x, self.cam_y, self.cam_z):
+
                     @_w.on_update
                     def _(_, _self=self):
                         _apply_pose_from_gui(_self)
+
                 # DiFix novel-view fix toggle — only when --difix_server was
                 # given. Enabling routes each rendered frame through the
                 # out-of-process DiFix server before display (~9–11 FPS).
                 if self.difix_client is not None:
-                    self.difix_checkbox = self.server.gui.add_checkbox(
-                        "DiFix (novel-view fix)", initial_value=False)
-                    self.difix_rtt = self.server.gui.add_text(
-                        "DiFix RTT", initial_value="-", disabled=True)
-                    self.server.gui.add_markdown(
-                        "_DiFix 启用后约 9–11 FPS，适合静止精修；"
-                        "连续拖动建议关闭。_")
+                    self.difix_checkbox = self.server.gui.add_checkbox("DiFix (novel-view fix)", initial_value=False)
+                    self.difix_rtt = self.server.gui.add_text("DiFix RTT", initial_value="-", disabled=True)
+                    self.server.gui.add_markdown("_DiFix 启用后约 9–11 FPS，适合静止精修；" "连续拖动建议关闭。_")
 
                     @self.difix_checkbox.on_update
                     def _(_, _self=self):
                         _self.difix_enabled = bool(_self.difix_checkbox.value)
                         _self.need_update = True
-                        print(f"[DiFix] enabled={_self.difix_enabled}",
-                              flush=True)
+                        print(f"[DiFix] enabled={_self.difix_enabled}", flush=True)
+
                 # E2.6: temporal Harmonizer toggle — only when
                 # --harmonizer_temporal_server was given. Mutually exclusive
                 # with DiFix (main() rejects both flags). On enable, reset the
                 # temporal history so the model starts from a clean cold frame.
                 if self.harmonizer_temporal_client is not None:
                     self.harmonizer_checkbox = self.server.gui.add_checkbox(
-                        "Harmonizer (temporal, de-flicker)",
-                        initial_value=False)
-                    self.difix_rtt = self.server.gui.add_text(
-                        "Harmonizer RTT", initial_value="-", disabled=True)
+                        "Harmonizer (temporal, de-flicker)", initial_value=False
+                    )
+                    self.difix_rtt = self.server.gui.add_text("Harmonizer RTT", initial_value="-", disabled=True)
                     self.server.gui.add_markdown(
                         "_Harmonizer temporal 模式：回读前 K 帧已修复输出做"
-                        "时序参考，连续 Play 去闪烁。Seek/拖动会自动重置历史。_")
+                        "时序参考，连续 Play 去闪烁。Seek/拖动会自动重置历史。_"
+                    )
 
                     @self.harmonizer_checkbox.on_update
                     def _(_, _self=self):
-                        _self.difix_enabled = bool(
-                            _self.harmonizer_checkbox.value)
+                        _self.difix_enabled = bool(_self.harmonizer_checkbox.value)
                         if _self.difix_enabled:
                             _self._postproc_reset_flag = True
                         _self.need_update = True
-                        print(f"[Harmonizer-temporal] enabled="
-                              f"{_self.difix_enabled}", flush=True)
+                        print(f"[Harmonizer-temporal] enabled=" f"{_self.difix_enabled}", flush=True)
+
             else:
                 self.server.gui.add_text(
                     "Mode",
@@ -525,11 +522,12 @@ class Viser4DViewer:
                 self.fps = None
 
         if self.engine is not None:
-            for slider in (self.resolution_slider, self.near_plane_slider,
-                           self.far_plane_slider):
+            for slider in (self.resolution_slider, self.near_plane_slider, self.far_plane_slider):
+
                 @slider.on_update
                 def _(_, _self=self):
                     _self.need_update = True
+
             # T8.13: FTheta mode locks render W×H to trained resolution
             # (principal_point is in pixels); hide the slider + show why.
             if self.ftheta_render_wh is not None:
@@ -537,8 +535,7 @@ class Viser4DViewer:
                 with folder:
                     w, h = self.ftheta_render_wh
                     self.server.gui.add_markdown(
-                        f"⚠️ **FTheta 模式**: render W×H 锁定到 "
-                        f"`{w}×{h}` (训练分辨率)，不可调节。"
+                        f"⚠️ **FTheta 模式**: render W×H 锁定到 " f"`{w}×{h}` (训练分辨率)，不可调节。"
                     )
 
         # Per-layer Gaussian render toggles. Nested as a sub-folder under
@@ -546,14 +543,10 @@ class Viser4DViewer:
         # Skipped for v1 ckpts (scene_mog is MixtureOfGaussians, no .specs)
         # and no-gaussian-render mode (engine=None) where nothing renders.
         self.layer_checkboxes: dict = {}
-        if self.engine is not None and isinstance(
-            getattr(self.engine, "scene_mog", None), LayeredGaussians
-        ):
+        if self.engine is not None and isinstance(getattr(self.engine, "scene_mog", None), LayeredGaussians):
             scene_mog = self.engine.scene_mog
             with folder:
-                gaussian_layers_folder = self.server.gui.add_folder(
-                    "Gaussian Layers"
-                )
+                gaussian_layers_folder = self.server.gui.add_folder("Gaussian Layers")
             with gaussian_layers_folder:
                 for spec in scene_mog.specs:
                     # dynamic_deformables: registry stub, no module in
@@ -562,9 +555,7 @@ class Viser4DViewer:
                         continue
                     if spec.name not in scene_mog.layers:
                         continue
-                    cb = self.server.gui.add_checkbox(
-                        spec.name, initial_value=True
-                    )
+                    cb = self.server.gui.add_checkbox(spec.name, initial_value=True)
                     self.layer_checkboxes[spec.name] = cb
 
                     @cb.on_update
@@ -577,9 +568,7 @@ class Viser4DViewer:
                             new_set.discard(_name)
                         # Wholesale replace (not in-place mutate) so a render
                         # iterating self.specs sees an atomic flip under GIL.
-                        object.__setattr__(
-                            mog, "enabled_layer_names", new_set
-                        )
+                        object.__setattr__(mog, "enabled_layer_names", new_set)
                         _self.need_update = True
                         # Bug 3 runtime instrumentation: print the toggle
                         # event + post-write enabled_layer_names so the log
@@ -587,9 +576,12 @@ class Viser4DViewer:
                         # callback actually fired and whether the wholesale
                         # set replacement reached the server-side mog.
                         # Confirms or refutes "GUI state desync" hypothesis.
-                        print(f"[BUG3-DIAG] toggle layer='{_name}' "
-                              f"value={bool(_cb.value)} → enabled_layer_names="
-                              f"{sorted(new_set)}", flush=True)
+                        print(
+                            f"[BUG3-DIAG] toggle layer='{_name}' "
+                            f"value={bool(_cb.value)} → enabled_layer_names="
+                            f"{sorted(new_set)}",
+                            flush=True,
+                        )
 
         if self.engine is not None:
             with folder:
@@ -621,8 +613,7 @@ class Viser4DViewer:
             # which surprised the user. Falls back to legacy meta.initial_c2w
             # behavior when no initial_cam_id given or not in cam ring.
             snapped = False
-            if (self._initial_cam_id
-                    and self._initial_cam_id in self._multi_cam_poses):
+            if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
                 entry = self._multi_cam_poses[self._initial_cam_id]
                 c2w_arr = entry["c2w"]
                 ts_arr = entry["timestamps_us"]
@@ -634,10 +625,8 @@ class Viser4DViewer:
                         idx = 0
                     c2w0 = c2w_arr[idx]
                     R = c2w0[:3, :3]
-                    forward_world = R @ np.array([0.0, 0.0, 1.0],
-                                                 dtype=np.float32)
-                    up_world = R @ np.array([0.0, -1.0, 0.0],
-                                            dtype=np.float32)
+                    forward_world = R @ np.array([0.0, 0.0, 1.0], dtype=np.float32)
+                    up_world = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
                     for client in self.server.get_clients().values():
                         client.camera.wxyz = mat_to_wxyz(c2w0)
                         client.camera.position = c2w0[:3, 3]
@@ -663,15 +652,11 @@ class Viser4DViewer:
                     R = self.meta.initial_c2w[:3, :3]
                     forward_cam = np.array([0.0, 0.0, 1.0], dtype=np.float32)
                     forward_world = R @ forward_cam
-                    client.camera.look_at = (
-                        self.meta.initial_c2w[:3, 3] + 10.0 * forward_world
-                    )
+                    client.camera.look_at = self.meta.initial_c2w[:3, 3] + 10.0 * forward_world
                 # Re-apply up vector after wxyz update so orbit controls
                 # don't snap to default world-up (which is wrong for NCore
                 # convention where camera +Y = world -Z = gravity down).
-                client.camera.up_direction = (
-                    tf.SO3(client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
-                )
+                client.camera.up_direction = tf.SO3(client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
                 if self.initial_fov_rad is not None:
                     client.camera.fov = float(self.initial_fov_rad)
 
@@ -688,13 +673,15 @@ class Viser4DViewer:
                 initial_value=int(self.meta.t_us_first),
             )
             self.frame_number = self.server.gui.add_number(
-                "Frame", min=0, max=max(self.meta.n_frames() - 1, 0),
-                step=1, initial_value=0,
+                "Frame",
+                min=0,
+                max=max(self.meta.n_frames() - 1, 0),
+                step=1,
+                initial_value=0,
             )
             self.play_button = self.server.gui.add_button("▶ Play")
             self.loop_cb = self.server.gui.add_checkbox("Loop", True)
-            self.speed_slider = self.server.gui.add_slider(
-                "Speed", min=0.1, max=4.0, step=0.1, initial_value=1.0)
+            self.speed_slider = self.server.gui.add_slider("Speed", min=0.1, max=4.0, step=0.1, initial_value=1.0)
 
         @self.time_slider.on_update
         def _(_):
@@ -731,36 +718,36 @@ class Viser4DViewer:
         assert self.meta is not None
         folder = self.server.gui.add_folder("Visibility")
         with folder:
-            self.show_ego_traj  = self.server.gui.add_checkbox("Ego trajectory", True)
+            self.show_ego_traj = self.server.gui.add_checkbox("Ego trajectory", True)
             self.show_ego_frust = self.server.gui.add_checkbox("Ego frustum", True)
-            self.show_tracks    = self.server.gui.add_checkbox("Track trajectories", True)
-            self.show_cuboids   = self.server.gui.add_checkbox("Active cuboids", True)
-            self.show_road      = self.server.gui.add_checkbox(
-                "Road LiDAR", self.meta.road_xyz is not None)
-            self.show_dyn_pts   = self.server.gui.add_checkbox("Dynamic LiDAR", False)
-            self.show_axes      = self.server.gui.add_checkbox("World axes", False)
+            self.show_tracks = self.server.gui.add_checkbox("Track trajectories", True)
+            self.show_cuboids = self.server.gui.add_checkbox("Active cuboids", True)
+            self.show_road = self.server.gui.add_checkbox("Road LiDAR", self.meta.road_xyz is not None)
+            self.show_dyn_pts = self.server.gui.add_checkbox("Dynamic LiDAR", False)
+            self.show_axes = self.server.gui.add_checkbox("World axes", False)
             # Bug 1 fix: Follow Ego — Play 时把 viser client camera 自动 snap
             # 到 ego_pose_at(t_us). 默认 OFF 保留 free-orbit, 勾选立刻同步一次
             # (避免要等下一次 slider/play tick).
-            self.show_follow_ego = self.server.gui.add_checkbox(
-                "Follow Ego", False
-            )
+            self.show_follow_ego = self.server.gui.add_checkbox("Follow Ego", False)
             # V3-VIZ.3: multi-camera dropdown + Follow Camera. Populated from
             # NCore dataset via --dataset_path; degrades to {primary} when not
             # available. Mutually exclusive with Follow Ego (only one snap
             # source active at a time).
-            cam_options = (sorted(self._multi_cam_poses.keys())
-                           if self._multi_cam_poses else [
-                               self.meta.ego_primary_camera_id])
-            initial_cam = (self.meta.ego_primary_camera_id
-                           if self.meta.ego_primary_camera_id in cam_options
-                           else cam_options[0])
+            cam_options = (
+                sorted(self._multi_cam_poses.keys()) if self._multi_cam_poses else [self.meta.ego_primary_camera_id]
+            )
+            initial_cam = (
+                self.meta.ego_primary_camera_id if self.meta.ego_primary_camera_id in cam_options else cam_options[0]
+            )
             self._current_dropdown_cam = initial_cam
             self._cam_dropdown = self.server.gui.add_dropdown(
-                "Camera", options=tuple(cam_options), initial_value=initial_cam,
+                "Camera",
+                options=tuple(cam_options),
+                initial_value=initial_cam,
             )
             self._show_follow_cam = self.server.gui.add_checkbox(
-                "Follow Camera", False,
+                "Follow Camera",
+                False,
             )
             # BUG-1c (2026-06-10): the "FTheta overlay (debug)" toggle is
             # GONE. In FTheta mode the overlay is the ONLY correct projection
@@ -834,8 +821,7 @@ class Viser4DViewer:
         @self._cam_dropdown.on_update
         def _(_):
             self._current_dropdown_cam = str(self._cam_dropdown.value)
-            self._snap_clients_to_camera(
-                self._current_dropdown_cam, self._t_us_current)
+            self._snap_clients_to_camera(self._current_dropdown_cam, self._t_us_current)
             self.need_update = True
 
         # V3-VIZ.3: Follow Camera checkbox — snap every timeline tick to the
@@ -847,10 +833,8 @@ class Viser4DViewer:
                 if self.show_follow_ego.value:
                     self.show_follow_ego.value = False
                     self._follow_ego_enabled = False
-                self._snap_clients_to_camera(
-                    self._current_dropdown_cam, self._t_us_current)
+                self._snap_clients_to_camera(self._current_dropdown_cam, self._t_us_current)
                 self.need_update = True
-
 
     # ---------------------------------------------------------------- scene
     def _populate_static_scene(self) -> None:
@@ -864,7 +848,8 @@ class Viser4DViewer:
 
     def _add_world_axes(self) -> None:
         self.h_world_axes = self.server.scene.add_frame(
-            "/world_axes", show_axes=True, axes_length=2.0, axes_radius=0.05)
+            "/world_axes", show_axes=True, axes_length=2.0, axes_radius=0.05
+        )
         self.h_world_axes.visible = False  # default off, toggle via Visibility
 
     def _add_ego_trajectory(self) -> None:
@@ -908,9 +893,7 @@ class Viser4DViewer:
     def _add_lidar_clouds(self) -> None:
         assert self.meta is not None
         if self.meta.road_xyz is not None and self.meta.road_xyz.size > 0:
-            colors = (self.meta.road_rgb
-                      if self.meta.road_rgb is not None
-                      else np.full_like(self.meta.road_xyz, 0.5))
+            colors = self.meta.road_rgb if self.meta.road_rgb is not None else np.full_like(self.meta.road_xyz, 0.5)
             self.h_road = self.server.scene.add_point_cloud(
                 "/lidar/road",
                 points=self.meta.road_xyz.astype(np.float32),
@@ -932,12 +915,14 @@ class Viser4DViewer:
             }
         elif self.meta.dyn_xyz is not None and self.meta.dyn_xyz.size > 0:
             # Legacy static fallback.
-            colors = (self.meta.dyn_rgb
-                      if self.meta.dyn_rgb is not None
-                      else np.broadcast_to(
-                          np.array([1.0, 0.5, 0.0], dtype=np.float32),
-                          self.meta.dyn_xyz.shape,
-                      ).copy())
+            colors = (
+                self.meta.dyn_rgb
+                if self.meta.dyn_rgb is not None
+                else np.broadcast_to(
+                    np.array([1.0, 0.5, 0.0], dtype=np.float32),
+                    self.meta.dyn_xyz.shape,
+                ).copy()
+            )
             self.h_dyn_pts = self.server.scene.add_point_cloud(
                 "/lidar/dynamic",
                 points=self.meta.dyn_xyz.astype(np.float32),
@@ -956,14 +941,11 @@ class Viser4DViewer:
             or per-track block is absent.
         """
         assert self.meta is not None
-        if (not self.meta.has_per_track_dyn_lidar()
-                or not hasattr(self, "_dyn_idx_by_track")):
-            return (np.zeros((0, 3), dtype=np.float32),
-                    np.zeros((0, 3), dtype=np.float32))
+        if not self.meta.has_per_track_dyn_lidar() or not hasattr(self, "_dyn_idx_by_track"):
+            return (np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32))
         active = self.meta.active_tracks_at(frame_idx)
         if not active:
-            return (np.zeros((0, 3), dtype=np.float32),
-                    np.zeros((0, 3), dtype=np.float32))
+            return (np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32))
         local_xyz = self.meta.dyn_local_xyz
         pts_list: list[np.ndarray] = []
         col_list: list[np.ndarray] = []
@@ -971,17 +953,16 @@ class Viser4DViewer:
             idxs = self._dyn_idx_by_track.get(tid)
             if idxs is None or idxs.size == 0:
                 continue
-            pose = self.meta.tracks[tid]["poses"][frame_idx]   # (4, 4)
+            pose = self.meta.tracks[tid]["poses"][frame_idx]  # (4, 4)
             R = pose[:3, :3]
             t = pose[:3, 3]
-            local = local_xyz[idxs]                            # (M, 3)
-            world = (local @ R.T) + t                          # (M, 3)
+            local = local_xyz[idxs]  # (M, 3)
+            world = (local @ R.T) + t  # (M, 3)
             pts_list.append(world.astype(np.float32))
             color = np.array(instance_color(tid), dtype=np.float32)
             col_list.append(np.broadcast_to(color, world.shape).astype(np.float32).copy())
         if not pts_list:
-            return (np.zeros((0, 3), dtype=np.float32),
-                    np.zeros((0, 3), dtype=np.float32))
+            return (np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.float32))
         return np.concatenate(pts_list, axis=0), np.concatenate(col_list, axis=0)
 
     def _update_dynamic_lidar(self, frame_idx: int) -> None:
@@ -1000,10 +981,11 @@ class Viser4DViewer:
         # User saw LiDAR points on startup even though "Dynamic LiDAR" was
         # unchecked. Read the checkbox value on first call so initial state
         # matches the GUI.
-        prev_visible = (self.h_dyn_pts.visible
-                        if self.h_dyn_pts is not None
-                        else bool(getattr(self, "show_dyn_pts", None)
-                                  and self.show_dyn_pts.value))
+        prev_visible = (
+            self.h_dyn_pts.visible
+            if self.h_dyn_pts is not None
+            else bool(getattr(self, "show_dyn_pts", None) and self.show_dyn_pts.value)
+        )
         if self.h_dyn_pts is not None:
             self.h_dyn_pts.remove()
             self.h_dyn_pts = None
@@ -1110,8 +1092,7 @@ class Viser4DViewer:
         # frustum visually "point at the ground" instead of "point forward".
         # The user expects a dashcam-style forward frustum.
         pose = None
-        if (self._initial_cam_id
-                and self._initial_cam_id in self._multi_cam_poses):
+        if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
             entry = self._multi_cam_poses[self._initial_cam_id]
             c2w_arr = entry["c2w"]
             ts_arr = entry["timestamps_us"]
@@ -1160,11 +1141,14 @@ class Viser4DViewer:
                 from threedgrut_playground.utils.viser_overlay_compositor import (
                     Viser4DOverlayCompositor,
                 )
+
                 # BUG-1: flip=identity to stay co-aligned with the backdrop
                 # camera (+Z forward) — see __init__ compositor comment.
                 self._overlay_compositor = Viser4DOverlayCompositor(
                     ftheta_dict=new_ftheta,
-                    height=new_res[1], width=new_res[0], subdivide_n=20,
+                    height=new_res[1],
+                    width=new_res[0],
+                    subdivide_n=20,
                     world_to_camera_flip=np.eye(4),
                 )
         for client in self.server.get_clients().values():
@@ -1216,7 +1200,12 @@ class Viser4DViewer:
     # 视觉）。子串匹配覆盖 heavy_truck 等复合类。改这一处 + _update_cuboid_labels
     # 即覆盖 line_segments + FTheta overlay + 两条 label 路径（共用 _iter）。
     _VEHICLE_CUBOID_TOKENS = (
-        "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
+        "automobile",
+        "bus",
+        "truck",
+        "consumer_vehicles",
+        "car",
+        "vehicle",
     )
 
     def _is_vehicle_cuboid(self, tid) -> bool:
@@ -1242,8 +1231,7 @@ class Viser4DViewer:
             poses = t["poses"]
             if poses is None or frame_idx >= poses.shape[0]:
                 continue
-            size = (t["size"] if t["size"] is not None
-                    else np.array([1.0, 1.0, 1.0], dtype=np.float32))
+            size = t["size"] if t["size"] is not None else np.array([1.0, 1.0, 1.0], dtype=np.float32)
             yield tid, cuboid_world_edges(poses[frame_idx], size)
 
     def _build_cuboid_edges(self, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1255,10 +1243,8 @@ class Viser4DViewer:
             pts_list.append(world)
             col_list.append(col)
         if not pts_list:
-            return (np.zeros((0, 2, 3), dtype=np.float32),
-                    np.zeros((0, 2, 3), dtype=np.float32))
-        return (np.concatenate(pts_list, axis=0),
-                np.concatenate(col_list, axis=0))
+            return (np.zeros((0, 2, 3), dtype=np.float32), np.zeros((0, 2, 3), dtype=np.float32))
+        return (np.concatenate(pts_list, axis=0), np.concatenate(col_list, axis=0))
 
     def _update_active_cuboids(self, frame_idx: int) -> None:
         """Remove + re-add line_segments handle for active cuboids.
@@ -1304,10 +1290,11 @@ class Viser4DViewer:
                     pass
                 self._cuboid_label_handles.pop(tid, None)
             return
-        prev_visible = (self.h_cuboid_lines.visible
-                        if self.h_cuboid_lines is not None
-                        else bool(getattr(self, "show_cuboids", None)
-                                  and self.show_cuboids.value))
+        prev_visible = (
+            self.h_cuboid_lines.visible
+            if self.h_cuboid_lines is not None
+            else bool(getattr(self, "show_cuboids", None) and self.show_cuboids.value)
+        )
         pts, cols = self._build_cuboid_edges(frame_idx)
         if self.h_cuboid_lines is not None:
             self.h_cuboid_lines.remove()
@@ -1336,8 +1323,7 @@ class Viser4DViewer:
         if self.meta is None:
             return
         # E2.8: vehicle-only display (matches _iter_active_cuboid_edges filter).
-        active_ids = {tid for tid in self.meta.active_tracks_at(frame_idx)
-                      if self._is_vehicle_cuboid(tid)}
+        active_ids = {tid for tid in self.meta.active_tracks_at(frame_idx) if self._is_vehicle_cuboid(tid)}
         # Remove labels for tracks no longer active.
         for tid in list(self._cuboid_label_handles.keys()):
             if tid not in active_ids:
@@ -1406,20 +1392,26 @@ class Viser4DViewer:
         # culling clips them correctly. Static world-space polylines are
         # cached in __init__ (B2 perf); low subdivide_n=3 because the
         # polylines are already dense (per-frame vertices).
-        if (getattr(self, "show_ego_traj", None) is not None
-                and bool(self.show_ego_traj.value)
-                and self._overlay_static_ego_polylines):
-            specs.append(PolylineLayerSpec(
-                name="ego_trajectory",
-                polylines_world=self._overlay_static_ego_polylines,
-                color=(51, 255, 51, 220),
-                width=2,
-                subdivide_n=3,
-            ))
+        if (
+            getattr(self, "show_ego_traj", None) is not None
+            and bool(self.show_ego_traj.value)
+            and self._overlay_static_ego_polylines
+        ):
+            specs.append(
+                PolylineLayerSpec(
+                    name="ego_trajectory",
+                    polylines_world=self._overlay_static_ego_polylines,
+                    color=(51, 255, 51, 220),
+                    width=2,
+                    subdivide_n=3,
+                )
+            )
 
-        if (getattr(self, "show_tracks", None) is not None
-                and bool(self.show_tracks.value)
-                and self._overlay_static_track_polylines):
+        if (
+            getattr(self, "show_tracks", None) is not None
+            and bool(self.show_tracks.value)
+            and self._overlay_static_track_polylines
+        ):
             # One layer per class so the overlay keeps the 3D path's
             # class_color coding (automobile blue / heavy_truck orange / ...).
             by_class: dict[str, list[np.ndarray]] = {}
@@ -1427,13 +1419,15 @@ class Viser4DViewer:
                 by_class.setdefault(cls_name, []).append(centers)
             for cls_name, polylines in by_class.items():
                 rgb = tuple(int(round(c * 255)) for c in class_color(cls_name))
-                specs.append(PolylineLayerSpec(
-                    name=f"track_trajectories_{cls_name}",
-                    polylines_world=polylines,
-                    color=(rgb[0], rgb[1], rgb[2], 180),
-                    width=1,
-                    subdivide_n=3,
-                ))
+                specs.append(
+                    PolylineLayerSpec(
+                        name=f"track_trajectories_{cls_name}",
+                        polylines_world=polylines,
+                        color=(rgb[0], rgb[1], rgb[2], 180),
+                        width=1,
+                        subdivide_n=3,
+                    )
+                )
 
         # BUG-1 fix (2026-06-10): active cuboids are BACK on the overlay path
         # (reverting that part of V3-VIZ.2). The wireframe's whole job is to
@@ -1442,8 +1436,7 @@ class Viser4DViewer:
         # it away from the image center. One layer per track keeps the
         # per-instance color the 3D path used. subdivide_n=20 because a
         # straight 3D edge projects to a curve under fisheye.
-        if (getattr(self, "show_cuboids", None) is not None
-                and bool(self.show_cuboids.value)):
+        if getattr(self, "show_cuboids", None) is not None and bool(self.show_cuboids.value):
             frame_idx = self.meta.lookup_frame_idx(t_us)
             for tid, edges in self._iter_active_cuboid_edges(frame_idx):
                 rgb = tuple(int(round(c * 255)) for c in instance_color(tid))
@@ -1453,18 +1446,18 @@ class Viser4DViewer:
                 # never separate — the browser-side pinhole 3D label drifted
                 # off the now-aligned box exactly like the old line_segments.
                 t = self.meta.tracks[tid]
-                anchor = self._cuboid_label_anchor(
-                    t["poses"][frame_idx], t["size"])
+                anchor = self._cuboid_label_anchor(t["poses"][frame_idx], t["size"])
                 label = f"t{tid} | {t.get('class', 'unknown')}"
-                specs.append(PolylineLayerSpec(
-                    name=f"active_cuboids_t{tid}",
-                    polylines_world=[edges[i].astype(np.float64)
-                                     for i in range(12)],
-                    color=(rgb[0], rgb[1], rgb[2], 255),
-                    width=2,
-                    subdivide_n=20,
-                    labels_world=[(anchor, label)],
-                ))
+                specs.append(
+                    PolylineLayerSpec(
+                        name=f"active_cuboids_t{tid}",
+                        polylines_world=[edges[i].astype(np.float64) for i in range(12)],
+                        color=(rgb[0], rgb[1], rgb[2], 255),
+                        width=2,
+                        subdivide_n=20,
+                        labels_world=[(anchor, label)],
+                    )
+                )
 
         return specs
 
@@ -1481,9 +1474,7 @@ class Viser4DViewer:
             return
         new_t = self._t_us_current + dt_us
         if new_t > self.meta.t_us_last:
-            new_t = (self.meta.t_us_first
-                     if self._is_loop
-                     else self.meta.t_us_last)
+            new_t = self.meta.t_us_first if self._is_loop else self.meta.t_us_last
             if not self._is_loop:
                 self._is_playing = False
                 self.play_button.label = "▶ Play"
@@ -1492,7 +1483,9 @@ class Viser4DViewer:
     def fast_render(self, kaolin_camera: Camera) -> np.ndarray:
         """Run engine for one Gaussian pass; return RGB uint8 frame."""
         out = self.engine.render_pass(
-            kaolin_camera, is_first_pass=True, timestamp_us=self._t_us_current,
+            kaolin_camera,
+            is_first_pass=True,
+            timestamp_us=self._t_us_current,
             fisheye_intrinsics=self.ftheta_intrinsics,  # T8.13
             opencv_pinhole_intrinsics=self.opencv_pinhole_intrinsics,  # E2.7-OPCV
             opencv_pinhole_rays=self.opencv_pinhole_rays,  # E2.7-OPCV pre-computed
@@ -1526,26 +1519,21 @@ class Viser4DViewer:
             # Resolution lock: if HxW changed since the last frame, the history
             # deque holds stale-sized frames → force a cold reset.
             wh = (img.shape[1], img.shape[0])
-            if self._postproc_last_wh is not None and \
-                    self._postproc_last_wh != wh:
+            if self._postproc_last_wh is not None and self._postproc_last_wh != wh:
                 self._postproc_reset_flag = True
             self._postproc_last_wh = wh
             reset = self._postproc_reset_flag
             self._postproc_reset_flag = False  # one-shot consume
             out = hc.fix(img, reset=reset)
             if self.difix_rtt is not None:
-                self.difix_rtt.value = (
-                    f"{hc.last_rtt_ms:.0f} ms"
-                    if hc.healthy else "unavailable"
-                )
+                self.difix_rtt.value = f"{hc.last_rtt_ms:.0f} ms" if hc.healthy else "unavailable"
             return out
         if self.difix_client is None:
             return img
         out = self.difix_client.fix(img)
         if self.difix_rtt is not None:
             self.difix_rtt.value = (
-                f"{self.difix_client.last_rtt_ms:.0f} ms"
-                if self.difix_client.healthy else "unavailable"
+                f"{self.difix_client.last_rtt_ms:.0f} ms" if self.difix_client.healthy else "unavailable"
             )
         return out
 
@@ -1579,7 +1567,7 @@ class Viser4DViewer:
                 view_matrix = get_c2w(client.camera)
                 fov_y = client.camera.fov
                 near = self.near_plane_slider.value
-                far  = self.far_plane_slider.value
+                far = self.far_plane_slider.value
                 kaolin_camera = Camera.from_args(
                     view_matrix=view_matrix,
                     fov=fov_y,
@@ -1613,14 +1601,11 @@ class Viser4DViewer:
             img_pre_overlay = None
             if self._overlay_compositor is not None:
                 try:
-                    layer_specs = self._collect_overlay_layer_specs(
-                        self._t_us_current)
+                    layer_specs = self._collect_overlay_layer_specs(self._t_us_current)
                     img_pre_overlay = img
-                    img = self._overlay_compositor.composite(
-                        img, layer_specs, view_matrix.astype(np.float64))
+                    img = self._overlay_compositor.composite(img, layer_specs, view_matrix.astype(np.float64))
                 except Exception as e:
-                    print(f"[B2-OVERLAY] composite failed (continuing without "
-                          f"overlay): {e}")
+                    print(f"[B2-OVERLAY] composite failed (continuing without " f"overlay): {e}")
             # B2 debug: dump pre-overlay backdrop + post-overlay blended to
             # disk so the result can be inspected outside the browser when
             # WebGL canvas toDataURL is not viable. Activated by env var
@@ -1630,16 +1615,14 @@ class Viser4DViewer:
             if _dump_dir:
                 try:
                     from PIL import Image as _PILImage
+
                     if img_pre_overlay is not None:
-                        _PILImage.fromarray(img_pre_overlay).save(
-                            os.path.join(_dump_dir, "b2_backdrop.png"))
-                    _PILImage.fromarray(img).save(
-                        os.path.join(_dump_dir, "b2_blended.png"))
+                        _PILImage.fromarray(img_pre_overlay).save(os.path.join(_dump_dir, "b2_backdrop.png"))
+                    _PILImage.fromarray(img).save(os.path.join(_dump_dir, "b2_blended.png"))
                     # Also dump the c2w used for THIS frame so offline
                     # annotation tools can reproject the same cuboids
                     # with the matching camera pose.
-                    np.save(os.path.join(_dump_dir, "b2_c2w.npy"),
-                            view_matrix.astype(np.float64))
+                    np.save(os.path.join(_dump_dir, "b2_c2w.npy"), view_matrix.astype(np.float64))
                     with open(os.path.join(_dump_dir, "b2_t_us.txt"), "w") as _f:
                         _f.write(str(self._t_us_current))
                 except Exception as e:
@@ -1678,8 +1661,9 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
         if isinstance(mog, LayeredGaussians):
             specs = list(mog.specs)
             enabled = set(getattr(mog, "enabled_layer_names", set()))
-            print(f"[T8.13-DIAG]   - scene_mog type: LayeredGaussians "
-                  f"({len(specs)} specs, {len(mog.layers)} modules)")
+            print(
+                f"[T8.13-DIAG]   - scene_mog type: LayeredGaussians " f"({len(specs)} specs, {len(mog.layers)} modules)"
+            )
             for spec in specs:
                 in_layers = spec.name in mog.layers
                 n_particles = 0
@@ -1688,11 +1672,13 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
                         n_particles = int(mog.layers[spec.name].positions.shape[0])
                     except Exception:
                         n_particles = -1
-                print(f"[T8.13-DIAG]     - {spec.name:24s} "
-                      f"is_particle={spec.is_particle_layer!s:5s}  "
-                      f"in_layers={in_layers!s:5s}  "
-                      f"n_particles={n_particles}  "
-                      f"in_enabled={spec.name in enabled!s}")
+                print(
+                    f"[T8.13-DIAG]     - {spec.name:24s} "
+                    f"is_particle={spec.is_particle_layer!s:5s}  "
+                    f"in_layers={in_layers!s:5s}  "
+                    f"n_particles={n_particles}  "
+                    f"in_enabled={spec.name in enabled!s}"
+                )
             print(f"[T8.13-DIAG]   - enabled_layer_names: {sorted(enabled)}")
             # Bug 3 prior observation 321: tracks_poses is a python dict that
             # _populate_tracks_impl writes only in __init__; init_from_checkpoint
@@ -1701,17 +1687,17 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
             # effect". Surface size here to confirm/refute.
             tracks_poses = getattr(mog, "tracks_poses", None)
             if isinstance(tracks_poses, dict):
-                print(f"[T8.13-DIAG]   - tracks_poses dict: "
-                      f"{len(tracks_poses)} tracks "
-                      f"(empty after ckpt load → known Bug 3 root cause hint)")
+                print(
+                    f"[T8.13-DIAG]   - tracks_poses dict: "
+                    f"{len(tracks_poses)} tracks "
+                    f"(empty after ckpt load → known Bug 3 root cause hint)"
+                )
             else:
                 print(f"[T8.13-DIAG]   - tracks_poses: {type(tracks_poses).__name__}")
         else:
-            print(f"[T8.13-DIAG]   - scene_mog type: {type(mog).__name__} "
-                  f"(v1 MixtureOfGaussians, no layers)")
+            print(f"[T8.13-DIAG]   - scene_mog type: {type(mog).__name__} " f"(v1 MixtureOfGaussians, no layers)")
     cbs = getattr(viewer, "layer_checkboxes", {}) or {}
-    print(f"[T8.13-DIAG]   - viser checkboxes registered: "
-          f"{[(n, bool(cb.value)) for n, cb in cbs.items()]}")
+    print(f"[T8.13-DIAG]   - viser checkboxes registered: " f"{[(n, bool(cb.value)) for n, cb in cbs.items()]}")
 
     # ---- A.2 viz_4d time range ----------------------------------------------
     print("[T8.13-DIAG] A.2 viz_4d time range (Bug 4 evidence):")
@@ -1721,13 +1707,10 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
     else:
         dur_us = md.t_us_last - md.t_us_first
         print(f"[T8.13-DIAG]   - schema_version:      {md.schema_version}")
-        print(f"[T8.13-DIAG]   - t_us_first:          {md.t_us_first} us "
-              f"({md.t_us_first / 1e6:.3f} s)")
-        print(f"[T8.13-DIAG]   - t_us_last:           {md.t_us_last} us "
-              f"({md.t_us_last / 1e6:.3f} s)")
+        print(f"[T8.13-DIAG]   - t_us_first:          {md.t_us_first} us " f"({md.t_us_first / 1e6:.3f} s)")
+        print(f"[T8.13-DIAG]   - t_us_last:           {md.t_us_last} us " f"({md.t_us_last / 1e6:.3f} s)")
         print(f"[T8.13-DIAG]   - duration:            {dur_us / 1e6:.3f} s")
-        print(f"[T8.13-DIAG]   - n_ego_frames:        "
-              f"{md.ego_frame_timestamps_us.shape[0]}")
+        print(f"[T8.13-DIAG]   - n_ego_frames:        " f"{md.ego_frame_timestamps_us.shape[0]}")
         print(f"[T8.13-DIAG]   - n_track_frames:      {md.n_frames()}")
         # Best-effort: read training duration_sec / seek_offset_sec from
         # ckpt['config'] (OmegaConf DictConfig in v2 ckpts).
@@ -1735,24 +1718,19 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
         if cfg is not None:
             try:
                 from omegaconf import OmegaConf  # local import: optional
-                dur_sec = OmegaConf.select(cfg, "dataset.train.duration_sec",
-                                            default="<unset>")
-                seek_sec = OmegaConf.select(cfg, "dataset.train.seek_offset_sec",
-                                             default="<unset>")
+
+                dur_sec = OmegaConf.select(cfg, "dataset.train.duration_sec", default="<unset>")
+                seek_sec = OmegaConf.select(cfg, "dataset.train.seek_offset_sec", default="<unset>")
                 iters = OmegaConf.select(cfg, "n_iterations", default="<unset>")
-                print(f"[T8.13-DIAG]   - cfg.dataset.train.duration_sec:    "
-                      f"{dur_sec}")
-                print(f"[T8.13-DIAG]   - cfg.dataset.train.seek_offset_sec: "
-                      f"{seek_sec}")
-                print(f"[T8.13-DIAG]   - cfg.n_iterations:                  "
-                      f"{iters}")
+                print(f"[T8.13-DIAG]   - cfg.dataset.train.duration_sec:    " f"{dur_sec}")
+                print(f"[T8.13-DIAG]   - cfg.dataset.train.seek_offset_sec: " f"{seek_sec}")
+                print(f"[T8.13-DIAG]   - cfg.n_iterations:                  " f"{iters}")
             except Exception as e:
                 print(f"[T8.13-DIAG]   - cfg parse failed: {e!r}")
         else:
             print("[T8.13-DIAG]   - cfg: <ckpt has no 'config' key>")
         # Per-track frame_info coverage (first 5 tracks).
-        print(f"[T8.13-DIAG]   - per-track frame_info coverage "
-              f"(first 5 of {md.n_tracks()} tracks):")
+        print(f"[T8.13-DIAG]   - per-track frame_info coverage " f"(first 5 of {md.n_tracks()} tracks):")
         for i, (tid, t) in enumerate(md.tracks.items()):
             if i >= 5:
                 break
@@ -1763,11 +1741,12 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
             n_active = int(fi.sum())
             n_total = int(fi.size)
             active_idx = np.where(fi)[0]
-            rng = (f"[{int(active_idx[0])}, {int(active_idx[-1])}]"
-                   if active_idx.size > 0 else "[]")
-            print(f"[T8.13-DIAG]     - {tid}: active "
-                  f"{n_active}/{n_total} ({100.0 * n_active / max(n_total, 1):.1f}%) "
-                  f"range={rng}")
+            rng = f"[{int(active_idx[0])}, {int(active_idx[-1])}]" if active_idx.size > 0 else "[]"
+            print(
+                f"[T8.13-DIAG]     - {tid}: active "
+                f"{n_active}/{n_total} ({100.0 * n_active / max(n_total, 1):.1f}%) "
+                f"range={rng}"
+            )
 
     # ---- A.3 ego_pose vs initial_c2w ----------------------------------------
     print("[T8.13-DIAG] A.3 Camera vs ego pose @ t_us_first (Bug 1 evidence):")
@@ -1777,33 +1756,31 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
         ep = md.ego_pose_at(md.t_us_first)
         ic = md.initial_c2w
         dpos = float(np.linalg.norm(ep[:3, 3] - ic[:3, 3]))
-        print(f"[T8.13-DIAG]   - ego_pose_at(t_us_first)[:3,3]: "
-              f"{ep[:3, 3].tolist()}")
-        print(f"[T8.13-DIAG]   - meta.initial_c2w[:3,3]:        "
-              f"{ic[:3, 3].tolist()}")
-        print(f"[T8.13-DIAG]   - delta:                         {dpos:.3f} m "
-              f"({'OK' if dpos < 1.0 else 'WARN >1m suggests metadata stale'})")
+        print(f"[T8.13-DIAG]   - ego_pose_at(t_us_first)[:3,3]: " f"{ep[:3, 3].tolist()}")
+        print(f"[T8.13-DIAG]   - meta.initial_c2w[:3,3]:        " f"{ic[:3, 3].tolist()}")
+        print(
+            f"[T8.13-DIAG]   - delta:                         {dpos:.3f} m "
+            f"({'OK' if dpos < 1.0 else 'WARN >1m suggests metadata stale'})"
+        )
 
     # ---- A.4 FTheta vs pinhole asymmetry ------------------------------------
     print("[T8.13-DIAG] A.4 Projection model (Bug 2 evidence):")
     if md is None:
         print("[T8.13-DIAG]   - metadata=None; viser draws pinhole only")
     elif md.has_ftheta():
-        print("[T8.13-DIAG]   - engine path (Gaussian):  FTheta polynomial "
-              "(8-key intrinsics)")
-        print("[T8.13-DIAG]   - viser scene primitives:  pinhole "
-              "(kaolin Camera.fov)")
-        print("[T8.13-DIAG]   - WARN: cuboid/frustum/lidar drawn by viser "
-              "frontend may not align with FTheta Gaussian backdrop, "
-              "especially near image periphery. See plan Phase D for fix.")
+        print("[T8.13-DIAG]   - engine path (Gaussian):  FTheta polynomial " "(8-key intrinsics)")
+        print("[T8.13-DIAG]   - viser scene primitives:  pinhole " "(kaolin Camera.fov)")
+        print(
+            "[T8.13-DIAG]   - WARN: cuboid/frustum/lidar drawn by viser "
+            "frontend may not align with FTheta Gaussian backdrop, "
+            "especially near image periphery. See plan Phase D for fix."
+        )
     else:
-        print("[T8.13-DIAG]   - engine path + viser:     pinhole (consistent, "
-              "alignment should hold)")
+        print("[T8.13-DIAG]   - engine path + viser:     pinhole (consistent, " "alignment should hold)")
     print("[T8.13-DIAG] ============================================================")
 
 
-def _load_multi_cam_poses(dataset_path: Optional[str],
-                          default_config: str) -> dict:
+def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> dict:
     """V3-VIZ.3: extract per-camera per-frame c2w + timestamps for the
     Camera dropdown + Follow Camera modes.
 
@@ -1816,10 +1793,10 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
         return {}
     try:
         import ncore  # noqa: F401 — runtime-only SDK
+
         from threedgrut.datasets.datasetNcore import NCoreDataset
     except ImportError as e:
-        print(f"[viz_4d] multi-camera load skipped — NCore SDK missing: {e}",
-              flush=True)
+        print(f"[viz_4d] multi-camera load skipped — NCore SDK missing: {e}", flush=True)
         return {}
     try:
         # NCoreDataset auto-fails when manifest has multiple sensors and
@@ -1828,8 +1805,12 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
         # exception payload lists every available sensor.
         try:
             NCoreDataset(
-                datapath=str(dataset_path), split="train", device="cpu",
-                sample_full_image=True, camera_ids=None, load_aux_masks=False,
+                datapath=str(dataset_path),
+                split="train",
+                device="cpu",
+                sample_full_image=True,
+                camera_ids=None,
+                load_aux_masks=False,
                 n_val_image_subsample=1,
             )
             all_cam_ids = ["camera_front_wide_120fov"]  # single-sensor clip
@@ -1839,12 +1820,16 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                 raise
             # Extract the bracketed list literal from the error message.
             import ast
-            lit = msg[msg.index("["):msg.rindex("]") + 1]
+
+            lit = msg[msg.index("[") : msg.rindex("]") + 1]
             all_cam_ids = sorted(ast.literal_eval(lit))
         ds = NCoreDataset(
-            datapath=str(dataset_path), split="train", device="cpu",
+            datapath=str(dataset_path),
+            split="train",
+            device="cpu",
             sample_full_image=True,
-            camera_ids=all_cam_ids, load_aux_masks=False,
+            camera_ids=all_cam_ids,
+            load_aux_masks=False,
             n_val_image_subsample=1,
         )
         out: dict[str, dict] = {}
@@ -1858,13 +1843,14 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
             if frame_indices is None or len(frame_indices) == 0:
                 continue
             c2w_native = sensor.get_frames_T_source_target(
-                source_node=sensor.sensor_id, target_node="world",
-                frame_indices=frame_indices, frame_timepoint=start_tp,
+                source_node=sensor.sensor_id,
+                target_node="world",
+                frame_indices=frame_indices,
+                frame_timepoint=start_tp,
             )
             c2w_native = np.asarray(c2w_native, dtype=np.float64).reshape(-1, 4, 4)
             c2w_wg = np.einsum("ij,njk->nik", T_w2wg, c2w_native).astype(np.float32)
-            ts = np.asarray(sensor.frames_timestamps_us)[
-                np.asarray(frame_indices), end_col].astype(np.int64)
+            ts = np.asarray(sensor.frames_timestamps_us)[np.asarray(frame_indices), end_col].astype(np.int64)
             # Per-camera FTheta intrinsics (so dropdown switch actually changes
             # what the engine renders, not just the viewer pose). Falls back
             # to None for non-FTheta cameras (pinhole/distorted) — engine then
@@ -1883,14 +1869,14 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                 if isinstance(cam_model, ncore.sensors.FThetaCameraModel):
                     p = cam_model.get_parameters()
                     ftheta_dict = {
-                        "resolution":              np.asarray(p.resolution, dtype=np.int64),
-                        "shutter_type":            p.shutter_type.name,
-                        "principal_point":         np.asarray(p.principal_point, dtype=np.float32),
-                        "reference_poly":          p.reference_poly.name,
+                        "resolution": np.asarray(p.resolution, dtype=np.int64),
+                        "shutter_type": p.shutter_type.name,
+                        "principal_point": np.asarray(p.principal_point, dtype=np.float32),
+                        "reference_poly": p.reference_poly.name,
                         "pixeldist_to_angle_poly": np.asarray(p.pixeldist_to_angle_poly, dtype=np.float32),
                         "angle_to_pixeldist_poly": np.asarray(p.angle_to_pixeldist_poly, dtype=np.float32),
-                        "max_angle":               float(p.max_angle),
-                        "linear_cde":              np.asarray(p.linear_cde, dtype=np.float32),
+                        "max_angle": float(p.max_angle),
+                        "linear_cde": np.asarray(p.linear_cde, dtype=np.float32),
                     }
                     fov_y_rad = 2.0 * float(max_angle)
                 elif isinstance(cam_model, ncore.sensors.OpenCVPinholeCameraModel):
@@ -1900,17 +1886,17 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                     # training contract (datasetNcore.py:443/449).
                     p = cam_model.get_parameters()
                     opencv_pinhole_dict = {
-                        "resolution":         np.asarray(p.resolution, dtype=np.int64),
-                        "shutter_type":       p.shutter_type.name,
-                        "principal_point":    np.asarray(p.principal_point, dtype=np.float32),
-                        "focal_length":       np.asarray(p.focal_length, dtype=np.float32),
-                        "radial_coeffs":      np.asarray(p.radial_coeffs, dtype=np.float32),
-                        "tangential_coeffs":  np.asarray(p.tangential_coeffs, dtype=np.float32),
-                        "thin_prism_coeffs":  np.asarray(p.thin_prism_coeffs, dtype=np.float32),
+                        "resolution": np.asarray(p.resolution, dtype=np.int64),
+                        "shutter_type": p.shutter_type.name,
+                        "principal_point": np.asarray(p.principal_point, dtype=np.float32),
+                        "focal_length": np.asarray(p.focal_length, dtype=np.float32),
+                        "radial_coeffs": np.asarray(p.radial_coeffs, dtype=np.float32),
+                        "tangential_coeffs": np.asarray(p.tangential_coeffs, dtype=np.float32),
+                        "thin_prism_coeffs": np.asarray(p.thin_prism_coeffs, dtype=np.float32),
                     }
                     xs = np.arange(W, dtype=np.int64)
                     ys = np.arange(H, dtype=np.int64)
-                    px, py = np.meshgrid(xs, ys, indexing='xy')
+                    px, py = np.meshgrid(xs, ys, indexing="xy")
                     pixels = np.stack([px, py], axis=-1).reshape(-1, 2)
                     rays = cam_model.pixels_to_camera_rays(pixels)
                     rays = rays.detach().cpu().numpy() if hasattr(rays, "detach") else np.asarray(rays)
@@ -1923,36 +1909,42 @@ def _load_multi_cam_poses(dataset_path: Optional[str],
                     if fy > 0:
                         fov_y_rad = 2.0 * float(np.arctan(0.5 * H / fy))
             except Exception as e:
-                print(f"[viz_4d] cam {cam_id}: intrinsics extract failed ({e})",
-                      flush=True)
+                print(f"[viz_4d] cam {cam_id}: intrinsics extract failed ({e})", flush=True)
             out[cam_id] = {
-                "c2w": c2w_wg, "timestamps_us": ts,
-                "ftheta_dict": ftheta_dict, "resolution": resolution,
+                "c2w": c2w_wg,
+                "timestamps_us": ts,
+                "ftheta_dict": ftheta_dict,
+                "resolution": resolution,
                 "fov_y_rad": fov_y_rad,
                 "opencv_pinhole_dict": opencv_pinhole_dict,
                 "opencv_pinhole_rays": opencv_pinhole_rays,
             }
-            print(f"[viz_4d] cam {cam_id}: {c2w_wg.shape[0]} frames, "
-                  f"FOV_y={np.rad2deg(fov_y_rad):.1f}°, "
-                  f"ftheta={'YES' if ftheta_dict else 'no'}",
-                  flush=True)
+            print(
+                f"[viz_4d] cam {cam_id}: {c2w_wg.shape[0]} frames, "
+                f"FOV_y={np.rad2deg(fov_y_rad):.1f}°, "
+                f"ftheta={'YES' if ftheta_dict else 'no'}",
+                flush=True,
+            )
         return out
     except Exception as e:
         print(f"[viz_4d] multi-camera load failed: {e}", flush=True)
         return {}
 
 
-def _load_metadata(ckpt: dict, dataset_path: Optional[str],
-                   default_config: str) -> Optional[FourDMetadata]:
+def _load_metadata(ckpt: dict, dataset_path: Optional[str], default_config: str) -> Optional[FourDMetadata]:
     """Try ckpt['viz_4d'] first; fall back to dataset on-the-fly extract."""
     md = FourDMetadata.from_ckpt(ckpt)
     if md is not None:
-        print(f"[viz_4d] loaded schema_v{md.schema_version} "
-              f"({md.n_tracks()} tracks, ego_N={md.ego_poses_c2w.shape[0]})")
+        print(
+            f"[viz_4d] loaded schema_v{md.schema_version} "
+            f"({md.n_tracks()} tracks, ego_N={md.ego_poses_c2w.shape[0]})"
+        )
         return md
     if dataset_path is None:
-        print("[viz_4d] ckpt has no viz_4d block; running static 3D mode "
-              "(pass --dataset_path to extract 4D on the fly)")
+        print(
+            "[viz_4d] ckpt has no viz_4d block; running static 3D mode "
+            "(pass --dataset_path to extract 4D on the fly)"
+        )
         return None
     # Lazy import — only triggered when fallback is requested, so machines
     # without NCore SDK don't crash on plain v2 ckpts.
@@ -1964,10 +1956,7 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
         from threedgrut.layers.registry import specs_from_config
         from threedgrut.viz.metadata import extract_4d_metadata
     except ImportError as e:
-        raise RuntimeError(
-            "--dataset_path requires NCore SDK + LayeredGaussians stack; "
-            f"falling back failed: {e}"
-        )
+        raise RuntimeError("--dataset_path requires NCore SDK + LayeredGaussians stack; " f"falling back failed: {e}")
     conf = ckpt["config"]
     conf = OmegaConf.merge(conf, OmegaConf.create({"path": dataset_path}))
     print(f"[viz_4d] no viz_4d block; extracting on-the-fly from {dataset_path}")
@@ -1982,8 +1971,12 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
     # surfaces the sensor list, second open passes the full list).
     try:
         train_ds = NCoreDataset(
-            datapath=str(dataset_path), split="train", device="cpu",
-            sample_full_image=True, camera_ids=None, load_aux_masks=False,
+            datapath=str(dataset_path),
+            split="train",
+            device="cpu",
+            sample_full_image=True,
+            camera_ids=None,
+            load_aux_masks=False,
             n_val_image_subsample=1,
         )
     except ValueError as _err:
@@ -1991,12 +1984,17 @@ def _load_metadata(ckpt: dict, dataset_path: Optional[str],
         if "Multiple camera sensors" not in _msg or "[" not in _msg:
             raise
         import ast as _ast
-        _lit = _msg[_msg.index("["):_msg.rindex("]") + 1]
+
+        _lit = _msg[_msg.index("[") : _msg.rindex("]") + 1]
         _all_cam_ids = sorted(_ast.literal_eval(_lit))
         train_ds = NCoreDataset(
-            datapath=str(dataset_path), split="train", device="cpu",
-            sample_full_image=True, camera_ids=_all_cam_ids,
-            load_aux_masks=False, n_val_image_subsample=1,
+            datapath=str(dataset_path),
+            split="train",
+            device="cpu",
+            sample_full_image=True,
+            camera_ids=_all_cam_ids,
+            load_aux_masks=False,
+            n_val_image_subsample=1,
         )
     specs = specs_from_config(conf)
     model = LayeredGaussians(conf, specs=specs, scene_extent=1.0)
@@ -2030,6 +2028,7 @@ def _cleanup_stale_jit_baton_locks(min_age_s: float = 60.0) -> None:
     """
     import glob as _glob
     import time as _time
+
     base = os.path.expanduser("~/.cache/torch_extensions")
     if not os.path.isdir(base):
         return
@@ -2048,14 +2047,16 @@ def _cleanup_stale_jit_baton_locks(min_age_s: float = 60.0) -> None:
             os.remove(lk)
             cleared.append((lk, age))
         except OSError as e:
-            print(f"[viz_4d] stale-lock cleanup: {lk} rm failed ({e})",
-                  flush=True)
+            print(f"[viz_4d] stale-lock cleanup: {lk} rm failed ({e})", flush=True)
     if cleared:
         for lk, age in cleared:
-            print(f"[viz_4d] removed stale JIT FileBaton lock "
-                  f"{lk} (age {age:.0f}s) — prevents file_baton.wait() "
-                  f"infinite loop. See https://github.com/pytorch/pytorch/"
-                  f"issues/9711", flush=True)
+            print(
+                f"[viz_4d] removed stale JIT FileBaton lock "
+                f"{lk} (age {age:.0f}s) — prevents file_baton.wait() "
+                f"infinite loop. See https://github.com/pytorch/pytorch/"
+                f"issues/9711",
+                flush=True,
+            )
 
 
 def main() -> None:
@@ -2065,97 +2066,134 @@ def main() -> None:
     _cleanup_stale_jit_baton_locks()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gs_object", type=str, default=None,
-                        help="Path of pretrained 3dgrt checkpoint (.pt). "
-                             "Mutually exclusive with --usdz; one of the two "
-                             "is required.")
+    parser.add_argument(
+        "--gs_object",
+        type=str,
+        default=None,
+        help="Path of pretrained 3dgrt checkpoint (.pt). "
+        "Mutually exclusive with --usdz; one of the two "
+        "is required.",
+    )
     # E2.7: NVIDIA NRE/NuRec USDZ entry — transparently downgrades to
     # --gs_object path after on-the-fly conversion. Lets viser_gui_4d.py
     # load NVIDIA-trained USDZ checkpoints for visual A/B comparison against
     # 3dgrut2-native .pt outputs in a second viser instance.
-    parser.add_argument("--usdz", type=str, default=None,
-                        help="NVIDIA NRE/NuRec training-checkpoint USDZ path. "
-                             "Mutually exclusive with --gs_object. When given, "
-                             "main() calls convert_usdz_to_pt() to write a "
-                             "3dgrut2-native .pt to --usdz_cache_dir, then "
-                             "transparently downgrades to --gs_object path. "
-                             "Requires --dataset_path (USDZ-converted .pt has "
-                             "no viz_4d block; metadata comes from NCore "
-                             "fallback).")
-    parser.add_argument("--usdz_cache_dir", type=str,
-                        default=os.path.expanduser(
-                            "~/.cache/3dgrut2/nre_usdz_pt"),
-                        help="Where converted .pt files are cached "
-                             "(named <usdz_basename>_<mtime_hash>.pt for "
-                             "idempotent reload across viser restarts).")
-    parser.add_argument("--usdz_layers", type=str,
-                        default="background,road,dynamic_rigids",
-                        help="Comma-separated NRE Gaussian layers to load. "
-                             "Default includes dynamic_rigids (E2.7-B: "
-                             "vehicles move with timeline via populate_tracks "
-                             "auto-hook on viz_4d.tracks). Skip "
-                             "dynamic_rigids if --dataset_path is absent or "
-                             "USDZ has no sequence_tracks.json. Don't add "
-                             "sky_envmap (needs nvdiffrast, not installed "
-                             "on inceptio/A800).")
-    parser.add_argument("--initial_cam_id", type=str, default=None,
-                        help="E2.7 H1 fix: lock viser initial camera to this "
-                             "NCore camera id (must be present in "
-                             "_load_multi_cam_poses ring). Recommended "
-                             "'camera_front_120' for outdoor driving scenes "
-                             "— random/default viser cameras can land in "
-                             "far-field gaussian noise and produce "
-                             "'unrecognizable artifacts'. When omitted, "
-                             "viser uses meta.initial_c2w (legacy behavior).")
-    parser.add_argument("--mesh_assets", type=str,
-                        default=os.path.join(os.path.dirname(__file__), "assets"))
-    parser.add_argument("--default_gs_config", type=str,
-                        default="apps/colmap_3dgrt.yaml")
-    parser.add_argument("--envmap_assets", type=str,
-                        default=os.path.join(os.path.dirname(__file__), "assets"))
-    parser.add_argument("--dataset_path", type=str, default=None,
-                        help="Optional NCore dataset path for 4D fallback when ckpt has no viz_4d.")
+    parser.add_argument(
+        "--usdz",
+        type=str,
+        default=None,
+        help="NVIDIA NRE/NuRec training-checkpoint USDZ path. "
+        "Mutually exclusive with --gs_object. When given, "
+        "main() calls convert_usdz_to_pt() to write a "
+        "3dgrut2-native .pt to --usdz_cache_dir, then "
+        "transparently downgrades to --gs_object path. "
+        "Requires --dataset_path (USDZ-converted .pt has "
+        "no viz_4d block; metadata comes from NCore "
+        "fallback).",
+    )
+    parser.add_argument(
+        "--usdz_cache_dir",
+        type=str,
+        default=os.path.expanduser("~/.cache/3dgrut2/nre_usdz_pt"),
+        help="Where converted .pt files are cached "
+        "(named <usdz_basename>_<mtime_hash>.pt for "
+        "idempotent reload across viser restarts).",
+    )
+    parser.add_argument(
+        "--usdz_layers",
+        type=str,
+        default="background,road,dynamic_rigids",
+        help="Comma-separated NRE Gaussian layers to load. "
+        "Default includes dynamic_rigids (E2.7-B: "
+        "vehicles move with timeline via populate_tracks "
+        "auto-hook on viz_4d.tracks). Skip "
+        "dynamic_rigids if --dataset_path is absent or "
+        "USDZ has no sequence_tracks.json. Don't add "
+        "sky_envmap (needs nvdiffrast, not installed "
+        "on inceptio/A800).",
+    )
+    parser.add_argument(
+        "--initial_cam_id",
+        type=str,
+        default=None,
+        help="E2.7 H1 fix: lock viser initial camera to this "
+        "NCore camera id (must be present in "
+        "_load_multi_cam_poses ring). Recommended "
+        "'camera_front_120' for outdoor driving scenes "
+        "— random/default viser cameras can land in "
+        "far-field gaussian noise and produce "
+        "'unrecognizable artifacts'. When omitted, "
+        "viser uses meta.initial_c2w (legacy behavior).",
+    )
+    parser.add_argument("--mesh_assets", type=str, default=os.path.join(os.path.dirname(__file__), "assets"))
+    parser.add_argument("--default_gs_config", type=str, default="apps/colmap_3dgrt.yaml")
+    parser.add_argument("--envmap_assets", type=str, default=os.path.join(os.path.dirname(__file__), "assets"))
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default=None,
+        help="Optional NCore dataset path for 4D fallback when ckpt has no viz_4d.",
+    )
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--target_fps", type=float, default=20.0)
-    parser.add_argument("--difix_server", type=str, default=None,
-                        help="host:port of an out-of-process DiFix server "
-                             "(e.g. 127.0.0.1:8765). When set, a 'DiFix' toggle "
-                             "appears under Render Controls; enabling it routes "
-                             "each rendered frame through DiFix before display. "
-                             "Start the server with "
-                             "threedgrut_playground/difix_server.py inside the "
-                             "cosmos Docker env. Default: off.")
-    parser.add_argument("--harmonizer_temporal_server", type=str, default=None,
-                        help="E2.6: host:port of a temporal DiffusionHarmonizer "
-                             "server (e.g. 127.0.0.1:59490). When set, a "
-                             "'Harmonizer (temporal)' toggle appears; enabling "
-                             "it routes each rendered frame through Harmonizer's "
-                             "temporal mode (curr + last K corrected outputs) "
-                             "for de-flickering continuous play sequences. "
-                             "Seek/scrub auto-resets the history. Mutually "
-                             "exclusive with --difix_server. Start the server "
-                             "with threedgrut_playground/harmonizer_temporal_"
-                             "server.py inside the harmonizer-cosmos-env Docker "
-                             "env. Default: off.")
-    parser.add_argument("--harmonizer_temporal_K", type=int, default=4,
-                        help="E2.6: history depth K for temporal Harmonizer "
-                             "(default 4, the paper default). The client holds "
-                             "up to K prior corrected outputs; each request "
-                             "carries 1 + min(history, K) frames.")
-    parser.add_argument("--no_gaussian_render", action="store_true",
-                        help="Skip Engine3DGRUT init + Gaussian background "
-                             "rendering. Required on Ampere datacenter SKUs "
-                             "WITHOUT RT cores (A100 / A800), where the OptiX "
-                             "extension dlopen segfaults. Hopper datacenter "
-                             "(H100/H800/H200) and all RTX cards have RT "
-                             "cores and don't need this flag. Scene "
-                             "primitives (ego/cuboid/LiDAR) + timeline still "
-                             "work in this mode.")
-    parser.add_argument("--renderer", type=str, default="3dgrt",
-                        choices=["3dgrt", "3dgut"],
-                        help="Rendering backend. '3dgrt' (default) uses OptiX ray tracing "
-                             "(requires RT cores). '3dgut' uses tile-based rasterization "
-                             "and works on A100/A800 without RT cores.")
+    parser.add_argument(
+        "--difix_server",
+        type=str,
+        default=None,
+        help="host:port of an out-of-process DiFix server "
+        "(e.g. 127.0.0.1:8765). When set, a 'DiFix' toggle "
+        "appears under Render Controls; enabling it routes "
+        "each rendered frame through DiFix before display. "
+        "Start the server with "
+        "threedgrut_playground/difix_server.py inside the "
+        "cosmos Docker env. Default: off.",
+    )
+    parser.add_argument(
+        "--harmonizer_temporal_server",
+        type=str,
+        default=None,
+        help="E2.6: host:port of a temporal DiffusionHarmonizer "
+        "server (e.g. 127.0.0.1:59490). When set, a "
+        "'Harmonizer (temporal)' toggle appears; enabling "
+        "it routes each rendered frame through Harmonizer's "
+        "temporal mode (curr + last K corrected outputs) "
+        "for de-flickering continuous play sequences. "
+        "Seek/scrub auto-resets the history. Mutually "
+        "exclusive with --difix_server. Start the server "
+        "with threedgrut_playground/harmonizer_temporal_"
+        "server.py inside the harmonizer-cosmos-env Docker "
+        "env. Default: off.",
+    )
+    parser.add_argument(
+        "--harmonizer_temporal_K",
+        type=int,
+        default=4,
+        help="E2.6: history depth K for temporal Harmonizer "
+        "(default 4, the paper default). The client holds "
+        "up to K prior corrected outputs; each request "
+        "carries 1 + min(history, K) frames.",
+    )
+    parser.add_argument(
+        "--no_gaussian_render",
+        action="store_true",
+        help="Skip Engine3DGRUT init + Gaussian background "
+        "rendering. Required on Ampere datacenter SKUs "
+        "WITHOUT RT cores (A100 / A800), where the OptiX "
+        "extension dlopen segfaults. Hopper datacenter "
+        "(H100/H800/H200) and all RTX cards have RT "
+        "cores and don't need this flag. Scene "
+        "primitives (ego/cuboid/LiDAR) + timeline still "
+        "work in this mode.",
+    )
+    parser.add_argument(
+        "--renderer",
+        type=str,
+        default="3dgrt",
+        choices=["3dgrt", "3dgut"],
+        help="Rendering backend. '3dgrt' (default) uses OptiX ray tracing "
+        "(requires RT cores). '3dgut' uses tile-based rasterization "
+        "and works on A100/A800 without RT cores.",
+    )
     # T8.12-FIX (Phase A.2 + A.5): explicit viser fov + optional fisheye
     # raygen switch. Reference repo (tools/viser_multilayer_nurec.py) uses
     # --fov_deg=90 hard-set for fisheye-trained ckpts and renders cleanly via
@@ -2163,24 +2201,36 @@ def main() -> None:
     # engine.camera_type; we just never wire it through viser_gui_4d. These
     # flags let A800/vast.ai operator A/B-test pinhole-90 vs fisheye-120
     # without code edits.
-    parser.add_argument("--initial_fov_deg", type=float, default=90.0,
-                        help="Initial viser client camera vertical fov (deg). "
-                             "Default 90 matches reference repo "
-                             "tools/viser_multilayer_nurec.py. Set explicitly "
-                             "to test e.g. 60 / 75 / 120; viser UI still lets "
-                             "the user override at runtime.")
-    parser.add_argument("--camera_type", type=str, default="Pinhole",
-                        choices=["Pinhole", "Fisheye"],
-                        help="Engine raygen mode. 'Pinhole' (default) matches "
-                             "T8.12 + reference repo behavior. 'Fisheye' "
-                             "routes through engine._raygen_fisheye + "
-                             "generate_fisheye_rays; use with --camera_fov_deg "
-                             "matching training (e.g. 120 for NCore "
-                             "camera_front_wide_120fov).")
-    parser.add_argument("--camera_fov_deg", type=float, default=None,
-                        help="Engine fisheye fov (deg). Only used when "
-                             "--camera_type=Fisheye. Defaults to "
-                             "--initial_fov_deg when omitted.")
+    parser.add_argument(
+        "--initial_fov_deg",
+        type=float,
+        default=90.0,
+        help="Initial viser client camera vertical fov (deg). "
+        "Default 90 matches reference repo "
+        "tools/viser_multilayer_nurec.py. Set explicitly "
+        "to test e.g. 60 / 75 / 120; viser UI still lets "
+        "the user override at runtime.",
+    )
+    parser.add_argument(
+        "--camera_type",
+        type=str,
+        default="Pinhole",
+        choices=["Pinhole", "Fisheye"],
+        help="Engine raygen mode. 'Pinhole' (default) matches "
+        "T8.12 + reference repo behavior. 'Fisheye' "
+        "routes through engine._raygen_fisheye + "
+        "generate_fisheye_rays; use with --camera_fov_deg "
+        "matching training (e.g. 120 for NCore "
+        "camera_front_wide_120fov).",
+    )
+    parser.add_argument(
+        "--camera_fov_deg",
+        type=float,
+        default=None,
+        help="Engine fisheye fov (deg). Only used when "
+        "--camera_type=Fisheye. Defaults to "
+        "--initial_fov_deg when omitted.",
+    )
     args = parser.parse_args()
 
     # E2.7: USDZ entry — convert USDZ → 3dgrut2-native .pt, then
@@ -2188,42 +2238,35 @@ def main() -> None:
     # torch.load / _load_metadata paths are unchanged.
     if args.usdz is not None:
         if args.gs_object is not None:
-            parser.error(
-                "--usdz and --gs_object are mutually exclusive; pick one.")
+            parser.error("--usdz and --gs_object are mutually exclusive; pick one.")
         if not args.dataset_path:
             parser.error(
                 "--usdz mode REQUIRES --dataset_path to the matching NCore "
                 "clip json — USDZ-converted .pt has no viz_4d block, so "
                 "metadata (timeline, ego pose, cam ring) must come from "
                 "NCore fallback. Without --dataset_path the viser panel "
-                "(timeline/frustum/cam dropdown) will be empty.")
-        from threedgrut_playground.utils.nre_usdz_loader import (
-            convert_usdz_to_pt,
-        )
+                "(timeline/frustum/cam dropdown) will be empty."
+            )
+        from threedgrut_playground.utils.nre_usdz_loader import convert_usdz_to_pt
+
         os.makedirs(args.usdz_cache_dir, exist_ok=True)
         usdz_abs = os.path.abspath(args.usdz)
-        mtime_hash = hashlib.md5(
-            f"{usdz_abs}:{os.path.getmtime(args.usdz)}".encode()
-        ).hexdigest()[:10]
+        mtime_hash = hashlib.md5(f"{usdz_abs}:{os.path.getmtime(args.usdz)}".encode()).hexdigest()[:10]
         cache_pt = os.path.join(
             args.usdz_cache_dir,
             f"{os.path.basename(args.usdz)}_{mtime_hash}.pt",
         )
         if not os.path.exists(cache_pt):
-            print(f"[E2.7-usdz] converting {args.usdz} → {cache_pt} "
-                  f"(layers={args.usdz_layers}, albedo_mode=dc)")
+            print(f"[E2.7-usdz] converting {args.usdz} → {cache_pt} " f"(layers={args.usdz_layers}, albedo_mode=dc)")
             convert_usdz_to_pt(
                 args.usdz,
                 cache_pt,
-                config_name=(args.default_gs_config
-                             or "apps/ncore_3dgut_mcmc_multilayer"),
-                layers=tuple(l.strip() for l in args.usdz_layers.split(",")
-                             if l.strip()),
+                config_name=(args.default_gs_config or "apps/ncore_3dgut_mcmc_multilayer"),
+                layers=tuple(l.strip() for l in args.usdz_layers.split(",") if l.strip()),
                 albedo_mode="dc",
             )
         else:
-            print(f"[E2.7-usdz] reusing cache {cache_pt} "
-                  f"(mtime_hash={mtime_hash})")
+            print(f"[E2.7-usdz] reusing cache {cache_pt} " f"(mtime_hash={mtime_hash})")
         args.gs_object = cache_pt
 
         # E2.7 P1/P4 fix: align NRE gaussians to NCore world frame.
@@ -2265,8 +2308,10 @@ def main() -> None:
         # world_translate=None.
         aligned_pt = cache_pt[:-3] + "_aligned.pt"
         if not os.path.exists(aligned_pt):
-            print(f"[E2.7-align] reading USDZ rig_trajectories.world_to_nre "
-                  f"for NRE→NCore world translate...", flush=True)
+            print(
+                f"[E2.7-align] reading USDZ rig_trajectories.world_to_nre " f"for NRE→NCore world translate...",
+                flush=True,
+            )
             try:
                 # E2.7 P1 ROOT-CAUSE FIX: USDZ container carries
                 # ``rig_trajectories.json`` with a top-level ``world_to_nre``
@@ -2280,23 +2325,24 @@ def main() -> None:
                 # Detection by user (大g): "3dgrut2 ckpt 和 USDZ 同源，c2w
                 # 数值应该一样" — diff revealed world_to_nre as the missing
                 # transform.
-                import zipfile as _zf, json as _json
+                import json as _json
+                import zipfile as _zf
+
                 with _zf.ZipFile(args.usdz) as _zip:
                     with _zip.open("rig_trajectories.json") as _fp:
                         _rt = _json.load(_fp)
                 _w2nre = _rt.get("world_to_nre") or {}
                 _w2nre_mat = np.asarray(
-                    _w2nre.get("matrix") if isinstance(_w2nre, dict)
-                    else _w2nre,
+                    _w2nre.get("matrix") if isinstance(_w2nre, dict) else _w2nre,
                     dtype=np.float64,
                 ).reshape(4, 4)
                 # NRE → NCore world translate = -world_to_nre.translation
                 _translate = (-_w2nre_mat[:3, 3]).astype(np.float32)
-                print(f"[E2.7-align] world_to_nre.translation="
-                      f"{_w2nre_mat[:3,3].tolist()}", flush=True)
-                print(f"[E2.7-align] NRE→world translate "
-                      f"={_translate.tolist()} (= -world_to_nre.translation)",
-                      flush=True)
+                print(f"[E2.7-align] world_to_nre.translation=" f"{_w2nre_mat[:3,3].tolist()}", flush=True)
+                print(
+                    f"[E2.7-align] NRE→world translate " f"={_translate.tolist()} (= -world_to_nre.translation)",
+                    flush=True,
+                )
                 # Sanity: rotation block should be identity (NRE typically
                 # only translates origin, never rotates). If non-identity,
                 # we'd need full matrix multiply on positions + per-axis
@@ -2304,11 +2350,13 @@ def main() -> None:
                 # translate-only.
                 _R = _w2nre_mat[:3, :3]
                 if not np.allclose(_R, np.eye(3), atol=1e-4):
-                    print(f"[E2.7-align] WARN: world_to_nre rotation NOT "
-                          f"identity (R=\n{_R}\n); translate-only align is "
-                          f"insufficient. Visual artifact possible. Full "
-                          f"matrix align TODO if user sees rotation skew.",
-                          flush=True)
+                    print(
+                        f"[E2.7-align] WARN: world_to_nre rotation NOT "
+                        f"identity (R=\n{_R}\n); translate-only align is "
+                        f"insufficient. Visual artifact possible. Full "
+                        f"matrix align TODO if user sees rotation skew.",
+                        flush=True,
+                    )
                 # Load NRE ckpt, apply +translate to every layer's positions,
                 # save to aligned cache.
                 _ckpt = torch.load(cache_pt, weights_only=False)
@@ -2328,50 +2376,55 @@ def main() -> None:
                     # the trajectory. fervent-knuth 873L: ``node_offset =
                     # offset if spec.name != 'dynamic_rigids' else None``.
                     if _layer == "dynamic_rigids":
-                        print(f"[E2.7-align]   layer={_layer}: "
-                              f"{_node['positions'].shape[0]} gaussians kept "
-                              f"in object-local frame (render_pass applies "
-                              f"track_pose per timestamp)", flush=True)
+                        print(
+                            f"[E2.7-align]   layer={_layer}: "
+                            f"{_node['positions'].shape[0]} gaussians kept "
+                            f"in object-local frame (render_pass applies "
+                            f"track_pose per timestamp)",
+                            flush=True,
+                        )
                         continue
                     _p = _node["positions"]
                     _orig_param = isinstance(_p, torch.nn.Parameter)
                     _p_dev = _p.device
                     _p_dtype = _p.dtype
                     with torch.no_grad():
-                        _p_new = _p.detach() + _trans_t.to(
-                            device=_p_dev, dtype=_p_dtype)
+                        _p_new = _p.detach() + _trans_t.to(device=_p_dev, dtype=_p_dtype)
                     if _orig_param:
-                        _node["positions"] = torch.nn.Parameter(
-                            _p_new.contiguous(), requires_grad=False)
+                        _node["positions"] = torch.nn.Parameter(_p_new.contiguous(), requires_grad=False)
                     else:
                         _node["positions"] = _p_new.contiguous()
-                    print(f"[E2.7-align]   layer={_layer}: shifted "
-                          f"{_p.shape[0]} gaussians by "
-                          f"({_translate[0]:.2f},{_translate[1]:.2f},"
-                          f"{_translate[2]:.2f})", flush=True)
+                    print(
+                        f"[E2.7-align]   layer={_layer}: shifted "
+                        f"{_p.shape[0]} gaussians by "
+                        f"({_translate[0]:.2f},{_translate[1]:.2f},"
+                        f"{_translate[2]:.2f})",
+                        flush=True,
+                    )
                 torch.save(_ckpt, aligned_pt)
-                print(f"[E2.7-align] wrote aligned ckpt → {aligned_pt}",
-                      flush=True)
+                print(f"[E2.7-align] wrote aligned ckpt → {aligned_pt}", flush=True)
             except Exception as _ae:
-                print(f"[E2.7-align] WARN: world-align skipped ({_ae!r}); "
-                      f"P1/P4 frustum/trajectory may show ~few-meter offset",
-                      flush=True)
+                print(
+                    f"[E2.7-align] WARN: world-align skipped ({_ae!r}); "
+                    f"P1/P4 frustum/trajectory may show ~few-meter offset",
+                    flush=True,
+                )
                 aligned_pt = None
         else:
-            print(f"[E2.7-align] reusing aligned cache {aligned_pt}",
-                  flush=True)
+            print(f"[E2.7-align] reusing aligned cache {aligned_pt}", flush=True)
         if aligned_pt is not None and os.path.exists(aligned_pt):
             args.gs_object = aligned_pt
     elif args.gs_object is None:
         parser.error("one of --gs_object or --usdz is required.")
 
-    print(f"[E2.7-init] about to init Engine3DGRUT(gs_object={args.gs_object}, "
-          f"default_config={args.default_gs_config}, renderer={args.renderer})",
-          flush=True)
+    print(
+        f"[E2.7-init] about to init Engine3DGRUT(gs_object={args.gs_object}, "
+        f"default_config={args.default_gs_config}, renderer={args.renderer})",
+        flush=True,
+    )
     if args.no_gaussian_render:
         engine = None
-        print("[viz_4d] --no_gaussian_render: skipping Engine3DGRUT "
-              "(scene primitives + timeline only)")
+        print("[viz_4d] --no_gaussian_render: skipping Engine3DGRUT " "(scene primitives + timeline only)")
     else:
         engine = Engine3DGRUT(
             gs_object=args.gs_object,
@@ -2384,13 +2437,10 @@ def main() -> None:
         # repo + our T8.12 stuck with pinhole; this hook lets operators flip
         # without rebuilding the engine.
         if args.camera_type == "Fisheye":
-            fisheye_fov_deg = (args.camera_fov_deg
-                               if args.camera_fov_deg is not None
-                               else args.initial_fov_deg)
+            fisheye_fov_deg = args.camera_fov_deg if args.camera_fov_deg is not None else args.initial_fov_deg
             engine.camera_type = "Fisheye"
             engine.camera_fov = float(fisheye_fov_deg)
-            print(f"[viz_4d] engine.camera_type=Fisheye, "
-                  f"engine.camera_fov={fisheye_fov_deg}°")
+            print(f"[viz_4d] engine.camera_type=Fisheye, " f"engine.camera_fov={fisheye_fov_deg}°")
     # Need ckpt dict for metadata; re-load explicitly (engine loaded model only).
     if args.gs_object.endswith(".pt"):
         ckpt = torch.load(args.gs_object, weights_only=False)
@@ -2424,8 +2474,7 @@ def main() -> None:
                     flush=True,
                 )
             except Exception as _e:
-                print(f"[E2.7-sanity] layer={layer} stats failed: {_e!r}",
-                      flush=True)
+                print(f"[E2.7-sanity] layer={layer} stats failed: {_e!r}", flush=True)
         ext = m.get("scene_extent", None) if isinstance(m, dict) else None
         try:
             ext_v = float(ext) if ext is not None else float("nan")
@@ -2449,9 +2498,7 @@ def main() -> None:
             f"clip as {args.usdz}."
         )
     if metadata is not None:
-        _n_frames = (metadata.n_frames()
-                     if callable(getattr(metadata, "n_frames", None))
-                     else metadata.n_frames)
+        _n_frames = metadata.n_frames() if callable(getattr(metadata, "n_frames", None)) else metadata.n_frames
         print(
             f"[E2.7] metadata source: "
             f"{'USDZ→.pt (NCore fallback)' if args.usdz else 'ckpt viz_4d or NCore fallback'}, "
@@ -2475,26 +2522,28 @@ def main() -> None:
     #       provide tracks; only viz_4d-ckpt path does, see _load_metadata)
     if args.usdz and metadata is not None and engine is not None:
         try:
-            dyn_node = ckpt.get("model", {}).get("gaussians_nodes", {}).get(
-                "dynamic_rigids")
+            dyn_node = ckpt.get("model", {}).get("gaussians_nodes", {}).get("dynamic_rigids")
             if dyn_node is None:
-                print("[E2.7-B] dynamic_rigids not in ckpt (loader skipped it "
-                      "or --usdz_layers excluded it); no track wiring.",
-                      flush=True)
+                print(
+                    "[E2.7-B] dynamic_rigids not in ckpt (loader skipped it "
+                    "or --usdz_layers excluded it); no track wiring.",
+                    flush=True,
+                )
             elif "_nre_cuboid_ids" not in dyn_node:
-                print("[E2.7-B] dynamic_rigids loaded but no _nre_cuboid_ids "
-                      "ride-along — NRE state_dict missing gaussian_cuboid_ids; "
-                      "vehicles will render at static base pose, no track motion.",
-                      flush=True)
+                print(
+                    "[E2.7-B] dynamic_rigids loaded but no _nre_cuboid_ids "
+                    "ride-along — NRE state_dict missing gaussian_cuboid_ids; "
+                    "vehicles will render at static base pose, no track motion.",
+                    flush=True,
+                )
             else:
                 from threedgrut_playground.utils.nre_usdz_loader import (
                     build_dynamic_tracks_for_viz4d,
                 )
+
                 cuboid_ids_t = dyn_node["_nre_cuboid_ids"]
                 cuboid_ids_np = (
-                    cuboid_ids_t.detach().cpu().numpy()
-                    if hasattr(cuboid_ids_t, "detach")
-                    else np.asarray(cuboid_ids_t)
+                    cuboid_ids_t.detach().cpu().numpy() if hasattr(cuboid_ids_t, "detach") else np.asarray(cuboid_ids_t)
                 )
                 # E2.7-B ROOT-CAUSE-CORRECTION: NRE world frame == NCore
                 # world frame (verified by tid='18' cross-source diff between
@@ -2507,21 +2556,25 @@ def main() -> None:
                 # Shared timeline = NCore primary cam frame timestamps the
                 # FourDMetadata already loaded. Tracks are resampled onto
                 # this so frame_info masks the in-window frames.
-                timeline_us = np.asarray(
-                    metadata.ego_frame_timestamps_us, dtype=np.int64
+                timeline_us = np.asarray(metadata.ego_frame_timestamps_us, dtype=np.int64)
+                print(
+                    f"[E2.7-B] resampling dynamic_rigids tracks onto "
+                    f"{timeline_us.size}-frame NCore timeline "
+                    f"(world_translate=None; NRE pose == NCore world)...",
+                    flush=True,
                 )
-                print(f"[E2.7-B] resampling dynamic_rigids tracks onto "
-                      f"{timeline_us.size}-frame NCore timeline "
-                      f"(world_translate=None; NRE pose == NCore world)...",
-                      flush=True)
                 track_ids_np, tracks_dict = build_dynamic_tracks_for_viz4d(
-                    args.usdz, cuboid_ids_np, timeline_us,
+                    args.usdz,
+                    cuboid_ids_np,
+                    timeline_us,
                     world_translate=world_translate,
                 )
-                print(f"[E2.7-B] built {len(tracks_dict)} tracks for "
-                      f"{cuboid_ids_np.size} gaussians; track_ids range "
-                      f"[{track_ids_np.min()},{track_ids_np.max()}].",
-                      flush=True)
+                print(
+                    f"[E2.7-B] built {len(tracks_dict)} tracks for "
+                    f"{cuboid_ids_np.size} gaussians; track_ids range "
+                    f"[{track_ids_np.min()},{track_ids_np.max()}].",
+                    flush=True,
+                )
                 # (a) register track_ids buffer on dynamic_rigids layer.
                 # layered_model.py:639 also restores this from
                 # ckpt["model"]["gaussians_nodes"][name]["track_ids"], but
@@ -2541,30 +2594,32 @@ def main() -> None:
                 _torch_tracks = {}
                 _n_active_per_track = []
                 for _tid, _t in tracks_dict.items():
-                    _fi = torch.as_tensor(
-                        _t["frame_info"], dtype=torch.bool, device=_dev)
+                    _fi = torch.as_tensor(_t["frame_info"], dtype=torch.bool, device=_dev)
                     _n_active_per_track.append(int(_fi.sum().item()))
                     _torch_tracks[_tid] = {
-                        "poses": torch.as_tensor(
-                            _t["poses"], dtype=torch.float32, device=_dev),
-                        "size": torch.as_tensor(
-                            _t["size"], dtype=torch.float32, device=_dev),
+                        "poses": torch.as_tensor(_t["poses"], dtype=torch.float32, device=_dev),
+                        "size": torch.as_tensor(_t["size"], dtype=torch.float32, device=_dev),
                         "frame_info": _fi,
                         "class": _t["class"],
                     }
                 _act = np.asarray(_n_active_per_track)
-                print(f"[E2.7-B] active-frame distribution per track: "
-                      f"min={_act.min()} max={_act.max()} "
-                      f"median={int(np.median(_act))} of {timeline_us.size} frames, "
-                      f"all-zero tracks={(_act==0).sum()}/{len(_act)}",
-                      flush=True)
+                print(
+                    f"[E2.7-B] active-frame distribution per track: "
+                    f"min={_act.min()} max={_act.max()} "
+                    f"median={int(np.median(_act))} of {timeline_us.size} frames, "
+                    f"all-zero tracks={(_act==0).sum()}/{len(_act)}",
+                    flush=True,
+                )
                 _torch_tracks[_first_tid]["cam_timestamps_us"] = torch.as_tensor(
-                    timeline_us, dtype=torch.int64, device=_dev)
+                    timeline_us, dtype=torch.int64, device=_dev
+                )
                 engine.scene_mog.populate_tracks(_torch_tracks)
-                print(f"[E2.7-B] populate_tracks done: "
-                      f"{len(_torch_tracks)} tracks on dynamic_rigids "
-                      f"({_dyn_layer.positions.shape[0]} gaussians).",
-                      flush=True)
+                print(
+                    f"[E2.7-B] populate_tracks done: "
+                    f"{len(_torch_tracks)} tracks on dynamic_rigids "
+                    f"({_dyn_layer.positions.shape[0]} gaussians).",
+                    flush=True,
+                )
                 # E2.7-B diagnostic: verify the 3 conditions LayeredGaussians
                 # checks in _transform_means_and_active path
                 # (layered_model.py:999-1003). If any is False, dyn gaussians
@@ -2572,20 +2627,13 @@ def main() -> None:
                 _tp = engine.scene_mog.tracks_poses
                 _has_tid = hasattr(_dyn_layer, "track_ids")
                 _n_track_pose_bufs = sum(
-                    1 for name, _ in engine.scene_mog.named_buffers()
-                    if name.startswith("_track_pose_")
+                    1 for name, _ in engine.scene_mog.named_buffers() if name.startswith("_track_pose_")
                 )
                 _n_track_active_bufs = sum(
-                    1 for name, _ in engine.scene_mog.named_buffers()
-                    if name.startswith("_track_active_")
+                    1 for name, _ in engine.scene_mog.named_buffers() if name.startswith("_track_active_")
                 )
-                _has_shared_ts = hasattr(
-                    engine.scene_mog, "tracks_camera_timestamps_us"
-                )
-                _shared_ts_len = (
-                    int(engine.scene_mog.tracks_camera_timestamps_us.shape[0])
-                    if _has_shared_ts else 0
-                )
+                _has_shared_ts = hasattr(engine.scene_mog, "tracks_camera_timestamps_us")
+                _shared_ts_len = int(engine.scene_mog.tracks_camera_timestamps_us.shape[0]) if _has_shared_ts else 0
                 print(
                     f"[E2.7-B-diag] dynamic transform pre-flight:\n"
                     f"  hasattr(dyn_layer, track_ids)        = {_has_tid}\n"
@@ -2605,13 +2653,10 @@ def main() -> None:
                 # Sample one track's pose to confirm world-frame translate is in
                 if _n_track_pose_bufs > 0:
                     _first_tid = sorted(_torch_tracks.keys())[0]
-                    _sample_buf = getattr(
-                        engine.scene_mog, f"_track_pose_{_first_tid}", None
-                    )
+                    _sample_buf = getattr(engine.scene_mog, f"_track_pose_{_first_tid}", None)
                     if _sample_buf is not None:
                         print(
-                            f"  sample _track_pose_{_first_tid}[0] pos="
-                            f"{_sample_buf[0, :3, 3].tolist()}",
+                            f"  sample _track_pose_{_first_tid}[0] pos=" f"{_sample_buf[0, :3, 3].tolist()}",
                             flush=True,
                         )
                 # (c) inject metadata.tracks + tracks_camera_timestamps_us
@@ -2626,14 +2671,19 @@ def main() -> None:
                     for _tid, _t in tracks_dict.items()
                 }
                 metadata.tracks_camera_timestamps_us = timeline_us
-                print(f"[E2.7-B] injected metadata.tracks ({len(metadata.tracks)} "
-                      f"tids) — viser cuboid wireframes now timeline-aware.",
-                      flush=True)
+                print(
+                    f"[E2.7-B] injected metadata.tracks ({len(metadata.tracks)} "
+                    f"tids) — viser cuboid wireframes now timeline-aware.",
+                    flush=True,
+                )
         except Exception as _e:
-            print(f"[E2.7-B] WARN: dynamic_rigids track wiring failed ({_e!r}); "
-                  f"vehicles will render at static base pose, no track motion.",
-                  flush=True)
+            print(
+                f"[E2.7-B] WARN: dynamic_rigids track wiring failed ({_e!r}); "
+                f"vehicles will render at static base pose, no track motion.",
+                flush=True,
+            )
             import traceback as _tb
+
             _tb.print_exc()
 
     # E2.7 H1 alias fallback: NCore cam ids vary between clip generations
@@ -2647,33 +2697,37 @@ def main() -> None:
         # Viser4DViewer init prints a WARN with the available list when
         # the id misses. This early alias note is purely informational.
         _common_front_aliases = (
-            "camera_front_120", "front_120",
-            "camera_front_wide_120fov", "camera_front_wide", "front",
+            "camera_front_120",
+            "front_120",
+            "camera_front_wide_120fov",
+            "camera_front_wide",
+            "front",
         )
         if args.initial_cam_id not in _common_front_aliases:
-            print(f"[E2.7] initial_cam_id='{args.initial_cam_id}' (custom; "
-                  f"if missing from cam ring, viser will WARN with the "
-                  f"available list — try one of {_common_front_aliases})",
-                  flush=True)
+            print(
+                f"[E2.7] initial_cam_id='{args.initial_cam_id}' (custom; "
+                f"if missing from cam ring, viser will WARN with the "
+                f"available list — try one of {_common_front_aliases})",
+                flush=True,
+            )
     # T8.13: announce projection path so vast.ai / A800 operator sees
     # at a glance whether FTheta or pinhole approximation is in effect.
     if metadata is not None and metadata.has_ftheta():
         ft = metadata.ego_primary_intrinsics_ftheta
-        print(f"[T8.13] FTheta intrinsics 已加载 "
-              f"(resolution={metadata.ego_primary_resolution}, "
-              f"max_angle={ft['max_angle']:.3f}rad). "
-              f"GUI resolution slider 已锁定到训练分辨率。")
+        print(
+            f"[T8.13] FTheta intrinsics 已加载 "
+            f"(resolution={metadata.ego_primary_resolution}, "
+            f"max_angle={ft['max_angle']:.3f}rad). "
+            f"GUI resolution slider 已锁定到训练分辨率。"
+        )
     else:
-        print("[T8.13] 无 FTheta intrinsics, 走 pinhole approximation 路径 "
-              "(T8.12 行为).")
+        print("[T8.13] 无 FTheta intrinsics, 走 pinhole approximation 路径 " "(T8.12 行为).")
     # V3-VIZ.3: per-camera per-frame c2w lookup (multi-camera dropdown +
     # Follow Camera). Empty when --dataset_path not provided → dropdown
     # falls back to {primary} only.
-    multi_cam_poses = _load_multi_cam_poses(
-        args.dataset_path, args.default_gs_config)
+    multi_cam_poses = _load_multi_cam_poses(args.dataset_path, args.default_gs_config)
     if multi_cam_poses:
-        print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available "
-              f"for dropdown / Follow Camera")
+        print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available " f"for dropdown / Follow Camera")
 
     # E2.7 P1/P4 diagnostic: dump NCore metadata frame origin vs USDZ gaussian
     # center side-by-side so the operator can immediately tell if the two are
@@ -2688,27 +2742,40 @@ def main() -> None:
         try:
             ego_first = metadata.ego_pose_at(metadata.t_us_first)
             ep = ego_first[:3, 3]
-            print(f"[E2.7-coord] NCore ego_pose_at(t_us_first) "
-                  f"position=({ep[0]:.2f},{ep[1]:.2f},{ep[2]:.2f})", flush=True)
-            if hasattr(metadata, "ego_poses_c2w") and metadata.ego_poses_c2w is not None and metadata.ego_poses_c2w.size > 0:
+            print(
+                f"[E2.7-coord] NCore ego_pose_at(t_us_first) " f"position=({ep[0]:.2f},{ep[1]:.2f},{ep[2]:.2f})",
+                flush=True,
+            )
+            if (
+                hasattr(metadata, "ego_poses_c2w")
+                and metadata.ego_poses_c2w is not None
+                and metadata.ego_poses_c2w.size > 0
+            ):
                 e0 = metadata.ego_poses_c2w[0, :3, 3]
                 eN = metadata.ego_poses_c2w[-1, :3, 3]
-                print(f"[E2.7-coord] NCore ego_poses_c2w[0]={tuple(round(float(v),2) for v in e0)} "
-                      f"[-1]={tuple(round(float(v),2) for v in eN)} "
-                      f"(span={(eN-e0).round(1).tolist()})", flush=True)
+                print(
+                    f"[E2.7-coord] NCore ego_poses_c2w[0]={tuple(round(float(v),2) for v in e0)} "
+                    f"[-1]={tuple(round(float(v),2) for v in eN)} "
+                    f"(span={(eN-e0).round(1).tolist()})",
+                    flush=True,
+                )
             if multi_cam_poses and args.initial_cam_id in multi_cam_poses:
                 c0 = multi_cam_poses[args.initial_cam_id]["c2w"][0, :3, 3]
-                print(f"[E2.7-coord] '{args.initial_cam_id}' c2w[0] "
-                      f"position=({c0[0]:.2f},{c0[1]:.2f},{c0[2]:.2f})", flush=True)
+                print(
+                    f"[E2.7-coord] '{args.initial_cam_id}' c2w[0] " f"position=({c0[0]:.2f},{c0[1]:.2f},{c0[2]:.2f})",
+                    flush=True,
+                )
             # Background gaussian median already printed by sanity-check
             # above (E2.7-sanity layer=background median=...). Compare visually
             # against these ego-frame coordinates: if magnitudes differ >100x
             # or signs flip, gaussians and metadata are in different frames.
-            print("[E2.7-coord] compare with [E2.7-sanity] background median "
-                  "above. Same-frame: numbers should be in the same ballpark "
-                  "(driving scene ego trajectory ≤ a few km accumulated; "
-                  "NRE local frame: a few hundred m centered on ~0).",
-                  flush=True)
+            print(
+                "[E2.7-coord] compare with [E2.7-sanity] background median "
+                "above. Same-frame: numbers should be in the same ballpark "
+                "(driving scene ego trajectory ≤ a few km accumulated; "
+                "NRE local frame: a few hundred m centered on ~0).",
+                flush=True,
+            )
         except Exception as _e:
             print(f"[E2.7-coord] diagnostic failed: {_e!r}", flush=True)
 
@@ -2721,7 +2788,9 @@ def main() -> None:
             "Pick one."
         )
     viewer = Viser4DViewer(
-        port=args.port, engine=engine, metadata=metadata,
+        port=args.port,
+        engine=engine,
+        metadata=metadata,
         target_fps=args.target_fps,
         initial_fov_rad=math.radians(args.initial_fov_deg),
         multi_cam_poses=multi_cam_poses,

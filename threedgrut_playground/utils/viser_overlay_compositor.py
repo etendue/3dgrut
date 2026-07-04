@@ -10,6 +10,7 @@ blended ndarray ready for ``client.scene.set_background_image``.
 This isolation lets the entire FTheta overlay path be unit-tested on Mac
 without a running viser server (see test_viser_4d_ftheta_overlay_integration).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ class PolylineLayerSpec:
     the polylines; invisible anchors (behind camera / outside FOV / out of
     bounds) are dropped. Rendered in the layer color with a black stroke.
     """
+
     name: str
     polylines_world: list[np.ndarray] = field(default_factory=list)
     color: RGBAColor = (0, 255, 0, 255)
@@ -83,8 +85,7 @@ class Viser4DOverlayCompositor:
         (0/8 corners) with the legacy flip; GT raw-camera validation
         (validate_cuboid_7cam, flip=I) hugs the real vehicles.
         """
-        self.projector = FthetaForwardProjector(
-            ftheta_dict, world_to_camera_flip=world_to_camera_flip)
+        self.projector = FthetaForwardProjector(ftheta_dict, world_to_camera_flip=world_to_camera_flip)
         self.renderer = OverlayRenderer(height=height, width=width)
         self.subdivide_n = int(subdivide_n)
         self.height = int(height)
@@ -92,9 +93,9 @@ class Viser4DOverlayCompositor:
 
     def composite(
         self,
-        backdrop_rgb: np.ndarray,         # (H, W, 3) uint8 from engine
+        backdrop_rgb: np.ndarray,  # (H, W, 3) uint8 from engine
         layers_world: Sequence[PolylineLayerSpec],
-        c2w_viser: np.ndarray,            # (4, 4) viser client camera
+        c2w_viser: np.ndarray,  # (4, 4) viser client camera
     ) -> np.ndarray:
         """Project each layer, render to RGBA, alpha-blend onto backdrop.
 
@@ -110,8 +111,7 @@ class Viser4DOverlayCompositor:
                 f"check ftheta_render_wh / engine output."
             )
 
-        total_pl = sum(len(L.polylines_world) + len(L.labels_world)
-                       for L in layers_world)
+        total_pl = sum(len(L.polylines_world) + len(L.labels_world) for L in layers_world)
         if total_pl == 0:
             return backdrop_rgb  # nothing to draw, skip projection + blend
 
@@ -122,27 +122,30 @@ class Viser4DOverlayCompositor:
             # Spec's per-layer subdivide_n overrides the compositor default
             # so callers can tune cuboid (high) vs trajectory (low) separately.
             n_sub = spec.subdivide_n if spec.subdivide_n else self.subdivide_n
-            projected = (self.projector.project_polylines(
-                spec.polylines_world, c2w_viser, subdivide_n=n_sub)
-                if spec.polylines_world else [])
+            projected = (
+                self.projector.project_polylines(spec.polylines_world, c2w_viser, subdivide_n=n_sub)
+                if spec.polylines_world
+                else []
+            )
             # BUG-1b: labels share the projector with the wireframe, so text
             # and box can never separate again. Invisible anchors dropped.
             texts: list[tuple[float, float, str]] = []
             if spec.labels_world:
-                anchors = np.stack([np.asarray(a, dtype=np.float64)
-                                    for a, _ in spec.labels_world])
+                anchors = np.stack([np.asarray(a, dtype=np.float64) for a, _ in spec.labels_world])
                 uv, vis = self.projector.project_points(anchors, c2w_viser)
                 for (_, text), (u, v), ok in zip(spec.labels_world, uv, vis):
                     if bool(ok):
                         texts.append((float(u), float(v), str(text)))
-            render_layers.append(OverlayLayer(
-                name=spec.name,
-                polylines=projected,
-                color=spec.color,
-                width=spec.width,
-                texts=texts,
-                font_size=spec.font_size,
-            ))
+            render_layers.append(
+                OverlayLayer(
+                    name=spec.name,
+                    polylines=projected,
+                    color=spec.color,
+                    width=spec.width,
+                    texts=texts,
+                    font_size=spec.font_size,
+                )
+            )
 
         overlay_rgba = self.renderer.render(render_layers)
         return alpha_blend(backdrop_rgb, overlay_rgba)

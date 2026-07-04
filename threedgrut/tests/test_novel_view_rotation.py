@@ -13,6 +13,7 @@ Pins the KPI contract introduced for the road off-track task (translation
     mode name) around the camera up axis and keeps the camera position fixed.
   * lateral modes remain a pure translation (no rotation regression).
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -67,9 +68,7 @@ def test_yaw_rotation_magnitude_and_fixed_position(deg: float) -> None:
     np.testing.assert_allclose(out[:3, 3], c2w[:3, 3], atol=1e-9)
     # Forward axis (c2w[:3,2]) must rotate by exactly `deg` around the up axis.
     fwd0, fwd1 = c2w[:3, 2], out[:3, 2]
-    cos_ang = np.clip(
-        np.dot(fwd0, fwd1) / (np.linalg.norm(fwd0) * np.linalg.norm(fwd1)), -1.0, 1.0
-    )
+    cos_ang = np.clip(np.dot(fwd0, fwd1) / (np.linalg.norm(fwd0) * np.linalg.norm(fwd1)), -1.0, 1.0)
     ang = np.degrees(np.arccos(cos_ang))
     np.testing.assert_allclose(ang, deg, atol=1e-6)
     # Rotation must be a proper SO(3) matrix (orthonormal, det +1).
@@ -85,9 +84,7 @@ def test_lateral_modes_are_pure_translation(mode: str) -> None:
     # Rotation block unchanged for lateral modes.
     np.testing.assert_allclose(out[:3, :3], c2w[:3, :3], atol=1e-12)
     meters = float(mode.split("_")[1].replace("m", ""))
-    np.testing.assert_allclose(
-        out[:3, 3], c2w[:3, 3] + meters * c2w[:3, 0], atol=1e-9
-    )
+    np.testing.assert_allclose(out[:3, 3], c2w[:3, 3] + meters * c2w[:3, 0], atol=1e-9)
 
 
 def test_yaw_deg_parsing_rejects_non_yaw() -> None:

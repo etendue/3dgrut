@@ -5,10 +5,11 @@ These readers load per-frame npz depth maps dumped by
 scripts/dump_lidar_depth_map.py (and the DepthV2 dump). npz layout:
     <root>/<camera_id>/<timestamp_us>.npz   with single key "depth" [H,W] float32
 """
+
 import numpy as np
 import pytest
 
-from threedgrut.datasets.aux_readers import LidarDepthAuxReader, DepthV2AuxReader
+from threedgrut.datasets.aux_readers import DepthV2AuxReader, LidarDepthAuxReader
 
 
 @pytest.fixture

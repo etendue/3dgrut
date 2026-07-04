@@ -31,6 +31,7 @@ env vars when no --in is given:
       -e DROP_OUT=/wk/profile/usdz_drop_background/last.usdz \
       nvcr.io/nvidia/nre/nre-ga:latest run-script /wk/profile/drop_node.py
 """
+
 import argparse
 import collections
 import io
@@ -43,6 +44,7 @@ CKPT_MEMBER = "checkpoint.ckpt"
 
 def _torch_load(data_or_path):
     import torch
+
     obj = io.BytesIO(data_or_path) if isinstance(data_or_path, (bytes, bytearray)) else data_or_path
     try:
         return torch.load(obj, map_location="cpu", weights_only=False)
@@ -63,6 +65,7 @@ def _load(path):
 
 def _save(ckpt, out, src_path, src_kind):
     import torch
+
     if out.endswith(".usdz"):
         if src_kind != "usdz":
             raise SystemExit("usdz output requires usdz input (need the other members to copy)")
@@ -98,7 +101,7 @@ def _node_prefixes(sd):
         i = k.find(marker)
         if i == -1:
             continue
-        node = k[i + len(marker):].split(".", 1)[0]
+        node = k[i + len(marker) :].split(".", 1)[0]
         out.setdefault(node, k[: i + len(marker)] + node + ".")
     return out
 
@@ -106,12 +109,14 @@ def _node_prefixes(sd):
 def _get_args():
     env = os.environ
     if env.get("DROP_IN") and not any(a.startswith("--in") for a in sys.argv[1:]):
+
         class A:
             inp = env["DROP_IN"]
             out = env.get("DROP_OUT")
             node = env.get("DROP_NODE")
             keep = int(env.get("DROP_KEEP", "0"))
             list = env.get("DROP_LIST", "").lower() in ("1", "true", "yes")
+
         return A()
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", required=True)
@@ -140,8 +145,9 @@ def main():
             if hasattr(t, "shape") and getattr(t, "ndim", 0) >= 1 and (k.endswith("positions") or k.endswith(".means")):
                 n = int(t.shape[0])
         if n is None:
-            dims = collections.Counter(int(sd[k].shape[0]) for k in keys
-                                       if hasattr(sd[k], "shape") and getattr(sd[k], "ndim", 0) >= 1)
+            dims = collections.Counter(
+                int(sd[k].shape[0]) for k in keys if hasattr(sd[k], "shape") and getattr(sd[k], "ndim", 0) >= 1
+            )
             n = dims.most_common(1)[0][0] if dims else 0
         node_counts[node] = n
         print(f"  {node:24s} N={n:>9}  ({len(keys)} tensors)")

@@ -31,6 +31,7 @@ adjacent frames produces a chord distance of ``‖2q‖² = 4`` even when the
 underlying rotation is identical. We align ``q[f±1]`` to ``q[f]`` via
 ``sign(⟨q[f], q[f±1]⟩)`` before subtraction.
 """
+
 from __future__ import annotations
 
 from typing import Iterable, Optional
@@ -116,15 +117,15 @@ def compute_pose_smoothness_loss(
         # ``sq * m`` doesn't trip the cross-device guard.
         a_bool = a.to(dtype=torch.bool, device=t.device)
         # Triple-active mask covering interior frames f ∈ [1, F-1).
-        mask = a_bool[:-2] & a_bool[1:-1] & a_bool[2:]   # [F-2]
+        mask = a_bool[:-2] & a_bool[1:-1] & a_bool[2:]  # [F-2]
         if not bool(mask.any()):
             continue
         n_valid = int(mask.sum().item())
         m = mask.to(dtype=t.dtype)
 
         if lambda_trans > 0.0:
-            d2t = t[2:] - 2.0 * t[1:-1] + t[:-2]   # [F-2, 3]
-            sq = (d2t * d2t).sum(dim=-1)            # [F-2]
+            d2t = t[2:] - 2.0 * t[1:-1] + t[:-2]  # [F-2, 3]
+            sq = (d2t * d2t).sum(dim=-1)  # [F-2]
             # `.to(device)` reconciles the per-track contribution back
             # onto the accumulator's device (Parameters may live on a
             # different cuda index than self.device in DDP scenarios).
@@ -140,7 +141,7 @@ def compute_pose_smoothness_loss(
             dot_next = (q_center * q_next).sum(dim=-1, keepdim=True)
             q_prev_a = torch.where(dot_prev >= 0, q_prev, -q_prev)
             q_next_a = torch.where(dot_next >= 0, q_next, -q_next)
-            d2q = q_next_a - 2.0 * q_center + q_prev_a   # [F-2, 4]
+            d2q = q_next_a - 2.0 * q_center + q_prev_a  # [F-2, 4]
             sq_r = (d2q * d2q).sum(dim=-1)
             sum_r = sum_r + (sq_r * m).sum().to(device)
             n_r += n_valid

@@ -11,6 +11,7 @@ Usage (on A800, conda 3dgrut env):
         --clip /root/work/yusun/ncore-nurec/data/ncore/clips/<id>/pai_<id>.json \
         --out  /tmp/road_lidar_xy.npy
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,6 +32,7 @@ def main() -> int:
     args = ap.parse_args()
 
     import hydra
+
     from threedgrut import datasets
 
     with hydra.initialize(config_path="../configs", version_base=None):
@@ -44,8 +46,10 @@ def main() -> int:
     xy = pts[:, :2].detach().cpu().numpy().astype(np.float32)
     np.save(args.out, xy)
     print(f"[dump] road LiDAR points: {pts.shape} -> saved XY {xy.shape} to {args.out}", flush=True)
-    print(f"[dump] XY bbox: x[{xy[:,0].min():.1f},{xy[:,0].max():.1f}] "
-          f"y[{xy[:,1].min():.1f},{xy[:,1].max():.1f}]", flush=True)
+    print(
+        f"[dump] XY bbox: x[{xy[:,0].min():.1f},{xy[:,0].max():.1f}] " f"y[{xy[:,1].min():.1f},{xy[:,1].max():.1f}]",
+        flush=True,
+    )
     return 0
 
 

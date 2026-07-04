@@ -13,6 +13,7 @@ call that actually needs them — Mac dev machines without those deps can still
 import ``threedgrut.correction.difix`` (e.g. via ``render.py`` startup) as long
 as ``enabled=False``. See ``third_party/Fixer/INSTALL.md`` for the GPU env.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,7 +22,6 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
-
 
 # DiFix's training input shape (height, width). README maps resolution=1024 to
 # (1024, 576); the model file uses h=1024, w=576 as fixed inference dims.
@@ -80,6 +80,7 @@ class DifixPostProcessor(nn.Module):
         if self._ckpt_path:
             return Path(self._ckpt_path)
         import os
+
         hf_home = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
         return Path(hf_home) / "nvidia-Fixer" / "pretrained" / "pretrained_fixer.pkl"
 
@@ -97,10 +98,11 @@ class DifixPostProcessor(nn.Module):
         them. Idempotent.
         """
         import os
-        base_dir = ckpt.parent.parent / "base"   # nvidia-Fixer/base/
+
+        base_dir = ckpt.parent.parent / "base"  # nvidia-Fixer/base/
         targets = {
             Path("/work/models/base/model_fast_tokenizer.pt"): base_dir / "model_fast_tokenizer.pt",
-            Path("/work/models/base/tokenizer_fast.pth"):     base_dir / "tokenizer_fast.pth",
+            Path("/work/models/base/tokenizer_fast.pth"): base_dir / "tokenizer_fast.pth",
         }
         for link, real in targets.items():
             if not real.exists():
@@ -138,6 +140,7 @@ class DifixPostProcessor(nn.Module):
         # third_party/Fixer/model.py rather than failing as a top-level
         # `model` module miss. Verified on ThinkPad cosmos container 2026-06-01.
         import sys
+
         fixer_dir = Path(__file__).resolve().parent.parent.parent / "third_party" / "Fixer"
         if str(fixer_dir) not in sys.path:
             sys.path.insert(0, str(fixer_dir))
@@ -190,16 +193,14 @@ class DifixPostProcessor(nn.Module):
         if single:
             image = image.unsqueeze(0)
         if image.dim() != 4 or image.shape[-1] != 3:
-            raise ValueError(
-                f"DiFix forward expects (B,H,W,3) or (H,W,3), got {tuple(image.shape)}"
-            )
+            raise ValueError(f"DiFix forward expects (B,H,W,3) or (H,W,3), got {tuple(image.shape)}")
 
         self._lazy_init()
         orig_dtype = image.dtype
         orig_h, orig_w = image.shape[1], image.shape[2]
 
         # NHWC -> NCHW, [0,1] -> [-1,1], cast + resize to DiFix native size.
-        x = image.permute(0, 3, 1, 2).contiguous()         # (B,3,H,W)
+        x = image.permute(0, 3, 1, 2).contiguous()  # (B,3,H,W)
         x = x * 2.0 - 1.0
         x = F.interpolate(
             x,
@@ -216,7 +217,7 @@ class DifixPostProcessor(nn.Module):
         # ``RuntimeError: expected mat1 and mat2 to have the same dtype,
         # but got: float != c10::BFloat16`` mid-forward.
         with torch.autocast(device_type="cuda", dtype=self._dtype, enabled=True):
-            y = self._model(x)                              # (B,3,target_h,target_w)
+            y = self._model(x)  # (B,3,target_h,target_w)
 
         # Resize back, denormalize, clamp, NCHW -> NHWC, restore dtype.
         y = F.interpolate(

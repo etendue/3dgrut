@@ -3,6 +3,7 @@
 Tests the pure-CPU container that ``viser_gui_4d.py`` uses to parse and look
 up entries in ``ckpt['viz_4d']``. No viser / kaolin / engine imports.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -13,69 +14,65 @@ from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 
 
 # ---------------------------------------------------------- helpers
-def _make_viz_block(F: int = 5, N_ego: int = 6, road_pts: int = 100,
-                    dyn_pts: int = 50, *, with_ftheta: bool = False) -> dict:
+def _make_viz_block(
+    F: int = 5, N_ego: int = 6, road_pts: int = 100, dyn_pts: int = 50, *, with_ftheta: bool = False
+) -> dict:
     ego: dict = {
-        "poses_c2w": torch.stack(
-            [torch.eye(4) for _ in range(N_ego)]
-        ),
-        "frame_timestamps_us": torch.tensor(
-            [1000 * (i + 1) for i in range(N_ego)], dtype=torch.int64
-        ),
-        "primary_camera_id":        "front_long",
+        "poses_c2w": torch.stack([torch.eye(4) for _ in range(N_ego)]),
+        "frame_timestamps_us": torch.tensor([1000 * (i + 1) for i in range(N_ego)], dtype=torch.int64),
+        "primary_camera_id": "front_long",
         "primary_camera_fov_y_rad": 0.65,
-        "primary_camera_aspect":    1.78,
+        "primary_camera_aspect": 1.78,
     }
     if with_ftheta:
         ego["primary_camera_intrinsics_FTheta"] = {
-            "resolution":              np.array([1920, 1208], dtype=np.int64),
-            "shutter_type":            "ROLLING_TOP_TO_BOTTOM",
-            "principal_point":         np.array([960.0, 604.0], dtype=np.float32),
-            "reference_poly":          "PIXELDIST_TO_ANGLE",
+            "resolution": np.array([1920, 1208], dtype=np.int64),
+            "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+            "principal_point": np.array([960.0, 604.0], dtype=np.float32),
+            "reference_poly": "PIXELDIST_TO_ANGLE",
             "pixeldist_to_angle_poly": np.zeros(5, dtype=np.float32),
             "angle_to_pixeldist_poly": np.zeros(5, dtype=np.float32),
-            "max_angle":               1.047,
-            "linear_cde":              np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            "max_angle": 1.047,
+            "linear_cde": np.array([1.0, 0.0, 0.0], dtype=np.float32),
         }
         ego["primary_camera_resolution"] = (1920, 1208)
     return {
         "schema_version": 2 if with_ftheta else 1,
-        "dataset_type":   "ncore",
-        "sequence_id":    "seq_x",
+        "dataset_type": "ncore",
+        "sequence_id": "seq_x",
         "ego": ego,
         "tracks": {
             "t0": {
-                "poses":      torch.eye(4).repeat(F, 1, 1),
-                "size":       torch.tensor([2.0, 1.5, 4.5]),
+                "poses": torch.eye(4).repeat(F, 1, 1),
+                "size": torch.tensor([2.0, 1.5, 4.5]),
                 "frame_info": torch.tensor([1, 1, 0, 1, 1], dtype=torch.bool)[:F],
-                "class":      "automobile",
+                "class": "automobile",
             },
             "t1": {
-                "poses":      torch.eye(4).repeat(F, 1, 1),
-                "size":       torch.tensor([3.0, 2.5, 12.0]),
+                "poses": torch.eye(4).repeat(F, 1, 1),
+                "size": torch.tensor([3.0, 2.5, 12.0]),
                 "frame_info": torch.zeros(F, dtype=torch.bool),
-                "class":      "heavy_truck",
+                "class": "heavy_truck",
             },
         },
-        "tracks_camera_timestamps_us": torch.tensor(
-            [1000 * (i + 1) for i in range(F)], dtype=torch.int64),
+        "tracks_camera_timestamps_us": torch.tensor([1000 * (i + 1) for i in range(F)], dtype=torch.int64),
         "lidar": {
-            "road_xyz":          torch.randn(road_pts, 3) if road_pts > 0 else None,
-            "road_rgb":          torch.rand(road_pts, 3) if road_pts > 0 else None,
-            "road_n_total":      road_pts * 5,
-            "road_subsample":    road_pts,
-            "dynamic_xyz":       torch.randn(dyn_pts, 3),
-            "dynamic_rgb":       None,
-            "dynamic_n_total":   dyn_pts * 5,
+            "road_xyz": torch.randn(road_pts, 3) if road_pts > 0 else None,
+            "road_rgb": torch.rand(road_pts, 3) if road_pts > 0 else None,
+            "road_n_total": road_pts * 5,
+            "road_subsample": road_pts,
+            "dynamic_xyz": torch.randn(dyn_pts, 3),
+            "dynamic_rgb": None,
+            "dynamic_n_total": dyn_pts * 5,
             "dynamic_subsample": dyn_pts,
         },
         "viewer_defaults": {
-            "initial_c2w":  torch.eye(4),
-            "near":         0.1,
-            "far":          500.0,
-            "resolution":   1024,
-            "t_us_first":   1000,
-            "t_us_last":    5000,
+            "initial_c2w": torch.eye(4),
+            "near": 0.1,
+            "far": 500.0,
+            "resolution": 1024,
+            "t_us_first": 1000,
+            "t_us_last": 5000,
         },
     }
 
@@ -180,8 +177,14 @@ def test_empty_tracks_block():
 def test_no_lidar_block():
     block = _make_viz_block()
     block["lidar"] = {
-        "road_xyz": None, "road_rgb": None, "road_n_total": None, "road_subsample": None,
-        "dynamic_xyz": None, "dynamic_rgb": None, "dynamic_n_total": None, "dynamic_subsample": None,
+        "road_xyz": None,
+        "road_rgb": None,
+        "road_n_total": None,
+        "road_subsample": None,
+        "dynamic_xyz": None,
+        "dynamic_rgb": None,
+        "dynamic_n_total": None,
+        "dynamic_subsample": None,
     }
     md = FourDMetadata.from_ckpt({"viz_4d": block})
     assert md.has_lidar() is False

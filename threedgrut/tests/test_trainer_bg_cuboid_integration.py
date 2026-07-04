@@ -17,6 +17,7 @@ The two pieces covered:
 2. End-to-end "frame → penalty" chain that mimics trainer's call sequence:
    ``collect_active_cuboids_for_frame`` → ``compute_bg_cuboid_opacity_penalty``.
 """
+
 from __future__ import annotations
 
 import types
@@ -31,10 +32,10 @@ from threedgrut.model.bg_cuboid_loss import (
     lambda_schedule,
 )
 
-
 # -----------------------------------------------------------------------------
 # 1. LayeredMCMCStrategy._maybe_clamp_dynamic_rigids
 # -----------------------------------------------------------------------------
+
 
 def _make_mock_dyn_layer(track_ids: list[int], positions: torch.Tensor):
     """Mimic ``MixtureOfGaussians`` minimally: positions Parameter + track_ids buffer."""
@@ -70,11 +71,13 @@ def test_dyn_clamp_off_by_default_byte_identical():
     """Without the conf gate, positions stay exactly as written."""
     layer = _make_mock_dyn_layer(
         track_ids=[0, 0, 0],
-        positions=torch.tensor([
-            [3.0, 0.0, 0.0],      # would be clamped if enabled (half=1.0)
-            [0.0, 1.5, 0.0],
-            [-2.0, 0.0, 0.0],
-        ]),
+        positions=torch.tensor(
+            [
+                [3.0, 0.0, 0.0],  # would be clamped if enabled (half=1.0)
+                [0.0, 1.5, 0.0],
+                [-2.0, 0.0, 0.0],
+            ]
+        ),
     )
     model = _make_mock_model(
         dyn_layer=layer,
@@ -98,9 +101,7 @@ def test_dyn_clamp_explicitly_disabled_byte_identical():
         tracks_metadata={"t0": {"size": torch.tensor([2.0, 2.0, 2.0])}},
         tracks_poses={"t0": torch.eye(4).unsqueeze(0)},
     )
-    conf = OmegaConf.create({
-        "trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": False}}
-    })
+    conf = OmegaConf.create({"trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": False}}})
     clamp_fn, _ = _build_strategy(conf, model)
     pos_before = layer.positions.data.clone()
     clamp_fn()
@@ -110,20 +111,20 @@ def test_dyn_clamp_explicitly_disabled_byte_identical():
 def test_dyn_clamp_enabled_pulls_outside_back_to_boundary():
     layer = _make_mock_dyn_layer(
         track_ids=[0, 0, 0],
-        positions=torch.tensor([
-            [3.0, 0.0, 0.0],      # outside x → clamped to 1.0
-            [0.5, 0.5, 0.5],      # inside → unchanged
-            [-2.0, 0.0, 0.0],     # outside x → clamped to -1.0
-        ]),
+        positions=torch.tensor(
+            [
+                [3.0, 0.0, 0.0],  # outside x → clamped to 1.0
+                [0.5, 0.5, 0.5],  # inside → unchanged
+                [-2.0, 0.0, 0.0],  # outside x → clamped to -1.0
+            ]
+        ),
     )
     model = _make_mock_model(
         dyn_layer=layer,
         tracks_metadata={"t0": {"size": torch.tensor([2.0, 2.0, 2.0])}},  # half=1
         tracks_poses={"t0": torch.eye(4).unsqueeze(0)},
     )
-    conf = OmegaConf.create({
-        "trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}
-    })
+    conf = OmegaConf.create({"trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}})
     clamp_fn, _ = _build_strategy(conf, model)
     clamp_fn()
     pos = layer.positions.data
@@ -141,9 +142,7 @@ def test_dyn_clamp_skipped_when_no_track_ids_buffer():
         tracks_metadata={"t0": {"size": torch.tensor([2.0, 2.0, 2.0])}},
         tracks_poses={"t0": torch.eye(4).unsqueeze(0)},
     )
-    conf = OmegaConf.create({
-        "trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}
-    })
+    conf = OmegaConf.create({"trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}})
     clamp_fn, _ = _build_strategy(conf, model)
     pos_before = layer.positions.data.clone()
     clamp_fn()  # should not raise
@@ -155,9 +154,7 @@ def test_dyn_clamp_skipped_when_no_layer():
     model.layers = {}  # no dynamic_rigids
     model.tracks_metadata = {}
     model.tracks_poses = {}
-    conf = OmegaConf.create({
-        "trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}
-    })
+    conf = OmegaConf.create({"trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}})
     clamp_fn, _ = _build_strategy(conf, model)
     clamp_fn()  # should not raise
 
@@ -171,9 +168,7 @@ def test_dyn_clamp_skipped_when_empty_positions():
         tracks_metadata={"t0": {"size": torch.tensor([2.0, 2.0, 2.0])}},
         tracks_poses={"t0": torch.eye(4).unsqueeze(0)},
     )
-    conf = OmegaConf.create({
-        "trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}
-    })
+    conf = OmegaConf.create({"trainer": {"bg_dyn_cuboid_penalty": {"dyn_clamp_to_cuboid": True}}})
     clamp_fn, _ = _build_strategy(conf, model)
     clamp_fn()  # should not raise
 
@@ -181,6 +176,7 @@ def test_dyn_clamp_skipped_when_empty_positions():
 # -----------------------------------------------------------------------------
 # 2. End-to-end "frame → penalty" mimicking trainer.get_losses
 # -----------------------------------------------------------------------------
+
 
 def _make_bg_layer(positions: torch.Tensor, density: torch.Tensor):
     layer = types.SimpleNamespace()
@@ -202,10 +198,17 @@ def test_end_to_end_zero_when_lambda_warmup_at_zero():
     lam = lambda_schedule(0, lambda_max=0.05, warmup_iters=5000)
     assert lam == 0.0
     poses, sizes = collect_active_cuboids_for_frame(
-        tracks_poses, tracks_active, tracks_size, frame_idx=0,
+        tracks_poses,
+        tracks_active,
+        tracks_size,
+        frame_idx=0,
     )
     loss = compute_bg_cuboid_opacity_penalty(
-        bg.positions, bg.density, poses, sizes, lambda_val=lam,
+        bg.positions,
+        bg.density,
+        poses,
+        sizes,
+        lambda_val=lam,
     )
     assert loss.item() == 0.0
 
@@ -213,10 +216,12 @@ def test_end_to_end_zero_when_lambda_warmup_at_zero():
 def test_end_to_end_penalty_at_full_warmup():
     """At step=warmup, lambda=lambda_max; inside-cuboid bg yields measurable loss."""
     bg = _make_bg_layer(
-        positions=torch.tensor([
-            [0.0, 0.0, 0.0],      # inside
-            [10.0, 0.0, 0.0],     # outside (track at origin)
-        ]),
+        positions=torch.tensor(
+            [
+                [0.0, 0.0, 0.0],  # inside
+                [10.0, 0.0, 0.0],  # outside (track at origin)
+            ]
+        ),
         density=torch.zeros(2, 1),  # sigmoid(0) = 0.5
     )
     tracks_poses = {"t0": torch.eye(4).unsqueeze(0)}
@@ -226,10 +231,17 @@ def test_end_to_end_penalty_at_full_warmup():
     lam = lambda_schedule(5000, lambda_max=0.05, warmup_iters=5000)
     assert lam == pytest.approx(0.05)
     poses, sizes = collect_active_cuboids_for_frame(
-        tracks_poses, tracks_active, tracks_size, frame_idx=0,
+        tracks_poses,
+        tracks_active,
+        tracks_size,
+        frame_idx=0,
     )
     loss = compute_bg_cuboid_opacity_penalty(
-        bg.positions, bg.density, poses, sizes, lambda_val=lam,
+        bg.positions,
+        bg.density,
+        poses,
+        sizes,
+        lambda_val=lam,
     )
     # 1 of 2 particles inside; sigmoid(0)=0.5 → mean=0.25; * 0.05 = 0.0125
     assert loss.item() == pytest.approx(0.0125, abs=1e-6)
@@ -246,11 +258,18 @@ def test_end_to_end_inactive_track_no_penalty():
     tracks_size = {"t0": torch.tensor([2.0, 2.0, 2.0])}
 
     poses, sizes = collect_active_cuboids_for_frame(
-        tracks_poses, tracks_active, tracks_size, frame_idx=0,
+        tracks_poses,
+        tracks_active,
+        tracks_size,
+        frame_idx=0,
     )
     assert poses.shape[0] == 0  # no active → empty
     loss = compute_bg_cuboid_opacity_penalty(
-        bg.positions, bg.density, poses, sizes, lambda_val=0.05,
+        bg.positions,
+        bg.density,
+        poses,
+        sizes,
+        lambda_val=0.05,
     )
     assert loss.item() == 0.0
 
@@ -268,13 +287,20 @@ def test_end_to_end_gradient_lowers_density_inside_cuboid():
     tracks_active = {"t0": torch.tensor([True])}
     tracks_size = {"t0": torch.tensor([2.0, 2.0, 2.0])}
     poses, sizes = collect_active_cuboids_for_frame(
-        tracks_poses, tracks_active, tracks_size, frame_idx=0,
+        tracks_poses,
+        tracks_active,
+        tracks_size,
+        frame_idx=0,
     )
 
     optim = torch.optim.SGD([bg.density], lr=1.0)
     optim.zero_grad()
     loss = compute_bg_cuboid_opacity_penalty(
-        bg.positions, bg.density, poses, sizes, lambda_val=1.0,
+        bg.positions,
+        bg.density,
+        poses,
+        sizes,
+        lambda_val=1.0,
     )
     loss.backward()
     optim.step()
@@ -282,5 +308,4 @@ def test_end_to_end_gradient_lowers_density_inside_cuboid():
     # Inside particle's density decreased; outside particle unchanged.
     d_after = bg.density.data
     assert d_after[0, 0].item() < 0.0, "inside-cuboid raw density should drop"
-    assert d_after[1, 0].item() == pytest.approx(0.0, abs=1e-6), \
-        "outside-cuboid raw density should not change"
+    assert d_after[1, 0].item() == pytest.approx(0.0, abs=1e-6), "outside-cuboid raw density should not change"

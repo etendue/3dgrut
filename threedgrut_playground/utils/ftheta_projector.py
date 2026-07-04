@@ -16,6 +16,7 @@ GL→CV flip only inverts Z:
 
 Pure numpy; no torch, no viser, no kaolin — fully Mac-testable.
 """
+
 from __future__ import annotations
 
 from typing import Optional, Sequence
@@ -23,7 +24,6 @@ from typing import Optional, Sequence
 import numpy as np
 
 from .projector_common import horner_ascending, subdivide_polyline
-
 
 # Phase 0 calibration: see docs/T8_artifacts/B2_calibration_probe_log.md
 # This flip maps a c2w in viser convention (+Y down, +Z backward) to OpenCV
@@ -71,23 +71,24 @@ class FthetaForwardProjector:
         camera ``T_camera_to_world``).
         """
         REQUIRED = {
-            "resolution", "principal_point",
-            "angle_to_pixeldist_poly", "max_angle",
+            "resolution",
+            "principal_point",
+            "angle_to_pixeldist_poly",
+            "max_angle",
         }
         missing = REQUIRED - set(ftheta_dict.keys())
         if missing:
             raise ValueError(f"ftheta_dict missing required keys: {sorted(missing)}")
 
         res = ftheta_dict["resolution"]
-        self.width  = int(res[0])
+        self.width = int(res[0])
         self.height = int(res[1])
 
         pp = ftheta_dict["principal_point"]
         self.cx = float(pp[0])
         self.cy = float(pp[1])
 
-        self.angle_to_pixeldist_poly = np.asarray(
-            ftheta_dict["angle_to_pixeldist_poly"], dtype=np.float64)
+        self.angle_to_pixeldist_poly = np.asarray(ftheta_dict["angle_to_pixeldist_poly"], dtype=np.float64)
         self.max_angle = float(ftheta_dict["max_angle"])
         # linear_cde intentionally skipped — see ftheta_intrinsics.py:50-57.
 
@@ -95,14 +96,13 @@ class FthetaForwardProjector:
             world_to_camera_flip = FLIP_VISER_TO_OPENCV
         flip = np.asarray(world_to_camera_flip, dtype=np.float64)
         if flip.shape != (4, 4):
-            raise ValueError(
-                f"world_to_camera_flip must be (4, 4); got {flip.shape}")
+            raise ValueError(f"world_to_camera_flip must be (4, 4); got {flip.shape}")
         self._flip = flip
 
     def project_points(
         self,
-        points_world: np.ndarray,         # (N, 3) float64-compatible
-        c2w_viser: np.ndarray,            # (4, 4) viser/ckpt convention (+Y down, +Z backward)
+        points_world: np.ndarray,  # (N, 3) float64-compatible
+        c2w_viser: np.ndarray,  # (4, 4) viser/ckpt convention (+Y down, +Z backward)
     ) -> tuple[np.ndarray, np.ndarray]:
         """3D world points → (uv: (N, 2) pixels, visible: (N,) bool).
 
@@ -130,7 +130,7 @@ class FthetaForwardProjector:
         x, y, z = p_cam[:, 0], p_cam[:, 1], p_cam[:, 2]
 
         r_xy = np.sqrt(x * x + y * y)
-        angle = np.arctan2(r_xy, z)                                # ∈ [0, π]
+        angle = np.arctan2(r_xy, z)  # ∈ [0, π]
 
         r_pix = horner_ascending(self.angle_to_pixeldist_poly, angle)
 
@@ -142,16 +142,16 @@ class FthetaForwardProjector:
         v = self.cy + v_off
         uv = np.stack([u, v], axis=-1)
 
-        in_fov   = angle <= self.max_angle
+        in_fov = angle <= self.max_angle
         in_bound = (u >= 0) & (u < self.width) & (v >= 0) & (v < self.height)
-        z_pos    = z > 0
-        visible  = in_fov & in_bound & z_pos
+        z_pos = z > 0
+        visible = in_fov & in_bound & z_pos
         return uv, visible
 
     def project_polylines(
         self,
-        polylines_world: Sequence[np.ndarray],   # list of (M_i, 3)
-        c2w_viser: np.ndarray,                   # (4, 4)
+        polylines_world: Sequence[np.ndarray],  # list of (M_i, 3)
+        c2w_viser: np.ndarray,  # (4, 4)
         subdivide_n: int = 20,
     ) -> list[tuple[np.ndarray, np.ndarray]]:
         """Project each polyline after piecewise-linear subdivision.
@@ -193,10 +193,9 @@ class FthetaForwardProjector:
         cursor = 0
         for L in lengths:
             if L == 0:
-                out.append((np.empty((0, 2), dtype=np.float64),
-                            np.empty((0,), dtype=bool)))
+                out.append((np.empty((0, 2), dtype=np.float64), np.empty((0,), dtype=bool)))
                 continue
-            out.append((uv_all[cursor:cursor + L], vis_all[cursor:cursor + L]))
+            out.append((uv_all[cursor : cursor + L], vis_all[cursor : cursor + L]))
             cursor += L
         return out
 

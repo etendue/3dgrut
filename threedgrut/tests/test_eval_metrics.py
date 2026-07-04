@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for compute_lidar_psnr (Stage 11 T11.F1)."""
+
 import math
+
 import pytest
 import torch
 

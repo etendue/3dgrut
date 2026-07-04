@@ -18,6 +18,7 @@ T6F.1 修复：
 dtype 转换逻辑等价于纯函数，(c) ego mask 接通后 layered_l1 自动从三区
 partition 剔除 ego 像素。端到端集成 verification 在 T6F.3 A800 跑。
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -27,8 +28,8 @@ import torch
 from threedgrut.datasets.protocols import Batch
 from threedgrut.model.layered_loss import compute_layered_l1_loss
 
-
 # --- (a) Batch.mask 形状契约 -----------------------------------------------
+
 
 def _make_minimal_batch(mask: torch.Tensor | None) -> Batch:
     """构造跑通 Batch.__post_init__ 的最小桩，rays/pose 用 1x4x4x3 / 1x4x4."""
@@ -63,13 +64,14 @@ def test_batch_mask_field_3d_shape_rejected_by_post_init():
 
 # --- (b) reshape / dtype 等价契约 (与 datasetNcore.get_gpu_batch_with_intrinsics 同源) ---
 
+
 def _ego_reshape_logic(valid, h, w):
     """提取 datasetNcore.get_gpu_batch_with_intrinsics 中的 T6F.1 reshape 段（CPU 版）：
 
-        if not isinstance(valid, torch.Tensor):
-            valid = torch.from_numpy(valid)
-        mask = valid.to(device, non_blocking=True).float()
-        batch_dict["mask"] = mask.reshape(1, h, w, 1)
+    if not isinstance(valid, torch.Tensor):
+        valid = torch.from_numpy(valid)
+    mask = valid.to(device, non_blocking=True).float()
+    batch_dict["mask"] = mask.reshape(1, h, w, 1)
     """
     if not isinstance(valid, torch.Tensor):
         valid = torch.from_numpy(valid)
@@ -111,12 +113,13 @@ def test_valid_1d_reshape_to_4d_mask():
     mask_from_2d = _ego_reshape_logic(valid_2d, H, W)
 
     assert mask_from_1d.shape == (1, H, W, 1)
-    assert torch.equal(mask_from_1d, mask_from_2d), (
-        "1D 和 2D valid 经 reshape 后应数值完全一致（reshape 是 row-major 顺序无关）"
-    )
+    assert torch.equal(
+        mask_from_1d, mask_from_2d
+    ), "1D 和 2D valid 经 reshape 后应数值完全一致（reshape 是 row-major 顺序无关）"
 
 
 # --- (c) ego mask 接通 layered_l1 后剔除 ego 像素 ---------------------------
+
 
 def test_layered_l1_with_ego_mask_excludes_ego_pixels():
     """T6F.1 集成契约：当 valid_mask（ego 接通）传入 compute_layered_l1_loss，
@@ -130,10 +133,10 @@ def test_layered_l1_with_ego_mask_excludes_ego_pixels():
     rgb_gt = torch.zeros(1, H, W, 3)
     rgb_pred = torch.zeros(1, H, W, 3)
     # 在下半图（"ego 车身区"）造 0.5 误差
-    rgb_pred[:, H // 2:, :, :] = 0.5
+    rgb_pred[:, H // 2 :, :, :] = 0.5
 
     ego_valid = torch.ones(1, H, W, dtype=torch.float32)
-    ego_valid[:, H // 2:, :] = 0.0  # ego 区 invalid
+    ego_valid[:, H // 2 :, :] = 0.0  # ego 区 invalid
 
     loss_no_mask = compute_layered_l1_loss(rgb_pred, rgb_gt, valid_mask=None)
     loss_with_mask = compute_layered_l1_loss(rgb_pred, rgb_gt, valid_mask=ego_valid)
@@ -180,9 +183,7 @@ def test_layered_l1_accepts_4d_valid_mask_with_image_infos():
     # 注意：[B, H, W, 1] 而不是 [B, H, W]，模拟真实 Batch.mask
     valid_mask_4d = torch.ones(B, H, W, 1, dtype=torch.float32)
     # 应当不抛 RuntimeError("size of tensor a (W) must match tensor b (H) at dim 2")
-    loss = compute_layered_l1_loss(
-        rgb_pred, rgb_gt, image_infos=image_infos, valid_mask=valid_mask_4d
-    )
+    loss = compute_layered_l1_loss(rgb_pred, rgb_gt, image_infos=image_infos, valid_mask=valid_mask_4d)
     assert loss.dim() == 0  # scalar
     assert torch.isfinite(loss)
 

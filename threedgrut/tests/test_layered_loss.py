@@ -4,6 +4,7 @@
 These tests exercise the pure function without instantiating Trainer, so they
 run on Mac CPU without CUDA / NCore SDK / Hydra compose overhead.
 """
+
 from __future__ import annotations
 
 import torch
@@ -15,10 +16,14 @@ def _quad_mask(H: int, W: int, quadrant: str) -> torch.Tensor:
     """Return a [H, W] mask covering one quadrant ('tl', 'tr', 'bl', 'br')."""
     m = torch.zeros(H, W)
     h2, w2 = H // 2, W // 2
-    if quadrant == "tl": m[:h2, :w2] = 1
-    elif quadrant == "tr": m[:h2, w2:] = 1
-    elif quadrant == "bl": m[h2:, :w2] = 1
-    elif quadrant == "br": m[h2:, w2:] = 1
+    if quadrant == "tl":
+        m[:h2, :w2] = 1
+    elif quadrant == "tr":
+        m[:h2, w2:] = 1
+    elif quadrant == "bl":
+        m[h2:, :w2] = 1
+    elif quadrant == "br":
+        m[h2:, w2:] = 1
     return m
 
 
@@ -46,12 +51,11 @@ def test_compute_layered_l1_loss_partitions_three_regions():
     pred = torch.ones(1, 4, 4, 3)
     gt = torch.zeros(1, 4, 4, 3)
     image_infos = {
-        "sky_mask":      _quad_mask(4, 4, "tl").unsqueeze(0),
-        "road_mask":     _quad_mask(4, 4, "tr").unsqueeze(0),
+        "sky_mask": _quad_mask(4, 4, "tl").unsqueeze(0),
+        "road_mask": _quad_mask(4, 4, "tr").unsqueeze(0),
         "dyn_mask_sseg": _quad_mask(4, 4, "bl").unsqueeze(0),
     }
-    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos,
-                                   min_pixels=1)  # all regions kept
+    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos, min_pixels=1)  # all regions kept
     # Each non-sky region's mean L1 = 1.0; bg region (br quadrant) also has 4 px
     # → bg + road + dyn = 3.0 (sky excluded)
     assert torch.allclose(loss, torch.tensor(3.0)), f"got {loss.item()}"
@@ -65,12 +69,11 @@ def test_compute_layered_l1_loss_small_region_skipped():
     road = torch.zeros(1, 10, 10)
     road[0, 0, :5] = 1
     image_infos = {
-        "sky_mask":      torch.zeros(1, 10, 10),
-        "road_mask":     road,
+        "sky_mask": torch.zeros(1, 10, 10),
+        "road_mask": road,
         "dyn_mask_sseg": torch.zeros(1, 10, 10),
     }
-    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos,
-                                   min_pixels=100)
+    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos, min_pixels=100)
     # bg region = 95 valid px, also < 100 → bg dropped
     # dyn region = 0 px → 0
     # road = 5 px → dropped → 0
@@ -84,18 +87,15 @@ def test_compute_layered_l1_loss_dyn_cuboid_takes_precedence_over_sseg():
     pred = torch.ones(1, 4, 4, 3)
     gt = torch.zeros(1, 4, 4, 3)
     image_infos = {
-        "sky_mask":         torch.zeros(1, 4, 4),
-        "road_mask":        torch.zeros(1, 4, 4),
-        "dyn_mask_sseg":    torch.ones(1, 4, 4),                 # all-1 sseg
-        "dyn_mask_cuboid":  _quad_mask(4, 4, "br").unsqueeze(0), # 4 px cuboid
+        "sky_mask": torch.zeros(1, 4, 4),
+        "road_mask": torch.zeros(1, 4, 4),
+        "dyn_mask_sseg": torch.ones(1, 4, 4),  # all-1 sseg
+        "dyn_mask_cuboid": _quad_mask(4, 4, "br").unsqueeze(0),  # 4 px cuboid
     }
-    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos,
-                                   min_pixels=1)
+    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos, min_pixels=1)
     # If cuboid wins: dyn region = 4 px, bg = 12 px → bg + dyn = 1 + 1 = 2.0
     # If sseg wins:   dyn region = 16 px, bg = 0 → only dyn = 1.0
-    assert torch.allclose(loss, torch.tensor(2.0)), (
-        f"got {loss.item()} — cuboid should take precedence over sseg"
-    )
+    assert torch.allclose(loss, torch.tensor(2.0)), f"got {loss.item()} — cuboid should take precedence over sseg"
 
 
 def test_compute_layered_l1_loss_returns_scalar():
@@ -103,12 +103,11 @@ def test_compute_layered_l1_loss_returns_scalar():
     pred = torch.ones(1, 4, 4, 3, requires_grad=True)
     gt = torch.zeros(1, 4, 4, 3)
     image_infos = {
-        "sky_mask":      _quad_mask(4, 4, "tl").unsqueeze(0),
-        "road_mask":     _quad_mask(4, 4, "tr").unsqueeze(0),
+        "sky_mask": _quad_mask(4, 4, "tl").unsqueeze(0),
+        "road_mask": _quad_mask(4, 4, "tr").unsqueeze(0),
         "dyn_mask_sseg": _quad_mask(4, 4, "bl").unsqueeze(0),
     }
-    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos,
-                                   min_pixels=1)
+    loss = compute_layered_l1_loss(pred, gt, image_infos=image_infos, min_pixels=1)
     assert loss.ndim == 0
     loss.backward()
     assert pred.grad is not None
@@ -121,8 +120,7 @@ def test_compute_sky_loss_zero_when_no_sky_pixels():
     """sky_mask sum < min_pixels → loss is 0 (no NaN, no grad explosion)."""
     rgb_sky = torch.ones(1, 4, 4, 3, requires_grad=True)
     gt = torch.zeros(1, 4, 4, 3)
-    loss = compute_sky_loss(rgb_sky, gt, sky_mask=torch.zeros(1, 4, 4),
-                            min_pixels=1)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=torch.zeros(1, 4, 4), min_pixels=1)
     assert loss.item() == 0.0
 
 
@@ -157,8 +155,7 @@ def test_compute_sky_loss_squeezed_mask_shape():
     """Mask provided already with trailing 1 (shape [B,H,W,1]) must work."""
     rgb_sky = torch.full((1, 4, 4, 3), 0.5)
     gt = torch.zeros(1, 4, 4, 3)
-    loss = compute_sky_loss(rgb_sky, gt, sky_mask=torch.ones(1, 4, 4, 1),
-                            min_pixels=1)
+    loss = compute_sky_loss(rgb_sky, gt, sky_mask=torch.ones(1, 4, 4, 1), min_pixels=1)
     assert torch.allclose(loss, torch.tensor(0.5), atol=1e-6)
 
 

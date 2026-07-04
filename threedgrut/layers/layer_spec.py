@@ -9,6 +9,7 @@ T1.2 expanded the 3-field T1.1 minimal spec to 8 fields covering scale prior,
 mask gating, lr_mult and particle/non-particle distinction so that Stage 2
 (LayeredMCMC) and Stage 3 (Road) can read all knobs from a single dataclass.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

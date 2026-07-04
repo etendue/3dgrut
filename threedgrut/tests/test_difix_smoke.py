@@ -9,6 +9,7 @@ Real-forward smoke is intentionally left to GPU hosts — see
 Run:
     pytest threedgrut/tests/test_difix_smoke.py -v
 """
+
 from __future__ import annotations
 
 import sys
@@ -62,11 +63,11 @@ def test_forward_rejects_bad_shape():
     # check, which requires bypassing the lazy_init RuntimeError. The shape
     # validation runs *before* lazy_init in forward(), so this should hit
     # ValueError first.
-    bad = torch.rand(1, 10, 10, 5)   # 5 channels, not 3
+    bad = torch.rand(1, 10, 10, 5)  # 5 channels, not 3
     with pytest.raises(ValueError, match=r"expects \(B,H,W,3\)"):
         m(bad)
 
-    bad2 = torch.rand(10, 10)         # 2D
+    bad2 = torch.rand(10, 10)  # 2D
     with pytest.raises(ValueError, match=r"expects \(B,H,W,3\)"):
         m(bad2)
 

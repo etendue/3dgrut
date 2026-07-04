@@ -37,6 +37,7 @@ preserved:
   * Port configurable via ``HARMONIZER_PORT`` env; default ``59490`` (distinct
     from E0.7/E2.1's 59487/59489 to prevent cross-wiring).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -144,11 +145,12 @@ def make_harmonizer_temporal_transform(
     import torch
     import torchvision.transforms as T
 
-    pre = T.Compose([
-        T.Resize(model_res, interpolation=T.InterpolationMode.BILINEAR,
-                 antialias=True),
-        T.Lambda(lambda x: x * 2 - 1),
-    ])
+    pre = T.Compose(
+        [
+            T.Resize(model_res, interpolation=T.InterpolationMode.BILINEAR, antialias=True),
+            T.Lambda(lambda x: x * 2 - 1),
+        ]
+    )
 
     def transform(curr: np.ndarray, history: "list[np.ndarray]") -> np.ndarray:
         # Source frame size — identical for curr and all history (validated by
@@ -157,63 +159,58 @@ def make_harmonizer_temporal_transform(
         h, w, _ = curr.shape
         # Stack curr + history -> (V, H, W, 3) uint8, then to (V, 3, H, W) float.
         frames = [curr] + list(history)
-        stack = np.stack(frames, axis=0)                      # (V, H, W, 3) u8
+        stack = np.stack(frames, axis=0)  # (V, H, W, 3) u8
         t = torch.from_numpy(np.ascontiguousarray(stack)).to(device)
         t = t.permute(0, 3, 1, 2).contiguous().float().div_(255.0)  # (V,3,H,W)
         # Resize + normalize to [-1,1] across all V at once.
-        t = pre(t)                                             # (V,3,h',w') [-1,1]
+        t = pre(t)  # (V,3,h',w') [-1,1]
         # Harmonizer forward wants (B, C, V, H, W); B=1. Pure-permute rearrange
         # of "b v c h w -> b c v h w": insert B, move V after C.
         x5 = t.unsqueeze(0).permute(0, 2, 1, 3, 4).contiguous()  # (1,C,V,h',w')
         x5 = x5.to(torch.bfloat16)
         with torch.autocast(device, dtype=torch.bfloat16):
-            y5 = model(x5)                                     # (1,C,V,h',w')
+            y5 = model(x5)  # (1,C,V,h',w')
         # Take the current-timestep output (V index 0) — the other V outputs
         # are Harmonizer's predictions for the history frames, which we discard
         # (the client only feeds history as reference, not to re-correct them).
         # Rearrange "b c v h w -> b v c h w" then take v=0: permute C/V axes.
-        y = y5.permute(0, 2, 1, 3, 4)[:, 0]                    # (1,C,h',w')
+        y = y5.permute(0, 2, 1, 3, 4)[:, 0]  # (1,C,h',w')
         y = (y.float() + 1) / 2
-        post = T.Compose([
-            T.Resize((h, w), interpolation=T.InterpolationMode.BILINEAR,
-                     antialias=True),
-        ])
-        y = post(y)                                            # (1,C,H,W) [0,1]
+        post = T.Compose(
+            [
+                T.Resize((h, w), interpolation=T.InterpolationMode.BILINEAR, antialias=True),
+            ]
+        )
+        y = post(y)  # (1,C,H,W) [0,1]
         y = (y.clamp(0.0, 1.0) * 255.0 + 0.5).to(torch.uint8)
-        return y[0].permute(1, 2, 0).cpu().numpy()             # (H,W,3) u8
+        return y[0].permute(1, 2, 0).cpu().numpy()  # (H,W,3) u8
 
     return transform
 
 
-def _warmup(
-    transform: TemporalTransform, h: int, w: int, K: int = 4
-) -> None:
+def _warmup(transform: TemporalTransform, h: int, w: int, K: int = 4) -> None:
     """Run one dummy V=1+K request to trigger lazy-init + CUDA kernel compile."""
     t0 = time.perf_counter()
     curr = np.zeros((h, w, 3), dtype=np.uint8)
     hist = [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(K)]
     transform(curr, hist)
     print(
-        f"[harm-temporal] warmup done V={1 + K} "
-        f"({time.perf_counter() - t0:.1f}s)",
+        f"[harm-temporal] warmup done V={1 + K} " f"({time.perf_counter() - t0:.1f}s)",
         flush=True,
     )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Temporal DiffusionHarmonizer inference TCP server (E2.6)"
-    )
+    parser = argparse.ArgumentParser(description="Temporal DiffusionHarmonizer inference TCP server (E2.6)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument(
-        "--port", type=int,
+        "--port",
+        type=int,
         default=int(os.environ.get("HARMONIZER_PORT", "59490")),
     )
     parser.add_argument(
         "--ckpt_path",
-        default=os.environ.get(
-            "HARMONIZER_CKPT", "/work/harm_models/diffusion_harmonizer.pkl"
-        ),
+        default=os.environ.get("HARMONIZER_CKPT", "/work/harm_models/diffusion_harmonizer.pkl"),
     )
     parser.add_argument("--timestep", type=int, default=250)
     parser.add_argument("--warmup_h", type=int, default=576)
@@ -227,6 +224,7 @@ def main() -> None:
     if os.path.isdir(harm_src):
         sys_path_added = harm_src
         import sys
+
         sys.path.insert(0, harm_src)
         os.chdir(harm_src)
     else:
@@ -237,22 +235,23 @@ def main() -> None:
 
     print("building Harmonizer Pix2Pix_Turbo...", flush=True)
     model = Pix2Pix_Turbo(
-        pretrained_path=args.ckpt_path, timestep=args.timestep,
-        train_full_unet=True, freeze_vae=False,
-        vae_skip_connection=False, use_sched=True,
-        device=torch.device("cuda"), dtype=torch.bfloat16,
+        pretrained_path=args.ckpt_path,
+        timestep=args.timestep,
+        train_full_unet=True,
+        freeze_vae=False,
+        vae_skip_connection=False,
+        use_sched=True,
+        device=torch.device("cuda"),
+        dtype=torch.bfloat16,
     )
     model.set_eval()
     model = model.to(device="cuda", dtype=torch.bfloat16)
     print("model built", flush=True)
 
-    transform = make_harmonizer_temporal_transform(
-        model, device="cuda", model_res=(576, 1024)
-    )
+    transform = make_harmonizer_temporal_transform(model, device="cuda", model_res=(576, 1024))
     _warmup(transform, args.warmup_h, args.warmup_w, K=args.warmup_K)
 
-    print(f"[harm-temporal] READY (sys.path added: {sys_path_added})",
-          flush=True)
+    print(f"[harm-temporal] READY (sys.path added: {sys_path_added})", flush=True)
     serve(args.host, args.port, transform)
 
 

@@ -27,6 +27,7 @@ Usage (inceptio worktree)::
         --out_dir ~/work/output/e28_run/quant \
         [--harmonizer_host 127.0.0.1 --harmonizer_port 59490]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -127,12 +128,24 @@ def _run(cmd: list, cwd: str) -> None:
 
 
 def _eval_mode(py, repo_root, ckpt, path, frames_dir, mode, cameras, out_json) -> dict:
-    cmd = [py, "scripts/eval_frames_dir.py",
-           "--checkpoint", ckpt, "--path", path,
-           "--frames-dir", str(frames_dir),
-           "--frames-map", str(Path(frames_dir) / "frames_map.json"),
-           "--mode", mode, "--nta-iou", "--kid",
-           "--output", str(out_json)]
+    cmd = [
+        py,
+        "scripts/eval_frames_dir.py",
+        "--checkpoint",
+        ckpt,
+        "--path",
+        path,
+        "--frames-dir",
+        str(frames_dir),
+        "--frames-map",
+        str(Path(frames_dir) / "frames_map.json"),
+        "--mode",
+        mode,
+        "--nta-iou",
+        "--kid",
+        "--output",
+        str(out_json),
+    ]
     if cameras:
         cmd += ["--cameras", cameras]
     _run(cmd, cwd=repo_root)
@@ -146,18 +159,20 @@ def main(argv=None) -> int:
     ap.add_argument("--path", required=True, help="dataset manifest json (GT distribution)")
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--modes", nargs="+", default=["lateral_3m", "lateral_6m"])
-    ap.add_argument("--cameras", default="camera_front_wide_120fov",
-                    help="restrict eval cameras (lateral rig-offset = front cam only)")
-    ap.add_argument("--harmonizer_host", default=None,
-                    help="enable before/after harmonizer pass when host+port given")
+    ap.add_argument(
+        "--cameras",
+        default="camera_front_wide_120fov",
+        help="restrict eval cameras (lateral rig-offset = front cam only)",
+    )
+    ap.add_argument("--harmonizer_host", default=None, help="enable before/after harmonizer pass when host+port given")
     ap.add_argument("--harmonizer_port", type=int, default=None)
-    ap.add_argument("--replace_report", default=None,
-                    help="defaults to <ckpt dir>/replace_report.json if present")
-    ap.add_argument("--qa_sanity", default=None,
-                    help="defaults to <ckpt dir>/qa_sanity.json if present")
-    ap.add_argument("--skip_render", action="store_true",
-                    help="reuse existing novel_view frames under <out_dir>/render "
-                         "(re-run eval/aggregate without re-rendering)")
+    ap.add_argument("--replace_report", default=None, help="defaults to <ckpt dir>/replace_report.json if present")
+    ap.add_argument("--qa_sanity", default=None, help="defaults to <ckpt dir>/qa_sanity.json if present")
+    ap.add_argument(
+        "--skip_render",
+        action="store_true",
+        help="reuse existing novel_view frames under <out_dir>/render " "(re-run eval/aggregate without re-rendering)",
+    )
     a = ap.parse_args(argv)
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -176,9 +191,21 @@ def main(argv=None) -> int:
         return Path(roots[-1]) if roots else None
 
     if not (a.skip_render and _find_novel_root() is not None):
-        render_cmd = [py, "render.py", "--checkpoint", a.ckpt, "--path", a.path,
-                      "--out-dir", str(render_dir), "--render-only",
-                      "--novel-view", "--novel-only", "--novel-save-n", "-1"]
+        render_cmd = [
+            py,
+            "render.py",
+            "--checkpoint",
+            a.ckpt,
+            "--path",
+            a.path,
+            "--out-dir",
+            str(render_dir),
+            "--render-only",
+            "--novel-view",
+            "--novel-only",
+            "--novel-save-n",
+            "-1",
+        ]
         # lateral rig-offset novel poses only equal our per-camera lateral for
         # the front camera, and eval restricts to it — so render only those
         # cameras (≈5× fewer frames than the full ring).
@@ -192,8 +219,7 @@ def main(argv=None) -> int:
 
     # 2) eval raw frames: NTA-IoU + FID/KID per mode.
     raw_metrics = {
-        m: _eval_mode(py, repo_root, a.ckpt, a.path, novel_root / m, m,
-                      a.cameras, out / f"metrics_raw_{m}.json")
+        m: _eval_mode(py, repo_root, a.ckpt, a.path, novel_root / m, m, a.cameras, out / f"metrics_raw_{m}.json")
         for m in a.modes
     }
 
@@ -201,20 +227,38 @@ def main(argv=None) -> int:
     fixed_metrics = None
     if a.harmonizer_host and a.harmonizer_port:
         fixed_root = out / "fixed"
-        _run([py, "scripts/e21_harmonizer_batch_fix.py",
-              "--raw-dir", str(novel_root), "--fixed-dir", str(fixed_root),
-              "--modes", *a.modes,
-              "--host", a.harmonizer_host, "--port", str(a.harmonizer_port)], cwd=repo_root)
+        _run(
+            [
+                py,
+                "scripts/e21_harmonizer_batch_fix.py",
+                "--raw-dir",
+                str(novel_root),
+                "--fixed-dir",
+                str(fixed_root),
+                "--modes",
+                *a.modes,
+                "--host",
+                a.harmonizer_host,
+                "--port",
+                str(a.harmonizer_port),
+            ],
+            cwd=repo_root,
+        )
         fixed_metrics = {
-            m: _eval_mode(py, repo_root, a.ckpt, a.path, fixed_root / m, m,
-                          a.cameras, out / f"metrics_fixed_{m}.json")
+            m: _eval_mode(py, repo_root, a.ckpt, a.path, fixed_root / m, m, a.cameras, out / f"metrics_fixed_{m}.json")
             for m in a.modes
         }
         try:
-            cmp_cmd = [py, "scripts/e21_compare_metrics.py",
-                       "--before", *[str(out / f"metrics_raw_{m}.json") for m in a.modes],
-                       "--after", *[str(out / f"metrics_fixed_{m}.json") for m in a.modes],
-                       "--modes", *a.modes]
+            cmp_cmd = [
+                py,
+                "scripts/e21_compare_metrics.py",
+                "--before",
+                *[str(out / f"metrics_raw_{m}.json") for m in a.modes],
+                "--after",
+                *[str(out / f"metrics_fixed_{m}.json") for m in a.modes],
+                "--modes",
+                *a.modes,
+            ]
             print("[e28-quant] before/after table:", flush=True)
             subprocess.run(cmp_cmd, cwd=repo_root, check=False)
         except Exception as e:  # comparison table is advisory, not a gate
@@ -228,16 +272,24 @@ def main(argv=None) -> int:
     qa_sanity = _load(a.qa_sanity or ckpt_dir / "qa_sanity.json", None)
     replace_report = _load(a.replace_report or ckpt_dir / "replace_report.json", None)
 
-    report = build_qa_report(raw_metrics, a.modes, fixed_metrics=fixed_metrics,
-                             qa_sanity=qa_sanity, replace_report=replace_report,
-                             ckpt_path=a.ckpt)
+    report = build_qa_report(
+        raw_metrics,
+        a.modes,
+        fixed_metrics=fixed_metrics,
+        qa_sanity=qa_sanity,
+        replace_report=replace_report,
+        ckpt_path=a.ckpt,
+    )
     report_path = out / "qa_report.json"
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     s = report["summary"]
-    print(f"[e28-quant] ✓ qa_report → {report_path}\n"
-          f"  NTA-IoU={s['mean_novel_nta_iou']}  FID={s['mean_novel_fid']}  "
-          f"KID={s['mean_novel_kid']}  harmonizer={s['harmonizer']}", flush=True)
+    print(
+        f"[e28-quant] ✓ qa_report → {report_path}\n"
+        f"  NTA-IoU={s['mean_novel_nta_iou']}  FID={s['mean_novel_fid']}  "
+        f"KID={s['mean_novel_kid']}  harmonizer={s['harmonizer']}",
+        flush=True,
+    )
     return 0
 
 

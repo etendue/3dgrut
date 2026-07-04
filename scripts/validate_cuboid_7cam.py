@@ -36,6 +36,7 @@ Usage (a800-x2)::
         --ckpt /root/work/yusun/ncore-nurec/output/<run>/checkpoints/ckpt_last.pt \\
         --output_dir /tmp/cuboid_7cam_validate
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,11 +50,9 @@ import torch
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from PIL import Image, ImageDraw, ImageFont
-
-from hydra import compose, initialize_config_dir
 import ncore.data as _nd
-
+from hydra import compose, initialize_config_dir
+from PIL import Image, ImageDraw, ImageFont
 
 _CONFIG_DIR = str(_REPO_ROOT / "configs")
 
@@ -62,8 +61,8 @@ _CONFIG_DIR = str(_REPO_ROOT / "configs")
 # Drawing helpers
 # --------------------------------------------------------------------------
 
-def _draw_polyline(im: Image.Image, uv: np.ndarray, visible: np.ndarray,
-                   color: tuple, width: int = 2) -> int:
+
+def _draw_polyline(im: Image.Image, uv: np.ndarray, visible: np.ndarray, color: tuple, width: int = 2) -> int:
     """Overlay a polyline; skip segments where either endpoint is invisible.
 
     Returns the number of segments actually drawn — used to decide whether
@@ -91,14 +90,14 @@ def _draw_caption(im: Image.Image, text: str) -> None:
     bbox = draw.textbbox((0, 0), text, font=font)
     w_t = bbox[2] - bbox[0]
     h_t = bbox[3] - bbox[1]
-    draw.rectangle([6, 6, 6 + w_t + 14, 6 + h_t + 14],
-                   fill=(0, 0, 0, 160))
+    draw.rectangle([6, 6, 6 + w_t + 14, 6 + h_t + 14], fill=(0, 0, 0, 160))
     draw.text((13, 10), text, fill=(255, 255, 255, 255), font=font)
 
 
 # --------------------------------------------------------------------------
 # Camera frame lookup
 # --------------------------------------------------------------------------
+
 
 def _find_nearest_camera_frame(camera_sensor, t_us: int) -> tuple[int, int]:
     """Return (camera_frame_index, frame_END_ts_us) closest to ``t_us``."""
@@ -114,14 +113,12 @@ def _build_projector(intrinsics: dict, model_type_name: str):
     from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
 
     if model_type_name == "FThetaCameraModelParameters":
-        return FthetaForwardProjector(
-            intrinsics, world_to_camera_flip=np.eye(4)), "ftheta", 20
+        return FthetaForwardProjector(intrinsics, world_to_camera_flip=np.eye(4)), "ftheta", 20
     if model_type_name in (
         "OpenCVPinholeCameraModelParameters",
         "OpenCVFisheyeCameraModelParameters",
     ):
-        return PinholeForwardProjector(
-            intrinsics, world_to_camera_flip=np.eye(4)), "pinhole", 4
+        return PinholeForwardProjector(intrinsics, world_to_camera_flip=np.eye(4)), "pinhole", 4
     return None, "unknown", 1
 
 
@@ -129,8 +126,8 @@ def _build_projector(intrinsics: dict, model_type_name: str):
 # Cuboid collection (from ckpt)
 # --------------------------------------------------------------------------
 
-def _collect_active_cuboid_edges(meta, t_us: int
-                                 ) -> list[tuple[str, np.ndarray, tuple]]:
+
+def _collect_active_cuboid_edges(meta, t_us: int) -> list[tuple[str, np.ndarray, tuple]]:
     """Walk ``FourDMetadata`` tracks, return per-track ``(tid, (12,2,3), color)``
     for every active cuboid at the frame nearest ``t_us``."""
     from threedgrut_playground.utils.cuboid import cuboid_world_edges, instance_color
@@ -143,9 +140,8 @@ def _collect_active_cuboid_edges(meta, t_us: int
         if poses is None or frame_idx >= poses.shape[0]:
             continue
         pose = poses[frame_idx]
-        size = t["size"] if t["size"] is not None else np.array(
-            [1.0, 1.0, 1.0], dtype=np.float32)
-        edges = cuboid_world_edges(pose, size)                  # (12, 2, 3)
+        size = t["size"] if t["size"] is not None else np.array([1.0, 1.0, 1.0], dtype=np.float32)
+        edges = cuboid_world_edges(pose, size)  # (12, 2, 3)
         col_f = instance_color(tid)
         col = tuple(int(round(c * 255)) for c in col_f)
         out.append((tid, edges, col))
@@ -155,6 +151,7 @@ def _collect_active_cuboid_edges(meta, t_us: int
 # --------------------------------------------------------------------------
 # Per-camera rendering
 # --------------------------------------------------------------------------
+
 
 def _render_camera_view(
     dataset,
@@ -176,35 +173,34 @@ def _render_camera_view(
     pil = Image.fromarray(rgb_arr, mode="RGB")
 
     # Intrinsics scaled to this resolution.
-    intrinsics_result = dataset._get_camera_model_parameters_for_resolution(
-        camera_id, render_w=W, render_h=H)
+    intrinsics_result = dataset._get_camera_model_parameters_for_resolution(camera_id, render_w=W, render_h=H)
     if intrinsics_result is None:
         _draw_caption(pil, f"{camera_id} | UNSUPPORTED CAMERA MODEL")
-        return pil, {"model": "unsupported", "drawn_cuboids": 0,
-                     "total_cuboids": len(cuboid_edges), "drift_us": drift_us}
+        return pil, {
+            "model": "unsupported",
+            "drawn_cuboids": 0,
+            "total_cuboids": len(cuboid_edges),
+            "drift_us": drift_us,
+        }
     intrinsics, model_type_name = intrinsics_result
 
-    projector, model_short, default_sub = _build_projector(
-        intrinsics, model_type_name)
+    projector, model_short, default_sub = _build_projector(intrinsics, model_type_name)
     if projector is None:
         _draw_caption(pil, f"{camera_id} | {model_type_name} (no projector)")
-        return pil, {"model": model_short, "drawn_cuboids": 0,
-                     "total_cuboids": len(cuboid_edges), "drift_us": drift_us}
+        return pil, {"model": model_short, "drawn_cuboids": 0, "total_cuboids": len(cuboid_edges), "drift_us": drift_us}
 
     # c2w in OpenCV convention. NCore returns (START, END) poses for the
     # rolling-shutter window — pick END because the cuboid timestamp lookup
     # in the ckpt also uses END timestamps, so this is the temporally
     # consistent choice for a single-pose sanity overlay.
-    _T_start, T_c2w_end = dataset._get_start_end_poses_world_global(
-        camera_sensor, cam_frame_idx)
+    _T_start, T_c2w_end = dataset._get_start_end_poses_world_global(camera_sensor, cam_frame_idx)
     T_c2w = np.asarray(T_c2w_end, dtype=np.float64)
 
     # Project + draw every cuboid; count those with at least one visible edge.
     drawn_cuboids = 0
     for tid, edges, color in cuboid_edges:
         polylines = [edges[i].astype(np.float64) for i in range(12)]
-        results = projector.project_polylines(
-            polylines, T_c2w, subdivide_n=default_sub)
+        results = projector.project_polylines(polylines, T_c2w, subdivide_n=default_sub)
         cuboid_drawn_segments = 0
         for uv, vis in results:
             cuboid_drawn_segments += _draw_polyline(pil, uv, vis, color, width=2)
@@ -217,13 +213,18 @@ def _render_camera_view(
         f"{drawn_cuboids}/{len(cuboid_edges)} cuboids  |  "
         f"Δt={drift_us/1000:.1f}ms",
     )
-    return pil, {"model": model_short, "drawn_cuboids": drawn_cuboids,
-                 "total_cuboids": len(cuboid_edges), "drift_us": drift_us}
+    return pil, {
+        "model": model_short,
+        "drawn_cuboids": drawn_cuboids,
+        "total_cuboids": len(cuboid_edges),
+        "drift_us": drift_us,
+    }
 
 
 # --------------------------------------------------------------------------
 # Grid composition
 # --------------------------------------------------------------------------
+
 
 def _tile_grid(panels: list[Image.Image], cols: int = 4) -> Image.Image:
     """Tile panels into a ``rows × cols`` grid (panel sizes can differ; each
@@ -247,15 +248,15 @@ def _tile_grid(panels: list[Image.Image], cols: int = 4) -> Image.Image:
 # Main
 # --------------------------------------------------------------------------
 
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--config_name", required=True,
-                   help="Hydra config (e.g. apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix)")
+    p.add_argument(
+        "--config_name", required=True, help="Hydra config (e.g. apps/ncore_3dgut_mcmc_v2_full_4dviz_dynfix)"
+    )
     p.add_argument("--path", required=True, help="NCore manifest path (overrides conf.path)")
-    p.add_argument("--ckpt", required=True,
-                   help="checkpoint path (provides cuboid poses via viz_4d block)")
-    p.add_argument("--t_us", type=int, default=None,
-                   help="timestamp (μs) to validate at; default = ckpt's t_us_first")
+    p.add_argument("--ckpt", required=True, help="checkpoint path (provides cuboid poses via viz_4d block)")
+    p.add_argument("--t_us", type=int, default=None, help="timestamp (μs) to validate at; default = ckpt's t_us_first")
     p.add_argument("--output_dir", required=True, type=Path)
     p.add_argument("--cols", type=int, default=4, help="grid columns (default 4)")
     args = p.parse_args(argv)
@@ -271,28 +272,31 @@ def main(argv=None) -> int:
 
     # 2. Build dataset via the factory (matches all NCore-specific kwargs).
     import threedgrut.datasets as datasets
+
     dataset, _val = datasets.make(conf.dataset.type, conf, ray_jitter=None)
     print(f"[7cam] dataset ready | cameras = {dataset.camera_ids}", flush=True)
 
     # 3. Load ckpt → FourDMetadata for cuboid poses + sizes.
     from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
+
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     meta: Optional[FourDMetadata] = FourDMetadata.from_ckpt(ckpt)
     if meta is None or meta.n_tracks() == 0:
         raise RuntimeError(
             f"checkpoint {args.ckpt} has no viz_4d / tracks — cuboid poses "
-            "must come from a 4D-trained ckpt with viz_4d block.")
+            "must come from a 4D-trained ckpt with viz_4d block."
+        )
 
     t_us = int(args.t_us) if args.t_us is not None else int(meta.t_us_first)
     frame_idx = meta.lookup_frame_idx(t_us)
     active = meta.active_tracks_at(frame_idx)
-    print(f"[7cam] t_us={t_us} | frame_idx={frame_idx} | "
-          f"active_cuboids={len(active)}/{meta.n_tracks()}", flush=True)
+    print(
+        f"[7cam] t_us={t_us} | frame_idx={frame_idx} | " f"active_cuboids={len(active)}/{meta.n_tracks()}", flush=True
+    )
 
     cuboid_edges = _collect_active_cuboid_edges(meta, t_us)
     if not cuboid_edges:
-        print("[7cam] WARNING: no active cuboids at this t_us — grid will be raw images only.",
-              flush=True)
+        print("[7cam] WARNING: no active cuboids at this t_us — grid will be raw images only.", flush=True)
 
     # 4. Per-camera render.
     panels: list[Image.Image] = []
@@ -306,14 +310,15 @@ def main(argv=None) -> int:
             blk = Image.new("RGB", (800, 600), color=(40, 0, 0))
             _draw_caption(blk, f"{cam_id}  |  ERROR: {e}")
             pil = blk
-            st = {"model": "error", "drawn_cuboids": 0,
-                  "total_cuboids": len(cuboid_edges), "drift_us": -1}
+            st = {"model": "error", "drawn_cuboids": 0, "total_cuboids": len(cuboid_edges), "drift_us": -1}
         out_path = args.output_dir / f"cam_{cam_id}.png"
         pil.save(out_path)
-        print(f"[7cam] {cam_id:>40s}  model={st['model']:<10s}  "
-              f"drawn={st['drawn_cuboids']}/{st['total_cuboids']}  "
-              f"Δt={st['drift_us']/1000:.1f}ms  → {out_path.name}",
-              flush=True)
+        print(
+            f"[7cam] {cam_id:>40s}  model={st['model']:<10s}  "
+            f"drawn={st['drawn_cuboids']}/{st['total_cuboids']}  "
+            f"Δt={st['drift_us']/1000:.1f}ms  → {out_path.name}",
+            flush=True,
+        )
         panels.append(pil)
         stats.append({"camera_id": cam_id, **st})
 
@@ -321,15 +326,16 @@ def main(argv=None) -> int:
     grid = _tile_grid(panels, cols=args.cols)
     grid_path = args.output_dir / "out_grid.png"
     grid.save(grid_path)
-    print(f"[7cam] grid saved: {grid_path}  ({grid.size[0]}×{grid.size[1]})",
-          flush=True)
+    print(f"[7cam] grid saved: {grid_path}  ({grid.size[0]}×{grid.size[1]})", flush=True)
 
     # 6. Summary line — quick "did anything project?" sanity gate.
     n_drawn = sum(s["drawn_cuboids"] for s in stats)
     n_seen = sum(1 for s in stats if s["drawn_cuboids"] > 0)
-    print(f"[7cam] SUMMARY: {n_seen}/{len(stats)} cameras saw at least 1 cuboid; "
-          f"total drawn cuboid-overlays = {n_drawn}",
-          flush=True)
+    print(
+        f"[7cam] SUMMARY: {n_seen}/{len(stats)} cameras saw at least 1 cuboid; "
+        f"total drawn cuboid-overlays = {n_drawn}",
+        flush=True,
+    )
     return 0
 
 

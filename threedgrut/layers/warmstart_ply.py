@@ -7,6 +7,7 @@ and turns an Objaverse-Y-up-canonical, per-axis-normalized asset into
 object-local (X=forward, Y=left, Z=up), metric particles ready for
 ``LayeredGaussians.init_layer_from_points``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -71,10 +72,10 @@ _CANONICAL_AXIS_MAP: dict[str, AxisMap] = {
 class AlignmentTransform:
     """Resolved canonical→object-local transform (see :func:`compute_axis_alignment`)."""
 
-    R: torch.Tensor           # [3,3] proper rotation (signed permutation)
-    q_R: torch.Tensor         # [4] wxyz form of R
+    R: torch.Tensor  # [3,3] proper rotation (signed permutation)
+    q_R: torch.Tensor  # [4] wxyz form of R
     scale_local: torch.Tensor  # [3] per-object-local-axis metric factor
-    center: torch.Tensor      # [3] PLY-frame center to subtract first
+    center: torch.Tensor  # [3] PLY-frame center to subtract first
     perm: tuple[int, int, int]
 
 
@@ -124,13 +125,15 @@ def load_warmstart_ply(path: str | Path, *, max_sh_degree: int = 0) -> WarmStart
         raise ValueError(f"warm-start PLY {path!s} rotations {tuple(rot.shape)} != ({n}, 4)")
     if scl.shape != (n, 3):
         raise ValueError(f"warm-start PLY {path!s} scales {tuple(scl.shape)} != ({n}, 3)")
-    for name, t in (("positions", pos), ("rotations", rot), ("scales", scl),
-                    ("densities", den), ("albedo", alb)):
+    for name, t in (("positions", pos), ("rotations", rot), ("scales", scl), ("densities", den), ("albedo", alb)):
         if not torch.isfinite(t).all():
             raise ValueError(f"warm-start PLY {path!s} has non-finite {name}")
     return WarmStartAsset(
-        positions=pos, rotations=rot, scales_log=scl,
-        density_logit=den, albedo=alb,
+        positions=pos,
+        rotations=rot,
+        scales_log=scl,
+        density_logit=den,
+        albedo=alb,
     )
 
 
@@ -155,8 +158,7 @@ def _rank_match_axismap(cuboids_dims: torch.Tensor, ply_halfspan: torch.Tensor) 
         R[i, perm[i]] = sign[i]
     if torch.det(R).item() < 0:
         sign[1] = -1.0  # flip local-Y (left/right) → proper rotation
-    return AxisMap(perm=(perm[0], perm[1], perm[2]),
-                   sign=(sign[0], sign[1], sign[2]))
+    return AxisMap(perm=(perm[0], perm[1], perm[2]), sign=(sign[0], sign[1], sign[2]))
 
 
 def compute_axis_alignment(
@@ -183,15 +185,18 @@ def compute_axis_alignment(
     det = torch.det(R).item()
     if abs(det - 1.0) > 1e-5:
         raise ValueError(
-            f"axis map for {label_class!r} yields det(R)={det:.3f}, not +1 "
-            f"(perm={amap.perm}, sign={amap.sign})"
+            f"axis map for {label_class!r} yields det(R)={det:.3f}, not +1 " f"(perm={amap.perm}, sign={amap.sign})"
         )
 
     half_perm = half[list(amap.perm)]
     scale_local = (dims * 0.5) / half_perm.clamp_min(1e-9)
     q_R = _rotmat_to_quat_wxyz(R)
     return AlignmentTransform(
-        R=R, q_R=q_R, scale_local=scale_local, center=center, perm=amap.perm,
+        R=R,
+        q_R=q_R,
+        scale_local=scale_local,
+        center=center,
+        perm=amap.perm,
     )
 
 
@@ -203,8 +208,8 @@ def apply_alignment(asset: WarmStartAsset, xf: AlignmentTransform) -> AlignedAss
     metric stretch is isotropic, a close approximation under mild anisotropy that
     training refines); density passthrough; colors = albedo→[0,1].
     """
-    p = asset.positions - xf.center                       # [N,3] centered
-    pos_local = (xf.R @ p.T).T * xf.scale_local           # rotate then scale
+    p = asset.positions - xf.center  # [N,3] centered
+    pos_local = (xf.R @ p.T).T * xf.scale_local  # rotate then scale
     n = asset.positions.shape[0]
     q_local = _quat_multiply_wxyz(xf.q_R.unsqueeze(0).expand(n, 4), asset.rotations)
     q_local = q_local / q_local.norm(dim=-1, keepdim=True).clamp_min(1e-12)
@@ -219,9 +224,7 @@ def apply_alignment(asset: WarmStartAsset, xf: AlignmentTransform) -> AlignedAss
     )
 
 
-def subsample_asset(
-    aligned: AlignedAsset, max_pts: int, *, generator: torch.Generator | None = None
-) -> AlignedAsset:
+def subsample_asset(aligned: AlignedAsset, max_pts: int, *, generator: torch.Generator | None = None) -> AlignedAsset:
     """Uniform random subsample to ``max_pts`` (no-op if already under budget).
 
     Mirrors the LiDAR-init randperm cap; pass a seeded ``generator`` for

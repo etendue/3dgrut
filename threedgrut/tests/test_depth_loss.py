@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for DepthLoss (Stage 11 / T11.A1)."""
+
 import pytest
 import torch
 
@@ -93,7 +94,7 @@ def test_compute_bg_lidar_loss_sky_far_anchor():
     pred = torch.full((1, 2, 2, 1), 60.0)  # 预测 60m
     sky_mask = torch.tensor([[[1.0, 0.0], [0.0, 0.0]]])  # 仅 (0,0) 是 sky
     loss = compute_bg_lidar_loss(pred, sky_mask, max_depth=80.0)
-    expected = ((60.0 / 80.0 - 1.0) ** 2)  # normalized: 60/80 vs 1.0
+    expected = (60.0 / 80.0 - 1.0) ** 2  # normalized: 60/80 vs 1.0
     assert loss.item() == pytest.approx(expected, abs=1e-6)
 
 

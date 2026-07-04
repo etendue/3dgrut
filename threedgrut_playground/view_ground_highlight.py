@@ -15,6 +15,7 @@ ground 高斯的指纹(对齐 vanilla.py 主流程的 ground-label 退化):
   python view_ground_highlight.py --input test_set_30000_gs_Background.ply --port 8093
   python view_ground_highlight.py --input ..._gs_...ply --mode splats
 """
+
 import argparse
 import os
 import time
@@ -44,19 +45,40 @@ def quat_to_rotmat(q):
     q = q / np.clip(np.linalg.norm(q, axis=1, keepdims=True), 1e-12, None)
     w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
     R = np.empty((len(q), 3, 3), np.float32)
-    R[:, 0, 0] = 1 - 2 * (y * y + z * z); R[:, 0, 1] = 2 * (x * y - w * z); R[:, 0, 2] = 2 * (x * z + w * y)
-    R[:, 1, 0] = 2 * (x * y + w * z); R[:, 1, 1] = 1 - 2 * (x * x + z * z); R[:, 1, 2] = 2 * (y * z - w * x)
-    R[:, 2, 0] = 2 * (x * z - w * y); R[:, 2, 1] = 2 * (y * z + w * x); R[:, 2, 2] = 1 - 2 * (x * x + y * y)
+    R[:, 0, 0] = 1 - 2 * (y * y + z * z)
+    R[:, 0, 1] = 2 * (x * y - w * z)
+    R[:, 0, 2] = 2 * (x * z + w * y)
+    R[:, 1, 0] = 2 * (x * y + w * z)
+    R[:, 1, 1] = 1 - 2 * (x * x + z * z)
+    R[:, 1, 2] = 2 * (y * z - w * x)
+    R[:, 2, 0] = 2 * (x * z - w * y)
+    R[:, 2, 1] = 2 * (y * z + w * x)
+    R[:, 2, 2] = 1 - 2 * (x * x + y * y)
     return R
 
 
 def load_gs_ply(path):
     from plyfile import PlyData
+
     print(f"[load] reading {path} ...", flush=True)
     v = PlyData.read(path)["vertex"].data
     names = v.dtype.names
-    need = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
-            "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
+    need = [
+        "x",
+        "y",
+        "z",
+        "f_dc_0",
+        "f_dc_1",
+        "f_dc_2",
+        "opacity",
+        "scale_0",
+        "scale_1",
+        "scale_2",
+        "rot_0",
+        "rot_1",
+        "rot_2",
+        "rot_3",
+    ]
     if any(n not in names for n in need):
         raise RuntimeError("PLY 缺少 3DGS 字段,这不是高斯 ply?")
     xyz = np.stack([v["x"], v["y"], v["z"]], 1).astype(np.float32)
@@ -86,7 +108,10 @@ def main():
     s = np.exp(np.clip(scale_raw, -30, 30)).astype(np.float32)
     flat = s.min(1) < 1e-3
     gmask = identity & flat
-    print(f"[ground] {int(gmask.sum()):,} / {n0:,} ({100 * gmask.mean():.1f}%) gaussians match ground fingerprint", flush=True)
+    print(
+        f"[ground] {int(gmask.sum()):,} / {n0:,} ({100 * gmask.mean():.1f}%) gaussians match ground fingerprint",
+        flush=True,
+    )
 
     rgb = np.clip(fdc * C0 + 0.5, 0.0, 1.0).astype(np.float32)
     op = sigmoid(op_raw).reshape(-1, 1)
@@ -143,13 +168,17 @@ def main():
             state[group].remove()
         if args.mode == "splats":
             h = server.scene.add_gaussian_splats(
-                f"/{group}", centers=sub(xyz, idx), covariances=sub(cov, idx),
-                rgbs=col, opacities=sub(op, idx))
+                f"/{group}", centers=sub(xyz, idx), covariances=sub(cov, idx), rgbs=col, opacities=sub(op, idx)
+            )
         else:
             ps = psize * (1.6 if group == "ground" else 1.0)
             h = server.scene.add_point_cloud(
-                f"/{group}", points=sub(xyz, idx), colors=(col * 255).astype(np.uint8),
-                point_size=ps, point_shape="circle")
+                f"/{group}",
+                points=sub(xyz, idx),
+                colors=(col * 255).astype(np.uint8),
+                point_size=ps,
+                point_shape="circle",
+            )
         h.visible = g_showg.value if group == "ground" else g_showe.value
         state[group] = h
 

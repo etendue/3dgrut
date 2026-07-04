@@ -7,6 +7,7 @@ crossing module boundaries.
 
 Pure numpy; no torch, no viser, no kaolin — Mac-testable.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -41,9 +42,9 @@ def subdivide_polyline(pl: np.ndarray, n: int) -> np.ndarray:
     M = pl.shape[0]
     if M < 2:
         return pl.copy()
-    t = np.linspace(0.0, 1.0, n, endpoint=False)                  # (n,)
-    a = pl[:-1]                                                   # (M-1, 3)
-    b = pl[1:]                                                    # (M-1, 3)
+    t = np.linspace(0.0, 1.0, n, endpoint=False)  # (n,)
+    a = pl[:-1]  # (M-1, 3)
+    b = pl[1:]  # (M-1, 3)
     seg = a[:, None, :] + (b - a)[:, None, :] * t[None, :, None]  # (M-1, n, 3)
-    flat = seg.reshape(-1, 3)                                     # ((M-1)*n, 3)
-    return np.concatenate([flat, pl[-1:]], axis=0)                # +1 endpoint
+    flat = seg.reshape(-1, 3)  # ((M-1)*n, 3)
+    return np.concatenate([flat, pl[-1:]], axis=0)  # +1 endpoint

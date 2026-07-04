@@ -19,6 +19,7 @@ On startup it loads the 3.8 GB Fixer weights and runs one warm-up forward
 (~11.5 s on a 4090) so the first real request from the viewer is already hot
 (~80 ms). Then it serves frames until killed.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,8 +48,8 @@ def make_difix_transform(difix, device: str = "cuda") -> Transform:
 
     def transform(img: np.ndarray) -> np.ndarray:
         t = torch.from_numpy(np.ascontiguousarray(img)).to(device)
-        t = t.float().div_(255.0)              # (H,W,3) [0,1]
-        y = difix(t)                            # (H,W,3) [0,1]
+        t = t.float().div_(255.0)  # (H,W,3) [0,1]
+        y = difix(t)  # (H,W,3) [0,1]
         # +0.5 then truncate = round-half-up back to [0,255] uint8.
         y = (y.clamp(0.0, 1.0) * 255.0 + 0.5).to(torch.uint8)
         return y.cpu().numpy()
@@ -145,8 +146,7 @@ def _warmup(transform: Transform, h: int, w: int) -> None:
     """Run one dummy frame to trigger DiFix lazy-init + CUDA kernel compile."""
     t0 = time.perf_counter()
     transform(np.zeros((h, w, 3), dtype=np.uint8))
-    print(f"[difix-server] warmup done ({time.perf_counter() - t0:.1f}s)",
-          flush=True)
+    print(f"[difix-server] warmup done ({time.perf_counter() - t0:.1f}s)", flush=True)
 
 
 def main() -> None:
@@ -154,8 +154,7 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--timestep", type=int, default=250)
-    parser.add_argument("--ckpt_path", default=None,
-                        help="pretrained_fixer.pkl path; default = HF cache.")
+    parser.add_argument("--ckpt_path", default=None, help="pretrained_fixer.pkl path; default = HF cache.")
     parser.add_argument("--warmup_h", type=int, default=640)
     parser.add_argument("--warmup_w", type=int, default=1024)
     args = parser.parse_args()
@@ -163,7 +162,9 @@ def main() -> None:
     from threedgrut.correction.difix import DifixPostProcessor
 
     difix = DifixPostProcessor(
-        enabled=True, ckpt_path=args.ckpt_path, timestep=args.timestep,
+        enabled=True,
+        ckpt_path=args.ckpt_path,
+        timestep=args.timestep,
     )
     transform = make_difix_transform(difix, device="cuda")
     _warmup(transform, args.warmup_h, args.warmup_w)

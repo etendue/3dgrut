@@ -14,36 +14,40 @@
 # limitations under the License.
 
 import os
+
 import requests
-from tqdm import tqdm
 from diffusers import DDPMScheduler, DPMSolverMultistepScheduler
+from tqdm import tqdm
 
 
 # +
 def make_1step_sched_base():
-    noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained("Efficient-Large-Model/Sana_1600M_1024px_diffusers", 
-                                                                        subfolder="scheduler")
+    noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained(
+        "Efficient-Large-Model/Sana_1600M_1024px_diffusers", subfolder="scheduler"
+    )
     noise_scheduler_1step.set_timesteps(1)
     noise_scheduler_1step.alphas_cumprod = noise_scheduler_1step.alphas_cumprod
     return noise_scheduler_1step
 
 
 def make_1step_sched_sprint():
-    noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained("Efficient-Large-Model/Sana_1600M_1024px_diffusers", 
-                                                                        subfolder="scheduler")
+    noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained(
+        "Efficient-Large-Model/Sana_1600M_1024px_diffusers", subfolder="scheduler"
+    )
     noise_scheduler_1step.set_timesteps(1)
     noise_scheduler_1step.alphas_cumprod = noise_scheduler_1step.alphas_cumprod
     return noise_scheduler_1step
 
+
 def make_1step_sched(hf_path):
-    noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained(hf_path, 
-                                                                        subfolder="scheduler")
+    noise_scheduler_1step = DPMSolverMultistepScheduler.from_pretrained(hf_path, subfolder="scheduler")
     noise_scheduler_1step.set_timesteps(1)
     noise_scheduler_1step.alphas_cumprod = noise_scheduler_1step.alphas_cumprod
     return noise_scheduler_1step
 
 
 # -
+
 
 def my_vae_encoder_fwd(self, sample):
     sample = self.conv_in(sample)
@@ -92,10 +96,10 @@ def download_url(url, outf):
     if not os.path.exists(outf):
         print(f"Downloading checkpoint to {outf}")
         response = requests.get(url, stream=True)
-        total_size_in_bytes = int(response.headers.get('content-length', 0))
+        total_size_in_bytes = int(response.headers.get("content-length", 0))
         block_size = 1024  # 1 Kibibyte
-        progress_bar = tqdm(total=total_size_in_bytes, unit='iB', unit_scale=True)
-        with open(outf, 'wb') as file:
+        progress_bar = tqdm(total=total_size_in_bytes, unit="iB", unit_scale=True)
+        with open(outf, "wb") as file:
             for data in response.iter_content(block_size):
                 progress_bar.update(len(data))
                 file.write(data)

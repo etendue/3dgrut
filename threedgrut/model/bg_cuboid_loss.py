@@ -18,6 +18,7 @@ Lambda warmup: ``0 → λ_max`` linearly over ``warmup_iters`` (Plan-agent
 recommendation, ramps slow enough that bg layer doesn't collapse while
 dynamic_rigids MCMC has time to densify into the freed cuboid interiors).
 """
+
 from __future__ import annotations
 
 from typing import Dict, Iterable, Tuple
@@ -77,9 +78,9 @@ def collect_active_cuboids_for_frame(
 
 
 def particles_inside_any_cuboid_mask(
-    positions: torch.Tensor,         # [N, 3] world frame
-    active_poses: torch.Tensor,      # [T, 4, 4] obj→world (active subset)
-    active_sizes: torch.Tensor,      # [T, 3] full extent
+    positions: torch.Tensor,  # [N, 3] world frame
+    active_poses: torch.Tensor,  # [T, 4, 4] obj→world (active subset)
+    active_sizes: torch.Tensor,  # [T, 3] full extent
 ) -> torch.Tensor:
     """Return ``[N]`` BoolTensor: True iff position falls inside any of the
     T cuboids (axis-aligned in each object frame).
@@ -97,22 +98,22 @@ def particles_inside_any_cuboid_mask(
 
     poses = active_poses.to(device=device, dtype=dtype)
     sizes = active_sizes.to(device=device, dtype=dtype)
-    size_half = sizes * 0.5                                          # [T, 3]
+    size_half = sizes * 0.5  # [T, 3]
     ones = torch.ones(N, 1, dtype=dtype, device=device)
-    pts_h = torch.cat([positions, ones], dim=-1)                     # [N, 4]
+    pts_h = torch.cat([positions, ones], dim=-1)  # [N, 4]
     for t in range(int(poses.shape[0])):
         pose_inv = torch.linalg.inv(poses[t])
-        local = (pose_inv @ pts_h.T).T[:, :3]                        # [N, 3]
-        inside_t = (local.abs() <= size_half[t]).all(dim=-1)         # [N]
+        local = (pose_inv @ pts_h.T).T[:, :3]  # [N, 3]
+        inside_t = (local.abs() <= size_half[t]).all(dim=-1)  # [N]
         inside_any |= inside_t
     return inside_any
 
 
 def compute_bg_cuboid_opacity_penalty(
-    bg_positions: torch.Tensor,      # [N, 3] world frame
-    bg_density_raw: torch.Tensor,    # [N] or [N, 1] pre-sigmoid (the nn.Parameter)
-    active_poses: torch.Tensor,      # [T, 4, 4] obj→world (active subset)
-    active_sizes: torch.Tensor,      # [T, 3]
+    bg_positions: torch.Tensor,  # [N, 3] world frame
+    bg_density_raw: torch.Tensor,  # [N] or [N, 1] pre-sigmoid (the nn.Parameter)
+    active_poses: torch.Tensor,  # [T, 4, 4] obj→world (active subset)
+    active_sizes: torch.Tensor,  # [T, 3]
     lambda_val: float,
 ) -> torch.Tensor:
     """Scalar loss penalising background particles inside active cuboids.
@@ -125,11 +126,7 @@ def compute_bg_cuboid_opacity_penalty(
     cuboid masks are treated as constants (no_grad branch on cuboid checks).
     """
     device = bg_positions.device
-    if (
-        lambda_val == 0.0
-        or active_poses.shape[0] == 0
-        or bg_positions.shape[0] == 0
-    ):
+    if lambda_val == 0.0 or active_poses.shape[0] == 0 or bg_positions.shape[0] == 0:
         return torch.zeros((), device=device, dtype=bg_density_raw.dtype)
 
     # Cuboid containment is a piecewise-constant function of bg_positions; no
@@ -137,18 +134,20 @@ def compute_bg_cuboid_opacity_penalty(
     # of the mask, only the opacity of whichever particles happen to be in).
     with torch.no_grad():
         inside_any = particles_inside_any_cuboid_mask(
-            bg_positions, active_poses, active_sizes,
+            bg_positions,
+            active_poses,
+            active_sizes,
         )
     mask_f = inside_any.to(dtype=bg_density_raw.dtype)
 
-    opacity = torch.sigmoid(bg_density_raw.view(-1))                  # [N]
+    opacity = torch.sigmoid(bg_density_raw.view(-1))  # [N]
     loss = (opacity * mask_f).mean()
     return float(lambda_val) * loss
 
 
 def clamp_layer_positions_to_cuboids(
-    positions: torch.Tensor,         # [N, 3] object-local frame (in-place mutated)
-    track_ids: torch.Tensor,         # [N] long
+    positions: torch.Tensor,  # [N, 3] object-local frame (in-place mutated)
+    track_ids: torch.Tensor,  # [N] long
     track_keys_sorted: Iterable[str],
     tracks_size: Dict[str, torch.Tensor],
 ) -> int:
@@ -168,7 +167,7 @@ def clamp_layer_positions_to_cuboids(
     for tid, size in tracks_size.items():
         if tid not in name_to_id:
             continue
-        mask = (track_ids == name_to_id[tid])
+        mask = track_ids == name_to_id[tid]
         if not bool(mask.any()):
             continue
         size_half = size.to(dtype=positions.dtype, device=positions.device) / 2.0

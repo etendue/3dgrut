@@ -22,6 +22,7 @@ Usage:
         --xy_range_m 30 \\
         --res_mpp    0.10
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,19 +58,21 @@ def _extract_ftheta_dict_from_model(camera_model) -> dict:
     """
     params = camera_model.get_parameters()
     return {
-        "resolution":              np.asarray(params.resolution, dtype=np.int64),
-        "shutter_type":            params.shutter_type.name,
-        "principal_point":         np.asarray(params.principal_point, dtype=np.float32),
-        "reference_poly":          params.reference_poly.name,
+        "resolution": np.asarray(params.resolution, dtype=np.int64),
+        "shutter_type": params.shutter_type.name,
+        "principal_point": np.asarray(params.principal_point, dtype=np.float32),
+        "reference_poly": params.reference_poly.name,
         "pixeldist_to_angle_poly": np.asarray(params.pixeldist_to_angle_poly, dtype=np.float32),
         "angle_to_pixeldist_poly": np.asarray(params.angle_to_pixeldist_poly, dtype=np.float32),
-        "max_angle":               float(params.max_angle),
-        "linear_cde":              np.asarray(params.linear_cde, dtype=np.float32),
+        "max_angle": float(params.max_angle),
+        "linear_cde": np.asarray(params.linear_cde, dtype=np.float32),
     }
 
 
 def _nearest_frame_index(
-    sensor, target_ts_us: int, end_col: int,
+    sensor,
+    target_ts_us: int,
+    end_col: int,
 ) -> tuple[int, int]:
     """Return (camera_frame_index, actual_ts) of frame nearest to target_ts."""
     ts_all = np.asarray(sensor.frames_timestamps_us)[:, end_col].astype(np.int64)
@@ -78,13 +81,10 @@ def _nearest_frame_index(
 
 
 def diagnose(args: argparse.Namespace) -> int:
-    from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
-    from threedgrut_playground.utils.diag_ckpt import (
-        load_ckpt_cpu,
-        extract_layer_positions,
-        extract_dyn_track_ids,
-        dyn_local_to_world_at_frame,
-    )
+    import imageio.v3 as iio
+    import ncore
+
+    from threedgrut.datasets.datasetNcore import NCoreDataset
     from threedgrut_playground.utils.bev_renderer import (
         build_inputs_from_metadata,
         render_bev_frame,
@@ -94,9 +94,13 @@ def diagnose(args: argparse.Namespace) -> int:
         CameraRig,
         default_azimuth,
     )
-    from threedgrut.datasets.datasetNcore import NCoreDataset
-    import imageio.v3 as iio
-    import ncore
+    from threedgrut_playground.utils.diag_ckpt import (
+        dyn_local_to_world_at_frame,
+        extract_dyn_track_ids,
+        extract_layer_positions,
+        load_ckpt_cpu,
+    )
+    from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 
     ckpt_path = Path(args.gs_object).expanduser().resolve()
     if not ckpt_path.exists():
@@ -105,8 +109,7 @@ def diagnose(args: argparse.Namespace) -> int:
 
     dataset_path = Path(args.dataset_path).expanduser().resolve()
     if not dataset_path.exists():
-        print(f"[bev-stitch] ERROR: dataset manifest not found: {dataset_path}",
-              file=sys.stderr)
+        print(f"[bev-stitch] ERROR: dataset manifest not found: {dataset_path}", file=sys.stderr)
         return 3
 
     out_dir = Path(args.out_dir).expanduser().resolve()
@@ -129,8 +132,10 @@ def diagnose(args: argparse.Namespace) -> int:
     n_frames_ego = int(meta.ego_poses_c2w.shape[0])
     frames = _parse_frame_range(args.frame_range, n_frames_ego)
     if not frames:
-        print(f"[bev-stitch] ERROR: no frames in range '{args.frame_range}' "
-              f"(n_frames={n_frames_ego})", file=sys.stderr)
+        print(
+            f"[bev-stitch] ERROR: no frames in range '{args.frame_range}' " f"(n_frames={n_frames_ego})",
+            file=sys.stderr,
+        )
         return 5
 
     # --- Load dataset (NCore SDK required) ----------------------------------
@@ -171,23 +176,23 @@ def diagnose(args: argparse.Namespace) -> int:
         try:
             ftheta_dict = _extract_ftheta_dict_from_model(cam_model)
         except Exception as e:
-            print(f"[bev-stitch] WARN: cam {cid} not FTheta — skipping ({e})",
-                  flush=True)
+            print(f"[bev-stitch] WARN: cam {cid} not FTheta — skipping ({e})", flush=True)
             continue
         # Image HW from camera model resolution.
         W_img = int(cam_model.resolution[0].item())
         H_img = int(cam_model.resolution[1].item())
-        rigs.append(CameraRig(
-            camera_id=cid,
-            ftheta_dict=ftheta_dict,
-            azimuth_deg=default_azimuth(cid),
-            image_hw=(H_img, W_img),
-        ))
+        rigs.append(
+            CameraRig(
+                camera_id=cid,
+                ftheta_dict=ftheta_dict,
+                azimuth_deg=default_azimuth(cid),
+                image_hw=(H_img, W_img),
+            )
+        )
         sensors[cid] = cam_sensor
 
     if not rigs:
-        print("[bev-stitch] ERROR: no usable cameras (no FTheta intrinsics found)",
-              file=sys.stderr)
+        print("[bev-stitch] ERROR: no usable cameras (no FTheta intrinsics found)", file=sys.stderr)
         return 6
 
     stitcher = BEVStitcher(
@@ -195,11 +200,15 @@ def diagnose(args: argparse.Namespace) -> int:
         bev_xy_range_m=args.xy_range_m,
         bev_resolution_m_per_px=args.res_mpp,
     )
-    print(f"[bev-stitch] BEV {stitcher.bev_w}×{stitcher.bev_h} px "
-          f"@ {args.res_mpp} m/px  ({stitcher.xy_range_m * 2:.0f}m square)",
-          flush=True)
-    print(f"[bev-stitch] sequence={meta.sequence_id}  n_frames_ego={n_frames_ego}  "
-          f"n_tracks={meta.n_tracks()}", flush=True)
+    print(
+        f"[bev-stitch] BEV {stitcher.bev_w}×{stitcher.bev_h} px "
+        f"@ {args.res_mpp} m/px  ({stitcher.xy_range_m * 2:.0f}m square)",
+        flush=True,
+    )
+    print(
+        f"[bev-stitch] sequence={meta.sequence_id}  n_frames_ego={n_frames_ego}  " f"n_tracks={meta.n_tracks()}",
+        flush=True,
+    )
     for name, p in layer_positions.items():
         print(f"  layer {name:<22} particles={p.shape[0]:>10d}", flush=True)
     print(f"[bev-stitch] rendering {len(frames)} frames → {out_dir}", flush=True)
@@ -236,14 +245,16 @@ def diagnose(args: argparse.Namespace) -> int:
                 img = sensor.get_frame_image_array(cf_idx)
             except Exception as e:
                 if args.verbose:
-                    print(f"[bev-stitch]   cam {cid} frame {fi}: skipped ({e})",
-                          flush=True)
+                    print(f"[bev-stitch]   cam {cid} frame {fi}: skipped ({e})", flush=True)
                 continue
             cam_c2w[cid] = c2w_wg
             cam_images[cid] = np.asarray(img)
 
         bg_rgb, _coverage = stitcher.stitch_frame(
-            cam_c2w, cam_images, ego_xy, ego_z,
+            cam_c2w,
+            cam_images,
+            ego_xy,
+            ego_z,
         )
         extent = stitcher.world_xy_extent(ego_xy)
 
@@ -251,12 +262,17 @@ def diagnose(args: argparse.Namespace) -> int:
         frame_layer_positions = dict(static_layers)
         if dyn_local is not None and dyn_track_ids is not None:
             frame_layer_positions["dynamic_rigids"] = dyn_local_to_world_at_frame(
-                dyn_local, dyn_track_ids, sorted_track_names,
-                meta.tracks, fi,
+                dyn_local,
+                dyn_track_ids,
+                sorted_track_names,
+                meta.tracks,
+                fi,
             )
 
         inputs = build_inputs_from_metadata(
-            meta, frame_layer_positions, fi,
+            meta,
+            frame_layer_positions,
+            fi,
             z_window_m=args.z_window_m,
         )
 
@@ -277,30 +293,38 @@ def diagnose(args: argparse.Namespace) -> int:
         out_path = out_dir / f"bev_stitched_{fi:04d}.png"
         iio.imwrite(str(out_path), out_img)
 
-        manifest.append({
-            "frame_idx": fi,
-            "ego_t_us": ego_t_us,
-            "out_path": str(out_path.relative_to(out_dir)),
-            "n_cuboids": len(inputs.cuboids),
-            "n_cameras_with_image": len(cam_c2w),
-        })
+        manifest.append(
+            {
+                "frame_idx": fi,
+                "ego_t_us": ego_t_us,
+                "out_path": str(out_path.relative_to(out_dir)),
+                "n_cuboids": len(inputs.cuboids),
+                "n_cameras_with_image": len(cam_c2w),
+            }
+        )
         if args.verbose:
-            print(f"[bev-stitch]   frame {fi:>4d}: cuboids={len(inputs.cuboids):>3d}  "
-                  f"cams={len(cam_c2w):>2d}  → {out_path.name}",
-                  flush=True)
+            print(
+                f"[bev-stitch]   frame {fi:>4d}: cuboids={len(inputs.cuboids):>3d}  "
+                f"cams={len(cam_c2w):>2d}  → {out_path.name}",
+                flush=True,
+            )
 
     manifest_path = out_dir / "manifest.json"
     with manifest_path.open("w") as fh:
-        json.dump({
-            "ckpt": str(ckpt_path),
-            "dataset": str(dataset_path),
-            "sequence_id": meta.sequence_id,
-            "cameras": camera_ids,
-            "xy_range_m": args.xy_range_m,
-            "res_mpp": args.res_mpp,
-            "n_frames": len(manifest),
-            "frames": manifest,
-        }, fh, indent=2)
+        json.dump(
+            {
+                "ckpt": str(ckpt_path),
+                "dataset": str(dataset_path),
+                "sequence_id": meta.sequence_id,
+                "cameras": camera_ids,
+                "xy_range_m": args.xy_range_m,
+                "res_mpp": args.res_mpp,
+                "n_frames": len(manifest),
+                "frames": manifest,
+            },
+            fh,
+            indent=2,
+        )
 
     print(f"[bev-stitch] wrote {len(manifest)} PNGs + {manifest_path}", flush=True)
     return 0
@@ -308,27 +332,32 @@ def diagnose(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--gs_object", required=True, type=str,
-                        help="Path to v2 LayeredGaussians ckpt (.pt).")
-    parser.add_argument("--dataset_path", required=True, type=str,
-                        help="Path to NCore manifest .json.")
+    parser.add_argument("--gs_object", required=True, type=str, help="Path to v2 LayeredGaussians ckpt (.pt).")
+    parser.add_argument("--dataset_path", required=True, type=str, help="Path to NCore manifest .json.")
     parser.add_argument("--out_dir", required=True, type=str)
-    parser.add_argument("--frame_range", default=None, type=str,
-                        help='Frame slice e.g. "0:10", "5", or empty for all.')
-    parser.add_argument("--xy_range_m", default=30.0, type=float,
-                        help="Half-width of BEV square around current ego (default 30 m).")
-    parser.add_argument("--res_mpp", default=0.10, type=float,
-                        help="BEV resolution in meters per pixel (default 0.10).")
+    parser.add_argument("--frame_range", default=None, type=str, help='Frame slice e.g. "0:10", "5", or empty for all.')
+    parser.add_argument(
+        "--xy_range_m", default=30.0, type=float, help="Half-width of BEV square around current ego (default 30 m)."
+    )
+    parser.add_argument(
+        "--res_mpp", default=0.10, type=float, help="BEV resolution in meters per pixel (default 0.10)."
+    )
     parser.add_argument("--grid_step_m", default=10.0, type=float)
     parser.add_argument("--z_window_m", default=10.0, type=float)
     parser.add_argument("--dpi", default=100, type=int)
-    parser.add_argument("--ground_offset_m", default=1.5, type=float,
-                        help="Subtract from ego_pose Z to estimate road height "
-                             "(camera mounted ~1.5 m above ground; default 1.5).")
+    parser.add_argument(
+        "--ground_offset_m",
+        default=1.5,
+        type=float,
+        help="Subtract from ego_pose Z to estimate road height " "(camera mounted ~1.5 m above ground; default 1.5).",
+    )
     parser.add_argument("--no_labels", action="store_true")
-    parser.add_argument("--camera_ids", default=None, type=str,
-                        help="Comma-separated camera IDs; default uses the 5 "
-                             "wide-coverage (120/70fov) cameras.")
+    parser.add_argument(
+        "--camera_ids",
+        default=None,
+        type=str,
+        help="Comma-separated camera IDs; default uses the 5 " "wide-coverage (120/70fov) cameras.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
     return diagnose(args)

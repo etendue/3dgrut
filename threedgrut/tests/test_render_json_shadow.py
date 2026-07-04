@@ -16,6 +16,7 @@ This test pins the *cause* without needing a GPU/model: if ``json`` is a local
 of ``render_all`` it appears in ``co_varnames``; a module-global reference does
 not. Cheap, deterministic, GPU-free.
 """
+
 import inspect
 import json as _json
 

@@ -2,6 +2,7 @@
 """threedgrut.layers package: dataclass-level utilities are always importable;
 LayeredGaussians (which imports torch + MoG) is exported lazily so the layer
 spec / registry can be inspected on a dev laptop without CUDA."""
+
 from threedgrut.layers.layer_spec import LayerSpec
 from threedgrut.layers.registry import STANDARD_LAYERS, specs_from_config
 

@@ -21,6 +21,7 @@ Color map (from cuboid.class_color + per-layer convention):
   ego trajectory   : green #00B050
   ego current      : red cross + heading triangle
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -28,31 +29,31 @@ from typing import Mapping, Optional
 
 import numpy as np
 
-
 # Layer style. Tuple = (color_hex, alpha, marker_size_px)
 _LAYER_STYLE: dict[str, tuple[str, float, float]] = {
-    "background":          ("#888888", 0.15, 0.5),
-    "road":                ("#3399FF", 0.30, 0.5),
-    "dynamic_rigids":      ("#FF3333", 0.50, 0.8),
+    "background": ("#888888", 0.15, 0.5),
+    "road": ("#3399FF", 0.30, 0.5),
+    "dynamic_rigids": ("#FF3333", 0.50, 0.8),
     "dynamic_deformables": ("#FFCC00", 0.50, 0.8),
 }
 
 # Cuboid class outline colors (matches threedgrut_playground.utils.cuboid.class_color).
 _CLASS_COLOR: dict[str, str] = {
-    "automobile":  "#1A99FF",   # blue
-    "heavy_truck": "#FF8019",   # orange
-    "bus":         "#CC4DD9",   # purple
-    "unknown":     "#A6A6A6",   # gray
+    "automobile": "#1A99FF",  # blue
+    "heavy_truck": "#FF8019",  # orange
+    "bus": "#CC4DD9",  # purple
+    "unknown": "#A6A6A6",  # gray
 }
 
 
 @dataclass
 class BEVRenderInputs:
     """Pre-extracted data for one BEV frame. Constructed by the CLI driver."""
-    ego_xy_trajectory: np.ndarray         # (N, 2) float32 — full ego XY polyline
-    ego_current_xy: np.ndarray            # (2,) float32 — current ego position
-    ego_current_heading_xy: np.ndarray    # (2,) float32 — unit heading vector
-    cuboids: list[dict]                   # [{tid, class, footprint_xy (4,2), center_xy}]
+
+    ego_xy_trajectory: np.ndarray  # (N, 2) float32 — full ego XY polyline
+    ego_current_xy: np.ndarray  # (2,) float32 — current ego position
+    ego_current_heading_xy: np.ndarray  # (2,) float32 — unit heading vector
+    cuboids: list[dict]  # [{tid, class, footprint_xy (4,2), center_xy}]
     layer_positions_xy: dict[str, np.ndarray]  # layer_name → (M, 2) float32 XY
 
 
@@ -79,10 +80,12 @@ def _cuboid_footprint_xy(pose: np.ndarray, size: np.ndarray) -> np.ndarray:
     sx, sy, sz = (float(s) for s in size.reshape(3))
     # Bottom face corners in object-local frame (CCW from -x,-y).
     local_corners = np.array(
-        [[-sx / 2, -sy / 2, -sz / 2],
-         [ sx / 2, -sy / 2, -sz / 2],
-         [ sx / 2,  sy / 2, -sz / 2],
-         [-sx / 2,  sy / 2, -sz / 2]],
+        [
+            [-sx / 2, -sy / 2, -sz / 2],
+            [sx / 2, -sy / 2, -sz / 2],
+            [sx / 2, sy / 2, -sz / 2],
+            [-sx / 2, sy / 2, -sz / 2],
+        ],
         dtype=np.float32,
     )
     R = pose[:3, :3]
@@ -100,7 +103,7 @@ def _cuboid_center_top_xy(pose: np.ndarray, size: np.ndarray) -> np.ndarray:
 
 
 def build_inputs_from_metadata(
-    meta,                                       # FourDMetadata
+    meta,  # FourDMetadata
     layer_positions: Mapping[str, np.ndarray],  # world-frame XY positions per layer
     frame_idx: int,
     *,
@@ -139,12 +142,14 @@ def build_inputs_from_metadata(
         size = track["size"]
         footprint = _cuboid_footprint_xy(pose, size)
         cls_name = str(track.get("class", "unknown"))
-        cuboids.append({
-            "tid": str(tid),
-            "class": cls_name,
-            "footprint_xy": footprint,                              # (4, 2)
-            "label_xy": _cuboid_center_top_xy(pose, size),          # (2,)
-        })
+        cuboids.append(
+            {
+                "tid": str(tid),
+                "class": cls_name,
+                "footprint_xy": footprint,  # (4, 2)
+                "label_xy": _cuboid_center_top_xy(pose, size),  # (2,)
+            }
+        )
 
     # Layer positions: filter by Z window, project to XY.
     layer_xy: dict[str, np.ndarray] = {}
@@ -191,9 +196,10 @@ def render_bev_frame(
             ``backdrop_rgb``. Required when ``backdrop_rgb`` is given.
     """
     import matplotlib
+
     matplotlib.use("Agg")  # headless safe
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Polygon, FancyArrow
+    from matplotlib.patches import FancyArrow, Polygon
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     cx, cy = float(inputs.ego_current_xy[0]), float(inputs.ego_current_xy[1])
@@ -201,8 +207,7 @@ def render_bev_frame(
     if backdrop_rgb is not None and backdrop_xy_extent is not None:
         # imshow uses image-y flipped (origin='upper') by default; we want
         # +Y up so the BEV is right-handed.
-        ax.imshow(backdrop_rgb, extent=backdrop_xy_extent, origin="lower",
-                  interpolation="nearest", zorder=0)
+        ax.imshow(backdrop_rgb, extent=backdrop_xy_extent, origin="lower", interpolation="nearest", zorder=0)
         ax.set_facecolor("white")
     else:
         # Grid (light gray, every grid_step_m).
@@ -218,39 +223,52 @@ def render_bev_frame(
         if xy is None or xy.size == 0:
             continue
         color, alpha, s = _LAYER_STYLE[name]
-        ax.scatter(xy[:, 0], xy[:, 1], s=s, c=color, alpha=alpha,
-                   edgecolors="none", zorder=2, label=f"{name} ({xy.shape[0]})")
+        ax.scatter(
+            xy[:, 0], xy[:, 1], s=s, c=color, alpha=alpha, edgecolors="none", zorder=2, label=f"{name} ({xy.shape[0]})"
+        )
 
     # Ego full trajectory (green line).
     traj = inputs.ego_xy_trajectory
     if traj.shape[0] >= 2:
-        ax.plot(traj[:, 0], traj[:, 1], color="#00B050", linewidth=1.5,
-                alpha=0.9, zorder=4, label="ego trajectory")
+        ax.plot(traj[:, 0], traj[:, 1], color="#00B050", linewidth=1.5, alpha=0.9, zorder=4, label="ego trajectory")
 
     # Cuboid footprints (polygons + labels).
     for cu in inputs.cuboids:
         color = _CLASS_COLOR.get(cu["class"], _CLASS_COLOR["unknown"])
-        poly = Polygon(cu["footprint_xy"], closed=True, edgecolor=color,
-                       facecolor="none", linewidth=1.8, zorder=5)
+        poly = Polygon(cu["footprint_xy"], closed=True, edgecolor=color, facecolor="none", linewidth=1.8, zorder=5)
         ax.add_patch(poly)
         if show_labels:
             lx, ly = float(cu["label_xy"][0]), float(cu["label_xy"][1])
-            ax.text(lx, ly, f"t{cu['tid']} | {cu['class']}",
-                    fontsize=6, color=color, ha="center", va="bottom",
-                    zorder=6, bbox=dict(facecolor="white", edgecolor="none",
-                                        alpha=0.6, pad=0.5))
+            ax.text(
+                lx,
+                ly,
+                f"t{cu['tid']} | {cu['class']}",
+                fontsize=6,
+                color=color,
+                ha="center",
+                va="bottom",
+                zorder=6,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.6, pad=0.5),
+            )
 
     # Ego current + heading.
-    ax.plot(cx, cy, marker="x", color="#E60000", markersize=10,
-            markeredgewidth=2.5, zorder=7, label="ego (current)")
+    ax.plot(cx, cy, marker="x", color="#E60000", markersize=10, markeredgewidth=2.5, zorder=7, label="ego (current)")
     hx, hy = inputs.ego_current_heading_xy
     arrow_len = max(2.0, xy_range_m * 0.04)
-    ax.add_patch(FancyArrow(
-        cx, cy, float(hx) * arrow_len, float(hy) * arrow_len,
-        width=arrow_len * 0.15, head_width=arrow_len * 0.45,
-        head_length=arrow_len * 0.45, color="#E60000",
-        length_includes_head=True, zorder=7,
-    ))
+    ax.add_patch(
+        FancyArrow(
+            cx,
+            cy,
+            float(hx) * arrow_len,
+            float(hy) * arrow_len,
+            width=arrow_len * 0.15,
+            head_width=arrow_len * 0.45,
+            head_length=arrow_len * 0.45,
+            color="#E60000",
+            length_includes_head=True,
+            zorder=7,
+        )
+    )
 
     ax.set_xlim(cx - xy_range_m, cx + xy_range_m)
     ax.set_ylim(cy - xy_range_m, cy + xy_range_m)
@@ -263,9 +281,14 @@ def render_bev_frame(
 
     # Scale annotation (bottom-right).
     ax.text(
-        0.98, 0.02, f"{int(xy_range_m * 2)} m × {int(xy_range_m * 2)} m",
-        transform=ax.transAxes, fontsize=7, color="#404040",
-        ha="right", va="bottom",
+        0.98,
+        0.02,
+        f"{int(xy_range_m * 2)} m × {int(xy_range_m * 2)} m",
+        transform=ax.transAxes,
+        fontsize=7,
+        color="#404040",
+        ha="right",
+        va="bottom",
         bbox=dict(facecolor="white", edgecolor="#C0C0C0", pad=2.0),
     )
 

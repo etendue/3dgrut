@@ -25,6 +25,7 @@ RGB 上逐帧推理，按 **与现 sseg 字节同构** 的布局写出独立 ita
 IndexedTarStore mode='w' 是 **write-once**：每个节点的 .zattrs 只能写一次
 （``attrs.put({...})`` 一次性写全），不可逐 key 追加（已实测 ValueError）。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -67,8 +68,12 @@ def main() -> int:
     ap.add_argument("--model", default="facebook/mask2former-swin-large-mapillary-vistas-semantic")
     ap.add_argument("--out", default=None, type=Path, help="override output itar path")
     ap.add_argument("--limit", type=int, default=0, help="debug: only first N frames (0=all)")
-    ap.add_argument("--fp16", action=argparse.BooleanOptionalAction, default=True,
-                    help="fp16 推理（默认开；--no-fp16 关，用于 fp16/fp32 精度对比）")
+    ap.add_argument(
+        "--fp16",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="fp16 推理（默认开；--no-fp16 关，用于 fp16/fp32 精度对比）",
+    )
     args = ap.parse_args()
 
     clip_dir = args.clip.expanduser()
@@ -140,23 +145,23 @@ def main() -> int:
             if H_ref is None:
                 H_ref, W_ref = H, W
                 # write camera-group attrs ONCE, after first frame gives resolution
-                cam_grp.attrs.put({
-                    "stuff_classes": stuff_classes,
-                    "resolution": [int(W), int(H)],
-                    "method": "mask2former-mapillary-vistas (self-run, gen_lane_sseg.py)",
-                    "pretrained_checkpoint": args.model,
-                    "dataset_name": "mapillary-vistas-v1.2",
-                    "lane_marking_ids": lane_ids,
-                })
+                cam_grp.attrs.put(
+                    {
+                        "stuff_classes": stuff_classes,
+                        "resolution": [int(W), int(H)],
+                        "method": "mask2former-mapillary-vistas (self-run, gen_lane_sseg.py)",
+                        "pretrained_checkpoint": args.model,
+                        "dataset_name": "mapillary-vistas-v1.2",
+                        "lane_marking_ids": lane_ids,
+                    }
+                )
             inputs = processor(images=Image.fromarray(rgb), return_tensors="pt")
             pix = inputs["pixel_values"].to(device)
             if args.fp16 and device == "cuda":
                 pix = pix.half()
             with torch.no_grad():
                 out = model(pixel_values=pix)
-            seg = processor.post_process_semantic_segmentation(
-                out, target_sizes=[(H, W)]
-            )[0]  # [H,W] long
+            seg = processor.post_process_semantic_segmentation(out, target_sizes=[(H, W)])[0]  # [H,W] long
             seg_np = seg.to(torch.uint8).cpu().numpy()
             buf = io.BytesIO()
             Image.fromarray(seg_np).save(buf, format="png")
@@ -173,10 +178,11 @@ def main() -> int:
         # （下次 run 会 unlink 重来，但避免半写 itar 留坑）。
         if hasattr(st, "close"):
             st.close()
-    print(f"[gen_lane] DONE: wrote {written} frames -> {out_path} "
-          f"({out_path.stat().st_size/1e6:.1f} MB)")
-    print(f"[gen_lane] RECONCILE: set LANE_CLASS_IDS = {tuple(lane_ids)} "
-          f"in threedgrut/model/per_class_eval.py + test guard")
+    print(f"[gen_lane] DONE: wrote {written} frames -> {out_path} " f"({out_path.stat().st_size/1e6:.1f} MB)")
+    print(
+        f"[gen_lane] RECONCILE: set LANE_CLASS_IDS = {tuple(lane_ids)} "
+        f"in threedgrut/model/per_class_eval.py + test guard"
+    )
     return 0
 
 

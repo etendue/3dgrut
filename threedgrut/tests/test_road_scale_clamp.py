@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """V3-R1.2 unit tests for per-layer scale clamp + anisotropy via LayerSpec
 and LayeredMCMCStrategy._maybe_clamp_road_scales integration."""
+
 from __future__ import annotations
 
 import math
@@ -41,9 +42,7 @@ def test_background_layer_clamps_not_set():
 # Integration tests: LayeredMCMCStrategy._maybe_clamp_road_scales
 # ---------------------------------------------------------------------------
 
-_CONFIG_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "configs")
-)
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "configs"))
 
 
 @pytest.fixture(scope="module")
@@ -61,11 +60,14 @@ def test_maybe_clamp_road_scales_clamps_oversized(real_conf):
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
         LayerSpec(
-            name="road", layer_id=1, max_n_particles=200_000,
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
             scale_prior=(0.1, 0.1, 0.001),
             scale_lr_mult=0.2,
             mask_field="road_mask",
-            scale_xy_max=0.3, scale_z_max=0.05,
+            scale_xy_max=0.3,
+            scale_z_max=0.05,
             anisotropy_ratio_max=8.0,
         ),
     ]
@@ -96,8 +98,12 @@ def test_maybe_clamp_road_scales_needle_anisotropy(real_conf):
 
     specs = [
         LayerSpec(
-            name="road", layer_id=1, max_n_particles=200_000,
-            scale_xy_max=0.3, scale_z_max=0.05, anisotropy_ratio_max=8.0,
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
+            scale_xy_max=0.3,
+            scale_z_max=0.05,
+            anisotropy_ratio_max=8.0,
         ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
@@ -107,9 +113,9 @@ def test_maybe_clamp_road_scales_needle_anisotropy(real_conf):
     N = 5
     # needle: XY=0.1m (log=-2.30), Z=0.001m (log=-6.91) → ratio=100x >> 8x
     with torch.no_grad():
-        road_layer.scale.data = torch.tensor(
-            [math.log(0.1), math.log(0.1), math.log(0.001)]
-        ).unsqueeze(0).expand(N, 3).clone()
+        road_layer.scale.data = (
+            torch.tensor([math.log(0.1), math.log(0.1), math.log(0.001)]).unsqueeze(0).expand(N, 3).clone()
+        )
 
     strat._maybe_clamp_road_scales()
 
@@ -135,11 +141,14 @@ def test_post_optimizer_step_clamps_road_scales(real_conf):
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
         LayerSpec(
-            name="road", layer_id=1, max_n_particles=200_000,
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
             scale_prior=(0.1, 0.1, 0.001),
             scale_lr_mult=0.2,
             mask_field="road_mask",
-            scale_xy_max=0.3, scale_z_max=0.05,
+            scale_xy_max=0.3,
+            scale_z_max=0.05,
             anisotropy_ratio_max=8.0,
         ),
     ]
@@ -158,8 +167,7 @@ def test_post_optimizer_step_clamps_road_scales(real_conf):
     #   - relocate (start=500): 0 > 500 = False → skipped
     #   - add (start=500): 0 > 500 = False → skipped
     # The _maybe_clamp_road_scales call at the end runs unconditionally.
-    strat._post_optimizer_step(step=0, scene_extent=10.0, train_dataset=None,
-                               batch=None, writer=None)
+    strat._post_optimizer_step(step=0, scene_extent=10.0, train_dataset=None, batch=None, writer=None)
 
     out_exp = torch.exp(road_layer.scale.detach())
     assert torch.all(out_exp[:, 0] <= 0.3 + 1e-6), "XY-X not clamped via _post_optimizer_step"
@@ -177,16 +185,22 @@ def test_maybe_clamp_road_scales_does_not_touch_background(real_conf):
     specs = [
         LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
         LayerSpec(
-            name="road", layer_id=1, max_n_particles=200_000,
-            scale_xy_max=0.3, scale_z_max=0.05, anisotropy_ratio_max=8.0,
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
+            scale_xy_max=0.3,
+            scale_z_max=0.05,
+            anisotropy_ratio_max=8.0,
         ),
     ]
     model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
     model.init_from_checkpoint(
-        {"gaussians_nodes": {
-            "background": _v1_shape_dict(N=30, conf=real_conf),
-            "road":       _v1_shape_dict(N=15, conf=real_conf),
-        }},
+        {
+            "gaussians_nodes": {
+                "background": _v1_shape_dict(N=30, conf=real_conf),
+                "road": _v1_shape_dict(N=15, conf=real_conf),
+            }
+        },
         setup_optimizer=False,
     )
     model.setup_optimizer_for_test()
@@ -202,6 +216,4 @@ def test_maybe_clamp_road_scales_does_not_touch_background(real_conf):
     strat._maybe_clamp_road_scales()
 
     bg_scale_after = model.layers["background"].scale.detach()
-    assert torch.equal(bg_scale_before, bg_scale_after), (
-        "background scale was mutated by _maybe_clamp_road_scales"
-    )
+    assert torch.equal(bg_scale_before, bg_scale_after), "background scale was mutated by _maybe_clamp_road_scales"

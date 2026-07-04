@@ -19,6 +19,7 @@ FTheta forward projection reuses the exact polynomial math of
 isolation); ray directions come from the dataset's per-pixel ``rays_dir``
 cache (FTheta-correct by construction), so no inverse-FTheta is needed here.
 """
+
 from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
@@ -107,8 +108,8 @@ def build_plane_warp(
     o_w = c2w_novel[:3, 3].to(device=device, dtype=dtype)
 
     # novel pixel rays → world
-    d_w = torch.einsum("ij,hwj->hwi", R_novel, rays)         # [H, W, 3]
-    d_flat = d_w.reshape(-1, 3)                              # [N, 3]
+    d_w = torch.einsum("ij,hwj->hwi", R_novel, rays)  # [H, W, 3]
+    d_flat = d_w.reshape(-1, 3)  # [N, 3]
     N = d_flat.shape[0]
 
     down = d_flat[:, 2] < -1e-6
@@ -126,8 +127,10 @@ def build_plane_warp(
             occ = height_field["occupied"]
             if occ.numel() and bool(occ.any()):
                 z_g = torch.full(
-                    (N,), float(height_field["grid_z"][occ].median()),
-                    dtype=dtype, device=device,
+                    (N,),
+                    float(height_field["grid_z"][occ].median()),
+                    dtype=dtype,
+                    device=device,
                 )
             else:
                 grid = torch.zeros(1, H, W, 2, dtype=dtype, device=device)
@@ -138,7 +141,7 @@ def build_plane_warp(
         denom = torch.where(down, d_flat[:, 2], torch.full_like(d_flat[:, 2], -1.0))
         for _ in range(max(1, n_iters)):
             t = (z_g - o_w[2]) / denom
-            xy = o_w[:2] + t.unsqueeze(-1) * d_flat[:, :2]   # [N, 2]
+            xy = o_w[:2] + t.unsqueeze(-1) * d_flat[:, :2]  # [N, 2]
             z_q, q_valid = query_ground_z(xy, height_field)
             hit_valid = q_valid
             z_g = torch.where(q_valid, z_q.to(dtype), z_g)
@@ -149,12 +152,12 @@ def build_plane_warp(
         t = (float(z0_fallback) - o_w[2]) / denom
         valid = down & (t > 0) & (t < t_max)
 
-    p_w = o_w + t.unsqueeze(-1) * d_flat                     # [N, 3] world hits
+    p_w = o_w + t.unsqueeze(-1) * d_flat  # [N, 3] world hits
 
     # --- world → original camera → pixels --------------------------------
     w2c_orig = torch.linalg.inv(c2w_orig.to(device=device, dtype=dtype))
     p_h = torch.cat([p_w, torch.ones(N, 1, dtype=dtype, device=device)], dim=-1)
-    p_cam = (w2c_orig @ p_h.T).T[:, :3]                      # [N, 3]
+    p_cam = (w2c_orig @ p_h.T).T[:, :3]  # [N, 3]
     uv, front = ftheta_project_points(p_cam, ftheta_params)
     valid = valid & front
     u, v = uv[:, 0], uv[:, 1]
@@ -186,11 +189,14 @@ def warp_image(
     """
     if img_hwc.dim() != 3:
         raise ValueError(f"warp_image expects [H, W, C]; got {tuple(img_hwc.shape)}")
-    src = img_hwc.permute(2, 0, 1).unsqueeze(0).float()      # [1, C, H, W]
+    src = img_hwc.permute(2, 0, 1).unsqueeze(0).float()  # [1, C, H, W]
     out = F.grid_sample(
-        src, grid.to(src.device, src.dtype),
-        mode=mode, padding_mode="zeros", align_corners=True,
+        src,
+        grid.to(src.device, src.dtype),
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=True,
     )
-    out = out.squeeze(0).permute(1, 2, 0)                    # [H, W, C]
+    out = out.squeeze(0).permute(1, 2, 0)  # [H, W, C]
     out = out * valid.to(out.dtype).unsqueeze(-1)
     return out.to(img_hwc.dtype) if img_hwc.dtype != out.dtype else out

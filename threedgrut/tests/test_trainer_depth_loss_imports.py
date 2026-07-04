@@ -16,6 +16,7 @@ This guard pins the fix: any depth_prior symbol used as a bare name in
 ``get_losses`` MUST be importable at module scope (or be a ``self.`` attribute).
 It parses the source statically, so it runs on Mac CPU with no torch/CUDA.
 """
+
 from __future__ import annotations
 
 import ast
@@ -67,10 +68,7 @@ def test_get_losses_bare_depth_symbols_are_module_imported():
     get_losses = _find_function(tree, "get_losses")
 
     # Bare names referenced (loaded) anywhere in get_losses.
-    used = {
-        n.id for n in ast.walk(get_losses)
-        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-    }
+    used = {n.id for n in ast.walk(get_losses) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     # Names bound locally inside get_losses (assignments / local imports) are fine.
     local_bound: set[str] = set()
     for node in ast.walk(get_losses):

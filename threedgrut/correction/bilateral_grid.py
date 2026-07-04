@@ -35,11 +35,12 @@ Identity initialization: each voxel = [[1,0,0,0],[0,1,0,0],[0,0,1,0]] (3x4
 identity affine) → output == input until the optimizer moves the grids. Same
 boundary as the old ExposureModel zero-init.
 """
+
 from __future__ import annotations
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
 
 
 def color_affine_transform(affine_mats: Tensor, rgb: Tensor) -> Tensor:
@@ -52,17 +53,15 @@ def color_affine_transform(affine_mats: Tensor, rgb: Tensor) -> Tensor:
     Returns:
         Transformed ``(..., 3)`` colors.
     """
-    return (
-        torch.matmul(affine_mats[..., :3], rgb.unsqueeze(-1)).squeeze(-1)
-        + affine_mats[..., 3]
-    )
+    return torch.matmul(affine_mats[..., :3], rgb.unsqueeze(-1)).squeeze(-1) + affine_mats[..., 3]
 
 
 def _identity_affine_3x4(device=None, dtype=torch.float32) -> Tensor:
     """[[1,0,0,0],[0,1,0,0],[0,0,1,0]] — identity in color-affine space."""
     return torch.tensor(
         [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0]],
-        dtype=dtype, device=device,
+        dtype=dtype,
+        device=device,
     )
 
 
@@ -83,7 +82,8 @@ def total_variation_loss(x: Tensor) -> Tensor:
         x1 = x.index_select(i, idx1)
         x2 = x.index_select(i, idx2)
         count = max(
-            torch.prod(torch.tensor(x1.size()[1:]).float()).item(), 1.0,
+            torch.prod(torch.tensor(x1.size()[1:]).float()).item(),
+            1.0,
         )
         tv = tv + torch.pow(x1 - x2, 2).sum() / count
     return tv / batch_size
@@ -123,10 +123,7 @@ class BilateralGrid(nn.Module):
         if num_camera < 1:
             raise ValueError(f"num_camera must be >= 1, got {num_camera}")
         if grid_X < 1 or grid_Y < 1 or grid_W < 1:
-            raise ValueError(
-                f"grid dims must all be >= 1, got "
-                f"({grid_X}, {grid_Y}, {grid_W})"
-            )
+            raise ValueError(f"grid dims must all be >= 1, got " f"({grid_X}, {grid_Y}, {grid_W})")
 
         self.num_camera = int(num_camera)
         self.grid_X = int(grid_X)
@@ -142,8 +139,7 @@ class BilateralGrid(nn.Module):
         # Buffer for grayscale guidance conversion (non-learnable).
         self.register_buffer(
             "_rgb2gray_w",
-            torch.tensor(list(self._RGB2GRAY_BT601), dtype=torch.float32)
-            .reshape(1, 3),
+            torch.tensor(list(self._RGB2GRAY_BT601), dtype=torch.float32).reshape(1, 3),
         )
 
     # --- Compat API (matches old ExposureModel) -------------------------------
@@ -159,9 +155,7 @@ class BilateralGrid(nn.Module):
             Same-shape tensor clamped to ``[0, 1]`` (matches ExposureModel).
         """
         if not (0 <= idx < self.num_camera):
-            raise IndexError(
-                f"camera idx {idx} out of range [0, {self.num_camera})"
-            )
+            raise IndexError(f"camera idx {idx} out of range [0, {self.num_camera})")
 
         # Fast path for 1x1x1 grid (NuRec default): grid output is spatially
         # uniform + guidance-independent → just take the single voxel and
@@ -181,9 +175,7 @@ class BilateralGrid(nn.Module):
         elif image.dim() == 4:
             image_b = image
         else:
-            raise ValueError(
-                f"image must be (H, W, 3) or (B, H, W, 3); got {image.shape}"
-            )
+            raise ValueError(f"image must be (H, W, 3) or (B, H, W, 3); got {image.shape}")
 
         B, H, W, C = image_b.shape
         if C != 3:
@@ -209,8 +201,11 @@ class BilateralGrid(nn.Module):
         grids_idx = grids_idx.expand(B, -1, -1, -1, -1)
 
         sampled = F.grid_sample(
-            grids_idx, grid_xyz,
-            mode="bilinear", align_corners=True, padding_mode="border",
+            grids_idx,
+            grid_xyz,
+            mode="bilinear",
+            align_corners=True,
+            padding_mode="border",
         )  # (B, 12, 1, H, W)
         affine_mats = sampled.squeeze(2).permute(0, 2, 3, 1)  # (B, H, W, 12)
         affine_mats = affine_mats.reshape(B, H, W, 3, 4)

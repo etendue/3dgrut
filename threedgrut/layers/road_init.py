@@ -18,6 +18,7 @@ PyTorch3D dependency by using torch.cdist):
      the thin disc is enforced from step 0 (paired with road perturb_mask
      D1 to prevent Z-noise during MCMC).
 """
+
 from __future__ import annotations
 
 from typing import Tuple
@@ -75,10 +76,8 @@ def init_road_layer(
     xy_max = ego_trajectory[:, :2].max(0).values + cut_range
 
     # 2. Tile BEV grid
-    xs = torch.arange(xy_min[0].item(), xy_max[0].item(), resolution,
-                      dtype=dtype, device=device)
-    ys = torch.arange(xy_min[1].item(), xy_max[1].item(), resolution,
-                      dtype=dtype, device=device)
+    xs = torch.arange(xy_min[0].item(), xy_max[0].item(), resolution, dtype=dtype, device=device)
+    ys = torch.arange(xy_min[1].item(), xy_max[1].item(), resolution, dtype=dtype, device=device)
     if xs.numel() == 0 or ys.numel() == 0:
         # ego trajectory too short / cut_range too small → empty grid
         return (
@@ -106,6 +105,7 @@ def init_road_layer(
     k = max(1, min(int(knn_k), road_points.shape[0]))
     try:
         from scipy.spatial import cKDTree
+
         rp_cpu = road_points[:, :2].detach().cpu().numpy()
         tree = cKDTree(rp_cpu)
         grid_cpu = grid_xy.detach().cpu().numpy()

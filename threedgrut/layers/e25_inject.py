@@ -11,17 +11,23 @@ untouched recon track keeps its learned tensors byte-identical.
 Frozen: no optimizer is built, no training happens. The edited dict is consumed
 by ``LayeredGaussians.init_from_checkpoint(..., setup_optimizer=False)``.
 """
+
 from __future__ import annotations
 
 import torch
 
-from threedgrut.layers.warmstart_ply import AlignedAsset, AlignmentTransform
 from threedgrut.layers.layered_model import _SH_C0, _rotmat_to_quat_wxyz
+from threedgrut.layers.warmstart_ply import AlignedAsset, AlignmentTransform
 
 # MoG dynamic_rigids node tensors that scale with particle count.
 _PARTICLE_KEYS = (
-    "positions", "rotation", "scale", "density",
-    "features_albedo", "features_specular", "track_ids",
+    "positions",
+    "rotation",
+    "scale",
+    "density",
+    "features_albedo",
+    "features_specular",
+    "track_ids",
 )
 
 
@@ -101,9 +107,7 @@ def aligned_to_node_tensors(aligned: AlignedAsset, spec_dim: int) -> dict:
         "scale": aligned.scales_log,
         "density": aligned.density_logit,
         "features_albedo": (aligned.colors - 0.5) / _SH_C0,
-        "features_specular": torch.zeros(
-            (n, spec_dim), dtype=aligned.positions.dtype
-        ),
+        "features_specular": torch.zeros((n, spec_dim), dtype=aligned.positions.dtype),
     }
 
 
@@ -120,30 +124,24 @@ def replace_tracks_in_dyn_node(dyn_node: dict, aligned_by_id: dict) -> dict:
     keep = ~torch.isin(track_ids, torch.tensor(target_ids, dtype=track_ids.dtype))
 
     # Pre-build AH node tensors per target (deterministic order = sorted ids).
-    ah_nodes = {
-        tid: aligned_to_node_tensors(aligned_by_id[tid], spec_dim)
-        for tid in target_ids
-    }
+    ah_nodes = {tid: aligned_to_node_tensors(aligned_by_id[tid], spec_dim) for tid in target_ids}
 
     new: dict = {}
     for key in (
-        "positions", "rotation", "scale", "density",
-        "features_albedo", "features_specular",
+        "positions",
+        "rotation",
+        "scale",
+        "density",
+        "features_albedo",
+        "features_specular",
     ):
         kept = dyn_node[key][keep]
         ah_parts = [ah_nodes[tid][key] for tid in target_ids]
         # MoG.init_from_checkpoint assigns these onto registered nn.Parameter
         # fields, so the edited dict must carry Parameters (frozen: no grad).
-        new[key] = torch.nn.Parameter(
-            torch.cat([kept, *ah_parts], dim=0), requires_grad=False
-        )
+        new[key] = torch.nn.Parameter(torch.cat([kept, *ah_parts], dim=0), requires_grad=False)
 
-    ah_ids = [
-        torch.full(
-            (aligned_by_id[tid].positions.shape[0],), tid, dtype=track_ids.dtype
-        )
-        for tid in target_ids
-    ]
+    ah_ids = [torch.full((aligned_by_id[tid].positions.shape[0],), tid, dtype=track_ids.dtype) for tid in target_ids]
     new["track_ids"] = torch.cat([track_ids[keep], *ah_ids], dim=0)
 
     # Carry non-particle metadata (n_active_features / scene_extent / optimizer /

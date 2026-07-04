@@ -5,6 +5,7 @@ The ONLY file that imports ultralytics; lazy-loaded and reused as a
 singleton across the eval loop. Everything upstream consumes the duck-typed
 ``detect_vehicles`` protocol so Mac unit tests inject fakes instead.
 """
+
 from __future__ import annotations
 
 import torch
@@ -15,10 +16,10 @@ _SINGLETON = None
 
 
 class VehicleDetector:
-    def __init__(self, weights: str = "yolov8m.pt", conf: float = 0.3,
-                 device: str = "cuda"):
+    def __init__(self, weights: str = "yolov8m.pt", conf: float = 0.3, device: str = "cuda"):
         from ultralytics import YOLO  # local import: missing dep must not
-        self.model = YOLO(weights)    # break the rest of the eval
+
+        self.model = YOLO(weights)  # break the rest of the eval
         self.conf = conf
         self.device = device
 
@@ -27,7 +28,10 @@ class VehicleDetector:
         """rgb [H, W, 3] in [0, 1] → vehicle-class 2D boxes [M, 4] xyxy px."""
         arr = (rgb_hw3_01.detach().clamp(0, 1) * 255).to(torch.uint8).cpu().numpy()
         res = self.model.predict(
-            arr, conf=self.conf, device=self.device, verbose=False,
+            arr,
+            conf=self.conf,
+            device=self.device,
+            verbose=False,
         )[0]
         b = res.boxes
         if b is None or b.shape[0] == 0:
@@ -39,8 +43,7 @@ class VehicleDetector:
         return b.xyxy[keep].float().cpu()
 
 
-def get_vehicle_detector(weights: str = "yolov8m.pt", conf: float = 0.3,
-                         device: str = "cuda"):
+def get_vehicle_detector(weights: str = "yolov8m.pt", conf: float = 0.3, device: str = "cuda"):
     global _SINGLETON
     if _SINGLETON is None:
         _SINGLETON = VehicleDetector(weights, conf, device)

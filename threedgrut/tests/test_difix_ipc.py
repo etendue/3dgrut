@@ -10,6 +10,7 @@ echo stand-ins so the IPC plumbing can be verified on a Mac.
 Run:
     pytest threedgrut/tests/test_difix_ipc.py -v
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -20,17 +21,9 @@ import time
 import numpy as np
 import pytest
 
-from threedgrut_playground.difix_server import (
-    make_difix_transform,
-    serve,
-    _serve_one,
-)
+from threedgrut_playground.difix_server import _serve_one, make_difix_transform, serve
 from threedgrut_playground.utils.difix_client import DifixClient
-from threedgrut_playground.utils.difix_protocol import (
-    pack_frame,
-    read_frame,
-    recvall,
-)
+from threedgrut_playground.utils.difix_protocol import pack_frame, read_frame, recvall
 
 
 class _IdentityDifix:
@@ -107,6 +100,7 @@ def test_recvall_reassembles_fragments():
     a, b = socket.socketpair()
     payload = bytes(range(256)) * 40  # 10240 bytes
     try:
+
         def _send():
             for i in range(0, len(payload), 100):
                 a.sendall(payload[i : i + 100])
@@ -331,7 +325,7 @@ def test_server_serves_second_client_while_first_is_stalled():
         # server's read_frame() blocks in recvall() waiting for the rest.
         stalled = socket.create_connection(("127.0.0.1", port), timeout=2.0)
         stalled.sendall(b"DFX1")  # 4 of 16 header bytes; rest never arrives
-        time.sleep(0.4)            # let the server accept + block on A
+        time.sleep(0.4)  # let the server accept + block on A
         # Client B must still be served promptly despite A being wedged.
         b = DifixClient("127.0.0.1", port, timeout=3.0)
         img = _rand_img()

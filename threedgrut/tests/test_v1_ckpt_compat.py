@@ -34,8 +34,12 @@ def test_v1_ckpt_loaded_into_background_layer_matches_single_model(real_conf):
     layered.init_from_checkpoint(v1_ckpt, setup_optimizer=False)
 
     for field in [
-        "positions", "rotation", "scale", "density",
-        "features_albedo", "features_specular",
+        "positions",
+        "rotation",
+        "scale",
+        "density",
+        "features_albedo",
+        "features_specular",
     ]:
         assert torch.equal(
             getattr(single, field).detach(),

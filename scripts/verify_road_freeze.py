@@ -9,7 +9,9 @@ Walks the ckpt for road-layer rotation/scale tensors and checks:
 
 Usage: python verify_road_freeze.py <ckpt.pt>
 """
+
 import sys
+
 import torch
 
 
@@ -45,16 +47,21 @@ def main():
             w = q[:, 0].abs().clamp(max=1.0)
             tilt = torch.rad2deg(2 * torch.acos(w))
             print(f"\n[ROTATION {k}] N={v.shape[0]}")
-            print(f"  tilt-from-identity deg: mean={tilt.mean():.5f} "
-                  f"p95={tilt.quantile(0.95):.5f} max={tilt.max():.5f}")
-            print(f"  → freeze_rotation_grad {'OK (normal vertical locked)' if tilt.quantile(0.95) < 0.5 else 'LEAKED (>0.5deg)'}")
+            print(
+                f"  tilt-from-identity deg: mean={tilt.mean():.5f} "
+                f"p95={tilt.quantile(0.95):.5f} max={tilt.max():.5f}"
+            )
+            print(
+                f"  → freeze_rotation_grad {'OK (normal vertical locked)' if tilt.quantile(0.95) < 0.5 else 'LEAKED (>0.5deg)'}"
+            )
         if "scale" in kl and v.ndim == 2 and v.shape[1] == 3:
             zmm = v.float()[:, 2].exp() * 1000.0
             print(f"\n[SCALE {k}] N={v.shape[0]}")
-            print(f"  z-scale mm: max={zmm.max():.5f} p95={zmm.quantile(0.95):.5f} "
-                  f"median={zmm.median():.5f}")
-            print(f"  → 1mm clamp {'OK' if zmm.max() <= 1.0 + 1e-3 else 'BREACHED'}; "
-                  f"road N={v.shape[0]} (init was 200000 → exclude_layer_ids {'OK' if v.shape[0]==200000 else 'changed'})")
+            print(f"  z-scale mm: max={zmm.max():.5f} p95={zmm.quantile(0.95):.5f} " f"median={zmm.median():.5f}")
+            print(
+                f"  → 1mm clamp {'OK' if zmm.max() <= 1.0 + 1e-3 else 'BREACHED'}; "
+                f"road N={v.shape[0]} (init was 200000 → exclude_layer_ids {'OK' if v.shape[0]==200000 else 'changed'})"
+            )
 
     if not hits:
         print("(no road tensors — top-level keys:)", list(ck.keys())[:25])

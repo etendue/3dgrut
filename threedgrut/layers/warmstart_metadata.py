@@ -7,6 +7,7 @@ bundle stores PLYs flat (``<class>__<hash>.ply``) while production bundles use
 the nested ``<class>/<hash>/gaussians.ply`` layout; ``resolve_ply_path`` accepts
 either.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,9 +43,7 @@ def load_bundle_metadata(metadata_yaml: str | Path) -> dict[str, AssetSpec]:
     for asset_hash, info in assets.items():
         dims = tuple(float(d) for d in info["cuboids_dims"])
         if len(dims) != 3:
-            raise ValueError(
-                f"asset {asset_hash!r} cuboids_dims must be [L,W,H], got {dims}"
-            )
+            raise ValueError(f"asset {asset_hash!r} cuboids_dims must be [L,W,H], got {dims}")
         out[str(asset_hash)] = AssetSpec(
             asset_hash=str(asset_hash),
             ply_file=str(info["ply_file"]),
@@ -69,8 +68,7 @@ def resolve_ply_path(bundle_root: str | Path, spec: AssetSpec) -> Path:
     if flat.is_file():
         return flat
     raise FileNotFoundError(
-        f"no PLY for asset {spec.asset_hash!r} under {root} "
-        f"(tried nested {spec.ply_file!r} and flat {flat.name!r})"
+        f"no PLY for asset {spec.asset_hash!r} under {root} " f"(tried nested {spec.ply_file!r} and flat {flat.name!r})"
     )
 
 
@@ -114,9 +112,6 @@ def map_assets_to_tracks(
                 f"{len(tracks)} loaded tracks (cleaned ids: {sorted(clean_to_raw)})"
             )
         if asset_hash not in bundle:
-            raise KeyError(
-                f"warm-start mapping asset {asset_hash!r} not in bundle "
-                f"(have {sorted(bundle)})"
-            )
+            raise KeyError(f"warm-start mapping asset {asset_hash!r} not in bundle " f"(have {sorted(bundle)})")
         out[resolved] = bundle[asset_hash]
     return out

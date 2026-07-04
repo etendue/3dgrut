@@ -31,6 +31,7 @@ This module is deliberately **pure torch** (no ``threedgrt_tracer`` / ``ncore``
 imports) so the Fourier math can be unit-tested on a CUDA-less Mac, mirroring
 ``threedgrut.model.pose_smoothness``.
 """
+
 from __future__ import annotations
 
 import math
@@ -101,18 +102,19 @@ def fourier_albedo_bias(
         Differentiable wrt ``fourier_table``.
     """
     if fourier_table.dim() != 3:
-        raise ValueError(
-            f"fourier_table must be [K, 3, k]; got shape {tuple(fourier_table.shape)}"
-        )
+        raise ValueError(f"fourier_table must be [K, 3, k]; got shape {tuple(fourier_table.shape)}")
     k = fourier_table.shape[-1]
     basis = fourier_cos_basis(
-        frame_id, n_frames, k,
-        device=fourier_table.device, dtype=fourier_table.dtype,
+        frame_id,
+        n_frames,
+        k,
+        device=fourier_table.device,
+        dtype=fourier_table.dtype,
     )  # [k]
     # Contract the k axis: [K, 3, k] · [k] -> [K, 3] per-track bias at time t.
-    per_track = torch.matmul(fourier_table, basis)            # [K, 3]
+    per_track = torch.matmul(fourier_table, basis)  # [K, 3]
     ids = track_ids.to(device=per_track.device, dtype=torch.long)
-    return per_track[ids]                                     # [N, 3]
+    return per_track[ids]  # [N, 3]
 
 
 def upgrade_albedo_table(table: torch.Tensor, k: int) -> torch.Tensor:
@@ -144,6 +146,4 @@ def upgrade_albedo_table(table: torch.Tensor, k: int) -> torch.Tensor:
         n_copy = min(k_old, k)
         out[..., :n_copy] = table[..., :n_copy]
         return out
-    raise ValueError(
-        f"albedo table must be [K, 3] or [K, 3, k]; got shape {tuple(table.shape)}"
-    )
+    raise ValueError(f"albedo table must be [K, 3] or [K, 3, k]; got shape {tuple(table.shape)}")

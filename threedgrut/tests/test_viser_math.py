@@ -1,4 +1,5 @@
 """Task D contract tests — mat_to_wxyz (Stage 8 viewer's pose→quaternion)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -15,9 +16,11 @@ def _quat_to_mat(q: np.ndarray) -> np.ndarray:
         return np.eye(3, dtype=np.float64)
     s = 2.0 / n
     return np.array(
-        [[1 - s * (y * y + z * z), s * (x * y - z * w), s * (x * z + y * w)],
-         [s * (x * y + z * w), 1 - s * (x * x + z * z), s * (y * z - x * w)],
-         [s * (x * z - y * w), s * (y * z + x * w), 1 - s * (x * x + y * y)]],
+        [
+            [1 - s * (y * y + z * z), s * (x * y - z * w), s * (x * z + y * w)],
+            [s * (x * y + z * w), 1 - s * (x * x + z * z), s * (y * z - x * w)],
+            [s * (x * z - y * w), s * (y * z + x * w), 1 - s * (x * x + y * y)],
+        ],
         dtype=np.float64,
     )
 
@@ -26,8 +29,7 @@ def test_identity_pose_yields_unit_quat():
     q = mat_to_wxyz(np.eye(4))
     assert q.shape == (4,)
     assert q.dtype == np.float32
-    np.testing.assert_allclose(q, np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-                                atol=1e-6)
+    np.testing.assert_allclose(q, np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), atol=1e-6)
 
 
 def test_90deg_x_rotation():
@@ -36,7 +38,8 @@ def test_90deg_x_rotation():
     R[:3, :3] = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])
     q = mat_to_wxyz(R)
     np.testing.assert_allclose(
-        q, np.array([0.7071068, 0.7071068, 0.0, 0.0], dtype=np.float32),
+        q,
+        np.array([0.7071068, 0.7071068, 0.0, 0.0], dtype=np.float32),
         atol=1e-6,
     )
 

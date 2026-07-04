@@ -20,14 +20,15 @@ viewdirs are world-frame normalized ray directions (per pixel). The cubemap
 backend applies a fixed (camera → OpenGL) rotation so its +Z face corresponds
 to the world +Y direction (same convention as drivestudio).
 """
+
 from __future__ import annotations
 
 import math
 from typing import Optional
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
 
 try:
     import nvdiffrast.torch as dr  # type: ignore[import]
@@ -74,8 +75,8 @@ class _SinusoidalEncoder(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         # x: [..., D]. Out: [..., D * (1 + 2 * num_freqs)]
-        xb = x.unsqueeze(-1) * self.freqs.to(x.device)        # [..., D, num_freqs]
-        flat = xb.reshape(*x.shape[:-1], -1)                  # [..., D * num_freqs]
+        xb = x.unsqueeze(-1) * self.freqs.to(x.device)  # [..., D, num_freqs]
+        flat = xb.reshape(*x.shape[:-1], -1)  # [..., D * num_freqs]
         return torch.cat([x, flat.sin(), flat.cos()], dim=-1)
 
 

@@ -30,6 +30,7 @@ Usage:
 
 Output: ``<out_dir>/bev_<frame_idx:04d>.png`` and a manifest ``manifest.json``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,18 +72,19 @@ def _frame_idx_for_ego(meta, frame_idx: int) -> int:
 
 
 def diagnose(args: argparse.Namespace) -> int:
-    from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
-    from threedgrut_playground.utils.diag_ckpt import (
-        load_ckpt_cpu,
-        extract_layer_positions,
-        extract_dyn_track_ids,
-        dyn_local_to_world_at_frame,
-    )
+    import imageio.v3 as iio
+
     from threedgrut_playground.utils.bev_renderer import (
         build_inputs_from_metadata,
         render_bev_frame,
     )
-    import imageio.v3 as iio
+    from threedgrut_playground.utils.diag_ckpt import (
+        dyn_local_to_world_at_frame,
+        extract_dyn_track_ids,
+        extract_layer_positions,
+        load_ckpt_cpu,
+    )
+    from threedgrut_playground.utils.viz4d_metadata import FourDMetadata
 
     ckpt_path = Path(args.gs_object).expanduser().resolve()
     if not ckpt_path.exists():
@@ -116,12 +118,15 @@ def diagnose(args: argparse.Namespace) -> int:
     n_frames_ego = int(meta.ego_poses_c2w.shape[0])
     frames = _parse_frame_range(args.frame_range, n_frames_ego)
     if not frames:
-        print(f"[bev-diag] ERROR: no frames in range '{args.frame_range}' "
-              f"(n_frames={n_frames_ego})", file=sys.stderr)
+        print(
+            f"[bev-diag] ERROR: no frames in range '{args.frame_range}' " f"(n_frames={n_frames_ego})", file=sys.stderr
+        )
         return 4
 
-    print(f"[bev-diag] sequence={meta.sequence_id}  n_frames_ego={n_frames_ego}  "
-          f"n_tracks={meta.n_tracks()}", flush=True)
+    print(
+        f"[bev-diag] sequence={meta.sequence_id}  n_frames_ego={n_frames_ego}  " f"n_tracks={meta.n_tracks()}",
+        flush=True,
+    )
     print(f"[bev-diag] layer particle counts:", flush=True)
     for name, p in layer_positions.items():
         print(f"  - {name:<22} {p.shape[0]:>10d}", flush=True)
@@ -135,20 +140,21 @@ def diagnose(args: argparse.Namespace) -> int:
         frame_layer_positions = dict(static_layers)
         if dyn_local is not None and dyn_track_ids is not None:
             frame_layer_positions["dynamic_rigids"] = dyn_local_to_world_at_frame(
-                dyn_local, dyn_track_ids, sorted_track_names,
-                meta.tracks, ego_fi,
+                dyn_local,
+                dyn_track_ids,
+                sorted_track_names,
+                meta.tracks,
+                ego_fi,
             )
 
         inputs = build_inputs_from_metadata(
-            meta, frame_layer_positions, ego_fi,
+            meta,
+            frame_layer_positions,
+            ego_fi,
             z_window_m=args.z_window_m,
         )
 
-        title = (
-            f"frame {ego_fi}/{n_frames_ego - 1}  "
-            f"seq={meta.sequence_id}  "
-            f"cuboids={len(inputs.cuboids)}"
-        )
+        title = f"frame {ego_fi}/{n_frames_ego - 1}  " f"seq={meta.sequence_id}  " f"cuboids={len(inputs.cuboids)}"
         img = render_bev_frame(
             inputs,
             xy_range_m=args.xy_range_m,
@@ -159,31 +165,39 @@ def diagnose(args: argparse.Namespace) -> int:
         )
         out_path = out_dir / f"bev_{ego_fi:04d}.png"
         iio.imwrite(str(out_path), img)
-        manifest.append({
-            "frame_idx": ego_fi,
-            "out_path": str(out_path.relative_to(out_dir)),
-            "n_cuboids": len(inputs.cuboids),
-            "n_bg_pts": int(inputs.layer_positions_xy.get("background", np.empty((0, 2))).shape[0]),
-            "n_road_pts": int(inputs.layer_positions_xy.get("road", np.empty((0, 2))).shape[0]),
-            "n_dyn_pts": int(inputs.layer_positions_xy.get("dynamic_rigids", np.empty((0, 2))).shape[0]),
-        })
+        manifest.append(
+            {
+                "frame_idx": ego_fi,
+                "out_path": str(out_path.relative_to(out_dir)),
+                "n_cuboids": len(inputs.cuboids),
+                "n_bg_pts": int(inputs.layer_positions_xy.get("background", np.empty((0, 2))).shape[0]),
+                "n_road_pts": int(inputs.layer_positions_xy.get("road", np.empty((0, 2))).shape[0]),
+                "n_dyn_pts": int(inputs.layer_positions_xy.get("dynamic_rigids", np.empty((0, 2))).shape[0]),
+            }
+        )
         if args.verbose:
             m = manifest[-1]
-            print(f"[bev-diag]   frame {ego_fi:>4d}: cuboids={m['n_cuboids']:>3d}  "
-                  f"bg={m['n_bg_pts']:>7d}  road={m['n_road_pts']:>6d}  "
-                  f"dyn={m['n_dyn_pts']:>5d}  → {out_path.name}",
-                  flush=True)
+            print(
+                f"[bev-diag]   frame {ego_fi:>4d}: cuboids={m['n_cuboids']:>3d}  "
+                f"bg={m['n_bg_pts']:>7d}  road={m['n_road_pts']:>6d}  "
+                f"dyn={m['n_dyn_pts']:>5d}  → {out_path.name}",
+                flush=True,
+            )
 
     manifest_path = out_dir / "manifest.json"
     with manifest_path.open("w") as fh:
-        json.dump({
-            "ckpt": str(ckpt_path),
-            "sequence_id": meta.sequence_id,
-            "xy_range_m": args.xy_range_m,
-            "z_window_m": args.z_window_m,
-            "n_frames": len(manifest),
-            "frames": manifest,
-        }, fh, indent=2)
+        json.dump(
+            {
+                "ckpt": str(ckpt_path),
+                "sequence_id": meta.sequence_id,
+                "xy_range_m": args.xy_range_m,
+                "z_window_m": args.z_window_m,
+                "n_frames": len(manifest),
+                "frames": manifest,
+            },
+            fh,
+            indent=2,
+        )
 
     print(f"[bev-diag] wrote {len(manifest)} PNGs + {manifest_path}", flush=True)
     return 0
@@ -191,21 +205,20 @@ def diagnose(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--gs_object", required=True, type=str,
-                        help="Path to v2 LayeredGaussians ckpt (.pt).")
-    parser.add_argument("--out_dir", required=True, type=str,
-                        help="Output directory for BEV PNGs + manifest.json.")
-    parser.add_argument("--frame_range", default=None, type=str,
-                        help='Frame slice e.g. "0:20", "10", or empty for all.')
-    parser.add_argument("--xy_range_m", default=60.0, type=float,
-                        help="Half-width of BEV square around current ego (default 60 m).")
-    parser.add_argument("--grid_step_m", default=10.0, type=float,
-                        help="Background grid step (default 10 m).")
-    parser.add_argument("--z_window_m", default=10.0, type=float,
-                        help="|z - ego_z| filter for Gaussian scatter (default 10 m).")
+    parser.add_argument("--gs_object", required=True, type=str, help="Path to v2 LayeredGaussians ckpt (.pt).")
+    parser.add_argument("--out_dir", required=True, type=str, help="Output directory for BEV PNGs + manifest.json.")
+    parser.add_argument(
+        "--frame_range", default=None, type=str, help='Frame slice e.g. "0:20", "10", or empty for all.'
+    )
+    parser.add_argument(
+        "--xy_range_m", default=60.0, type=float, help="Half-width of BEV square around current ego (default 60 m)."
+    )
+    parser.add_argument("--grid_step_m", default=10.0, type=float, help="Background grid step (default 10 m).")
+    parser.add_argument(
+        "--z_window_m", default=10.0, type=float, help="|z - ego_z| filter for Gaussian scatter (default 10 m)."
+    )
     parser.add_argument("--dpi", default=100, type=int)
-    parser.add_argument("--no_labels", action="store_true",
-                        help="Hide cuboid labels (faster + less clutter).")
+    parser.add_argument("--no_labels", action="store_true", help="Hide cuboid labels (faster + less clutter).")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
     return diagnose(args)

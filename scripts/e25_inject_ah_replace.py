@@ -22,6 +22,7 @@ Usage (inceptio)::
         --out_ckpt      ~/work/output/e25_ah_frozen/ckpt_e25_frozen.pt \
         --ensure_viz_4d --dry_run        # then drop --dry_run to commit
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,7 +57,12 @@ from threedgrut.layers.warmstart_ply import (  # noqa: E402
 # NCore cuboid autolabel classes that count as a "car" for E2.5 (pedestrians
 # are skipped per the spike decision — AH is the wrong tool for them).
 _VEHICLE_CLASS_TOKENS = (
-    "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
+    "automobile",
+    "bus",
+    "truck",
+    "consumer_vehicles",
+    "car",
+    "vehicle",
 )
 _AH_CAR_CLASS_TOKENS = ("consumer_vehicles", "automobile")
 
@@ -79,15 +85,21 @@ def _parse_args(argv=None):
     ap.add_argument("--mapping", default=None, help="JSON {track_name: asset_hash} to override auto-match")
     ap.add_argument("--max_pts_per_track", type=int, default=200000)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--ensure_viz_4d", action="store_true",
-                    help="if ckpt lacks viz_4d, run inject_viz_4d first (needs --dataset_path + NCore SDK)")
-    ap.add_argument("--no_class_filter", action="store_true",
-                    help="consider every present track (not just vehicle classes)")
-    ap.add_argument("--no_yaw_flip", action="store_true",
-                    help="skip the 180° yaw fix (NCore cuboid forward vs AH canonical); "
-                         "default applies it so cars face their direction of travel")
-    ap.add_argument("--dry_run", action="store_true",
-                    help="print probe + mapping + size deltas, write nothing")
+    ap.add_argument(
+        "--ensure_viz_4d",
+        action="store_true",
+        help="if ckpt lacks viz_4d, run inject_viz_4d first (needs --dataset_path + NCore SDK)",
+    )
+    ap.add_argument(
+        "--no_class_filter", action="store_true", help="consider every present track (not just vehicle classes)"
+    )
+    ap.add_argument(
+        "--no_yaw_flip",
+        action="store_true",
+        help="skip the 180° yaw fix (NCore cuboid forward vs AH canonical); "
+        "default applies it so cars face their direction of travel",
+    )
+    ap.add_argument("--dry_run", action="store_true", help="print probe + mapping + size deltas, write nothing")
     return ap.parse_args(argv)
 
 
@@ -101,6 +113,7 @@ def _load_ckpt_with_viz_4d(args) -> dict:
             "Re-run with --ensure_viz_4d --dataset_path <NCore pai_*.json>."
         )
     from threedgrut.viz.inject import inject_viz_4d  # lazy: needs NCore SDK
+
     tmp = Path(tempfile.mkdtemp()) / "baseline_with_viz4d.pt"
     print(f"[e25] ckpt lacks viz_4d → inject_viz_4d → {tmp}")
     inject_viz_4d(args.baseline_ckpt, args.dataset_path, str(tmp))
@@ -156,8 +169,10 @@ def main(argv=None) -> int:
         print(f"  {h}  dims={tuple(round(x,3) for x in d)}")
     print(f"=== mapping recon_track ← AH ({len(mapping)}) ===")
     for name, h in mapping.items():
-        print(f"  id={name_to_id[name]:>3d} {recon_sizes[name]} ← {h} {tuple(round(x,3) for x in ah_dims[h])}"
-              f"  Δ(L,W,H)={_dims_delta(recon_sizes[name], ah_dims[h])}  {name}")
+        print(
+            f"  id={name_to_id[name]:>3d} {recon_sizes[name]} ← {h} {tuple(round(x,3) for x in ah_dims[h])}"
+            f"  Δ(L,W,H)={_dims_delta(recon_sizes[name], ah_dims[h])}  {name}"
+        )
 
     if not mapping:
         raise SystemExit("empty mapping — no recon vehicle track matched any AH car. Check --dataset_path / classes.")

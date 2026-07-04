@@ -38,6 +38,7 @@ The pure parsers (``parse_rig_trajectories`` / ``build_viz4d_dict`` /
 ``convert_usdz_to_ckpt_with_tracks`` needs the 3dgrut env + GPU (build_native_ckpt
 builds a reference MoG on cuda).
 """
+
 from __future__ import annotations
 
 import json
@@ -92,6 +93,7 @@ def build_ftheta_dict(camera_model_params: dict) -> dict:
 @dataclass
 class RigInfo:
     """Parsed rig_trajectories.json: per-camera pose tables + rig trajectory."""
+
     sequence_id: str
     cams: dict
     T_rig_worlds: np.ndarray
@@ -231,7 +233,9 @@ def build_viz4d_dict(
 # track_ids remap (cuboid_id → sorted-tid slot) — pure, numpy.
 # --------------------------------------------------------------------------- #
 def cuboid_ids_to_track_ids(
-    cuboid_ids: np.ndarray, track_order: list, basis_tids: Optional[list] = None,
+    cuboid_ids: np.ndarray,
+    track_order: list,
+    basis_tids: Optional[list] = None,
 ) -> tuple[np.ndarray, list]:
     """Per-gaussian cuboid index → sorted-tid slot (populate_tracks convention).
 
@@ -293,7 +297,8 @@ def apply_nre_to_world_translate(
     if not np.allclose(T[:3, :3], np.eye(3), atol=1e-4):
         logger.warning(
             "world_to_nre rotation NOT identity (R=%s); translate-only align "
-            "insufficient — visual skew possible (E2.7 同警告)", T[:3, :3].tolist()
+            "insufficient — visual skew possible (E2.7 同警告)",
+            T[:3, :3].tolist(),
         )
     translate = (-T[:3, 3]).astype(np.float32)
     tt = torch.as_tensor(translate, dtype=torch.float32)
@@ -306,7 +311,8 @@ def apply_nre_to_world_translate(
             shifted = p.detach().cpu() + tt
         node["positions"] = (
             torch.nn.Parameter(shifted.contiguous(), requires_grad=False)
-            if isinstance(p, torch.nn.Parameter) else shifted.contiguous()
+            if isinstance(p, torch.nn.Parameter)
+            else shifted.contiguous()
         )
         logger.info("nre→world: shifted layer %r by %s", layer, translate.tolist())
     return translate
@@ -314,7 +320,12 @@ def apply_nre_to_world_translate(
 
 # E2.8 insert: NCore autolabel vehicle classes (substring match, ↔ e28_replace).
 _VEHICLE_CATALOG_TOKENS = (
-    "automobile", "bus", "truck", "consumer_vehicles", "car", "vehicle",
+    "automobile",
+    "bus",
+    "truck",
+    "consumer_vehicles",
+    "car",
+    "vehicle",
 )
 
 
@@ -323,7 +334,10 @@ def _is_vehicle_class(cls) -> bool:
 
 
 def build_vehicle_catalog(
-    viz_tracks: dict, sorted_tids: list, present_slots: set, ego_c2w,
+    viz_tracks: dict,
+    sorted_tids: list,
+    present_slots: set,
+    ego_c2w,
 ) -> dict:
     """Catalog EVERY vehicle cuboid track (not just the ones with gaussians).
 
@@ -345,7 +359,7 @@ def build_vehicle_catalog(
         fi = np.asarray(meta["frame_info"]).astype(bool)
         active = int(fi.sum())
         if active > 0 and ego_xyz.shape[0] > 0:
-            tpos = poses[fi][:, :3, 3]                                # (A, 3)
+            tpos = poses[fi][:, :3, 3]  # (A, 3)
             d = np.linalg.norm(tpos[:, None, :] - ego_xyz[None, :, :], axis=-1)
             min_dist = float(d.min())
         else:
@@ -365,8 +379,9 @@ def build_vehicle_catalog(
 @dataclass
 class UsdzScene:
     """Output of :func:`convert_usdz_to_ckpt_with_tracks`."""
+
     ckpt: dict
-    recon: dict = field(default_factory=dict)      # {tid: (label_class, (L,W,H))}
+    recon: dict = field(default_factory=dict)  # {tid: (label_class, (L,W,H))}
     name_to_id: dict = field(default_factory=dict)  # {tid: sorted-tid slot int}
     primary_cam: str = ""
     sequence_id: str = ""
@@ -390,8 +405,7 @@ def _track_order_from_usdz(usdz_path: str | Path) -> list:
             logger.info("track_order parsed from %s (%d entries)", member, len(order))
             return order
     raise ValueError(
-        f"USDZ {usdz_path}: no volume.usda/sequence_tracks.usda with track prims "
-        f"(last error: {last_err!r})"
+        f"USDZ {usdz_path}: no volume.usda/sequence_tracks.usda with track prims " f"(last error: {last_err!r})"
     )
 
 
@@ -431,9 +445,7 @@ def convert_usdz_to_ckpt_with_tracks(
     gn = ckpt["model"]["gaussians_nodes"]
     recon: dict = {}
     name_to_id: dict = {}
-    rig = parse_rig_trajectories(
-        json.loads(read_usdz_member_bytes(usdz_path, "rig_trajectories.json"))
-    )
+    rig = parse_rig_trajectories(json.loads(read_usdz_member_bytes(usdz_path, "rig_trajectories.json")))
     # 坐标对齐（E2.7 golden 规则 + 2026-06-17 实测）：bg/road gaussians 在 NRE
     # 近原点帧，需 +(-world_to_nre.translation)≈+38m 搬到 NCore world；ego
     # (rig_trajectories，实测 c2w[0]=[2.15,0.03,1.44] 本就 NCore world) + track
@@ -441,9 +453,7 @@ def convert_usdz_to_ckpt_with_tracks(
     # 场景与车/相机错位 ~38m（E2.7-B/C 反复踩坑）。
     applied_translate = apply_nre_to_world_translate(gn, rig.world_to_nre)
     resolved_cam = resolve_primary_cam(rig, primary_cam)
-    tracks_raw = parse_sequence_tracks(
-        json.loads(read_usdz_member_bytes(usdz_path, "sequence_tracks.json"))
-    )
+    tracks_raw = parse_sequence_tracks(json.loads(read_usdz_member_bytes(usdz_path, "sequence_tracks.json")))
     ckpt["viz_4d"] = build_viz4d_dict(rig, tracks_raw, primary_cam=resolved_cam)
 
     if "dynamic_rigids" in gn:
@@ -454,17 +464,14 @@ def convert_usdz_to_ckpt_with_tracks(
                 "dynamic_rigids node has no _nre_cuboid_ids — build_native_ckpt "
                 "did not carry gaussian_cuboid_ids (cannot wire per-track replacement)."
             )
-        cuboid_ids = (cuboid_ids.cpu().numpy() if torch.is_tensor(cuboid_ids)
-                      else np.asarray(cuboid_ids))
+        cuboid_ids = cuboid_ids.cpu().numpy() if torch.is_tensor(cuboid_ids) else np.asarray(cuboid_ids)
         track_order = _track_order_from_usdz(usdz_path)
         # Slot basis MUST match populate_tracks = sorted(viz_4d.tracks.keys()),
         # NOT sorted(set(track_order)) — viz_4d carries all 179 sequence tids for
         # wireframe display, so the gaussian slots index that full basis (else the
         # AH car for tid A renders at tid B's pose → cuboid≠asset skew).
         basis_tids = sorted(ckpt["viz_4d"]["tracks"].keys())
-        track_ids, sorted_tids = cuboid_ids_to_track_ids(
-            cuboid_ids, track_order, basis_tids=basis_tids
-        )
+        track_ids, sorted_tids = cuboid_ids_to_track_ids(cuboid_ids, track_order, basis_tids=basis_tids)
         dyn["track_ids"] = torch.as_tensor(track_ids, dtype=torch.long)
 
         present = {int(s) for s in np.unique(track_ids).tolist()}
@@ -485,7 +492,9 @@ def convert_usdz_to_ckpt_with_tracks(
         # so the driver can place AH cars at active/nearby vehicles without
         # gaussians too (NRE only reconstructed 8/70 here).
         catalog = build_vehicle_catalog(
-            ckpt["viz_4d"]["tracks"], sorted_tids, present,
+            ckpt["viz_4d"]["tracks"],
+            sorted_tids,
+            present,
             ckpt["viz_4d"]["ego"]["poses_c2w"],
         )
     else:
@@ -534,6 +543,9 @@ def _ckpt_to_cpu(ckpt: dict) -> dict:
     for node in ckpt["model"]["gaussians_nodes"].values():
         for k, v in list(node.items()):
             if torch.is_tensor(v):
-                node[k] = (torch.nn.Parameter(v.detach().cpu(), requires_grad=False)
-                           if isinstance(v, torch.nn.Parameter) else v.detach().cpu())
+                node[k] = (
+                    torch.nn.Parameter(v.detach().cpu(), requires_grad=False)
+                    if isinstance(v, torch.nn.Parameter)
+                    else v.detach().cpu()
+                )
     return ckpt

@@ -6,6 +6,7 @@ won't load on a Mac. This pure-CPU helper is what
 ``Engine3DGRUT._trace_scene_mog`` calls to materialize the FTheta dict
 for ``Batch.intrinsics_FThetaCameraModelParameters``.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -17,14 +18,14 @@ from threedgrut_playground.utils.ftheta_intrinsics import ftheta_dict_to_tensors
 
 def _fake_ftheta_dict_numpy():
     return {
-        "resolution":              np.array([1920, 1208], dtype=np.int64),
-        "shutter_type":            "ROLLING_TOP_TO_BOTTOM",
-        "principal_point":         np.array([960.0, 604.0], dtype=np.float32),
-        "reference_poly":          "PIXELDIST_TO_ANGLE",
+        "resolution": np.array([1920, 1208], dtype=np.int64),
+        "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+        "principal_point": np.array([960.0, 604.0], dtype=np.float32),
+        "reference_poly": "PIXELDIST_TO_ANGLE",
         "pixeldist_to_angle_poly": np.zeros(5, dtype=np.float32),
         "angle_to_pixeldist_poly": np.zeros(5, dtype=np.float32),
-        "max_angle":               1.047,
-        "linear_cde":              np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        "max_angle": 1.047,
+        "linear_cde": np.array([1.0, 0.0, 0.0], dtype=np.float32),
     }
 
 
@@ -45,8 +46,7 @@ def test_numpy_int_array_to_list_int():
 def test_numpy_float_arrays_to_list_float():
     # T8.13: principal_point / *_poly / linear_cde → list[float].
     d = ftheta_dict_to_tensors(_fake_ftheta_dict_numpy())
-    for k in ("principal_point", "pixeldist_to_angle_poly",
-              "angle_to_pixeldist_poly", "linear_cde"):
+    for k in ("principal_point", "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "linear_cde"):
         assert isinstance(d[k], list), k
         assert all(isinstance(x, float) for x in d[k]), k
 
@@ -82,8 +82,13 @@ def test_torch_tensor_also_converted_to_list():
 def test_all_8_required_keys_preserved():
     out = ftheta_dict_to_tensors(_fake_ftheta_dict_numpy())
     REQUIRED = {
-        "resolution", "shutter_type", "principal_point", "reference_poly",
-        "pixeldist_to_angle_poly", "angle_to_pixeldist_poly", "max_angle",
+        "resolution",
+        "shutter_type",
+        "principal_point",
+        "reference_poly",
+        "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly",
+        "max_angle",
         "linear_cde",
     }
     assert set(out.keys()) == REQUIRED

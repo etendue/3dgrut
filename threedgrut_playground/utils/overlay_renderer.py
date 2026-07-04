@@ -6,6 +6,7 @@ Draws projected polylines (returned by ``FthetaForwardProjector.project_polyline
 into a transparent RGBA buffer that ``Viser4DOverlayCompositor`` then alpha-
 blends into the engine's Gaussian backdrop image.
 """
+
 from __future__ import annotations
 
 import functools
@@ -14,7 +15,6 @@ from typing import Iterable, Sequence
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-
 
 RGBAColor = tuple[int, int, int, int]
 
@@ -53,6 +53,7 @@ class OverlayLayer:
     just above the anchor point — mirroring the viser 3D label that hugs the
     cuboid's top corner.
     """
+
     name: str
     polylines: list[tuple[np.ndarray, np.ndarray]] = field(default_factory=list)
     color: RGBAColor = (0, 255, 0, 255)
@@ -141,21 +142,12 @@ def alpha_blend(backdrop_rgb: np.ndarray, overlay_rgba: np.ndarray) -> np.ndarra
     No-op fast path when overlay is fully transparent (max alpha == 0).
     """
     if backdrop_rgb.shape[:2] != overlay_rgba.shape[:2]:
-        raise ValueError(
-            f"shape mismatch: backdrop={backdrop_rgb.shape} "
-            f"overlay={overlay_rgba.shape}"
-        )
+        raise ValueError(f"shape mismatch: backdrop={backdrop_rgb.shape} " f"overlay={overlay_rgba.shape}")
     if backdrop_rgb.dtype != np.uint8 or overlay_rgba.dtype != np.uint8:
-        raise ValueError(
-            f"dtype must be uint8: backdrop={backdrop_rgb.dtype} "
-            f"overlay={overlay_rgba.dtype}"
-        )
+        raise ValueError(f"dtype must be uint8: backdrop={backdrop_rgb.dtype} " f"overlay={overlay_rgba.dtype}")
     if overlay_rgba[..., 3].max() == 0:
         return backdrop_rgb  # nothing to blend
 
     a = overlay_rgba[..., 3:4].astype(np.float32) / 255.0
-    blended = (
-        overlay_rgba[..., :3].astype(np.float32) * a
-        + backdrop_rgb.astype(np.float32) * (1.0 - a)
-    )
+    blended = overlay_rgba[..., :3].astype(np.float32) * a + backdrop_rgb.astype(np.float32) * (1.0 - a)
     return blended.astype(np.uint8)

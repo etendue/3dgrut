@@ -8,6 +8,7 @@ agreement with the canonical P1.3b basis), per-layer tensor pull, scene extent.
 The GPU build (``build_native_ckpt`` / ``convert_usdz_to_pt``) is exercised on
 inceptio against the real E0.3 usdz.
 """
+
 from __future__ import annotations
 
 import io
@@ -19,8 +20,8 @@ import torch
 from threedgrut_playground.utils.nre_usdz_loader import (
     _CapturingStub,
     _TolerantUnpickler,
-    eval_fourier_albedo,
     estimate_scene_extent,
+    eval_fourier_albedo,
     fourier_cos_basis,
     nre_layer_tensors,
     tolerant_torch_load,
@@ -31,8 +32,7 @@ from threedgrut_playground.utils.nre_usdz_loader import (
 # Tolerant unpickler
 # --------------------------------------------------------------------------- #
 def test_tolerant_load_roundtrips_plain_ckpt():
-    blob = {"state_dict": {"a": torch.arange(6).float().reshape(2, 3)},
-            "global_step": 42}
+    blob = {"state_dict": {"a": torch.arange(6).float().reshape(2, 3)}, "global_step": 42}
     buf = io.BytesIO()
     torch.save(blob, buf)
     out = tolerant_torch_load(buf.getvalue())
@@ -62,9 +62,8 @@ def test_capturing_stub_swallows_state_without_losing_dict_items():
 # --------------------------------------------------------------------------- #
 def test_fourier_cos_basis_matches_canonical_p13b():
     """Local basis must agree with the canonical P1.3b impl (plan invariant)."""
-    from threedgrut.model.track_albedo_fourier import (
-        fourier_cos_basis as canonical,
-    )
+    from threedgrut.model.track_albedo_fourier import fourier_cos_basis as canonical
+
     for k in (1, 3, 5, 20):
         for n_frames in (1, 10, 480):
             for t in (0, 3, n_frames - 1):
@@ -133,16 +132,21 @@ def test_nre_layer_tensors_renames_and_collapses():
     sd = _fake_nre_state("background", 8, fourier_k=5, with_cuboid=False)
     out = nre_layer_tensors(sd, "background")
     assert set(out) == {
-        "positions", "rotation", "scale", "density",
-        "features_albedo", "features_specular", "n_active_features",
+        "positions",
+        "rotation",
+        "scale",
+        "density",
+        "features_albedo",
+        "features_specular",
+        "n_active_features",
     }
     assert out["rotation"].shape == (8, 4)
     assert out["scale"].shape == (8, 3)
     assert out["density"].shape == (8, 1)
-    assert out["features_albedo"].shape == (8, 3)        # collapsed
+    assert out["features_albedo"].shape == (8, 3)  # collapsed
     assert out["features_specular"].shape == (8, 45)
     assert out["n_active_features"] == 3
-    assert "camera_extra_signal" not in out             # dropped
+    assert "camera_extra_signal" not in out  # dropped
     assert "extra_signal" not in out
 
 

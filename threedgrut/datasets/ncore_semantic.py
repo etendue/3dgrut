@@ -31,6 +31,7 @@ TODO(T3.1.b A800 对账): NRE 的 mask2former 实际输出 palette 可能与 Cit
 若不匹配，本文件改成从 scene_manifest['component_stores'] 读 class table，
 或在 nre-tools docker 输出里查 palette JSON。
 """
+
 from __future__ import annotations
 
 # 唯一 sky class
