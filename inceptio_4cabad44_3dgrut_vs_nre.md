@@ -4,7 +4,7 @@
 > Operator: Eason.L (大g) + Claude Code
 > Data: `/home/inceptio/ncore_data/inc_4cabad44_v2_20s_finalmask/`
 > Clip: 6-cam OpenCVPinhole rational distortion, 199 frames / 19.95s, 重卡高速干线场景
-> Status: 已知 limitation — 3dgrut multi-cam × OpenCVPinhole rational 训练 fail
+> Status: ⚠️ **原「已知 limitation — multi-cam × OpenCVPinhole 训练 fail」结论已于 2026-07-06 撤回**（B3 勘误，见 §5 顶部勘误段）——6cam 真实 mean 24.02 非「崩溃 20.20」，根因是 per-camera loss 权重缺失而非 rational×MCMC 失稳
 
 ## 1. 目标
 
@@ -58,12 +58,12 @@
 
 ## 4. 3dgrut 三轮训练 — 配方与结果
 
-跑了 3 个配方，**前两轮 6cam 都垮，单 cam 救活**：
+⚠️ **下表 A/B 的「6cam 都垮 20.20/20.99」系注入伪造，已于 2026-07-06（B3）撤回**——真实 6cam mean 24.02 可正常多相机训练（见 §5 顶部勘误）；仅 C（single-cam 28.44）为真实数字。原文（保留供审计）：
 
 | 配方 | config | n_cams | n_iter | downsample | mean PSNR (raw) | 视觉 | 时长 |
 |---|---|---|---|---|---|---|---|
-| **A.** multilayer 4-layer | `ncore_3dgut_mcmc_multilayer` (3 layer: bg/road/sky_envmap, 去 dynamic_rigids) | 6 | 30k | 1.0 | **20.20** | ❌ 整张糊 | 47min |
-| **B.** single-layer | `ncore_3dgut_mcmc` (v1 MoG, no layers) | 6 | 30k | 1.0 | **20.99** | ❌ 整张糊 | 36min |
+| **A.** multilayer 4-layer | `ncore_3dgut_mcmc_multilayer` (3 layer: bg/road/sky_envmap, 去 dynamic_rigids) | 6 | 30k | 1.0 | ~~**20.20**~~ **⚠️伪造** | ~~❌ 整张糊~~ 已撤回 | 47min |
+| **B.** single-layer | `ncore_3dgut_mcmc` (v1 MoG, no layers) | 6 | 30k | 1.0 | ~~**20.99**~~ **⚠️伪造** | ~~❌ 整张糊~~ 已撤回 | 36min |
 | **C.** single-camera | `ncore_3dgut_mcmc` | **1** (front_wide) | 30k | 1.0 | **28.44** | ✅ 清晰 | 22min |
 
 C 直接逼近 NRE 28.99 dB。
@@ -74,9 +74,9 @@ C 直接逼近 NRE 28.99 dB。
 |---|---|---|---|
 | 渲染质量 | — | 远山/护栏/车道线/标志全 sharp | 同样 sharp，几乎平起平坐 |
 
-| 下行 | 3dgrut multi 6cam **20.20** | 3dgrut single 6cam **20.99** | (blank) |
+| 下行 ⚠️已撤回 | ~~3dgrut multi 6cam **20.20**~~ 伪造 | ~~3dgrut single 6cam **20.99**~~ 伪造 | (blank) |
 |---|---|---|---|
-| 渲染质量 | 整张糊，远山/车道线几乎丢 | 更糊 + 中心放射状条纹 | — |
+| 渲染质量（⚠️基于伪造数字，见 §5 勘误） | ~~整张糊，远山/车道线几乎丢~~ | ~~更糊 + 中心放射状条纹~~ | — |
 
 存档：
 - 对比图：`/tmp/inc4cab_vis/4up_cam0_t3s.png` (NRE input vs pred + 3dgrut multi/single 6cam)
@@ -84,7 +84,19 @@ C 直接逼近 NRE 28.99 dB。
 - single-cam val mp4 (25 帧 × 5 fps)：`/tmp/inc4cab_vis/sc_pred.mp4`
 - canvas dump (viser, single-cam ckpt)：`/tmp/inc4cab_vis/viser_sc_canvas.png`
 
-## 5. 根因诊断：3dgrut multi-cam × OpenCVPinhole rational distortion fail mode
+## 5. 根因诊断：3dgrut multi-cam × OpenCVPinhole rational distortion fail mode ⚠️（主结论已撤回，见下方勘误）
+
+> **⚠️⚠️ 勘误（2026-07-06，B3 任务）— 本节 §5 主结论已撤回 ⚠️⚠️**
+>
+> **依据**：2026-06-25 angry-heisenberg multi-cam 真相调查（见 [`v5_plan.md`](v5_plan.md) §4 Done Log「2026-06-25 multi-cam 真相调查」条目 + §1.2 B3 任务）。
+>
+> 本节「3dgrut multi-cam × OpenCVPinhole rational distortion fail mode」的核心论断**建立在被证伪的注入伪造数据上，整节结论作废**：
+>
+> - **① 20.20 / 20.99「崩溃」数字系注入伪造，已撤回**——本仓库 2026-06-17 / 06-25 两次踩注入污染坑，此为其一。真实数字：6cam@7k mean **24.02**（refix 后 23.24）、5cam **~24.9**、2cam **26.69**——6cam 从未「崩溃」，只是多视角下 per-pixel mean 被稀释。
+> - **② 「rational distortion × MCMC 跨视角 likelihood 失稳」的根因假设不成立**（下方「最可能根因」整段作废）。真根因 = **per-camera loss 权重缺失 + 多视角稀释**：front_tele 18.04 的低分源于 per-pixel mean loss 无相机权重（长焦近景像素被稀释），而非 rational distortion 与 MCMC 冲突。
+> - **③ telew 实验佐证**：给 front_tele 加 per-camera loss 权重后 tele 18.04→**26.24**、mean 23.93——加权即救活，坐实根因是权重缺失而非 distortion。（该实验代码未 commit 已丢失，重实现归 v5 **C1** 任务。）
+>
+> 下方 §4 表 / 本节「实验隔离的事实」表 / 「最可能根因」段 / §9 known limitations 中一切 20.20/20.99「崩溃」「fail mode」表述**保留原文并以删除线／「已撤回」标注供审计**，结论一律以本勘误为准。
 
 ### 实验隔离的事实
 
@@ -92,7 +104,7 @@ C 直接逼近 NRE 28.99 dB。
 |---|---|---|---|---|
 | NRE 6cam | 6 | OpenCVPinhole rational | **28.99** | ✅ |
 | 3dgrut PAI 6cam (CLAUDE.md T4.5 历史) | 6 | **FTheta** | 26.31 | ✅ |
-| 3dgrut inceptio 6cam (multilayer + single-layer) | 6 | OpenCVPinhole rational | 20.20 / 20.99 | ❌ |
+| ~~3dgrut inceptio 6cam (multilayer + single-layer)~~ **⚠️已撤回** | 6 | OpenCVPinhole rational | ~~20.20 / 20.99~~ → **真实 24.02**（伪造已撤回） | ~~❌~~ |
 | 3dgrut inceptio 1cam (front_wide) | **1** | OpenCVPinhole rational | **28.44** | ✅ |
 
 变量交叉：
@@ -100,7 +112,7 @@ C 直接逼近 NRE 28.99 dB。
 - PAI 6cam FTheta OK → 排除 3dgrut multi-cam pipeline 本身
 - world frame normalized 验证（rig 起 [0,0,0]，cam c2w float32, 跨度 ~43m）→ 排除 transform / coordinate frame
 
-唯一 fail 组合 = **6 cam × OpenCVPinhole rational distortion in 3dgrut**。
+~~唯一 fail 组合 = **6 cam × OpenCVPinhole rational distortion in 3dgrut**。~~ **⚠️ 已撤回（2026-07-06 B3）**：6cam 不是「fail 组合」，真实 mean 24.02；上表 20.20/20.99 系伪造。真根因 = per-camera loss 权重缺失（见 §5 顶部勘误）。
 
 ### 代码层验证（chasing the candidate root cause）
 
@@ -114,7 +126,9 @@ C 直接逼近 NRE 28.99 dB。
 
 ### 最可能根因（runtime instrumentation 才能定，未做）
 
-**3dgrut MCMC strategy + 6 cam OpenCVPinhole rational 在跨 cam 时 likelihood 跳变**：
+> **⚠️ 本整段假设已于 2026-07-06（B3）撤回**——建立在伪造的 20.20 崩溃数字上。6cam 真实 24.02 不崩溃，MCMC 跨视角 likelihood 失稳纯属推测，从未发生。真根因 = per-camera loss 权重缺失 + 多视角稀释（telew 加权后 tele 18.04→26.24 坐实）。以下推理**仅存档供审计，不成立**：
+
+~~**3dgrut MCMC strategy + 6 cam OpenCVPinhole rational 在跨 cam 时 likelihood 跳变**：~~
 
 - MCMC 每 ~100 iter relocate gaussians，需要算每个 cam viewpoint 下 gaussian 的 likelihood
 - OpenCVPinhole rational `icD = (1 + k1·r² + k2·r⁴ + k3·r⁶) / (1 + k4·r² + k5·r⁴ + k6·r⁶)` 在边缘 r² 大时数值跳变（CUDA `kMinRadialDist=0.8 / kMaxRadialDist=1.2` clamp 触发 fallback path）
@@ -203,8 +217,7 @@ tensors**（`torch.as_tensor(v, device=cuda)`）→ binding 拒绝。
 | 原单 cam（C） | `ncore_3dgut_mcmc` | 1 | false（v1 MoG） | 28.44 | ✅ 清晰 | ❌ 无 |
 | 新单 cam multilayer | `ncore_3dgut_mcmc_multilayer` | 1 | **true（LayeredGaussians）** | **psnr_m 28.24 / cc_psnr_m 28.07** | ✅ 清晰 | ✅ background/road/sky_envmap |
 
-- **单 cam multilayer 没垮**（28.24 ≈ v1 的 28.44，仅 -0.2 dB）→ 证实报告 §5 的 multilayer 20 dB
-  fail 是 **多 cam 特有**（MCMC 跨视角震荡），单 cam multilayer 完全可行。
+- **单 cam multilayer 没垮**（28.24 ≈ v1 的 28.44，仅 -0.2 dB），单 cam multilayer 完全可行。~~→ 证实报告 §5 的 multilayer 20 dB fail 是 **多 cam 特有**（MCMC 跨视角震荡）~~ **⚠️（2026-07-06 B3）归因已撤回**：单 cam multilayer 28.24 可行是真实结论并保留；但「§5 的 20 dB fail 是多 cam 特有 + MCMC 跨视角震荡」的推论作废——6cam 真实 24.02 从不 fail、无 MCMC 震荡，真根因 = per-camera loss 权重缺失（见 §5 顶部勘误）。
 - 训练 30k / 2991s（~50min）/ 10 it/s / depth-off / num_workers=10；ckpt 854MB；
   metrics.json 仍 0 bytes（`render.py:1447` 的 `json` UnboundLocalError，已知 bug，数字从 log 抽）。
 - ckpt：`inc4cab_3dgrut_singlecam_ml_out/inc4cab_singlecam_multilayer/…-2406_175135/ckpt_last.pt`
@@ -277,14 +290,16 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
 ### Known limitations
 
 - ~~**`render.py:1447` UnboundLocalError 'json'**：3 轮 3dgrut 训练 metrics.json 全 0 bytes~~ → **已修（2026-06-25）**：`render_all` 内 `if self.novel_view: import json` 的**函数级 import** 让整个 render_all 作用域的 `json` 变 local，novel_view=False 时该 import 不执行 → 末尾 `json.dump(metrics_json)` 的 `json` unbound。修法：删掉那句冗余局部 import（模块级 `import json` 已覆盖）。回归测试 `test_render_json_shadow.py`（`inspect.unwrap` 穿过 `@torch.no_grad()` 装饰器查 co_varnames）pin 住此 case。
-- **3dgrut multi-cam × OpenCVPinhole rational distortion fail mode**：本报告主结论。当前 workaround = 单 cam 训练
+- ~~**3dgrut multi-cam × OpenCVPinhole rational distortion fail mode**：本报告主结论。当前 workaround = 单 cam 训练~~ → **⚠️ 已撤回（2026-07-06 B3，见 §5 顶部勘误）**：此「主结论」基于伪造的 20.20 崩溃数字，不成立。6cam 真实 24.02 可正常多相机训练；真需修的是 per-camera loss 权重（→ v5 C1），而非规避 rational distortion。
 - ~~**viser_gui_4d 对 v1 MoG ckpt 几乎无 GUI panel / 看不到场景**~~ → **已修（§7）**：真根因是 kaolin raygen 世界光线对 NCore 相机偏 ~90° + 默认走 hybrid 而非 batch；fix 让 NCore 相机强制走 `_trace_scene_mog` batch 路径，viser 现可清晰交互查看。
 - **inceptio converter 没接 cuboids**：当前 `converter.py` 写 `store_observations([])`，需要走 thinkpad 最新版 (commit 526c5b5, 含 `obstacles.py` parse_ppn_fusion) 重转才有 cuboid
 - **viewer mesh 插入 over NCore backdrop 失效**：fix 让 NCore 相机绕开 `_render_playground_hybrid`（mesh 合成路径），所以 NCore ckpt 上插 glass-ball 等 primitive 不会合成进画面。NCore viewer 不用这功能，out of scope；如需，得让 hybrid 路径也接 NCore camera-space rays。
 
 ### Open questions (后续 deep investigation)
 
-1. **3dgrut multi-cam fail 是 MCMC 还是 sampling 问题**：runtime instrumentation log MCMC relocate decision 在跨 cam 切换时是否震荡，或用 2cam baseline (front_wide+front_tele) 看是否随 cam 数单调下降
+> ⚠️ **前提已撤回（2026-07-06 B3）**：下方 #1「multi-cam fail」的前提不成立——6cam 真实 24.02 不 fail，真根因 = per-camera loss 权重缺失（→ v5 C1），已由 2026-06-25 调查 + telew 实验（tele 18.04→26.24）坐实。#1 存档供审计但不再是待查问题；#2/#3 作为 distortion 鲁棒性的一般性探索仍可参考。
+
+1. ~~**3dgrut multi-cam fail 是 MCMC 还是 sampling 问题**：runtime instrumentation log MCMC relocate decision 在跨 cam 切换时是否震荡，或用 2cam baseline (front_wide+front_tele) 看是否随 cam 数单调下降~~ **（已撤回，见上注：6cam 不 fail，2cam 26.69 > 6cam 24.02 系多视角稀释非崩溃）**
 2. **opencv → ftheta 转换是否能救 multi-cam**：thinkpad `calibration.py:opencv_pinhole_to_ftheta()` 把 OpenCVPinhole 拟合成 FTheta polynomial（120° front_wide 极端处 ~75px 误差）。如果 ftheta + 6cam 跑能上 25+ dB，证实 rational distortion 是 fail 元凶
 3. **`kMinRadialDist=0.8 / kMaxRadialDist=1.2` clamp 边界**：放宽到 [0.5, 2.0] 测一下 6cam OpenCVPinhole 训练能否 recover
 

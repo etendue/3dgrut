@@ -4,7 +4,7 @@
 > **与 v4 的关系**：[`v4_plan.md`](v4_plan.md) 仍是 **外推（extrapolation）主线**（PAI 9ae clip 线，E2.2 渐进蒸馏等继续归 v4）；v4 的 **E5.1 / E5.2 移交本文档**（改编号 A1 / A2，执行与回填以 v5 为准）。两线并行不冲突：v4 = 方法轴（外推），v5 = 数据轴（inceptio 落地）。
 > **决策依据（decision of record）**：
 > - inc_b6a9 onboarding + road/dynamic 诊断：[PR #42](https://github.com/etendue/3dgrut/pull/42)（E5.0，v4 §5 Done Log 2026-07-02）
-> - 4cab NRE 对照方法论：[`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md)（⚠️ 其 20.2 multi-cam 崩溃结论已被 2026-06-25 调查证伪，见 B3 勘误任务）
+> - 4cab NRE 对照方法论：[`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md)（⚠️ 其 20.2 multi-cam 崩溃结论系注入伪造，已由 2026-06-25 调查证伪 + 2026-07-06 **B3 在该文档 §5 落勘误段**；真实 6cam 24.02）
 > - multi-cam 真相 + telew 实验：2026-06-25 angry-heisenberg 调查（6cam 真实 24.02、front_tele 18.04 根因 = 无 per-camera loss 权重；telew 实验 tele 18.04→26.24 有效但**代码未 commit 已丢失**，见 C1）
 > - cuboid autogen 终局：[PR #40](https://github.com/etendue/3dgrut/pull/40)（纯几何天花板结论，2026-06-30 commit `2d32ea6`；收尾决策见 D2）
 > - 业界调研（2026-07-02 三路）：外推蒸馏配方（FaithFusion 置信度加权 / FixingGS 连续小步）留 v4 E2.2 吸收；3D auto-label 开源链（CenterPoint+MOT）作 D2 备选记录
@@ -70,7 +70,6 @@ kanban
     Backlog
         [B1 NRE 同 clip 对照锚（升级双臂）：官方 baseline 臂 + difix 蒸馏臂（Harmonizer IPC），gap 实测化 + C 路线天花板]
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
-        [B3 文档勘误：vs_nre 报告 20.2 伪造结论撤回 + inceptio_5cam_task 结果回填]
         [B4 held-out 侧相机真 GT off-track 锚：现 3-cam ckpt 渲侧相机位姿 vs 真图，零训练·无悔棋]
         [B5 E1 外推度量移植 b6a9：novel 6 档 + FID/KID render-only·无悔棋]
         [C1 telew per-camera loss weight 重实现（上轮丢码）：光度项乘权 + 默认字节等价 + 必须 commit 进 main]
@@ -85,6 +84,7 @@ kanban
     "Review"
 
     "Done"
+        [B3 文档勘误 ✅ 2026-07-06（vs_nre §5 伪造 20.20 结论撤回＋真实 6cam 24.02＋根因改判 per-camera loss 权重；5cam task 回填 ~24.9；viser task 三处加注）]
         [A1 road 修复 ✅ 2026-07-04（aux 遮挡 bug 2117× ＋ opacity 正则根治 ＋ lattice v2 收官；baseline 锚 R3p 20.25，inceptio 配方 yaml 入库）]
         [A5 pinhole cuboid mask 修复簇 ✅ 297a0bc（2026-07-02 新增：三处 FTheta-only gate ＋ behind-camera 过滤）]
         [A2 cuboid ts 插值 ✅ 6983018（per-camera END ts ＋ lerp、slerp 插值；wireframe 目检 cross 相机套准）]
@@ -107,7 +107,7 @@ kanban
 | **A5** ★ | A | **pinhole cuboid mask 修复簇**（2026-07-02 大g 发现新增）— 三处 FTheta-only gate 在 pinhole clip 静默失效：trainer `_maybe_fill_cuboid_mask`（训练 dyn_mask_cuboid 从未生成）、render.py class_psnr eval gate（A3 缺字段根因）、共享 `project_cuboids_to_mask` pinhole 分支缺 behind-camera 过滤 | 大g 代码审查 | 0.5 | ✅ | `297a0bc`：z>0 corner 过滤两分支共用 + `resolve_batch_cuboid_intrinsics` 双模型 dispatch（FTheta 字节等价）；3D 路径（bg_cuboid_penalty/clamp）不受影响；旧行为可 `++trainer.bg_dyn_cuboid_penalty.use_cuboid_mask=false` 复现 |
 | **B1** ★ | B | **NRE 同 clip 对照锚（双臂）** — 臂 1＝nre-ga car2sim 官方配方 baseline；臂 2＝同配方 + `difix.training.enabled=true`（Harmonizer IPC，单变量）→ 官方口径 + `nre render` lateral 3m/6m 帧 FID → **v5 gap 表首行实测化 + C 路线 off-track 天花板（门 1 输入）** | 4cab runbook + E0.7 IPC 架构 | 1.5 | ⬜ | 夜间 docker 挂机；**前置＝IPC 实物验证**（inceptio `~/work/nurec_e0/e07/` flags/日志/USDZ）；⚠️ 口径陷阱（官方 val 每 3 帧 + 1/4 res），对锚须统一口径或显式标注 |
 | **B2** | B | **lane 指标立锚** — [`gen_lane_sseg.py`](scripts/gen_lane_sseg.py) 自跑 Mapillary lane sseg → `compute_lane_metrics`（grad_corr / band_psnr）前视立锚，验证朝地 LiDAR 车道线优势 | v3 P3.0 工具复用 | 1 | ⬜ | gate＝A1（侧相机进来 road 覆盖才够意义）；不跨 clip 比 PAI 锚 0.693 |
-| **B3** | B | **文档勘误** — [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) 加勘误段（20.2 崩溃 + rational×MCMC 假设撤回，真实 6cam 23.2-24.0）；[`inceptio_5cam_task.md`](inceptio_5cam_task.md) 状态回填（已执行，5cam ~24.9@7k） | 2026-06-25 调查结论 | 0.5 | ⬜ | 防伪造数字再误导下游判断（本轮分析已被误导一次） |
+| **B3** | B | **文档勘误** — [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) 加勘误段（20.2 崩溃 + rational×MCMC 假设撤回，真实 6cam 23.2-24.0）；[`inceptio_5cam_task.md`](inceptio_5cam_task.md) 状态回填（已执行，5cam ~24.9@7k） | 2026-06-25 调查结论 | 0.5 | ✅ | commit message `docs(B3)`：4cab §5 勘误段（20.20/20.99 伪造撤回＋rational×MCMC 假设作废＋根因改判 per-camera loss 权重）＋5cam task 回填 ~24.9＋viser task 三处加注；防伪造数字再误导下游 |
 | **B4** ★ | B | **held-out 侧相机真 GT off-track 锚** — 现有 3-cam 30k ckpt 在未参训侧相机位姿渲染 vs 真图（真 GT 外推，v4 E1.3 协议反用）→ held-out per-cam psnr/lpips + FID 与训练相机同口径对照 | v4 E1.3 协议 + E5.0 ckpt | 0.5 | ⬜ | **零训练 render-only；无悔棋三件套之一**；侧相机只需图像+位姿、不需 sseg aux；数字回答「b6a9 离轴差多少」（门 1 输入） |
 | **B5** | B | **E1 外推度量移植 b6a9** — novel 6 档（含 lateral 3m/6m）+ FID/KID（`--render-only` / `--novel-fid` 链路）在 b6a9 config 打通 | v4 E1.1/E1.4 工具 | 0.5 | ⬜ | render-only；**无悔棋三件套之一**；metrics.json 出 novel 档字段，与 B4 真 GT 互证 |
 | **C1** ★ | C | **telew per-camera loss weight 重实现** — `trainer.py` 加 `_camera_loss_weight(camera_id)` + 光度项（L1/SSIM）乘权、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；**必须 commit 进 main**（上轮实现验证有效但 worktree reset 丢码的教训） | 2026-06-25 调查 #6882 方案 | 0.5 | ⬜ | Mac 单测：weight=1 恒等 / weight=2 光度翻倍正则不变 |
@@ -122,10 +122,10 @@ kanban
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
 | **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
-| **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 0/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | ⬜ |
+| **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 1/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | 🟡 |
 | **C** | 扩相机阶梯 3→12 | 0/4 | 12 相机全量纳入或明确收口点 | 每步原相机不退 | ⬜ |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
-| **总计** | — | **5/16** | — | — | — |
+| **总计** | — | **6/16** | — | — | — |
 
 ### 1.4 任务依赖图
 
@@ -276,6 +276,12 @@ flowchart TD
   - **lattice v2 实测（进行中）**：R0c ✅ 20.84/0.613/17.92；**R1p（6-cam 首个健康 run）✅ 20.16 / ssim 0.640 / lpips 0.630 / automobile 17.39，死层告警 0，训练 51 min 恢复正常速度**；⚠️ 口径注记：mean/road_crop 系全相机平均（新相机 left_wide 18.1 天然难），跨相机集不可直接比；同 3 台守护线 21.59/20.34/20.05（对锚 −0.3~0.5，容量摊薄效应）；**公平对比需 per-camera 等比步数（6-cam 数据翻倍 → 30k 等于欠训一半），R1p-60k 列为达成 KPI 的第一候选**。R2p/R3p 过夜跑。A800 双卡并行重做 depth A/B（正则off 干净版，agent 托管）。
   - **viser 涂抹一案终审（半天调查，结论入档）**：渲染管线全链无罪（曝光/渲染器/ckpt/代码版本/驱动/JIT/坐标约定逐层排除，PAI 对照 + 昨日 ckpt 对照 + Follow Camera 实验闭环）。真凶＝**OPCV 模式漏了 connect 时 `client.camera.fov = 训练相机 fov_y` 的一行同步**——服务端按训练内参渲 120° 广角图，浏览器端按默认 ~75° 贴合 → 全屏拉伸涂抹；FTheta 模式接线完整故 PAI 正常。**使用姿势（修复前）**：启动带 `--initial_cam_id <cam>`（激活 rational 光线路径）+ UI 勾一次 Follow Camera（校准 fov，之后自由飞行正常）。一行修复+分辨率锁已挂任务芯片（含验证协议）。历史教训：6/24"验证"只查非全黑、6/26 只查日志 active——**画面正确性从未被验证过**，伪完成识别再添一例。
 
+- **2026-07-06 ★ B3 文档勘误（纯文档零 GPU，commit message `docs(B3): …`）**：清除 2026-06-25 调查已撤回、但仍留在报告里会误导下游的伪造结论（本轮分析开局即被旧版 20.20 结论误导一次，故优先做）。
+  - **[`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md)**：§5 顶部加显眼勘误段（依据 + 三条撤回：① 20.20/20.99「崩溃」数字系注入伪造 → 真实 6cam@7k **24.02** / 5cam **~24.9** / 2cam **26.69**；② 「rational×MCMC 跨视角 likelihood 失稳」假设作废；③ 真根因 = **per-camera loss 权重缺失 + 多视角稀释**，telew 加权 tele 18.04→26.24 佐证 → 重实现归 **C1**）；另在 §4 训练表 A/B 行、§5「实验隔离」表 +「唯一 fail 组合」句 +「最可能根因」整段、§9 主结论 + open questions #1、顶部 Status——一律**删除线／「已撤回」标注保留原文供审计**（不静默删）。
+  - **[`inceptio_5cam_task.md`](inceptio_5cam_task.md)**：状态「待执行」→「✅ 已执行」+ 执行结果段回填（5cam **~24.9@7k**，含 6/5/2cam 对照表 + 结论指向 C1）。⚠️ 该文件原为主仓库 **untracked**，本次纳入版本库（随 B3 commit 追踪），回填才对下游可见。
+  - **[`inceptio_viser_opencv_pinhole_task.md`](inceptio_viser_opencv_pinhole_task.md)**：L51/L71/L139 三处引用 20.20/20.99 崩溃处加撤回加注，指向 4cab §5 勘误。
+  - **全仓 grep 校验**：其余含「20.2」的 md（T8_buglists / v2_plan / v3_plan 的 heavy_truck 20.26 / bus 20.25 / mean 20.29）均为无关指标，未误改；v5_plan 内 §0.5 决策依据 + §5 文档速查两处「待勘误」引用同步改「已勘误」。
+
 ---
 
 ## 5. 文档关系速查
@@ -286,6 +292,6 @@ flowchart TD
 | v4 主线：外推性能（E2.2 蒸馏等，PAI 线）；E5.1/E5.2 已移交本文档 A1/A2 | [`v4_plan.md`](v4_plan.md) |
 | v3 主线（收敛）：per-class 重建质量（行人 Phase 2 遗留归 v3） | [`v3_plan_revised.md`](v3_plan_revised.md) |
 | 架构差异图 + 关键不变量 | [`v2_architecture.md`](v2_architecture.md) |
-| 4cab NRE 对照 + multi-cam 报告（⚠️ 待 B3 勘误） | [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) |
+| 4cab NRE 对照 + multi-cam 报告（✅ 2026-07-06 B3 已勘误：§5 撤回伪造 20.20 崩溃结论） | [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) |
 | A800/inceptio/vast 执行环境与铁律 | [`CLAUDE.md`](CLAUDE.md) |
 | **off-track 战役设计（A→B→C 收敛 + 算力调度 + 决策门）** | [`docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md`](docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md) |

@@ -48,7 +48,7 @@
 | 资源 | 位置 |
 |---|---|
 | Single-cam ckpt（验证目标） | inceptio:`/home/inceptio/ncore_data/inc4cab_3dgrut_singlecam_out/inc4cab_singlecam_ds05/inceptio_4cabad44-6d56-4c2e-999f-8db32983849c-2406_130110/ckpt_last.pt` |
-| Multi-cam ckpts（对照） | `inc4cab_3dgrut_out/`（multilayer 20.20 dB） + `inc4cab_3dgrut_single_out/`（single-layer 20.99 dB） |
+| Multi-cam ckpts（对照） | `inc4cab_3dgrut_out/`（multilayer ~~20.20 dB~~）+ `inc4cab_3dgrut_single_out/`（single-layer ~~20.99 dB~~）⚠️ **20.20/20.99 系伪造已撤回，真实 6cam 24.02，见 [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) §5** |
 | Dataset manifest | inceptio:`/home/inceptio/ncore_data/inc_4cabad44_v2_20s_finalmask/inceptio_4cabad44-6d56-4c2e-999f-8db32983849c/inceptio_4cabad44-6d56-4c2e-999f-8db32983849c.json` |
 | Single-cam eval val mp4（视觉 ground truth） | inceptio:`<ckpt run dir>/ours_30000/renders/00000..00024.png` + 已 scp 一份 `/tmp/inc4cab_vis/sc_pred.mp4` |
 | 之前几张 viser canvas dump | `/tmp/inc4cab_vis/viser_sc_canvas.png`（initial=cross_left 错向）、`viser_sc_fixed.png`（initial=front_wide）、`viser_sc_with_opcv_fix.png`（我的 fix 后，几乎一样）、`viser_before_after.png` |
@@ -68,7 +68,7 @@
 
 1. **eval val PNG 28.44 dB 清晰**——证明 ckpt 学到了正确的场景 gaussians
 2. **viser 画面糊**——但不是"模糊"是"完全看不到场景元素，只有 ego frustum + 中央模糊 splat band"
-3. **3dgrut multi-cam × OpenCVPinhole 训练 fail**（multilayer 20.20 / single-layer 20.99 都垮）；single-cam (front_wide only) OK 28.44；这是 NVIDIA 3dgrut 在 inceptio 这种**强 rational distortion (k4-k6 显著非零) + 6 cam 跨视角差异**组合下的 fail mode，**不影响**本任务（本任务只针对 single-cam ckpt 的 viewer 显示）
+3. ~~**3dgrut multi-cam × OpenCVPinhole 训练 fail**（multilayer 20.20 / single-layer 20.99 都垮）~~ ⚠️ **此崩溃结论已撤回（2026-07-06 B3，见 [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) §5）——20.20/20.99 系注入伪造，6cam 真实 24.02 不崩溃，根因是 per-camera loss 权重缺失**；single-cam (front_wide only) OK 28.44；~~这是 NVIDIA 3dgrut 在 inceptio 这种**强 rational distortion (k4-k6 显著非零) + 6 cam 跨视角差异**组合下的 fail mode~~，**本任务不受影响**（只针对 single-cam ckpt 的 viewer 显示）
 4. **inceptio 6 cam 全部是 OpenCVPinhole rational** — k1=0.48-1.40, k4=0.53-1.76, front_tele 极端 k3=-138/k6=-153。是真 rational mode，**不是** simple polynomial
 5. **T_world_to_world_global = identity** — inceptio finalmask world frame === world_global frame，**没有 frame mismatch**
 6. **trajectory transform 完全自洽**：ego/rig 从 [0,0,0] 到 [42, -5, 0.2]，camera = ego + T_sensor_rig(c2w-rotated, dtype float32) — 物理位置完全合理
@@ -136,7 +136,7 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
 
 预计 ~30-40 min。新 ckpt 类型 = `LayeredGaussians`，加载 viser 时**自动走我的 OpenCVPinhole fix path**。
 
-**潜在 issue / 坑**：multilayer config 在 6cam OpenCVPinhole 上之前 fail 到 20.20 dB（之前 session 数据）。**单 cam 用 multilayer 配方没试过**。可能 fail 因为：
+**潜在 issue / 坑**：~~multilayer config 在 6cam OpenCVPinhole 上之前 fail 到 20.20 dB（之前 session 数据）~~ ⚠️ **该 20.20 fail 数字已撤回（2026-07-06 B3，系伪造；真实 6cam 24.02，见 [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) §5）**。**单 cam 用 multilayer 配方没试过**。可能 fail 因为：
 - multilayer `bg_road_penalty` + `layered_loss` + sky envmap MLP 都是为 cuboids 数据设计的
 - 单 cam 没 cross-cam 干扰，但 multilayer 那套 region weighting 可能仍 sub-optimal
 - 验证：跑完看 mean PSNR vs single-cam baseline 28.44，应该接近或不差太多
