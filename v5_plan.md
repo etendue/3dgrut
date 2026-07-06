@@ -34,7 +34,7 @@
 | 车辆 class_psnr（动态区） | **17.53**（A3 已立锚 2026-07-02：automobile，299 records，72 条 <15dB） | [`class_psnr.py`](threedgrut/model/class_psnr.py) | A2/D1 闭合 |
 | 行人 per-class（监控） | person 15.40（13 rec，无专属模型，同 v3 结论） | `per_class_eval.py` | 仅监控，不主动做（v5 不做行人建模） |
 | NRE 同 clip gap | **未测**（4cab 锚 28.99 不可跨 clip 比） | B1（双臂）：nre-ga 官方配方 ± difix 蒸馏 | 把"落后多少"变实测数字 + C 路线天花板 |
-| **off-track 质量（2026-07-03 新主轴）** | **未测**（现锚全部 on-track 口径） | B4 held-out 侧相机真 GT + B5 novel 档 FID/KID | B4/B5 立锚 → 战役门 1/2 后定目标 |
+| **off-track 质量（2026-07-03 新主轴）** | **B4 实测 2026-07-06**：held-out 侧相机 cc_psnr 旧锚 7.0 / R0c 9.7（vs train 19.5，gap **−10~−12 dB**）；扩相机收益 **+8.88 dB**（R0c held-out 9.66 → R1p 参训 18.54） | B4 held-out 真 GT ✅ + B5 novel 档 FID/KID | 门 1 判据；B5 novel 档补 → 门 1/2 后定目标 |
 | 纳入训练的相机数 | 3 / 12 | per-camera psnr 表 | C 阶梯：5 → 10 → 11（+tele）→ 12（+鱼眼） |
 | 守护线 | 现有 3 相机 per-cam psnr（22.07 / 20.71 / 20.31） | 现成 | 每步扩相机/改动后原相机不退 |
 
@@ -71,7 +71,6 @@ kanban
         [B1 NRE 同 clip 对照锚（升级双臂）：官方 baseline 臂 + difix 蒸馏臂（Harmonizer IPC），gap 实测化 + C 路线天花板]
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
         [B3 文档勘误：vs_nre 报告 20.2 伪造结论撤回 + inceptio_5cam_task 结果回填]
-        [B4 held-out 侧相机真 GT off-track 锚：现 3-cam ckpt 渲侧相机位姿 vs 真图，零训练·无悔棋]
         [B5 E1 外推度量移植 b6a9：novel 6 档 + FID/KID render-only·无悔棋]
         [C1 telew per-camera loss weight 重实现（上轮丢码）：光度项乘权 + 默认字节等价 + 必须 commit 进 main]
         [C2 扩相机 5→10 pinhole：单变量逐组加，per-cam psnr 全表 + telew 调权]
@@ -85,6 +84,7 @@ kanban
     "Review"
 
     "Done"
+        [B4 held-out off-track 锚 ✅ 2026-07-06：旧锚 held-out cc_psnr 7.0 / R0c 9.7 vs train 19.5，gap −10~−12dB；扩相机收益 +8.88dB（思路 B 首个实测证据）]
         [A1 road 修复 ✅ 2026-07-04（aux 遮挡 bug 2117× ＋ opacity 正则根治 ＋ lattice v2 收官；baseline 锚 R3p 20.25，inceptio 配方 yaml 入库）]
         [A5 pinhole cuboid mask 修复簇 ✅ 297a0bc（2026-07-02 新增：三处 FTheta-only gate ＋ behind-camera 过滤）]
         [A2 cuboid ts 插值 ✅ 6983018（per-camera END ts ＋ lerp、slerp 插值；wireframe 目检 cross 相机套准）]
@@ -108,7 +108,7 @@ kanban
 | **B1** ★ | B | **NRE 同 clip 对照锚（双臂）** — 臂 1＝nre-ga car2sim 官方配方 baseline；臂 2＝同配方 + `difix.training.enabled=true`（Harmonizer IPC，单变量）→ 官方口径 + `nre render` lateral 3m/6m 帧 FID → **v5 gap 表首行实测化 + C 路线 off-track 天花板（门 1 输入）** | 4cab runbook + E0.7 IPC 架构 | 1.5 | ⬜ | 夜间 docker 挂机；**前置＝IPC 实物验证**（inceptio `~/work/nurec_e0/e07/` flags/日志/USDZ）；⚠️ 口径陷阱（官方 val 每 3 帧 + 1/4 res），对锚须统一口径或显式标注 |
 | **B2** | B | **lane 指标立锚** — [`gen_lane_sseg.py`](scripts/gen_lane_sseg.py) 自跑 Mapillary lane sseg → `compute_lane_metrics`（grad_corr / band_psnr）前视立锚，验证朝地 LiDAR 车道线优势 | v3 P3.0 工具复用 | 1 | ⬜ | gate＝A1（侧相机进来 road 覆盖才够意义）；不跨 clip 比 PAI 锚 0.693 |
 | **B3** | B | **文档勘误** — [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) 加勘误段（20.2 崩溃 + rational×MCMC 假设撤回，真实 6cam 23.2-24.0）；[`inceptio_5cam_task.md`](inceptio_5cam_task.md) 状态回填（已执行，5cam ~24.9@7k） | 2026-06-25 调查结论 | 0.5 | ⬜ | 防伪造数字再误导下游判断（本轮分析已被误导一次） |
-| **B4** ★ | B | **held-out 侧相机真 GT off-track 锚** — 现有 3-cam 30k ckpt 在未参训侧相机位姿渲染 vs 真图（真 GT 外推，v4 E1.3 协议反用）→ held-out per-cam psnr/lpips + FID 与训练相机同口径对照 | v4 E1.3 协议 + E5.0 ckpt | 0.5 | ⬜ | **零训练 render-only；无悔棋三件套之一**；侧相机只需图像+位姿、不需 sseg aux；数字回答「b6a9 离轴差多少」（门 1 输入） |
+| **B4** ★ | B | **held-out 侧相机真 GT off-track 锚** — 现有 3-cam 30k ckpt 在未参训侧相机位姿渲染 vs 真图（真 GT 外推，v4 E1.3 协议反用）→ held-out per-cam psnr/lpips + FID 与训练相机同口径对照 | v4 E1.3 协议 + E5.0 ckpt | 0.5 | ✅ | **2026-07-06 实测**（render-only，worktree @ a5083c8）：held-out cc_psnr 旧锚 7.0 / R0c 9.7 vs train 19.5（gap −10~−12 dB）；扩相机收益 +8.88 dB（思路 B 证据）；双源交叉一致；详见 §4 Done Log |
 | **B5** | B | **E1 外推度量移植 b6a9** — novel 6 档（含 lateral 3m/6m）+ FID/KID（`--render-only` / `--novel-fid` 链路）在 b6a9 config 打通 | v4 E1.1/E1.4 工具 | 0.5 | ⬜ | render-only；**无悔棋三件套之一**；metrics.json 出 novel 档字段，与 B4 真 GT 互证 |
 | **C1** ★ | C | **telew per-camera loss weight 重实现** — `trainer.py` 加 `_camera_loss_weight(camera_id)` + 光度项（L1/SSIM）乘权、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；**必须 commit 进 main**（上轮实现验证有效但 worktree reset 丢码的教训） | 2026-06-25 调查 #6882 方案 | 0.5 | ⬜ | Mac 单测：weight=1 恒等 / weight=2 光度翻倍正则不变 |
 | **C2** | C | **扩相机 5→10 pinhole** — 单变量逐组加 rear×2 / back_rear_wide / front_standard，telew 按 per-cam psnr 调权 | 新 | 1 | ⬜ | gate＝A1 + C1；守护线＝已有相机 psnr 不退 |
@@ -122,10 +122,10 @@ kanban
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
 | **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
-| **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 0/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | ⬜ |
+| **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 1/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | 🟡 |
 | **C** | 扩相机阶梯 3→12 | 0/4 | 12 相机全量纳入或明确收口点 | 每步原相机不退 | ⬜ |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
-| **总计** | — | **5/16** | — | — | — |
+| **总计** | — | **6/16** | — | — | — |
 
 ### 1.4 任务依赖图
 
@@ -241,6 +241,13 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-06 ★ B4 held-out 侧相机真 GT off-track 锚**（render-only，inceptio worktree @ a5083c8；门 1 判据之一）：
+  - **四组 render**（旧锚/R0c × train/held-out，`--dataset-cameras` 替换 camera_ids + `--novel-fid`，exposure 自动禁用→cc 口径）：run1 旧锚×train cc_psnr **19.46**/FID 330 · run2 旧锚×held-out **7.00**/408 · run3 R0c×train **19.60**/114 · run4 R0c×held-out **9.66**/384。双源交叉（rich log × metrics.json）全一致；run1 gate cc19.46 pass 钉死 held-out 低分＝**真实离轴崩溃**（非 pinhole×--dataset-cameras bug）。
+  - **结论① held-out−train gap（off-track 离轴差距，KPI off-track 行）**：旧锚 **−12.46 dB**、R0c **−9.95 dB**——b6a9 侧后相机（left/right/back_rear_wide）离轴质量从 ~19.5 崩到 7-10 dB cc_psnr。
+  - **结论② 扩相机收益（单变量 R1p=R0c+6cam，同三台侧后相机 参训 vs 未参训）**：R0c held-out 9.66 → R1p 参训 18.54 = **+8.88 dB**（left +6.73 / right +10.96 / back +6.52）——**思路 B（扩相机改善离轴）首个实测证据**：扩相机把侧后相机从「离轴崩溃」救到「参训正常」；R3p 参训 18.72 旁证。
+  - 口径注记：FID/KID 72 帧/组（<2048 有偏，仅四组内部 A/B）；cc_psnr per-frame 仿射拟合曝光鲁棒，故 R1p/R3p（带 exposure）与四组（exposure 禁用）可比；旧锚/R0c 均 3-cam 前向训练，held-out=未训侧后。底稿 `.superpowers/sdd/b4_summary.md`；metrics 在 `inceptio:~/work/output/b4_{old,r0c}_{train,heldout}/`。
+  - 执行注记：版本口径 worktree @ a5083c8（大g 拍板，避 inceptio 主仓库 daa8ce5 分叉 + 未提交 E2.6 工作）；Task 3 subagent stalled + Mac 断网各遇一次，均 controller 接管（batch setsid 后台不受影响），数据零丢失。
 
 - **2026-07-04 ★ baseline 固化（大g 决策：先立 baseline 再逐个解 issue）+ R2p/A800 depth A/B 出数**：
   - **baseline = `configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml`**（compose multilayer + 6-cam camera_ids + `loss.use_opacity=false`；`# @package _global_` 头必需，Mac compose 验证 6 相机/正则off/mask on）。**锚 = R2p 30k：mean 20.11 / cc 18.54 / ssim 0.640 / lpips 0.629 / road_crop 24.51 / automobile 18.54（<15dB 38/346）**；per-cam front 21.16 / cross 20.18/19.90 / left 18.44 / right 21.24 / back 19.58。
