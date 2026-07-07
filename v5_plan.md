@@ -266,6 +266,7 @@ flowchart TD
     | I5 | viser OPCV 初始 fov 未同步（涂抹） | 2026-07-03 终审 | 一行修（芯片 task_aed6e22a） | 低（有使用姿势绕过） |
     | I6 | left_wide 极点像素 + 最弱相机（18.44） | ray 极点已防护；per-cam 表 | 去畸变 shader 修（上游）+ C1 telew 权重 | 低 |
     | I7 | B 阶段：NRE 同 clip gap 未实测 | B1 未跑（A800 无 nre-ga 容器） | 拉容器或 inceptio 夜间挂机 | 中 |
+    | I8 | ego mask 漏卡车自车结构（后视镜/支架/车把，2026-07-07 大g 目测 R3p 发现） | R3p f048 render/GT 左下自车支架**清晰重建**（非糊）→ ego mask 未覆盖它；egomask aux 存在但 nre-tools `--ego-mask` 疑走 sseg，mask2former(Cityscapes) 对卡车 ego 属 OOD（训练集几乎全乘用车视角） | 手动补**卡车 ego ROI filter**（固定支架区 mask 补进 egomask）；执行前先①可视化 egomask 实际覆盖 ②验证 sseg 对卡车 ego 的识别 | 中（污染重建纯净度+被 sseg 误标+off-track 视角错位） |
 
 - **2026-07-02/03 任务A 主体执行（A2/A3/A4/A5 ✅ + A1 根因改写与 aux 修复 + 三类训练 NaN 排障；branch `claude/laughing-lichterman-a52733`）**：
   - **A1 步骤0 诊断（`2f55017` diag_lidar_sseg_vs_proj.py）推翻 E5.0 结论**：thinkpad lidar-cam 投影图（大g 提供，已存 `inceptio:~/work/data/inc_b6a9ed61_20s/proj_ref/`）× camvis × 几何重投影三方对照——前向 3-cam 明明看得到大量路面点（front_wide 每 sweep ~7 万点落 road 像素却 100% 被标 ignore），`P(ignore|camvis>0)=0.875`。真根因＝**nre-tools lidar-seg 遮挡检查**（`estimators.py` spin-mesh 射线求交 1mm 容差 × 掠射路面几何 × 聚合 multi-lidar 破坏 spin 有序性 → 误杀）；vegetation/building 近垂直入射不受害，故 E5.0 误判为相机覆盖问题。
