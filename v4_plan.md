@@ -35,9 +35,9 @@
 | **车道线外推** lane grad_corr / band_lpips @ lateral_3m/6m | **未测（测量盲区）**：现 `NOVEL_VIEW_MODES` 仅 lateral_1m/2m + yaw_5/10deg | E1.1（=P3.3）：[`novel_view.py`](threedgrut/utils/novel_view.py) 扩档 + lane 区域 novel 指标 | E1 立锚 → E2/E3 闭合；参考 DiFix3D+ FID −20% 量级 |
 | **车辆外推** NTA-IoU（原轨迹 + 3m/6m 档） | 未测（plan 已备未执行） | E1.2：[`2026-06-10-nta-iou-eval-metric.md`](docs/superpowers/plans/2026-06-10-nta-iou-eval-metric.md) | E1 立锚 → 闭合；参考 ReconDreamer 系 3m 0.498→0.572 |
 | **真 GT 外推** held-out camera per-class | 未测（协议不存在） | E1.3：留出侧相机做真 GT 外推集（DiFix3D+ RDS 协议反用） | E1 立锚 → 闭合 |
-| **感知质量** FID/KID @ 3m/6m | 未测 | E1.4：FID/KID 接入 render eval | 立锚 → 不升 |
+| **感知质量** FID/KID @ 3m/6m | **E1.4 立锚**：render 75.3 / 1m 124 / 3m 168 / 6m 193（单调）；**E2.2 第一档 naive 蒸馏 FID@1m 120.2→147.16 恶化**（2026-07-07 判负） | E1.4：FID/KID 接入 render eval ✅ | 立锚 → 不升（**E2.2 naive 违反：升 +27**）|
 | **NuRec 同 clip 对照锚** | 传闻 ~36 dB 未实测（v3_plan.md L33 理论对标值） | **E0.4**：官方 nre 配方在自有 clip 训练 + 双向全指标对照 | 把"与 NuRec 差距"从估计变实测，量化 v4 天花板 |
-| 守护线（interpolated 不退化） | class_psnr 25.07 / cc 26.06 / lane grad_corr 0.744 / novel(≤2m) 0.5962 | 现成（v3 全套） | cc ≥ 24.7（沿 v3）；grad_corr / class_psnr 不退 |
+| 守护线（interpolated 不退化） | class_psnr 25.07 / cc 26.06 / lane grad_corr 0.744 / novel(≤2m) 0.5962 | 现成（v3 全套） | cc ≥ 24.7（沿 v3）；grad_corr / class_psnr 不退。**E2.2 第一档 naive 违反：cc_masked→22.87 破线**（2026-07-07 判负归档）|
 
 ### 0.3 v4 不做（明确出界）
 
@@ -69,7 +69,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [E2.2 渐进外推蒸馏（核心移植）★★ 2026-07-03 战役主线 next-up·spec offtrack-campaign]
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
         [E2.7-C dyn features_albedo Fourier→SH 转换（E2.7-B 烟雾感 follow-up）]
@@ -80,6 +79,7 @@ kanban
 
     "In Progress"
         [E0.6 官方编辑体验：run-book + 资产 + schema 全就绪，待 GPU 空档]
+        [E2.2 渐进外推蒸馏 ★★ 第一档 naive 判负 2026-07-07：1m harmonizer-fix 帧直接注入 3D → FID@1m 120.2→147.16 恶化·cc_masked 25.90→22.87 破守护·目测 floater/色带；机制+基建打通（distill_frames.py + 5 GPU-path fix）loss/FID 双验非 bug；2m+ 档待大g 议 floater 抑制+progressive]
 
     "Blocked"
         [E3.1 ＝v3 P3.4 移交：空气区 penalty（gate E1.1 锚 ✅ + R9 PR24）]
@@ -133,7 +133,7 @@ kanban
 | **E1.4** | E1 | **FID/KID 接入**：novel 外推档渲染帧 vs 训练视角真图分布的 FID/KID（torchmetrics/clean-fid），写 metrics.json `mean_novel_fid_{mode}` | SOTA 综述（无 GT 外推共识指标） | 1 | ✅ | **2026-06-12 完成**：`--novel-fid` 开关；baseline FID render 75.3 → 1m 124 → 3m 168 → 6m 193 单调（K4 sanity PASS）；KID 主指标（subset 自适应）；**FID render 75 vs 官方场景 7.4 → 自有表示侧伪影重一个量级（E0.2 推论③实证）** |
 | **E1.5** | E1 | **v4 gap 表回填**：E0.4 NuRec 锚 + E1.1–E1.4 自有锚汇总入 § 1.3，**据实重排 E2/E3 优先级**（对标 v3 R1 纪律） | — | 0.5 | ✅ | **2026-06-12 重排结论：E3 先行、E2 定位 6m+ 档互补**。证据链：①官方纯表示侧（difix 关）3m lane +0.05/+3.9dB（road 冻结五件套之效）②6m 两家同崩 ~0.30 → 表示侧只能右移退化曲线一档，6m 必须修复链 ③三方锚配方无差 → 差距是结构性配方非调参 ④interp FID 61 vs 75 官方伪影少 ⑤E1.3 真 GT gap 7.77dB。**执行序：E3.1/E3.2 短刀（待 R9，大g暂缓）→ E3.3 BEV；E2.1 spike 低成本并行（域差已被 E0.7 smoke 初步排除）** |
 | **E2.1** ★ | E2 | **Harmonizer 升级集成 + 域差 spike**：[`third_party/Fixer`](third_party/Fixer)（一代）→ [NVIDIA/harmonizer](https://github.com/NVIDIA/harmonizer)（Cosmos Predict2 0.6B，时间条件，Apache-2.0）；HF `nvidia/Harmonizer` 权重 → 对 baseline 渲染的 3m/6m 帧离线修复 → E1 指标前后对比（**纯后处理预期：FID/感知大改善、几何指标不动**——正确预期，勿误判失败） | NuRec 调研 § 2.3/5.2 + v3 T15.2 | 1 | ✅ | **2026-06-13 完成**（render-only daefc03/4ac911d · batch-fix cd9fa6b · compare 24b03b0）：render-only 关监督出帧 10.6→4.62s/帧 + harmonizer IPC 批修复 750 帧 + eval_frames_dir 评。**FID −33%/−28% · KID −64%/−56% · NTA +0.033/+0.037 · lane_grad_corr −0.085/−0.095**（raw≡E1锚口径已验）；目视去伪影显著无异物 → **E2.2 GO**（§5 Done Log） |
-| **E2.2** ★★ | E2 | **渐进外推蒸馏（v4 核心）**：DiFix3D+ progressive update 移植——外推位姿从 1m→2m→3m→6m 逐步推进，每步「渲染→Harmonizer 修复→修复帧按低权重蒸馏回 3D（road/lane 区域加权）→下一步」；区别 v3 Stage 15 教训：不打全图 repro 轴，蒸馏目标=外推档 + road/lane 病灶区 | NuRec 调研 § 2.4（ablation 证据）+ v3 Stage 15 复活改轴 | 2.5 | ⬜ | gate=E2.1 spike + E1 锚；验收=E1 全指标 |
+| **E2.2** ★★ | E2 | **渐进外推蒸馏（v4 核心）**：DiFix3D+ progressive update 移植——外推位姿从 1m→2m→3m→6m 逐步推进，每步「渲染→Harmonizer 修复→修复帧按低权重蒸馏回 3D（road/lane 区域加权）→下一步」；区别 v3 Stage 15 教训：不打全图 repro 轴，蒸馏目标=外推档 + road/lane 病灶区 | NuRec 调研 § 2.4（ablation 证据）+ v3 Stage 15 复活改轴 | 2.5 | 🟡 | **第一档 naive 判负（2026-07-07，详见 §5 Done Log）**：1m harmonizer-fix 帧直接注入 3D → FID@1m 120.2→147.16 恶化 + cc_masked 25.90→22.87 破守护 + 目测 floater/色带；机制+基建（`distill_frames.py` + 5 GPU-path fix：78a9447/b8e3218/540d504/0b1e545/8860861）打通，loss 路由 + FID 有效性双确认非 bug。**2m+ 档不启动、待大g 议后续**（floater 抑制 + progressive + region 加权 vs 转 E2.3/E3）|
 | **E2.3** | E2 | **actor 弱观测面修复蒸馏**：对车辆 track object-centric 环绕渲染弱观测面 → Harmonizer 修复 → cuboid×sseg mask 内低权蒸馏；攻 P1.4 验尸根因（未观测面缺约束）的 2D 监督解法 | v3 P1.4 否定结论 + SOTA 共识（2D 监督非 3D 注入） | 2 | ⬜ | gate=E2.1；验收=class_psnr + NTA-IoU + 守护线 |
 | **E2.4** | E2 | （备选）**Harmonizer 域内微调**：若 E2.1 spike 显示 NCore 域差大——按 DiFix3D+ 降质构造法（cycle reconstruction 横移 1–6m / model underfitting / cross reference）在自有 clip 造配对，LoRA 级微调 | DiFix3D+ 论文 § 训练数据构造 | 2 | ⬜ | 仅 E2.1 域差坐实才投 |
 | **E2.5** | E2 | **编辑协调 spike（3dgrut2 侧）**：复用 AH 注入引擎（PR #18 plumbing / frozen 离线手术）在自有 ckpt 插入/取代 1–2 辆 asset-harvester 车 → Harmonizer 时间模式协调 → NTA-IoU/FID + 目视验收；**不训练或轻训练**——区别 P1.4 warm-start（重建轴）：本卡是编辑场景 + 生成协调，正是 NuRec 官方编辑形态 | 新 e25_inject.py + scripts/e25_inject_ah_replace.py（0350e34/21cf1c4） | 1.5 | ✅ 目测 | gate=E2.1 + E0.6 清单；**2026-06-17 目测 spike 完成**：3 AH 车 frozen 注入取代 recon automobile（'316'/'372'/'24'）+ viser+harmonizer 实时协调，目测 harmonizer 协调**有效但有限**（违和感降低、优于无 harmonizer、未完全自然）；定量 NTA-IoU/FID 按大g 决定跳过留 v5。v5 编辑轴第一块基石 |
@@ -326,6 +326,17 @@ flowchart TD
 - **v3 T15.2**：Fixer 一代已集成（[`correction/difix.py`](threedgrut/correction/difix.py)），E2.1 升级起点；Stage 15 全图蒸馏 +0.30 教训 → E2.2 改打外推档+病灶区。
 
 **新条目（v4 启动后填充，格式：日期 + commit + 实测数）**：
+
+- **2026-07-07 E2.2 渐进外推蒸馏「第一档 lateral_1m naive」判负 + 蒸馏基建打通**（off-track 战役思路 A；`superpowers:subagent-driven-development` 执行 Task 0–7，Task 1 严格 TDD 4 红先行；分支 `claude/laughing-dewdney-862997`；实测 inceptio depth-off + **5s 数据窗** full-window）：
+  - **结论 ＝ 干净否定**：1m harmonizer-fix 帧**直接**蒸馏回 3D（naive——无 floater 抑制 / 无 progressive / 仅低权 λ、未做 region 加权）在 off-track **恶化**。**三读数双源交叉**：
+    - ① **FID@1m 120.2 → 147.16 恶化**（锚 `p31b3_depthoff_30k` test-split vs gentle-distilled；`mean_render_fid=110.06` 同向佐证；**主指标判负**）；
+    - ② **cc_psnr_masked 25.90 → 22.87 破守护线**（门 cc≥24.7；mean_psnr 24.23→21.80、mean_psnr_masked 24.38 基本持平但 cc 项掉）；
+    - ③ **目测**（front_wide lateral_1m 三联 A_anchor / B_fixed_target / C_distilled 拉回 scratchpad）＝ distilled 出 **floater + 色带 artifact**，非干净几何。
+  - **机制洞见（教科书级 naive 2D→3D distill 失败模式）**：harmonizer 修的是**2D 分布**，直接注入 3D 缺多视一致约束 → 漂浮物 + 颜色条纹；DiFix3D+ 之所以必须 progressive（1m→2m→…逐档扩增强范围）+ region weighting + floater 抑制，正是治此。与 E0.7 β'（interpolated 蒸馏 −0.4dB 微降）方向一致但 off-track 放大成显著退化。
+  - **非 bug 双确认（诊断排除误判，非管线故障）**：① **loss 路由**——trainer `is_distill` 分支 `loss_l1 = distill_photometric_loss（λ·(l1+(1−ssim))）`、`if not is_distill:` 包住真图光度项，实测每 distill step `🔥 E2.2 distill step fired`；② **FID 有效性**——初读误把 `mean_render_kid_std` 当 render_fid，纠正后 `mean_render_fid=110.06` 有效、负结果真实。
+  - **配方教训**：warm-start `initialization.method=checkpoint` 重置 `global_step=0` → LR scheduler 回峰值 + MCMC 40% relocate 结构性摧毁（aggressive −5.6dB 系 val/test split + masked/unmasked 混用假象）；**gentle 配方**（`++strategy.relocate.max_relocation_fraction=0.0` + 各 LR /10，relocate 实测近零）仍 −2.4dB（对 unmasked test 锚 24.23）→ 温和化救不回 naive 方向本身的错。
+  - **可复用基建（5 个 GPU-path fix，全部命中 reviewer 预警的「GPU-only path untested」在真跑逐一暴露）**：新 `threedgrut/datasets/distill_frames.py`（DistillFrameSource 轻量 per-cam template + per-frame pose 索引 + distill_photometric_loss + apply_distill_warmstart）+ trainer `is_distill` 接线 + render.py `--novel-only/--novel-fid`；`test_distill_frames.py` 16 测（Mac 全绿）。commit 链：**78a9447**（warm-start open_dict 注 `initialization.path`，破 OmegaConf struct）→ **b8e3218**（source pose 从 `make_test`/test split 取，非 val 子采样）→ **540d504**（pack∩source 交集，容 5s 窗窄 source）→ **0b1e545**（checkpoint-init 为各 particle 层建 fresh optimizer，补 `LayeredGaussians.setup_optimizer` 只接 bg/sky/track 的洞）→ **8860861**（轻量 per-cam template + per-frame pose，避 375 帧 full-window ~19GB OOM）。
+  - **归档口径（大g 决策）**：「主看 FID、PSNR 非优化目标；截图确恶化 → 先归档、在讨论后续」。naive 第一档**不构成 Gate 1 GO**；E2.2 状态 🟡（机制 + 基建打通、naive 方向判负）；**2m+ 档不启动**，待大g 议 floater 抑制 + progressive + region 加权方案（继续本档路线 vs 转 E2.3/E3 线）。
 
 - **2026-07-02 新 inceptio 多相机 clip（`inc_b6a9ed61`，12 相机含 2 鱼眼 ftheta + cuboids）3-cam multilayer onboarding + aux 并行 6× + viser exposure 修复 + road/dynamic 质量诊断**（大g 新数据任务，分支 `claude/heuristic-meninsky-2d14ed`，未合 main）。
   - **数据 + 几何验证 ✅**：thinkpad→inceptio 内网直传 4.5G；12 相机 camera model 全确认（`camera_front_fisheye`/`camera_back_rear_fisheye`＝**FTheta**，其余 10＝**OpenCVPinhole**，`datasetNcore` 原生支持混合自动路由，3-cam 目标全 pinhole）；训练前**无-ckpt** cuboid 几何验证（新 `scripts/validate_cuboid_pretrain.py`，复用 `load_tracks_from_ncore_cuboids`＋validate_cuboid_7cam 投影）→ front_wide（dt=0）wireframe 精确套车，**pose/cuboids/transformation 正确**。
