@@ -122,6 +122,7 @@ class Renderer:
         novel_save_n: int = 5,
         render_only: bool = False,
         novel_only: bool = False,
+        novel_modes=None,
     ) -> None:
 
         if path:  # Replace the path to the test data
@@ -149,8 +150,16 @@ class Renderer:
         self.novel_save_n = int(novel_save_n)
         # E2.1: fast frame-dump — skip supervision loads, NTA, extra metrics.
         self.render_only = bool(render_only)
-        # E2.1: restrict novel modes to lateral_3m + lateral_6m only.
-        self.novel_only = bool(novel_only)
+        # E2.1 / E2.2: restrict novel modes to a subset. ``novel_only`` keeps the
+        # historical bool meaning (lateral_3m + lateral_6m); ``novel_modes`` (a
+        # list of mode names) parameterizes it — E2.2 renders per-band distill
+        # packs (e.g. lateral_1m). resolve_novel_modes validates against
+        # NOVEL_VIEW_MODES (typo fails fast) and returns the restriction tuple
+        # or None (render all modes).
+        from threedgrut.utils.novel_view import resolve_novel_modes
+
+        self.novel_modes = resolve_novel_modes(bool(novel_only), novel_modes)
+        self.novel_only = self.novel_modes is not None
         # Road off-track task: when true, render_all() restricts every model
         # forward in the eval pass to the road particle layer (bg / dynamic-
         # rigid / sky_envmap switched off via enabled_layer_names) so road_crop
@@ -224,6 +233,7 @@ class Renderer:
         novel_save_n: int = 5,
         render_only: bool = False,
         novel_only: bool = False,
+        novel_modes=None,
         road_only: bool = False,
     ):
         """Loads checkpoint for test path.
@@ -462,6 +472,7 @@ class Renderer:
             novel_save_n=novel_save_n,
             render_only=render_only,
             novel_only=novel_only,
+            novel_modes=novel_modes,
         )
 
     @classmethod
@@ -992,7 +1003,7 @@ class Renderer:
                 rgb_gt_perm = rgb_gt_full.permute(0, 3, 1, 2)
                 # E2.1: --novel-only restricts to lateral_3m + lateral_6m
                 # (the harmonizer target modes); other 4 modes skipped.
-                _novel_modes = ("lateral_3m", "lateral_6m") if self.novel_only else NOVEL_VIEW_MODES
+                _novel_modes = self.novel_modes if self.novel_only else NOVEL_VIEW_MODES
                 for mode in _novel_modes:
                     nT, nTe = perturb_batch_shutter_pair_torch(
                         orig_T,

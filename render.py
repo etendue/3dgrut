@@ -128,13 +128,24 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--novel-only",
-        action="store_true",
+        nargs="?",
+        const="lateral_3m,lateral_6m",
+        default=None,
         help=(
-            "E2.1: with --novel-view, render ONLY lateral_3m + lateral_6m "
-            "(skip lateral_1m/2m + yaw_5/10deg). Cuts 6-mode cost to 2-mode."
+            "E2.1/E2.2: with --novel-view, render ONLY the given comma-separated "
+            "novel modes (skip the rest). Bare --novel-only keeps the historical "
+            "default 'lateral_3m,lateral_6m'; pass e.g. --novel-only lateral_1m to "
+            "dump a single-band distill pack. Modes must be in NOVEL_VIEW_MODES."
         ),
     )
     args = parser.parse_args()
+
+    # E2.2: parse the novel-only mode list. None → not restricted; a value
+    # (incl. the bare-flag const) → restrict to those modes.
+    novel_modes_list = None
+    novel_only_flag = args.novel_only is not None
+    if novel_only_flag:
+        novel_modes_list = [m.strip() for m in args.novel_only.split(",") if m.strip()]
 
     eval_cameras_list = [c.strip() for c in args.eval_cameras.split(",") if c.strip()] or None
     dataset_cameras_list = [c.strip() for c in args.dataset_cameras.split(",") if c.strip()] or None
@@ -154,7 +165,8 @@ if __name__ == "__main__":
         novel_fid=args.novel_fid,
         novel_save_n=args.novel_save_n,
         render_only=args.render_only,
-        novel_only=args.novel_only,
+        novel_only=novel_only_flag,
+        novel_modes=novel_modes_list,
     )
 
     renderer.render_all()

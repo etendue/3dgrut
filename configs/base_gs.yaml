@@ -142,7 +142,29 @@ import_ply:
   enabled: false
   path: ""
   init_global_step: 0
-  
+
+# E2.2 — warm-start distillation from a converged anchor checkpoint. When set,
+# routes model-param loading through initialization.method="checkpoint" (loads
+# params only → FRESH optimizer + global_step=0), so ``n_iterations`` counts
+# distillation steps from 0 (NOT a resume that continues the anchor's step /
+# optimizer / cosine schedule). Empty = off (byte-identical). CLI:
+#   ++init_checkpoint=/path/to/anchor.pt
+init_checkpoint: ""
+
+# E2.2 — pseudo-GT progressive-distillation injection. Default enabled=false is
+# BYTE-EQUIVALENT to main (no DistillFrameSource built; loss path unchanged).
+# When enabled, each train step fires with probability ``p``: a Harmonizer-fixed
+# novel frame from ``frames_dir/<mode>/`` becomes an INDEPENDENT pseudo-GT batch
+# (novel pose via perturb_batch_shutter_pair_torch), scored with full-image
+# L1+SSIM scaled by ``lam``. Regularization / MCMC / exposure untouched.
+distill:
+  enabled: false               # master toggle; false = main byte-identical
+  frames_dir: null             # E2.1 fixed-frame pack root (contains <mode>/frames_map.json)
+  p: 0.3                       # per-step probability a distill batch is drawn
+  lam: 0.1                     # photometric weight for the pseudo-GT term (small start)
+  mode: lateral_1m             # novel-view mode; must match the rendered pack
+  region_weight_mask: null     # RESERVED (YAGNI §8) — lane-collapse 2nd knob; NOT implemented
+
 export_usd:
   enabled: false
   path: ""

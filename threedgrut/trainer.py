@@ -191,6 +191,7 @@ class Trainer3DGRUT:
         self.init_exposure_model(conf)
         self.init_depth_losses(conf)  # T11.A2
         self.init_pose_optimizer(conf)
+        self.init_distill_source(conf)  # E2.2 pseudo-GT injection
         self.init_gui(conf, self.model, self.train_dataset, self.val_dataset, self.scene_bbox)
 
     def init_dataloaders(self, conf: DictConfig):
@@ -297,6 +298,20 @@ class Trainer3DGRUT:
         3. Set up the optimizer to optimize the gaussian model params
         4. Initialize the densification buffers in the densificaiton strategy
         """
+
+        # E2.2 distillation warm-start: load an anchor checkpoint's model params
+        # only, with a FRESH optimizer + global_step=0, so ``n_iterations`` counts
+        # distill steps from 0 (unlike ``conf.resume`` which restores the optimizer
+        # and CONTINUES the anchor's step / cosine schedule). We route through the
+        # existing ``initialization.method="checkpoint"`` branch, which already
+        # does init_from_checkpoint(setup_optimizer=False) → setup_optimizer() →
+        # global_step=0. No-op when unset (byte-identical). ``conf.resume`` wins
+        # if both are set (explicit resume beats warm-start).
+        _init_ckpt = conf.get("init_checkpoint", "") if hasattr(conf, "get") else getattr(conf, "init_checkpoint", "")
+        if _init_ckpt and not conf.resume:
+            logger.info(f"🔥 E2.2 distillation warm-start from anchor checkpoint: {_init_ckpt}")
+            conf.initialization.method = "checkpoint"
+            conf.initialization.path = _init_ckpt
 
         # Initialize
         if conf.resume:  # Load a checkpoint
@@ -574,6 +589,39 @@ class Trainer3DGRUT:
 
         self.global_step = global_step
         self.n_epochs = int((conf.n_iterations + len(train_dataset) - 1) / len(train_dataset))
+
+    def init_distill_source(self, conf: DictConfig) -> None:
+        """E2.2 — build the pseudo-GT DistillFrameSource when distill.enabled.
+
+        Default OFF → ``self.distill_source = None`` (byte-identical to main: no
+        source built, run_train_iter/get_losses take their existing paths). When
+        on, we index the VAL-split batches (the same split render.py dumped novel
+        frames from) by ``ts:<cam>:<ts>`` so a fixed pack frame can recover its
+        source shutter poses for the novel-view perturbation.
+        """
+        self.distill_source = None
+        dconf = conf.get("distill", None) if hasattr(conf, "get") else getattr(conf, "distill", None)
+        enabled = bool(getattr(dconf, "enabled", False)) if dconf is not None else False
+        if not enabled:
+            return
+
+        from threedgrut.datasets.distill_frames import DistillFrameSource
+
+        frames_dir = getattr(dconf, "frames_dir", None)
+        mode = getattr(dconf, "mode", "lateral_1m")
+        if not frames_dir:
+            raise ValueError("distill.enabled=true but distill.frames_dir is not set")
+
+        # Collect source-frame batches from the val split (one Batch per frame).
+        source_batches = [self.val_dataset.get_gpu_batch_with_intrinsics(b) for b in self.val_dataloader]
+        self.distill_source = DistillFrameSource(frames_dir, mode, source_batches)
+        self._distill_p = float(getattr(dconf, "p", 0.3))
+        self._distill_lam = float(getattr(dconf, "lam", 0.1))
+        self._distill_rng = np.random.default_rng(int(conf.get("seed_initialization", 42)))
+        logger.info(
+            f"🔥 E2.2 distillation ON: {len(self.distill_source)} fixed frames "
+            f"(mode={mode}, p={self._distill_p}, lam={self._distill_lam}) from {frames_dir}"
+        )
 
     def init_gui(
         self,
@@ -1142,17 +1190,35 @@ class Trainer3DGRUT:
         image_infos = getattr(gpu_batch, "image_infos", None)
         trainer_conf = getattr(self.conf, "trainer", {})
 
-        # T8/B3 — optionally fill image_infos["dyn_mask_cuboid"] from active
-        # cuboids + FTheta intrinsics so compute_layered_l1_loss prefers cuboid
-        # over sseg (cuboid mask is exact: tied to tracked actors, no leak from
-        # untracked vehicles / cones). Mutates image_infos in place.
-        self._maybe_fill_cuboid_mask(gpu_batch, trainer_conf)
-        image_infos = getattr(gpu_batch, "image_infos", None)
+        # E2.2 — pseudo-GT distill batch: full-image L1 + SSIM scaled by lam,
+        # NOT the layered_l1 / region-mask path (novel frames carry no sseg/road
+        # masks; mask is None). We route the whole photometric term through the
+        # existing ``lambda_l1 * loss_l1`` slot (lambda_l1←1, loss_l1←lam*(L1+
+        # (1-SSIM)); L2/SSIM slots zeroed) so the total-loss formula and the
+        # return-dict shape stay identical. Regularization / MCMC / exposure
+        # terms below are UNTOUCHED (they operate on model params, not the
+        # batch rgb, so they are λ-independent).
+        is_distill = bool(getattr(gpu_batch, "is_distill", False))
+        if is_distill:
+            from threedgrut.datasets.distill_frames import distill_photometric_loss
 
-        # Mask out the invalid pixels if the mask is provided
-        if mask is not None:
-            rgb_gt = rgb_gt * mask
-            rgb_pred = rgb_pred * mask
+            lam = float(getattr(self, "_distill_lam", 0.1))
+            loss_l1 = distill_photometric_loss(rgb_pred, rgb_gt, lam)
+            loss_l2 = torch.zeros(1, device=self.device)
+            loss_ssim = torch.zeros(1, device=self.device)
+            lambda_l1, lambda_l2, lambda_ssim = 1.0, 0.0, 0.0
+        else:
+            # T8/B3 — optionally fill image_infos["dyn_mask_cuboid"] from active
+            # cuboids + FTheta intrinsics so compute_layered_l1_loss prefers cuboid
+            # over sseg (cuboid mask is exact: tied to tracked actors, no leak from
+            # untracked vehicles / cones). Mutates image_infos in place.
+            self._maybe_fill_cuboid_mask(gpu_batch, trainer_conf)
+            image_infos = getattr(gpu_batch, "image_infos", None)
+
+            # Mask out the invalid pixels if the mask is provided
+            if mask is not None:
+                rgb_gt = rgb_gt * mask
+                rgb_pred = rgb_pred * mask
 
         # L1 loss
         # T3.4: when conf.trainer.layered_loss is enabled and the batch
@@ -1160,43 +1226,47 @@ class Trainer3DGRUT:
         # {bg, road, dyn} regions and sum per-region means (sky excluded;
         # Stage 5 envmap takes over). SSIM stays full-image (D7).
         # v1 byte-identical when layered_loss=false or image_infos missing.
-        loss_l1 = torch.zeros(1, device=self.device)
-        lambda_l1 = 0.0
-        if self.conf.loss.use_l1:
-            with torch.cuda.nvtx.range(f"loss-l1"):
-                use_layered = (
-                    trainer_conf.get("layered_loss", False)
-                    if hasattr(trainer_conf, "get")
-                    else getattr(trainer_conf, "layered_loss", False)
-                )
-                if use_layered and image_infos is not None:
-                    loss_l1 = compute_layered_l1_loss(
-                        rgb_pred,
-                        rgb_gt,
-                        image_infos=image_infos,
-                        valid_mask=mask,
+        # E2.2: distill batches already set loss_l1/lambda_l1 (+ zeroed L2/SSIM)
+        # above via distill_photometric_loss; skip the real-image photometric
+        # blocks entirely so they don't clobber those values.
+        if not is_distill:
+            loss_l1 = torch.zeros(1, device=self.device)
+            lambda_l1 = 0.0
+            if self.conf.loss.use_l1:
+                with torch.cuda.nvtx.range(f"loss-l1"):
+                    use_layered = (
+                        trainer_conf.get("layered_loss", False)
+                        if hasattr(trainer_conf, "get")
+                        else getattr(trainer_conf, "layered_loss", False)
                     )
-                else:
-                    loss_l1 = torch.abs(rgb_pred - rgb_gt).mean()
-                lambda_l1 = self.conf.loss.lambda_l1
+                    if use_layered and image_infos is not None:
+                        loss_l1 = compute_layered_l1_loss(
+                            rgb_pred,
+                            rgb_gt,
+                            image_infos=image_infos,
+                            valid_mask=mask,
+                        )
+                    else:
+                        loss_l1 = torch.abs(rgb_pred - rgb_gt).mean()
+                    lambda_l1 = self.conf.loss.lambda_l1
 
-        # L2 loss
-        loss_l2 = torch.zeros(1, device=self.device)
-        lambda_l2 = 0.0
-        if self.conf.loss.use_l2:
-            with torch.cuda.nvtx.range(f"loss-l2"):
-                loss_l2 = torch.nn.functional.mse_loss(outputs["pred_rgb"], rgb_gt)
-                lambda_l2 = self.conf.loss.lambda_l2
+            # L2 loss
+            loss_l2 = torch.zeros(1, device=self.device)
+            lambda_l2 = 0.0
+            if self.conf.loss.use_l2:
+                with torch.cuda.nvtx.range(f"loss-l2"):
+                    loss_l2 = torch.nn.functional.mse_loss(outputs["pred_rgb"], rgb_gt)
+                    lambda_l2 = self.conf.loss.lambda_l2
 
-        # DSSIM loss
-        loss_ssim = torch.zeros(1, device=self.device)
-        lambda_ssim = 0.0
-        if self.conf.loss.use_ssim:
-            with torch.cuda.nvtx.range(f"loss-ssim"):
-                rgb_gt_full = torch.permute(rgb_gt, (0, 3, 1, 2))
-                pred_rgb_full = torch.permute(rgb_pred, (0, 3, 1, 2))
-                loss_ssim = 1.0 - ssim(pred_rgb_full, rgb_gt_full)
-                lambda_ssim = self.conf.loss.lambda_ssim
+            # DSSIM loss
+            loss_ssim = torch.zeros(1, device=self.device)
+            lambda_ssim = 0.0
+            if self.conf.loss.use_ssim:
+                with torch.cuda.nvtx.range(f"loss-ssim"):
+                    rgb_gt_full = torch.permute(rgb_gt, (0, 3, 1, 2))
+                    pred_rgb_full = torch.permute(rgb_pred, (0, 3, 1, 2))
+                    loss_ssim = 1.0 - ssim(pred_rgb_full, rgb_gt_full)
+                    lambda_ssim = self.conf.loss.lambda_ssim
 
         # Opacity regularization
         loss_opacity = torch.zeros(1, device=self.device)
@@ -2253,6 +2323,22 @@ class Trainer3DGRUT:
         # Access the GPU-cache batch data
         with torch.cuda.nvtx.range(f"train_iter{global_step}_get_gpu_batch"):
             gpu_batch = self.train_dataset.get_gpu_batch_with_intrinsics(batch)
+
+        # E2.2 — pseudo-GT probabilistic-mix injection. With probability p, this
+        # step trains on an INDEPENDENT Harmonizer-fixed novel frame (its own
+        # novel pose + fixed rgb_gt) instead of the real batch — never a pixel
+        # blend of the two (different poses can't be mixed). No-op when the
+        # source is None (distill disabled → byte-identical to main).
+        if getattr(self, "distill_source", None) is not None:
+            if float(self._distill_rng.random()) < self._distill_p:
+                gpu_batch = self.distill_source.sample(rng=self._distill_rng)
+                _fc = self.distill_source.fire_count
+                if _fc == 1 or _fc % 200 == 0:
+                    logger.info(
+                        f"🔥 E2.2 distill step fired at global_step={global_step} "
+                        f"(pseudo-GT sample #{_fc}, mode={self.distill_source.mode}, "
+                        f"lam={self._distill_lam})"
+                    )
 
         # Perform validation if required
         is_time_to_validate = (global_step > 0 or conf.validate_first) and (global_step % self.val_frequency == 0)

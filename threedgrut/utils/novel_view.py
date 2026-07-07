@@ -33,7 +33,7 @@ distorted intra-frame motion. Use ``perturb_shutter_pair`` for that pair.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -193,3 +193,23 @@ def novel_frame_key(camera_id: str, timestamp_us) -> str:
 def novel_frame_relpath(camera_id: str, save_idx: int) -> str:
     """Per-camera subdir, 6-digit zero-padded — matches eval_frames_dir fallback layout."""
     return f"{camera_id}/{int(save_idx):06d}.png"
+
+
+def resolve_novel_modes(novel_only: bool, novel_modes=None) -> Optional[Tuple[str, ...]]:
+    """E2.2 — resolve render.py's --novel-only into a validated mode tuple.
+
+    * ``novel_modes`` given (non-empty)  → those modes (validated), restriction on.
+    * else ``novel_only`` True           → historical default ``(lateral_3m, lateral_6m)``.
+    * else                               → ``None`` (no restriction; render all modes).
+
+    Raises ``ValueError`` on any mode not in ``NOVEL_VIEW_MODES`` (a typo must
+    fail fast, not silently render nothing).
+    """
+    if novel_modes:
+        bad = [m for m in novel_modes if m not in NOVEL_VIEW_MODES]
+        if bad:
+            raise ValueError(f"novel modes {bad} not in NOVEL_VIEW_MODES {NOVEL_VIEW_MODES}")
+        return tuple(novel_modes)
+    if novel_only:
+        return ("lateral_3m", "lateral_6m")
+    return None

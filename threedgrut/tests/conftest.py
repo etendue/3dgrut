@@ -50,7 +50,28 @@ from unittest.mock import MagicMock
 
 def _install_stubs() -> None:
     """Install sys.modules stubs for packages that require CUDA or ncore SDK."""
+    import contextlib
+
     import torch  # noqa: E402 — torch is available
+
+    # 0. torch.cuda.nvtx.range: on a CPU-only torch build this raises
+    #    "NVTX functions not installed" the moment it is used — even as a bare
+    #    @decorator (e.g. model.losses.ssim). It is used BOTH as a decorator and
+    #    as a context manager across threedgrut, so replace it with a no-op that
+    #    is valid in both forms. GPU builds are unaffected (this only runs when
+    #    the tests import). Lets CPU tests call NVTX-decorated code (E2.2 ssim).
+    class _NoopNvtxRange(contextlib.ContextDecorator):
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    if not torch.cuda.is_available():
+        torch.cuda.nvtx.range = _NoopNvtxRange  # type: ignore[assignment]
 
     # 1. ncore: NVIDIA-internal SDK
     for name in ("ncore", "ncore.sensors", "ncore.data"):
@@ -96,6 +117,46 @@ def _install_stubs() -> None:
         sys.modules.setdefault("tensorboard", MagicMock())
         sys.modules.setdefault("torch.utils.tensorboard", tb_stub)
         sys.modules.setdefault("torch.utils.tensorboard.writer", tb_stub.writer)
+
+    # 5b. fused_ssim: CUDA extension (threedgrut.model.losses.ssim wraps it).
+    #     Provide a pure-torch SSIM so CPU tests can exercise the real
+    #     photometric loss path (E2.2 distill). Matches fused_ssim's public
+    #     signature ``fused_ssim(img1, img2, padding="valid") -> scalar``:
+    #     11x11 Gaussian window, "valid" padding (no border), mean over the map.
+    if "fused_ssim" not in sys.modules:
+        import math
+
+        import torch.nn.functional as F  # noqa: N812
+
+        def _gaussian_window(window_size: int, sigma: float, channels: int, device, dtype):
+            coords = torch.arange(window_size, dtype=dtype, device=device) - (window_size - 1) / 2.0
+            g = torch.exp(-(coords**2) / (2.0 * sigma**2))
+            g = (g / g.sum()).unsqueeze(1)
+            w2d = (g @ g.t()).unsqueeze(0).unsqueeze(0)  # [1,1,ws,ws]
+            return w2d.expand(channels, 1, window_size, window_size).contiguous()
+
+        def _fused_ssim(img1, img2, padding="valid", train=True):
+            ws, sigma = 11, 1.5
+            c = img1.shape[1]
+            pad = 0 if padding == "valid" else ws // 2
+            win = _gaussian_window(ws, sigma, c, img1.device, img1.dtype)
+            mu1 = F.conv2d(img1, win, padding=pad, groups=c)
+            mu2 = F.conv2d(img2, win, padding=pad, groups=c)
+            mu1_sq, mu2_sq, mu1_mu2 = mu1 * mu1, mu2 * mu2, mu1 * mu2
+            sigma1_sq = F.conv2d(img1 * img1, win, padding=pad, groups=c) - mu1_sq
+            sigma2_sq = F.conv2d(img2 * img2, win, padding=pad, groups=c) - mu2_sq
+            sigma12 = F.conv2d(img1 * img2, win, padding=pad, groups=c) - mu1_mu2
+            C1, C2 = 0.01**2, 0.03**2
+            ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
+                (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+            )
+            return ssim_map.mean()
+
+        _fs_mod = types.ModuleType("fused_ssim")
+        _fs_mod.__spec__ = importlib.util.spec_from_loader("fused_ssim", loader=None)
+        _fs_mod.fused_ssim = _fused_ssim
+        _ = math  # silence unused when linters fold the import
+        sys.modules["fused_ssim"] = _fs_mod
 
     # 6. threedgrut.datasets: package-level stub with __path__ so submodule
     #    imports (e.g. threedgrut.datasets.utils) succeed without executing
