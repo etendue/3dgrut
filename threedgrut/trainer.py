@@ -381,6 +381,18 @@ class Trainer3DGRUT:
                 case "checkpoint":
                     checkpoint = torch.load(conf.initialization.path, weights_only=False)
                     model.init_from_checkpoint(checkpoint, setup_optimizer=False)
+                    # E2.2 warm-start: the fall-through LayeredGaussians.setup_optimizer()
+                    # only wires bg/sky/track and ASSUMES the particle layers got their
+                    # Adam from init_layer_from_points — which checkpoint-init bypasses,
+                    # leaving road/dynamic particle optimizers None (scheduler_step then
+                    # crashes with 'NoneType' has no attribute 'param_groups'). Wire each
+                    # particle layer's Adam FRESH (no state_dict) so distillation starts
+                    # from bounded ~lr*sign(grad) steps, not the anchor's converged Adam
+                    # moments. getattr guard → a non-layered single MoG (no .specs) just
+                    # uses the fall-through model.setup_optimizer() below.
+                    for _spec in getattr(model, "specs", []):
+                        if getattr(_spec, "is_particle_layer", False):
+                            model.layers[_spec.name].setup_optimizer()
                 case "lidar":
                     assert isinstance(
                         train_dataset, datasets.NCoreDataset
