@@ -172,11 +172,27 @@ def test_missing_mode_dir_raises(tmp_path):
 
 
 def test_pack_frame_without_source_pose_raises(tmp_path):
-    # frames_map references (CAM, 999) but no source batch has that ts.
+    # ZERO pack frames match any source pose → raise (fully disjoint split).
     src = _mk_source_batch(CAM, 111, seed=1)  # ts 111, pack wants 999
     _write_pack(str(tmp_path), MODE, [(CAM, 999, torch.rand(H, W, 3))])
     with pytest.raises((KeyError, ValueError, RuntimeError)):
         DistillFrameSource(str(tmp_path), MODE, _build_source([src]))
+
+
+def test_partial_source_match_uses_intersection(tmp_path):
+    # PARTIAL match: pack has 2 frames, source covers only 1 (e.g. a 5s test
+    # split vs a full-window pack) → use the matched frame, skip the other, NO
+    # raise. Guards against re-regressing to the strict all-or-nothing check.
+    src = _mk_source_batch(CAM, 111, seed=1)  # only ts 111 has a source pose
+    _write_pack(
+        str(tmp_path),
+        MODE,
+        [(CAM, 111, torch.rand(H, W, 3)), (CAM, 999, torch.rand(H, W, 3))],
+    )
+    source = DistillFrameSource(str(tmp_path), MODE, _build_source([src]))
+    assert len(source) == 1  # only the matched frame is usable
+    b = source.sample(rng=np.random.default_rng(0))
+    assert int(b.timestamp_us) == 111
 
 
 def test_missing_png_file_raises(tmp_path):

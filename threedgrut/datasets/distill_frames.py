@@ -28,6 +28,7 @@ them — never call the renderer.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Iterable, Optional
 
@@ -144,17 +145,29 @@ class DistillFrameSource:
                 continue
             self._source_by_key[novel_frame_key(cam, int(ts))] = b
 
-        # Every pack frame MUST have a source pose — a missing one means the
-        # pack and the dataset split disagree (frame-pose misalignment is
-        # distillation poison). Fail loudly at construction, not mid-training.
-        missing = [k for k in self.frames_map if k not in self._source_by_key]
-        if missing:
+        # Use the pack frames that HAVE a matching source pose (correctly
+        # aligned). Missing ones mean the source split (e.g. a 5s or subsampled
+        # test split) is narrower than the pack — those frames are SKIPPED, not
+        # misaligned (their poses would be right if present). Warn (never
+        # silent); fail only if NOTHING matches (fully disjoint = real error).
+        self._keys = [k for k in self.frames_map if k in self._source_by_key]
+        n_missing = len(self.frames_map) - len(self._keys)
+        if not self._keys:
+            example = next(iter(self.frames_map))
             raise KeyError(
-                f"{len(missing)} distill pack frame(s) have no matching source "
-                f"pose (e.g. {missing[0]!r}); pack/dataset split mismatch"
+                f"NONE of {len(self.frames_map)} distill pack frames have a "
+                f"matching source pose (e.g. {example!r}); pack/dataset split "
+                f"fully disjoint — wrong frames_dir/mode or split config"
             )
-
-        self._keys = list(self.frames_map.keys())
+        if n_missing:
+            logging.getLogger(__name__).warning(
+                "distill: %d/%d pack frames have no source pose in this split "
+                "(using the %d matched); source split narrower than the pack "
+                "(e.g. train.duration_sec=5 → 5s test vs full-window pack).",
+                n_missing,
+                len(self.frames_map),
+                len(self._keys),
+            )
         self._fire_count = 0
 
     def __len__(self) -> int:
