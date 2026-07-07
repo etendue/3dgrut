@@ -595,9 +595,10 @@ class Trainer3DGRUT:
 
         Default OFF → ``self.distill_source = None`` (byte-identical to main: no
         source built, run_train_iter/get_losses take their existing paths). When
-        on, we index the VAL-split batches (the same split render.py dumped novel
-        frames from) by ``ts:<cam>:<ts>`` so a fixed pack frame can recover its
-        source shutter poses for the novel-view perturbation.
+        on, we index the TEST-split batches (``datasets.make_test`` — the SAME
+        split render.py dumps the pack from; the trainer's val split is
+        subsampled by ``val_frame_interval`` and would miss most pack frames) by
+        ``ts:<cam>:<ts>`` so a fixed pack frame recovers its source shutter poses.
         """
         self.distill_source = None
         dconf = conf.get("distill", None) if hasattr(conf, "get") else getattr(conf, "distill", None)
@@ -612,8 +613,18 @@ class Trainer3DGRUT:
         if not frames_dir:
             raise ValueError("distill.enabled=true but distill.frames_dir is not set")
 
-        # Collect source-frame batches from the val split (one Batch per frame).
-        source_batches = [self.val_dataset.get_gpu_batch_with_intrinsics(b) for b in self.val_dataloader]
+        # Source poses must come from the SAME split render.py dumped the pack
+        # from: render.py uses datasets.make_test (the FULL test split), NOT the
+        # trainer's val split (subsampled by val_frame_interval → pack ⊄ val,
+        # which raised "N distill pack frame(s) have no matching source pose").
+        from threedgrut.datasets.utils import configure_dataloader_for_platform
+
+        test_dataset = datasets.make_test(name=conf.dataset.type, config=conf)
+        test_loader_kwargs = configure_dataloader_for_platform(
+            {"num_workers": 8, "batch_size": 1, "shuffle": False, "collate_fn": None}
+        )
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, **test_loader_kwargs)
+        source_batches = [test_dataset.get_gpu_batch_with_intrinsics(b) for b in test_dataloader]
         self.distill_source = DistillFrameSource(frames_dir, mode, source_batches)
         self._distill_p = float(getattr(dconf, "p", 0.3))
         self._distill_lam = float(getattr(dconf, "lam", 0.1))
