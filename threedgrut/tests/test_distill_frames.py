@@ -25,7 +25,7 @@ import pytest
 import torch
 import torchvision
 
-from threedgrut.datasets.distill_frames import DistillFrameSource
+from threedgrut.datasets.distill_frames import DistillFrameSource, apply_distill_warmstart
 from threedgrut.utils.novel_view import (
     novel_frame_key,
     perturb_batch_shutter_pair_torch,
@@ -287,3 +287,46 @@ def test_resolve_novel_modes_explicit_list():
 def test_resolve_novel_modes_rejects_unknown_mode():
     with pytest.raises(ValueError):
         resolve_novel_modes(True, ["lateral_9m"])  # not a real mode
+
+
+# ── E2.2 warm-start (regression: Task 4 GPU crash — struct-locked initialization) ──
+
+
+def _warmstart_conf(init_checkpoint="", resume=""):
+    from omegaconf import OmegaConf
+
+    conf = OmegaConf.create(
+        {
+            "init_checkpoint": init_checkpoint,
+            "resume": resume,
+            "initialization": {"method": "random", "num_gaussians": 1000},
+        }
+    )
+    OmegaConf.set_struct(conf, True)  # real hydra configs are struct-locked
+    return conf
+
+
+def test_warmstart_sets_checkpoint_path_on_struct_config():
+    # Regression: initialization has NO 'path' key + struct-locked → the naive
+    # `conf.initialization.path = ...` raised ConfigAttributeError at
+    # setup_training (arm1 crash). apply_distill_warmstart must open_dict it.
+    conf = _warmstart_conf(init_checkpoint="/anchor/ckpt_last.pt")
+    out = apply_distill_warmstart(conf)
+    assert out == "/anchor/ckpt_last.pt"
+    assert conf.initialization.method == "checkpoint"
+    assert conf.initialization.path == "/anchor/ckpt_last.pt"
+
+
+def test_warmstart_noop_when_unset():
+    conf = _warmstart_conf(init_checkpoint="")
+    assert apply_distill_warmstart(conf) == ""
+    assert conf.initialization.method == "random"
+    assert "path" not in conf.initialization
+
+
+def test_warmstart_resume_wins():
+    # Explicit resume beats warm-start (resume restores optimizer/step).
+    conf = _warmstart_conf(init_checkpoint="/anchor.pt", resume="/resume.pt")
+    assert apply_distill_warmstart(conf) == ""
+    assert conf.initialization.method == "random"
+    assert "path" not in conf.initialization

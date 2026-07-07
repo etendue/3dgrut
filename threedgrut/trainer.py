@@ -307,11 +307,11 @@ class Trainer3DGRUT:
         # does init_from_checkpoint(setup_optimizer=False) → setup_optimizer() →
         # global_step=0. No-op when unset (byte-identical). ``conf.resume`` wins
         # if both are set (explicit resume beats warm-start).
-        _init_ckpt = conf.get("init_checkpoint", "") if hasattr(conf, "get") else getattr(conf, "init_checkpoint", "")
-        if _init_ckpt and not conf.resume:
+        from threedgrut.datasets.distill_frames import apply_distill_warmstart
+
+        _init_ckpt = apply_distill_warmstart(conf)
+        if _init_ckpt:
             logger.info(f"🔥 E2.2 distillation warm-start from anchor checkpoint: {_init_ckpt}")
-            conf.initialization.method = "checkpoint"
-            conf.initialization.path = _init_ckpt
 
         # Initialize
         if conf.resume:  # Load a checkpoint

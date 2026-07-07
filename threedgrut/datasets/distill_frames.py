@@ -75,6 +75,30 @@ def distill_photometric_loss(rgb_pred: torch.Tensor, rgb_gt: torch.Tensor, lam: 
     return lam * (l1 + ssim_term)
 
 
+def apply_distill_warmstart(conf) -> str:
+    """E2.2 warm-start: route ``init_checkpoint`` → the existing
+    ``initialization.method='checkpoint'`` branch (loads model params only →
+    fresh optimizer → global_step=0), setting the anchor path.
+
+    Uses ``open_dict`` because the ``initialization`` config group (e.g.
+    ``configs/initialization/checkpoint.yaml``) is struct-locked and has NO
+    ``path`` key by default — a plain ``conf.initialization.path = ...`` raises
+    ``ConfigAttributeError: Key 'path' is not in struct`` (the Task 4 GPU
+    crash this regressed). No-op when ``init_checkpoint`` is unset or ``resume``
+    is set (explicit resume wins). Returns the resolved checkpoint path (``""``
+    when inactive).
+    """
+    from omegaconf import open_dict
+
+    init_ckpt = conf.get("init_checkpoint", "") if hasattr(conf, "get") else getattr(conf, "init_checkpoint", "")
+    if init_ckpt and not getattr(conf, "resume", ""):
+        with open_dict(conf.initialization):
+            conf.initialization.method = "checkpoint"
+            conf.initialization.path = init_ckpt
+        return init_ckpt
+    return ""
+
+
 class DistillFrameSource:
     """Samples Harmonizer-fixed novel frames as pseudo-GT ``Batch`` objects."""
 
