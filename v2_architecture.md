@@ -431,6 +431,7 @@ flowchart TB
 | `threedgrut/model/track_albedo_fourier.py` | **P1.3b ✅ (2026-06-06, fourier_albedo_bias Σ f_i·cos(iπt/N_t) + upgrade_albedo_table ckpt 升降维，纯函数)** —— 4D-SH 时变 albedo；A/B k4 24.13 vs DC k1 24.20 **无增益**，default k1 关、gated 留未来 |
 | `threedgrut/model/plane_warp.py` | **E1.1 ✅ (2026-06-12, ftheta_project_points + build_plane_warp + warp_image 纯函数)** —— 平面诱导 warp 伪 GT：novel 像素射线↔road 高度场定点求交→FTheta 投回原相机；novel lane 指标内核（render.py + eval_frames_dir 共用） |
 | `threedgrut/model/nta_iou.py` | **E1.2 ✅ (2026-06-12, project_track_to_2d_box + compute_frame_nta_iou)** —— GT cuboid→2D AABB best-match IoU；behind-camera 前置剔除 |
+| `threedgrut/datasets/distill_frames.py` | **E2.2 第一档 naive 判负 · 基建 ✅（2026-07-07）**：DistillFrameSource（轻量 per-cam template + per-frame pose 索引，避 375 帧 full-window ~19GB OOM）+ distill_photometric_loss（λ·(l1+(1−ssim))）+ apply_distill_warmstart（open_dict 注 `initialization.method=checkpoint`）；配套 trainer `is_distill` 接线 + render.py `--novel-only/--novel-fid`；16 测 `test_distill_frames.py`（Mac，Task 1 严格 TDD）。5 GPU-path fix：78a9447/b8e3218/540d504/0b1e545/8860861。**naive 1m 蒸馏 FID@1m 120.2→147.16 恶化 + cc_masked 25.90→22.87 破守护 + 目测 floater 判负**。**⏭ 蒸馏方向 2026-07-07 终止**（大g 拍板：三红灯——蒸馏至今零正数 / 幻觉污染信息论硬伤 / FID 目标与几何 KPI 错位；见 v4_plan §5 战略决策条）、**代码留分支不合 main** |
 | `threedgrut/model/vehicle_detector.py` | **E1.2 ✅ (YOLOv8m 懒加载单例)** —— 唯一 ultralytics 耦合点，duck-typed 注入 |
 | `scripts/dump_test_split_manifest.py` | **E0.4 ✅ (2026-06-12)** —— test split 位姿 manifest（NuRec 侧出帧对齐用） |
 | `scripts/eval_frames_dir.py` | **E0.4 ✅ (2026-06-12)** —— render_all 去模型离线评测器：外部帧（nre render）喂项目侧全指标，同口径双向对照核心 |
@@ -569,6 +570,7 @@ flowchart TB
 | LayeredMCMC + v1 ckpt resume 端到端 byte-identical PSNR | Stage 2 出口 ✅ | A800 1k step 验证 24.123 dB（2026-05-18, df1e87d）；8 帧序列与 T1.2 baseline 完全一致 |
 | **E3.2.5 roaddisk 几何 bundle 进 baseline**：multilayer.yaml 默认含 `road_init_knn_k=5` + `scale_z_max=0.001`（1mm 真薄盘）+ `positions_lr=1e-6` + `freeze_rotation_grad=true` + `strategy.exclude_layer_ids=[road]`（6k A/B on>off cc +0.41 / lane +0.04~0.06；大g 决策 2026-06-23，原 roaddisk preset 降冗余）。takeover bg_road_penalty 保持 λ0.1/z_band0.4（三档调强证伪不进） | E3.2.5 ✅ baseline (2026-06-23) | compose 验证 road override 生效 + 全套 919 测零回归 |
 | sub.model 与各层 MoG identity 绑定（跨层无迁移结构性保证） | T2.4 ✅ | `test_no_cross_layer_migration_structural` (Mac, 04c9174) |
+| **E2.2 distill opt-in 默认关**：`distill.enabled=false`（默认）时 trainer 逐字节等价 v3——`is_distill` 分支不触发、真图光度项照走；`apply_distill_warmstart` 仅在 enabled 时改 `initialization` | E2.2 第一档 ✅ (2026-07-07) | `test_distill_frames.py` 16 测（Mac，含 warm-start struct/noop/resume-wins + pack∩source 交集回归）+ inceptio naive 1m 实测 FID@1m 120.2→147.16 恶化判负。**⏭ 蒸馏方向 2026-07-07 终止、代码不合 main**（不变量仅记录 opt-in 默认关的 byte-equiv 事实，供未来复用基建时参考）|
 | init_densification_buffer 广播到所有 sub-strategy | T2.4 ✅ | `test_init_densification_buffer_dispatches_to_all_subs` (Mac, 04c9174) |
 | _make_sub_conf 不改变父 conf | T2.4 ✅ (M-2 carry-over) | `test_make_sub_conf_does_not_mutate_parent` (Mac, 04c9174) |
 | Stage 1 测试单独运行不依赖 test_layered_mcmc.py 的 collect order | T2.4 ✅ (I-1 fix) | conftest.py stubs (51540a8); pytest test_layered_gaussians.py 9/9 PASS standalone |
