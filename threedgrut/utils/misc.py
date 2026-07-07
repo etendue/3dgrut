@@ -28,7 +28,18 @@ OmegaConf.register_new_resolver("eq", lambda a, b: a == b)
 
 
 def to_torch(data: npt.NDArray, device: str, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
-    """Converts a numpy array to a torch tensor on target device with optional type-casting"""
+    """Converts a numpy array to a torch tensor on target device with optional type-casting.
+
+    Read-only source arrays (e.g. aux masks decoded via ``np.asarray(Image.open(...))``,
+    whose buffer is non-writable) are copied first. Otherwise ``torch.from_numpy`` would
+    share the read-only buffer, emit a per-worker UserWarning ("NumPy array is not
+    writable...") that floods render.py multi-camera held-out eval, and — since
+    ``.to("cpu")`` is a no-op — leave any downstream in-place write as undefined behavior
+    that can silently corrupt the dataset's cached sseg/mask arrays. Writable inputs keep
+    the zero-copy path unchanged.
+    """
+    if not data.flags.writeable:
+        data = data.copy()
     return torch.from_numpy(data).to(device=device, dtype=dtype)
 
 
