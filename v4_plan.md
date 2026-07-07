@@ -6,7 +6,7 @@
 > - NuRec 工具链调研 [`~/repo/report/nvidia-nurec-extrapolation-analysis.md`](../report/nvidia-nurec-extrapolation-analysis.md)（修复器三代演进 / DiFix3D+ 量化证据 / held-out 协议 / license）
 > - 领域综述 [`~/repo/report/3d-4d-state-of-the-art-2025-2026.md`](../report/3d-4d-state-of-the-art-2025-2026.md)（外推 = 生成先验主战场；NTA-IoU/FID/KID 评测共识）
 > - 2026-06-11 外推诊断（aperture problem 根因 + 测量双盲区）：[`v3_plan_revised.md`](v3_plan_revised.md) § 2.3 / § 6 Done Log
-> - **2026-07-03 off-track 战役收敛（大g 拍板）**：**E2.2 定为战役主线 next-up**（A→B→C 优先序、无悔棋三件套、算力调度、决策门见 [`docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md`](docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md)）；E2.2 每档验收三读数（FID/KID + lane + interpolated 守护）与门 2 判据以战役 spec 为准；**表示侧新 spike 战役期冻结**（E3.3/E3.2.6/autogen 三连负教训）
+> - **2026-07-03 off-track 战役收敛（大g 拍板）**：**E2.2 定为战役主线 next-up**（A→B→C 优先序、无悔棋三件套、算力调度、决策门见 [`docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md`](docs/superpowers/specs/2026-07-03-offtrack-campaign-design.md)）；E2.2 每档验收三读数（FID/KID + lane + interpolated 守护）与门 2 判据以战役 spec 为准；**表示侧新 spike 战役期冻结**（E3.3/E3.2.6/autogen 三连负教训）。**【2026-07-07 更新（推翻本条主线定位）：E2.2 蒸馏第一档 naive 判负 + 三红灯（蒸馏至今零正数 / 幻觉污染信息论硬伤 / FID 目标与几何 KPI 错位）→ 大g 拍板终止蒸馏作为 off-track 主武器，主线转表示侧 E3 + 数据侧、表示侧冻结随之解除，详见 §5 Done Log 2026-07-07 战略决策条】**
 > **执行约定**：沿用 [`CLAUDE.md`](CLAUDE.md)（inceptio 首选 / depth-off+nw=10 铁律 / 文档同步纪律 / Mermaid 全角括号）；具体任务开工时按 superpowers 流程在 `docs/superpowers/plans/` 起 TDD 执行 plan。
 > **官方工具就绪**：NVIDIA nurec-skills 已装入本环境（`nre` / `ncore` / `asset-harvester` / `nurec-fixer` / `physical-ai-datasets` / `nurec-index`），E0 直接调用。
 
@@ -79,13 +79,13 @@ kanban
 
     "In Progress"
         [E0.6 官方编辑体验：run-book + 资产 + schema 全就绪，待 GPU 空档]
-        [E2.2 渐进外推蒸馏 ★★ 第一档 naive 判负 2026-07-07：1m harmonizer-fix 帧直接注入 3D → FID@1m 120.2→147.16 恶化·cc_masked 25.90→22.87 破守护·目测 floater/色带；机制+基建打通（distill_frames.py + 5 GPU-path fix）loss/FID 双验非 bug；2m+ 档待大g 议 floater 抑制+progressive]
 
     "Blocked"
         [E3.1 ＝v3 P3.4 移交：空气区 penalty（gate E1.1 锚 ✅ + R9 PR24）]
         [E3.2 ＝v3 P3.5 移交：road SH DC-only freeze（gate 同 E3.1）]
 
     "Done"
+        [E2.2 渐进外推蒸馏 ★★ ⏭ 蒸馏方向终止 2026-07-07：第一档 naive 判负（FID@1m 120.2→147.16 恶化·cc_masked 25.90→22.87 破守护·目测 floater/色带）+ 三红灯（蒸馏至今零正数·幻觉污染信息论硬伤·FID 目标与几何 KPI 错位）+ E1.5 早已降级 E2 → 大g 拍板终止蒸馏主武器、转表示侧 E3+数据侧；基建代码留分支不合 main]
         [E5.0 inc_b6a9 新 clip onboarding ✅ 2026-07-02：12 相机含 2 鱼眼 ftheta，3-cam 完整 4 层 multilayer 30k（mean_psnr 21.04，inceptio depth-off 锚）；几何验证 pose/cuboids/transformation 正确；aux 多 container 并行 6×（5.8h→58min）；viser exposure bug 修复；road/dynamic 诊断喂 E5.1/E5.2]
         [E3.2.5 几何硬退化 disk ✅ → 默认进 baseline 2026-06-23：6k A/B on＞off（cc +0.41 / lateral lane grad_corr +0.04~0.06 / freeze 铁证 rot 0°·z 1mm·N 恒定）→ roaddisk bundle 写进 multilayer.yaml（大g 决策）；30k 全量待排期]
         [E3.3 BEV 纹理平面化 ⏭ 实测判负 2026-06-23：6k A/B BEV 全面略差（cc 23.49 vs 23.74·lane 6m 0.282 vs 0.307·road_crop 26.56 vs 27.35）+ viser 无改善白条仍 bg → road 弱所有权下颜色参数化无效（spec §1.4）；代码 PR #37 opt-in OFF 不进 main]
@@ -133,7 +133,7 @@ kanban
 | **E1.4** | E1 | **FID/KID 接入**：novel 外推档渲染帧 vs 训练视角真图分布的 FID/KID（torchmetrics/clean-fid），写 metrics.json `mean_novel_fid_{mode}` | SOTA 综述（无 GT 外推共识指标） | 1 | ✅ | **2026-06-12 完成**：`--novel-fid` 开关；baseline FID render 75.3 → 1m 124 → 3m 168 → 6m 193 单调（K4 sanity PASS）；KID 主指标（subset 自适应）；**FID render 75 vs 官方场景 7.4 → 自有表示侧伪影重一个量级（E0.2 推论③实证）** |
 | **E1.5** | E1 | **v4 gap 表回填**：E0.4 NuRec 锚 + E1.1–E1.4 自有锚汇总入 § 1.3，**据实重排 E2/E3 优先级**（对标 v3 R1 纪律） | — | 0.5 | ✅ | **2026-06-12 重排结论：E3 先行、E2 定位 6m+ 档互补**。证据链：①官方纯表示侧（difix 关）3m lane +0.05/+3.9dB（road 冻结五件套之效）②6m 两家同崩 ~0.30 → 表示侧只能右移退化曲线一档，6m 必须修复链 ③三方锚配方无差 → 差距是结构性配方非调参 ④interp FID 61 vs 75 官方伪影少 ⑤E1.3 真 GT gap 7.77dB。**执行序：E3.1/E3.2 短刀（待 R9，大g暂缓）→ E3.3 BEV；E2.1 spike 低成本并行（域差已被 E0.7 smoke 初步排除）** |
 | **E2.1** ★ | E2 | **Harmonizer 升级集成 + 域差 spike**：[`third_party/Fixer`](third_party/Fixer)（一代）→ [NVIDIA/harmonizer](https://github.com/NVIDIA/harmonizer)（Cosmos Predict2 0.6B，时间条件，Apache-2.0）；HF `nvidia/Harmonizer` 权重 → 对 baseline 渲染的 3m/6m 帧离线修复 → E1 指标前后对比（**纯后处理预期：FID/感知大改善、几何指标不动**——正确预期，勿误判失败） | NuRec 调研 § 2.3/5.2 + v3 T15.2 | 1 | ✅ | **2026-06-13 完成**（render-only daefc03/4ac911d · batch-fix cd9fa6b · compare 24b03b0）：render-only 关监督出帧 10.6→4.62s/帧 + harmonizer IPC 批修复 750 帧 + eval_frames_dir 评。**FID −33%/−28% · KID −64%/−56% · NTA +0.033/+0.037 · lane_grad_corr −0.085/−0.095**（raw≡E1锚口径已验）；目视去伪影显著无异物 → **E2.2 GO**（§5 Done Log） |
-| **E2.2** ★★ | E2 | **渐进外推蒸馏（v4 核心）**：DiFix3D+ progressive update 移植——外推位姿从 1m→2m→3m→6m 逐步推进，每步「渲染→Harmonizer 修复→修复帧按低权重蒸馏回 3D（road/lane 区域加权）→下一步」；区别 v3 Stage 15 教训：不打全图 repro 轴，蒸馏目标=外推档 + road/lane 病灶区 | NuRec 调研 § 2.4（ablation 证据）+ v3 Stage 15 复活改轴 | 2.5 | 🟡 | **第一档 naive 判负（2026-07-07，详见 §5 Done Log）**：1m harmonizer-fix 帧直接注入 3D → FID@1m 120.2→147.16 恶化 + cc_masked 25.90→22.87 破守护 + 目测 floater/色带；机制+基建（`distill_frames.py` + 5 GPU-path fix：78a9447/b8e3218/540d504/0b1e545/8860861）打通，loss 路由 + FID 有效性双确认非 bug。**2m+ 档不启动、待大g 议后续**（floater 抑制 + progressive + region 加权 vs 转 E2.3/E3）|
+| **E2.2** ★★ | E2 | **渐进外推蒸馏（v4 核心）**：DiFix3D+ progressive update 移植——外推位姿从 1m→2m→3m→6m 逐步推进，每步「渲染→Harmonizer 修复→修复帧按低权重蒸馏回 3D（road/lane 区域加权）→下一步」；区别 v3 Stage 15 教训：不打全图 repro 轴，蒸馏目标=外推档 + road/lane 病灶区 | NuRec 调研 § 2.4（ablation 证据）+ v3 Stage 15 复活改轴 | 2.5 | ⏭ | **蒸馏方向终止（2026-07-07 大g 拍板，详见 §5 Done Log 战略决策条）**：第一档 naive 判负（FID@1m 120.2→147.16 恶化 + cc_masked 25.90→22.87 破守护 + 目测 floater/色带）+ 三红灯（① 蒸馏至今零正数：E0.7 官方权重 interpolated −0.4dB、本档也负 ② 幻觉污染信息论硬伤：生成内容蒸回 3D 创造不出真信息、上限仅正则 ③ FID 目标与头号几何 KPI 错位）+ E1.5 早已把 E2 降级为 6m+ 补充 → **终止蒸馏作为 off-track 主武器**，转表示侧 E3 + 数据侧（LiDAR/多通行）。基建（`distill_frames.py` + 5 fix：78a9447/b8e3218/540d504/0b1e545/8860861）留分支作记录、**代码不合 main** |
 | **E2.3** | E2 | **actor 弱观测面修复蒸馏**：对车辆 track object-centric 环绕渲染弱观测面 → Harmonizer 修复 → cuboid×sseg mask 内低权蒸馏；攻 P1.4 验尸根因（未观测面缺约束）的 2D 监督解法 | v3 P1.4 否定结论 + SOTA 共识（2D 监督非 3D 注入） | 2 | ⬜ | gate=E2.1；验收=class_psnr + NTA-IoU + 守护线 |
 | **E2.4** | E2 | （备选）**Harmonizer 域内微调**：若 E2.1 spike 显示 NCore 域差大——按 DiFix3D+ 降质构造法（cycle reconstruction 横移 1–6m / model underfitting / cross reference）在自有 clip 造配对，LoRA 级微调 | DiFix3D+ 论文 § 训练数据构造 | 2 | ⬜ | 仅 E2.1 域差坐实才投 |
 | **E2.5** | E2 | **编辑协调 spike（3dgrut2 侧）**：复用 AH 注入引擎（PR #18 plumbing / frozen 离线手术）在自有 ckpt 插入/取代 1–2 辆 asset-harvester 车 → Harmonizer 时间模式协调 → NTA-IoU/FID + 目视验收；**不训练或轻训练**——区别 P1.4 warm-start（重建轴）：本卡是编辑场景 + 生成协调，正是 NuRec 官方编辑形态 | 新 e25_inject.py + scripts/e25_inject_ah_replace.py（0350e34/21cf1c4） | 1.5 | ✅ 目测 | gate=E2.1 + E0.6 清单；**2026-06-17 目测 spike 完成**：3 AH 车 frozen 注入取代 recon automobile（'316'/'372'/'24'）+ viser+harmonizer 实时协调，目测 harmonizer 协调**有效但有限**（违和感降低、优于无 harmonizer、未完全自然）；定量 NTA-IoU/FID 按大g 决定跳过留 v5。v5 编辑轴第一块基石 |
@@ -326,6 +326,13 @@ flowchart TD
 - **v3 T15.2**：Fixer 一代已集成（[`correction/difix.py`](threedgrut/correction/difix.py)），E2.1 升级起点；Stage 15 全图蒸馏 +0.30 教训 → E2.2 改打外推档+病灶区。
 
 **新条目（v4 启动后填充，格式：日期 + commit + 实测数）**：
+
+- **2026-07-07 ★ 战略决策：终止「蒸馏（E2.2）作为 off-track 主武器」**（大g 拍板；本条＝方向裁决，证据见紧邻下方「第一档 naive 判负」条）：
+  - **裁决**：off-track 战役**不再把 E2.2 渐进外推蒸馏当主线赌**。蒸馏最多退为「约束式、晚期、只赌 FID 不赌几何」的辅助手段，非主武器。主线转**表示侧 E3**（空气区 penalty E3.1 / road SH DC-freeze E3.2 / road-bg 所有权切分 E3.6）+ **数据侧**（LiDAR ray 监督 / 多次通行补真信息）；2026-07-03 定的「表示侧新 spike 战役期冻结」**随之解除**。
+  - **依据（naive 负不单独定方向错，但三红灯指向方向本身）**：① naive 第一档崩，DiFix3D+ 理论**自身也预测**裸奔（单发 + 大跳 + 无约束）失败——第一档不能单独判死方向；**但** ② **蒸馏至今零正数**：E0.7 官方级权重 interpolated **−0.4dB（净代价）**、本档 off-track 也负，两独立数据点全 ≤0，是趋势非偶然 ③ **幻觉污染信息论硬伤**：Harmonizer 对未观测区靠生成幻觉（非真值 / 跨 pose 不一致），蒸回 3D **创造不出捕获数据里没有的真信息**、上限仅「往合理先验正则」，可能**不可约**（R-v4.5 从风险变结构性）④ **优化目标与 KPI 错位**：蒸馏优化感知/分布（FID），头号 KPI 是几何（lane grad_corr / held-out 真 GT / cc）——扩散让画面「看着对」但几何「编不出真值」，第一档连「拿几何换 FID」都没换成（cc −3dB + FID 反涨 +27）。
+  - **off-track 病态本质坐实优先级**：未观测区**无捕获信息**，填补只有先验（E3）/ 生成（E2）/ 数据（E4）三路，无一能无中生有真信息；第一档最硬的一句＝「**生成内容裸灌回 3D 会毁已观测区**」→ 优先「不毁已观测」的先验（E3）+ 数据（LiDAR/多通行），生成退为晚期抛光。与 **E1.5 早已下的「E3 先行、E2 补 6m+ 互补」**结论一致——本决策**确认并执行**该降级，非推翻。
+  - **重新赌蒸馏的可证伪门槛**（若未来再议）：必须 **progressive + reference-view 条件**（给足 DiFix3D+ 成立条件），判据＝**FID↑ AND 守护线不破**同时成立；若仍只「拿几何换 FID」则蒸馏作主武器**实锤证伪**、彻底转线。
+  - **代码处置**：蒸馏基建（`threedgrut/datasets/distill_frames.py` + trainer `is_distill` 接线 + render.py `--novel-*` + 5 GPU-path fix 78a9447/b8e3218/540d504/0b1e545/8860861）**留分支 `claude/laughing-dewdney-862997` 作记录、不合 main**（大g：代码不用提交）；仅文档落库决策。
 
 - **2026-07-07 E2.2 渐进外推蒸馏「第一档 lateral_1m naive」判负 + 蒸馏基建打通**（off-track 战役思路 A；`superpowers:subagent-driven-development` 执行 Task 0–7，Task 1 严格 TDD 4 红先行；分支 `claude/laughing-dewdney-862997`；实测 inceptio depth-off + **5s 数据窗** full-window）：
   - **结论 ＝ 干净否定**：1m harmonizer-fix 帧**直接**蒸馏回 3D（naive——无 floater 抑制 / 无 progressive / 仅低权 λ、未做 region 加权）在 off-track **恶化**。**三读数双源交叉**：
