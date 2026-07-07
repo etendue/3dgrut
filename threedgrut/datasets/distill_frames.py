@@ -136,21 +136,37 @@ class DistillFrameSource:
         if not self.frames_map:
             raise ValueError(f"distill frame pack is empty: {map_path}")
 
-        # Index source frames by their alignment key.
-        self._source_by_key: dict[str, Batch] = {}
+        # LIGHTWEIGHT indexing so a full-window pack (100s of frames) doesn't pin
+        # every source batch on the GPU (375 full batches ≈ 19 GB → OOM). Rays /
+        # intrinsics are camera-space (POSE-INDEPENDENT) → keep ONE template per
+        # camera; store only the per-frame shutter poses. ``source_batches`` may
+        # be a generator — consumed once, each full batch dropped after extraction.
+        self._cam_templates: dict = {}  # camera_id → carry-field template (+ _device)
+        self._pose_by_key: dict = {}  # ts-key → (T_to_world, T_to_world_end, cam, ts)
         for b in source_batches:
             cam = getattr(b, "camera_id", None)
             ts = getattr(b, "timestamp_us", None)
             if cam is None or ts is None or int(ts) < 0:
                 continue
-            self._source_by_key[novel_frame_key(cam, int(ts))] = b
+            if cam not in self._cam_templates:
+                tmpl = {f: getattr(b, f) for f in _CARRY_FIELDS if getattr(b, f, None) is not None}
+                tmpl["_device"] = (
+                    b.rgb_gt.device if getattr(b, "rgb_gt", None) is not None else b.rays_dir.device
+                )
+                self._cam_templates[cam] = tmpl
+            self._pose_by_key[novel_frame_key(cam, int(ts))] = (
+                b.T_to_world,
+                b.T_to_world_end,
+                cam,
+                int(ts),
+            )
 
         # Use the pack frames that HAVE a matching source pose (correctly
         # aligned). Missing ones mean the source split (e.g. a 5s or subsampled
         # test split) is narrower than the pack — those frames are SKIPPED, not
         # misaligned (their poses would be right if present). Warn (never
         # silent); fail only if NOTHING matches (fully disjoint = real error).
-        self._keys = [k for k in self.frames_map if k in self._source_by_key]
+        self._keys = [k for k in self.frames_map if k in self._pose_by_key]
         n_missing = len(self.frames_map) - len(self._keys)
         if not self._keys:
             example = next(iter(self.frames_map))
@@ -178,31 +194,27 @@ class DistillFrameSource:
         if rng is None:
             rng = np.random.default_rng()
         key = self._keys[int(rng.integers(0, len(self._keys)))]
-        src = self._source_by_key[key]
+        T_start, T_end, cam, ts = self._pose_by_key[key]
+        tmpl = self._cam_templates[cam]
 
-        rgb_gt = self._load_fixed_frame(self.frames_map[key], src)
+        rgb_gt = self._load_fixed_frame(self.frames_map[key], tmpl["_device"])
 
         # SAME transform render.py applied → exact novel-pose reconstruction.
-        new_start, new_end = perturb_batch_shutter_pair_torch(src.T_to_world, src.T_to_world_end, self.mode)
+        new_start, new_end = perturb_batch_shutter_pair_torch(T_start, T_end, self.mode)
 
         fields = {
-            "rays_ori": src.rays_ori,
-            "rays_dir": src.rays_dir,
             "T_to_world": new_start,
             "T_to_world_end": new_end,
-            "rays_in_world_space": bool(getattr(src, "rays_in_world_space", False)),
             "rgb_gt": rgb_gt,
             "mask": None,  # novel frames have no sseg/road masks
-            "camera_id": getattr(src, "camera_id", None),
-            "camera_idx": int(getattr(src, "camera_idx", -1)),
-            "timestamp_us": int(getattr(src, "timestamp_us", -1)),
+            "camera_id": cam,
+            "timestamp_us": int(ts),
         }
+        # Camera-space rays / intrinsics / camera_idx from the shared per-camera
+        # template (pose-independent → identical across that camera's frames).
         for f in _CARRY_FIELDS:
-            if f in fields:
-                continue
-            val = getattr(src, f, None)
-            if val is not None:
-                fields[f] = val
+            if f in tmpl:
+                fields[f] = tmpl[f]
 
         batch = Batch(**fields)
         # Route the loss to the full-image photometric path (spec §2.2).
@@ -215,8 +227,8 @@ class DistillFrameSource:
         """# pseudo-GT batches sampled so far (Task 4 smoke sanity log)."""
         return self._fire_count
 
-    def _load_fixed_frame(self, relpath: str, src) -> torch.Tensor:
-        """Read the fixed PNG → ``[1, H, W, 3]`` float on the source's device."""
+    def _load_fixed_frame(self, relpath: str, device) -> torch.Tensor:
+        """Read the fixed PNG → ``[1, H, W, 3]`` float on the given device."""
         import torchvision
 
         path = os.path.join(self._mode_dir, relpath)
@@ -224,5 +236,4 @@ class DistillFrameSource:
             raise FileNotFoundError(f"distill fixed frame missing: {path} — pack integrity broken")
         img = torchvision.io.read_image(path).float().div(255.0)  # [C, H, W]
         img = img[:3].permute(1, 2, 0)  # [H, W, 3]
-        device = src.rgb_gt.device if getattr(src, "rgb_gt", None) is not None else src.rays_dir.device
         return img.unsqueeze(0).to(device)

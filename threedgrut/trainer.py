@@ -636,7 +636,10 @@ class Trainer3DGRUT:
             {"num_workers": 8, "batch_size": 1, "shuffle": False, "collate_fn": None}
         )
         test_dataloader = torch.utils.data.DataLoader(test_dataset, **test_loader_kwargs)
-        source_batches = [test_dataset.get_gpu_batch_with_intrinsics(b) for b in test_dataloader]
+        # Generator (not list): DistillFrameSource extracts a lightweight per-camera
+        # template + per-frame pose from each batch and drops the full batch, so a
+        # full-window test split (375 frames) never pins all batches on GPU at once.
+        source_batches = (test_dataset.get_gpu_batch_with_intrinsics(b) for b in test_dataloader)
         self.distill_source = DistillFrameSource(frames_dir, mode, source_batches)
         self._distill_p = float(getattr(dconf, "p", 0.3))
         self._distill_lam = float(getattr(dconf, "lam", 0.1))
