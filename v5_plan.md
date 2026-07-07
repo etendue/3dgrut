@@ -402,6 +402,11 @@ flowchart TD
   - 口径注记：FID/KID 72 帧/组（<2048 有偏，仅四组内部 A/B）；cc_psnr per-frame 仿射拟合曝光鲁棒，故 R1p/R3p（带 exposure）与四组（exposure 禁用）可比；旧锚/R0c 均 3-cam 前向训练，held-out=未训侧后。底稿 `.superpowers/sdd/b4_summary.md`；metrics 在 `inceptio:~/work/output/b4_{old,r0c}_{train,heldout}/`。
   - 执行注记：版本口径 worktree @ a5083c8（大g 拍板，避 inceptio 主仓库 daa8ce5 分叉 + 未提交 E2.6 工作）；Task 3 subagent stalled + Mac 断网各遇一次，均 controller 接管（batch setsid 后台不受影响），数据零丢失。
 
+- **2026-07-07 I1 欠训假设否定（A800 双卡步数 A/B）+ A800 env 被清事故档案**：
+  - 设计：单变量步数 A/B——卡0 `i1_30k_anchor` vs 卡1 `i1_60k`，同 [`ncore_3dgut_mcmc_multilayer_inceptio.yaml`](configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml) 配方（depth 四键显式关 + sky mlp + nw=24），b6a9 6-cam 全量窗。
+  - 结果：**mean 20.22 → 20.32（Δ+0.10，<0.3 噪声判据不显著）**；lpips 0.6288→0.6247 / ssim / road_crop（24.55→24.49）持平；唯 mean_class_psnr 18.15→18.67（+0.51）但 <15dB 记录 46→53 反增。**步数翻倍救不回 6-cam 退化 → 欠训假设否定，I1 60k 路线关闭**；退化更指向容量摊薄 / 多视角一致性张力（I4 分层正则精调、C1 telew 权重更对症）。
+  - 互证：A800 30k 重立锚 20.22 与 inceptio R3p 20.25 逐相机咬合（±0.3 内：front 21.45 / cross 20.27 / 20.00 / left 18.49 / right 21.13 / back 19.88）。
+  - ⚠️ 事故档案：训练完成后 A800 管理员清理——/tmp rich log 丢失 + **conda env `3dgrut2` 整个被删**（envs 仅剩 j6；数据与输出产物幸存）。反伪造双源缺一，以 metrics.json 内部完整性（376 class records / 121 NTA 帧 / per-cam 齐全）+ 30k 与三个历史独立 run 咬合佐证入档。**新纪律（已进 E2.2 plan Global Constraints）：A800 log 一律写输出目录非 /tmp、产物完成即回传 inceptio 备份**。
 - **2026-07-04 ★ baseline 固化（大g 决策：先立 baseline 再逐个解 issue）+ R2p/A800 depth A/B 出数**：
   - **baseline = `configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml`**（compose multilayer + 6-cam camera_ids + `loss.use_opacity=false`；`# @package _global_` 头必需，Mac compose 验证 6 相机/正则off/mask on）。**锚 = R2p 30k：mean 20.11 / cc 18.54 / ssim 0.640 / lpips 0.629 / road_crop 24.51 / automobile 18.54（<15dB 38/346）**；per-cam front 21.16 / cross 20.18/19.90 / left 18.44 / right 21.24 / back 19.58。
   - **A5 单变量增益坐实（R2p vs R1p）**：automobile **+1.15**、劣质记录 73→38（−48%）、road_crop +0.63，mean/ssim/lpips 持平，front −0.43（监督预算向 dyn 重分配）——cuboid mask 留在 baseline（默认 on）。
@@ -412,7 +417,7 @@ flowchart TD
   - **Issues 清单（baseline 之上逐个解，带证据与优先级）**：
     | # | issue | 证据 | 候选解 | 优先级 |
     |---|---|---|---|---|
-    | I1 | 6-cam 守护线对 3-cam 锚退 0.4~0.9（欠训） | 6-cam 数据×2、30k=每相机有效步数减半 | **R2p 配方 60k 等比重训** | ★高 |
+    | I1 | ~~6-cam 守护线对 3-cam 锚退 0.4~0.9（欠训）~~ **已否定并关闭（2026-07-07 A800 步数 A/B，见 Done Log）**：60k Δmean 仅 +0.10 | i1_30k 20.22 / i1_60k 20.32 | 退化指向容量摊薄/多视角张力（转 I4 / C1 对症） | ✅ 关闭 |
     | I2 | 车辆仍糊（18.54，虽 +1.15） | dyn 层 30k + 36 tracks | R3p（A2 interp，跑数中）→ D1 poseopt | ★高 |
     | I3 | road 层颜色贡献度不足（road-only 偏暗） | road-only 渲染图 2026-07-03 | E3.6 takeover 完整版（bg init 剔 road 点 + road 补密） | 中 |
     | I4 | opacity 正则修剪红利丢失（3-cam mean −0.46） | R0c vs R0b | 分层 λ / dyn 豁免 / 可见性加权 | 中 |
