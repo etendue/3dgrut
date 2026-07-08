@@ -120,6 +120,160 @@ class SsegAuxReader:
         return np.asarray(Image.open(io.BytesIO(png_bytes)))
 
 
+def _decode_egomask_frame(arr) -> np.ndarray:
+    """Decode one egomask frame to a ``(H, W)`` bool array (True = ego pixel).
+
+    nre-tools stores egomask frames in either of two forms; both are handled:
+      * a plain ``(H, W)`` uint8 array with values in ``{0, 255}``, or
+      * 0-D ``|S<n>`` PNG bytes (same 0-D pattern as SsegAuxReader).
+    A pixel is "ego" iff it is non-zero.
+    """
+    if getattr(arr, "shape", None) == ():
+        img = np.asarray(Image.open(io.BytesIO(bytes(arr[()]))))
+    else:
+        img = np.asarray(arr[...])
+    mask = img != 0
+    if mask.ndim == 3:  # e.g. an RGB(A) PNG — any channel set means ego
+        mask = mask.any(axis=-1)
+    return mask
+
+
+class EgomaskAuxReader:
+    """Per-camera static ego-mask reader over an ``aux.egomask.zarr.itar`` store.
+
+    Same lazy-open pattern as :class:`SsegAuxReader`. The internal group that
+    holds the per-camera frame arrays is discovered generically (any group with
+    array children is treated as a camera group, keyed by its own name) rather
+    than hard-coding ``aux/ego_mask`` — the nre-tools internal group name is not
+    version-pinned here, and the diagnostic that inspected b6a9 walked the tree
+    generically (grouping frames by their parent group name).
+
+    ``read_static_mask(camera_id)`` returns the **union** over all of that
+    camera's frames: any frame marking a pixel ego makes it ego in the static
+    mask (conservative — the ego structure is static w.r.t. the camera, so a
+    hit in any frame is real).
+    """
+
+    def __init__(self, itar_path: Union[str, Path]) -> None:
+        self.itar_path = Path(itar_path)
+        self._root = None  # lazy zarr group root
+        self._cam_groups: Optional[dict] = None  # camera_id -> frame group
+
+    def _ensure_open(self) -> None:
+        if self._root is None:
+            self._root = _open_itar_zarr(self.itar_path)
+        if self._cam_groups is None:
+            self._cam_groups = self._discover_camera_groups(self._root)
+
+    @staticmethod
+    def _discover_camera_groups(root) -> dict:
+        """Walk the tree: a group holding frame arrays is a per-camera group."""
+        cams: dict = {}
+
+        def _walk(grp, name: str) -> None:
+            if list(grp.array_keys()):
+                cams[name] = grp
+                return
+            for k in grp.group_keys():
+                _walk(grp[k], k)
+
+        _walk(root, "")
+        cams.pop("", None)  # never register the root itself as a camera
+        return cams
+
+    def camera_ids(self) -> list:
+        self._ensure_open()
+        return sorted(self._cam_groups.keys())
+
+    def has_camera(self, camera_id: str) -> bool:
+        self._ensure_open()
+        return camera_id in self._cam_groups
+
+    def read_static_mask(self, camera_id: str) -> np.ndarray:
+        """Return the ``(H, W)`` bool union of this camera's ego-mask frames.
+
+        Raises:
+            KeyError: camera_id not present in this egomask itar (or the camera
+                group is empty).
+        """
+        self._ensure_open()
+        if camera_id not in self._cam_groups:
+            raise KeyError(
+                f"EgomaskAuxReader: camera '{camera_id}' not in egomask itar "
+                f"(available: {sorted(self._cam_groups)})"
+            )
+        grp = self._cam_groups[camera_id]
+        union: Optional[np.ndarray] = None
+        for k in grp.array_keys():
+            frame = _decode_egomask_frame(grp[k])
+            union = frame if union is None else np.logical_or(union, frame)
+        if union is None:
+            raise KeyError(f"EgomaskAuxReader: camera '{camera_id}' has no frames")
+        return union
+
+
+def _dilate_mask(mask: np.ndarray, iterations: int) -> np.ndarray:
+    """Binary-dilate ``mask`` ``iterations`` times, treating ``0`` as identity.
+
+    ``scipy.ndimage.binary_dilation`` interprets ``iterations < 1`` as "dilate
+    until the result stops changing" (which fills a connected region entirely).
+    We instead want ``iterations == 0`` to mean "no dilation". datasetNcore's
+    default is 30 (>= 1), so for every real value this is byte-for-byte identical
+    to ``ndimage.binary_dilation(mask, iterations=iterations)``.
+    """
+    if iterations and iterations >= 1:
+        from scipy import ndimage  # lazy: keep module import light for non-mask consumers
+
+        return ndimage.binary_dilation(mask, iterations=iterations)
+    return mask
+
+
+def resolve_ego_valid_mask(
+    sdk_mask_image,
+    clip_dir: Optional[Union[str, Path]],
+    camera_id: str,
+    resolution_hw: Tuple[int, int],
+    dilation_iters: int,
+) -> np.ndarray:
+    """Resolve the ``(H, W)`` bool **valid**-pixel ego mask for one camera.
+
+    Three branches, in priority order:
+      1. ``sdk_mask_image`` present AND non-zero → the NCore-SDK sequence embeds
+         a real ego mask: ``convert("L") != 0`` → dilate → ``logical_not``
+         (byte-identical to datasetNcore's existing path).
+      2. else if ``clip_dir`` is not None and an ``aux.egomask.zarr.itar`` exists
+         there whose :class:`EgomaskAuxReader` ``has_camera(camera_id)`` → itar
+         union → dilate → ``logical_not``.
+      3. else → all-True with shape ``resolution_hw`` (nothing masks anything).
+
+    Args:
+        sdk_mask_image: PIL Image (the SDK ``get_mask_images().get("ego")``) or
+            None. When it is all-zero it is treated as absent (falls to 2/3).
+        clip_dir: clip directory to search for the egomask itar, or None to skip
+            branch 2 (non-NCore callers).
+        camera_id: e.g. ``"camera_cross_left_120fov"``.
+        resolution_hw: ``(H, W)`` used for the branch-3 all-True fallback.
+        dilation_iters: morphological dilation iterations; 0 means no dilation.
+
+    The valid mask is ``logical_not`` of the (dilated) ego mask, matching the
+    downstream ``camera_valid_pixels_ego_mask`` semantics.
+    """
+    if sdk_mask_image is not None:
+        sdk_mask = np.asarray(sdk_mask_image.convert("L")) != 0
+        if sdk_mask.any():
+            return np.logical_not(_dilate_mask(sdk_mask, dilation_iters))
+
+    if clip_dir is not None:
+        itar_path = discover_aux_path(clip_dir, "egomask")
+        if itar_path is not None:
+            reader = EgomaskAuxReader(itar_path)
+            if reader.has_camera(camera_id):
+                mask = reader.read_static_mask(camera_id)
+                return np.logical_not(_dilate_mask(mask, dilation_iters))
+
+    return np.ones(tuple(int(x) for x in resolution_hw), dtype=bool)
+
+
 class LidarSsegAuxReader:
     """Per-frame per-point lidar semantic segmentation label reader.
 
