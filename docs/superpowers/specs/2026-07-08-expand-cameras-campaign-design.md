@@ -49,6 +49,8 @@
 
 ### P0.3 补齐 front_wide / back_rear_wide（数据脚本 + 目检）
 
+> ⚠️ **2026-07-08 supersede**：原「sseg egocar 派生自动补齐」路线**被替换**为「大g 手工多边形标注 → 视觉多边形栅格化 + write-once 替换 itar」。详见 [`2026-07-08-visual-polygon-egomask-design.md`](2026-07-08-visual-polygon-egomask-design.md) + [`../plans/2026-07-08-visual-polygon-egomask.md`](../plans/2026-07-08-visual-polygon-egomask.md)。生成源变（视觉多边形，含浏览器 canvas 手工标注器），存储目标（clip 目录唯一 egomask itar，10 台+2 台跳过）与下游 P0.2 接线不变。**实跑 2026-07-08 完成**（commit `40277d2`，10 台 mask 精细贴合，back_rear_wide 5251 px/0.25% 最干净，back_rear_fisheye 车顶弧 20.9% 最大，前后 vignette 由多边形/圆环覆盖）。
+
 - 目标：两台全黑相机补上静态 ego mask。
 - 路径：脚本从 sseg itar 逐帧统计 egocar(19) 像素 → **跨帧并集**（自车相对相机静止，真 ego 高度稳定；抽帧目检排除「把邻车误标 egocar」的污染帧）→ 形态学清理（去孤立小连通域 + dilate 缓冲）→ 写回 egomask itar（复用 `merge_lidar_aux.py` 的 itar 写经验，`create_dataset(shape=src.shape)` 通用处理）。
 - 兜底：若 sseg egocar 派生结果目检不干净（误检多/漏车头），改**手工 ROI 多边形**（每相机一张，半天内）。

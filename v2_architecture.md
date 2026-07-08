@@ -436,7 +436,13 @@ flowchart TB
 | `scripts/dump_test_split_manifest.py` | **E0.4 ✅ (2026-06-12)** —— test split 位姿 manifest（NuRec 侧出帧对齐用） |
 | `scripts/eval_frames_dir.py` | **E0.4 ✅ (2026-06-12)** —— render_all 去模型离线评测器：外部帧（nre render）喂项目侧全指标，同口径双向对照核心 |
 | `threedgrut/datasets/ncore_semantic.py` | T3.1.a ✅ (e8cb490, Cityscapes palette 常量) |
-| `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) |
+| `threedgrut/datasets/aux_readers.py` | T3.1.b ✅ (5b49f4b, SsegAuxReader + LidarSsegAuxReader 直读 itar) + **P0.2 ✅ (4a9f2e6, EgomaskAuxReader 通用相机组发现 + resolve_ego_valid_mask 三分支 valid 图纯函数，12 Mac 单测)** |
+| `threedgrut/datasets/egomask_static.py` | **P0.3 ✅ (5b3d48a T1 rasterize_polygons/rasterize_fisheye_outer/build_camera_mask + cf7162b T2 compose_egomask_set 并集补强合成，11 Mac 单测)** — b6a9 视觉多边形静态 ego mask 栅格化+合成纯函数 |
+| `scripts/egomask_viz.py` | **P0.3 ✅ (d201f72 T3)** — read_first_frame_rgb + render_grid_reference（100px 网格参考图）+ render_resolved_overlay（resolve-dilated 叠图）；双路 import 规避 GPU 机 threedgrut/__init__ cascade |
+| `scripts/gen_static_egomask_b6a9.py` | **P0.3 ✅ (013bae1 T4 write_egomask_itar + inceptio round-trip 验证 + 40277d2 T5 build_masks/cmd_overlay/cmd_write 驱动主流程)** — b6a9 egomask itar write-once 替换驱动（旧 itar mv 到 aux_backup/） |
+| `scripts/egomask_polygons_b6a9.json` | **P0.3 ✅ (40277d2 T5)** — 大g 用自包含 HTML 标注器（浏览器 canvas + 100px 网格 + 滚轮缩放 + shift 拖拽平移）手工标注 10 台顶点数据；reinforce=[] 纯视觉替换；跳过 front_tele/front_standard（自车不入镜） |
+| `threedgrut/tests/test_egomask_aux_reader.py` | **P0.2 ✅ (4a9f2e6)** — EgomaskAuxReader + resolve_ego_valid_mask 12 单测（并集/PNG bytes/三分支/dilation_iters=0 guard） |
+| `threedgrut/tests/test_egomask_static.py` | **P0.3 ✅ (5b3d48a + cf7162b)** — 栅格化 7 单测 + 合成 4 单测 |
 | `threedgrut/datasets/tracks_loader.py` | T4.1.b ✅ (b22a506) + T4.5 ✅ (4807951, load_tracks_from_ncore_cuboids) |
 | `threedgrut/correction/__init__.py` | T5.2 ✅ / T6.1 ✅ (Stage 5/6 Mac) |
 | `threedgrut/correction/sky_envmap.py` | T5.2 ✅ (Stage 5 Mac, SkyEnvmapBase + SkyEnvmapMLP + SkyEnvmapCubemap) |
@@ -571,6 +577,7 @@ flowchart TB
 | **E3.2.5 roaddisk 几何 bundle 进 baseline**：multilayer.yaml 默认含 `road_init_knn_k=5` + `scale_z_max=0.001`（1mm 真薄盘）+ `positions_lr=1e-6` + `freeze_rotation_grad=true` + `strategy.exclude_layer_ids=[road]`（6k A/B on>off cc +0.41 / lane +0.04~0.06；大g 决策 2026-06-23，原 roaddisk preset 降冗余）。takeover bg_road_penalty 保持 λ0.1/z_band0.4（三档调强证伪不进） | E3.2.5 ✅ baseline (2026-06-23) | compose 验证 road override 生效 + 全套 919 测零回归 |
 | sub.model 与各层 MoG identity 绑定（跨层无迁移结构性保证） | T2.4 ✅ | `test_no_cross_layer_migration_structural` (Mac, 04c9174) |
 | **E2.2 distill opt-in 默认关**：`distill.enabled=false`（默认）时 trainer 逐字节等价 v3——`is_distill` 分支不触发、真图光度项照走；`apply_distill_warmstart` 仅在 enabled 时改 `initialization` | E2.2 第一档 ✅ (2026-07-07) | `test_distill_frames.py` 16 测（Mac，含 warm-start struct/noop/resume-wins + pack∩source 交集回归）+ inceptio naive 1m 实测 FID@1m 120.2→147.16 恶化判负。**⏭ 蒸馏方向 2026-07-07 终止、代码不合 main**（不变量仅记录 opt-in 默认关的 byte-equiv 事实，供未来复用基建时参考）|
+| **P0.2/P0.3 egomask fallback 字节等价**：`resolve_ego_valid_mask` 三分支（SDK 非零→现路径 / SDK 空+itar 命中→itar 并集→dilate→取反 / 都无→全 True）——**无 egomask itar 的 clip（PAI 线）SDK 非零则走现路径、SDK 无则 branch 3 全 True，与 datasetNcore 现路径逐字节一致**；`dilation_iters=0` 恒等 guard（scipy iterations<1 会膨胀到收敛，用 iters>=1 才调 scipy；datasetNcore 默认 30 → 现路径字节等价）。b6a9 clip 目录仅数据文件替换（新 itar 91KB，旧 161KB 备份至 aux_backup/），下游代码零改动 | P0.2 ✅ (4a9f2e6) + P0.3 ✅ (40277d2) | `test_egomask_aux_reader.py` 12 测（三分支 + sentinel 证明 SDK 非零不触碰 itar + dilation_iters=0 guard）+ inceptio round-trip（`ROUNDTRIP OK`：write→EgomaskAuxReader 读回 np.array_equal）+ 回读验证（10 台 per-cam nonzero 精确匹配写入） |
 | init_densification_buffer 广播到所有 sub-strategy | T2.4 ✅ | `test_init_densification_buffer_dispatches_to_all_subs` (Mac, 04c9174) |
 | _make_sub_conf 不改变父 conf | T2.4 ✅ (M-2 carry-over) | `test_make_sub_conf_does_not_mutate_parent` (Mac, 04c9174) |
 | Stage 1 测试单独运行不依赖 test_layered_mcmc.py 的 collect order | T2.4 ✅ (I-1 fix) | conftest.py stubs (51540a8); pytest test_layered_gaussians.py 9/9 PASS standalone |
