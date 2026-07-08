@@ -53,9 +53,11 @@
 - [ ] **Step 3: 改 datasetNcore 该块**为委托调用 + 一行 sanity 日志（风格对齐 A5 的 `[A5] dyn_mask_cuboid filled via ...`）：fallback 激活时打 `[P0.2] ego mask via aux itar fallback: <camera_id> coverage=<pct>%`。clip 目录取值沿 `discover_aux_path` 在本文件既有用法（L1297 一带的 clip_dir 来源）。
 - [ ] **Step 4: Mac 全套回归**：`.venv/bin/python -m pytest threedgrut/tests/ -x -q` 零失败。
 - [ ] **Step 5: Commit** `feat(P0.2): datasetNcore ego mask SDK缺失/全零时 fallback 读 aux itar（PAI 线字节等价）`。
-- [ ] **Step 6: inceptio 实证**（分支 push → worktree）：跑一个 500 步 smoke（R3p 配方 + `n_iterations=500`），grep 日志确认 6 相机中 4 台出现 `[P0.2]` fallback 行、coverage 与诊断数字量级一致（cross ~8%、right_wide ~1%）。
+- [ ] **Step 6: inceptio 实证**（分支 push → worktree）：跑一个 500 步 smoke（R3p 配方 + `n_iterations=500`），grep 日志确认 6 训练相机**全部**出现 `[P0.2]` fallback 行（P0.3 视觉多边形已补齐 10 台）、coverage 与已知数字量级一致（cross ~8%、right_wide ~1%、back_rear_wide ~0.25%）。
 
-### Task 3: front/back ego mask 派生脚本 + 实跑补齐
+### Task 3: front/back ego mask 派生脚本 + 实跑补齐 ⏭ superseded
+
+> ⚠️ **2026-07-08 supersede**：本任务被「视觉多边形手工标注」路线替换并**已完成**（spec §3 P0.3 注记；设计 [`2026-07-08-visual-polygon-egomask-design.md`](../specs/2026-07-08-visual-polygon-egomask-design.md)、实现 plan [`2026-07-08-visual-polygon-egomask.md`](2026-07-08-visual-polygon-egomask.md)、commit `40277d2`：10 台相机 mask 已入 clip 目录 egomask itar）。下方原文仅存档，不执行；Task 8 新相机 egomask 缺失时也走视觉多边形标注器，不写本派生脚本。
 
 **Files:**
 - Create: `scripts/derive_egomask_from_sseg.py`
@@ -134,11 +136,11 @@
 ### Task 8: C2 前置——新相机 aux 生成（rear_left + front_standard）
 
 **Interfaces:**
-- Consumes: CLAUDE.md nre-tools runbook + A1 遮挡补丁（`NRE_LIDARSEG_OCCLUSION=off`，`/tmp/estimators_patched.py` bind-mount）；Task 3 派生脚本。
+- Consumes: CLAUDE.md nre-tools runbook + A1 遮挡补丁（`NRE_LIDARSEG_OCCLUSION=off`，`/tmp/estimators_patched.py` bind-mount）；egomask 兜底走 P0.3 视觉多边形标注器（Task 3 已 supersede；新相机 rear_left/front_standard 的 egomask **大概率已被 P0.3 十台标注覆盖**，Step 2 先 diag 确认）。
 - Produces: 8 相机全套 aux（sseg + egomask + lidar-camvis 覆盖新相机；lidar-sseg 重跑或合并）落主 clip 目录，旧 aux 备份。
 
 - [ ] **Step 1: 容器 run A**（sseg + egomask，8 相机 id 列表，`--parallel-mode --workers-per-gpu=3`）+ run B（lidar-seg camvis，遮挡补丁下 0.7s/帧）；itar write-once 纪律——完整跑完再替换，绝不中途 stop。
-- [ ] **Step 2: 验收**：`diag_egomask_itar.py` 扫 8 相机——egomask 全黑者用 Task 3 脚本派生补齐 + 目检；lidar-sseg road 占比量级复核（A1 修复后 ~40% 参照）。
+- [ ] **Step 2: 验收**：`diag_egomask_itar.py` 扫 8 相机——egomask 缺失/全黑者用 P0.3 视觉多边形标注器补齐 + 目检；lidar-sseg road 占比量级复核（A1 修复后 ~40% 参照）。
 - [ ] **Step 3: 结果与命令记录入 v5_plan Done Log**（无代码 commit，文档 commit）。
 
 ### Task 9: C2 阶梯 run（6 → 8 cam）
