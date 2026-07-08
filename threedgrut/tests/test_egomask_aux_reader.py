@@ -29,7 +29,11 @@ from PIL import Image
 from scipy import ndimage
 
 from threedgrut.datasets import aux_readers
-from threedgrut.datasets.aux_readers import EgomaskAuxReader, resolve_ego_valid_mask
+from threedgrut.datasets.aux_readers import (
+    EgomaskAuxReader,
+    resolve_ego_valid_mask,
+    resolve_ego_valid_mask_with_source,
+)
 
 H, W = 4, 4
 
@@ -224,3 +228,118 @@ def test_resolve_clip_dir_none_all_true():
     assert valid.shape == (5, 7)
     assert valid.dtype == bool
     assert valid.all()
+
+
+# --------------------------------------------------------------------------- #
+# resolve_ego_valid_mask_with_source — wire semantics for datasetNcore
+# integration (P0.2 Task 2). The caller (datasetNcore L429-440) needs to know
+# which branch produced the mask so it can log ``[P0.2] ego mask via aux itar
+# fallback: <cam> coverage=<pct>%`` only when the itar fallback actually fired.
+# --------------------------------------------------------------------------- #
+def _build_root_multi_cam(H_: int, W_: int):
+    """Fake root with 4 cameras mirroring the b6a9 fallback shape (varying mask
+    coverage across cameras; one all-zero camera to cover the trivial branch).
+    """
+
+    def _f(coords):
+        m = np.zeros((H_, W_), dtype=np.uint8)
+        for r, c in coords:
+            m[r, c] = 255
+        return m
+
+    cams = {
+        "camera_cross_left_120fov": _FakeGroup(
+            arrays={
+                "1000": _FakeArray(_f([(0, 0), (0, 1), (1, 0)])),
+                "2000": _FakeArray(_f([(0, 1), (1, 1)])),
+            }
+        ),
+        "camera_cross_right_120fov": _FakeGroup(
+            arrays={"1000": _FakeArray(_f([(H_ - 1, W_ - 1), (H_ - 1, W_ - 2)]))}
+        ),
+        "camera_right_wide_120fov": _FakeGroup(
+            arrays={"1000": _FakeArray(_f([(H_ // 2, W_ // 2)]))}
+        ),
+        "camera_back_rear_wide_120fov": _FakeGroup(arrays={"1000": _FakeArray(_f([]))}),
+    }
+    ego = _FakeGroup(groups=dict(cams))
+    aux = _FakeGroup(groups={"ego_mask": ego})
+    return _FakeGroup(groups={"aux": aux}), list(cams.keys())
+
+
+def test_wire_fallback_multi_camera_pixel_count(monkeypatch, tmp_path):
+    """P0.2 wire: SDK all-zero + itar covering 4 cameras → each camera's valid
+    pixel count = H*W − dilate(union).sum() (mirrors datasetNcore L429-440 with
+    the dataset-default 30 dilation iters). source=='itar' unlocks the log."""
+    H_, W_ = 8, 8
+    (tmp_path / "clip.aux.egomask.zarr.itar").touch()
+    root, camera_ids = _build_root_multi_cam(H_, W_)
+    monkeypatch.setattr(aux_readers, "_open_itar_zarr", lambda p: root)
+    dilation = 30  # datasetNcore default (n_camera_mask_dilation_iterations)
+
+    sdk_zero = Image.fromarray(np.zeros((H_, W_), dtype=np.uint8))
+    for cam_id in camera_ids:
+        valid, source = resolve_ego_valid_mask_with_source(
+            sdk_zero,
+            clip_dir=tmp_path,
+            camera_id=cam_id,
+            resolution_hw=(H_, W_),
+            dilation_iters=dilation,
+        )
+        raw_union = EgomaskAuxReader(str(tmp_path / "clip.aux.egomask.zarr.itar")).read_static_mask(cam_id)
+        expected_ego = ndimage.binary_dilation(raw_union, iterations=dilation) if raw_union.any() else raw_union
+        assert valid.shape == (H_, W_)
+        assert valid.dtype == bool
+        assert valid.sum() == (H_ * W_) - int(expected_ego.sum())
+        assert source == "itar"
+
+
+def test_wire_pai_line_sdk_none_no_itar_all_valid(tmp_path):
+    """P0.2 regression: PAI clip (SDK ``get_mask_images().get("ego")`` returns
+    None and no aux egomask itar exists) → all-True mask, byte-identical to the
+    pre-P0.2 ``np.ones((h, w), dtype=bool)`` datasetNcore path. source=='none'
+    means no log line is emitted."""
+    H_, W_ = 6, 10
+    valid, source = resolve_ego_valid_mask_with_source(
+        None,
+        clip_dir=tmp_path,
+        camera_id="camera_front_wide_120fov",
+        resolution_hw=(H_, W_),
+        dilation_iters=30,
+    )
+    assert valid.shape == (H_, W_)
+    assert valid.dtype == bool
+    assert source == "none"
+    assert np.array_equal(valid, np.ones((H_, W_), dtype=bool))
+
+
+def test_wire_source_is_sdk_when_sdk_nonzero(monkeypatch):
+    """SDK non-zero path reports source='sdk' (no [P0.2] fallback log)."""
+
+    def _boom(*a, **k):
+        raise AssertionError("itar fallback must not be reached when SDK mask is non-zero")
+
+    monkeypatch.setattr(aux_readers, "discover_aux_path", _boom)
+    sdk = np.zeros((H, W), dtype=np.uint8)
+    sdk[2, 2] = 255
+    _, source = resolve_ego_valid_mask_with_source(
+        Image.fromarray(sdk),
+        clip_dir="explode-if-used",
+        camera_id="camA",
+        resolution_hw=(H, W),
+        dilation_iters=0,
+    )
+    assert source == "sdk"
+
+
+def test_resolve_ego_valid_mask_still_returns_ndarray(monkeypatch, tmp_path):
+    """Task 1 API preserved: legacy ``resolve_ego_valid_mask`` still returns a
+    single ndarray (thin wrapper over the with_source variant)."""
+    (tmp_path / "clip.aux.egomask.zarr.itar").touch()
+    root = _build_root()
+    monkeypatch.setattr(aux_readers, "_open_itar_zarr", lambda p: root)
+    valid = resolve_ego_valid_mask(
+        None, clip_dir=tmp_path, camera_id="camA", resolution_hw=(H, W), dilation_iters=0
+    )
+    assert isinstance(valid, np.ndarray)
+    assert np.array_equal(valid, np.logical_not(CAMA_UNION))
