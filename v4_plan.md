@@ -69,7 +69,6 @@
 %%{init: {'theme':'base'}}%%
 kanban
     Backlog
-        [E2.2 渐进外推蒸馏（核心移植）★★ 2026-07-03 战役主线 next-up·spec offtrack-campaign]
         [E2.3 actor 弱观测面修复蒸馏]
         [E2.6 viser_gui_4d temporal 后处理（difixer Fixer→Harmonizer 三代时间模式，回读前帧提 inference 时序一致性）]
         [E2.7-C dyn features_albedo Fourier→SH 转换（E2.7-B 烟雾感 follow-up）]
