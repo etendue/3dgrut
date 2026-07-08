@@ -17,7 +17,8 @@ no ncore SDK, so unit-testable on Mac CPU.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+import warnings
+from typing import Dict, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -77,3 +78,49 @@ def build_camera_mask(
         cx, cy, r = fisheye_circle
         mask |= rasterize_fisheye_outer((cx, cy), r, (H, W))
     return mask
+
+
+def compose_egomask_set(
+    visual_specs: Dict[str, dict],
+    existing_reader,
+    hw: Tuple[int, int],
+    reinforce_cams: Set[str],
+    skip_cams: Set[str],
+) -> Dict[str, np.ndarray]:
+    """Compose the per-camera static ego-mask set to write into the itar.
+
+    Args:
+        visual_specs: ``{camera_id: {"polygons": [[(x,y),...], ...],
+            "fisheye_circle": (cx, cy, r) or None}}`` — Claude-annotated shapes.
+        existing_reader: an ``EgomaskAuxReader`` (needs ``has_camera`` /
+            ``read_static_mask``) supplying the base mask for reinforced cameras.
+        hw: ``(H, W)`` of the target masks.
+        reinforce_cams: cameras whose existing itar mask is unioned with the
+            visual polygons (pixel-accurate body kept, omissions added). Each
+            MUST be present in ``existing_reader`` or a ``KeyError`` is raised.
+        skip_cams: cameras that get NO mask (absent from the returned dict, so
+            no itar entry -> ``resolve_ego_valid_mask`` returns all-valid).
+
+    Returns:
+        ``{camera_id: (H, W) bool}`` for every camera in ``visual_specs`` except
+        those in ``skip_cams``.
+    """
+    result: Dict[str, np.ndarray] = {}
+    for cam, spec in visual_specs.items():
+        if cam in skip_cams:
+            warnings.warn(f"compose_egomask_set: '{cam}' in skip_cams — ignoring its visual spec")
+            continue
+        base = None
+        if cam in reinforce_cams:
+            if not existing_reader.has_camera(cam):
+                raise KeyError(
+                    f"compose_egomask_set: reinforce camera '{cam}' not present in existing egomask reader"
+                )
+            base = existing_reader.read_static_mask(cam)
+        result[cam] = build_camera_mask(
+            hw,
+            polygons=spec.get("polygons"),
+            fisheye_circle=spec.get("fisheye_circle"),
+            base_mask=base,
+        )
+    return result

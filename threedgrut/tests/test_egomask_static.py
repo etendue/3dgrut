@@ -10,9 +10,11 @@ Fisheye center is (cx, cy) = (col, row). Tolerance: binary, exact np.array_equal
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from threedgrut.datasets.egomask_static import (
     build_camera_mask,
+    compose_egomask_set,
     rasterize_fisheye_outer,
     rasterize_polygons,
 )
@@ -94,3 +96,63 @@ def test_build_camera_mask_polygons_only():
     m = build_camera_mask((H, W), polygons=[poly])
     assert m[2, 2]
     assert not m[19, 29]
+
+
+# --------------------------------------------------------------------------- #
+# compose_egomask_set (T2 — union-reinforce + skip list)
+# --------------------------------------------------------------------------- #
+class _FakeReader:
+    """Minimal EgomaskAuxReader stand-in for compose tests."""
+
+    def __init__(self, masks: dict):
+        self._masks = masks
+
+    def has_camera(self, cam):
+        return cam in self._masks
+
+    def read_static_mask(self, cam):
+        return self._masks[cam]
+
+
+def _rect_mask(x0, y0, x1, y1):
+    m = np.zeros((H, W), dtype=bool)
+    m[y0 : y1 + 1, x0 : x1 + 1] = True
+    return m
+
+
+def test_compose_reinforce_unions_existing_and_visual():
+    existing = _rect_mask(0, 0, 3, 3)  # existing itar mask block
+    reader = _FakeReader({"camR": existing})
+    poly = [[(20, 15), (28, 15), (28, 18), (20, 18)]]
+    visual = {"camR": {"polygons": poly, "fisheye_circle": None}}
+    out = compose_egomask_set(visual, reader, (H, W), reinforce_cams={"camR"}, skip_cams=set())
+    expected = existing | rasterize_polygons(poly, (H, W))
+    assert np.array_equal(out["camR"], expected)
+
+
+def test_compose_pure_visual_ignores_existing_base():
+    existing = _rect_mask(0, 0, 3, 3)
+    reader = _FakeReader({"camV": existing})  # reader HAS it, but camV is not reinforced
+    poly = [[(20, 15), (28, 15), (28, 18), (20, 18)]]
+    visual = {"camV": {"polygons": poly, "fisheye_circle": None}}
+    out = compose_egomask_set(visual, reader, (H, W), reinforce_cams=set(), skip_cams=set())
+    assert np.array_equal(out["camV"], rasterize_polygons(poly, (H, W)))
+    assert not out["camV"][0:4, 0:4].any()  # existing base NOT merged
+
+
+def test_compose_skip_cam_absent_from_output():
+    reader = _FakeReader({})
+    rect = [[(1, 1), (4, 1), (4, 4), (1, 4)]]
+    visual = {
+        "camA": {"polygons": rect, "fisheye_circle": None},
+        "camSkip": {"polygons": rect, "fisheye_circle": None},
+    }
+    out = compose_egomask_set(visual, reader, (H, W), reinforce_cams=set(), skip_cams={"camSkip"})
+    assert set(out.keys()) == {"camA"}
+
+
+def test_compose_reinforce_missing_in_reader_raises():
+    reader = _FakeReader({})  # no cameras
+    visual = {"camR": {"polygons": [[(1, 1), (4, 1), (4, 4), (1, 4)]], "fisheye_circle": None}}
+    with pytest.raises(KeyError):
+        compose_egomask_set(visual, reader, (H, W), reinforce_cams={"camR"}, skip_cams=set())
