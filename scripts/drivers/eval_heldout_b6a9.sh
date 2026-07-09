@@ -47,6 +47,11 @@ test -f "$CKPT" || { echo "ERROR: ckpt missing at $CKPT"; exit 1; }
 
 mkdir -p "$OUT/train" "$OUT/heldout"
 
+# driver-owned log — 不依赖 launcher 侧 shell 重定向（P0.6 首跑教训：
+# setsid + `ssh -n "... > /tmp/xxx 2>&1 &"` 时 detach 后 launcher redirect fd 关闭，
+# driver 侧 echo/SUMMARY 输出被丢弃，Monitor 挂 /tmp 关键字永远等不到）。
+exec > >(tee -a "$OUT/driver.log") 2>&1
+
 echo "=== P0.6 heldout $TAG start $(date '+%F %T') ==="
 echo "ckpt   : $CKPT"
 echo "out    : $OUT"

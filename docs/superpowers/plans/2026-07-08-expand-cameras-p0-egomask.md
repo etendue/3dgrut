@@ -106,7 +106,7 @@
 
 **执行注记（2026-07-09）**：全 8 mode 一次调用（`NOVEL_VIEW_MODES` = legacy 4 + E1.1 lateral_3m/6m + PR #34 yaw_30/60deg），无需 b6a9 特化代码；R4e ckpt 直接可用；KID buffer warning 属预期（累积特征），143 帧 subset 未 OOM；两两独立度量方向一致（B4 held-out cc −10dB × P0.5 lateral 6m FID +17.5 + LPIPS +0.14 × yaw 60deg FID +43.5）。
 
-### Task 6: held-out 评估一键驱动
+### Task 6: held-out 评估一键驱动 ✅（2026-07-09 完成，`6b39f6f` driver + tee 修复 + 6min inceptio on R4e ckpt；R4e 基线 train cc_psnr_masked 17.73 / held-out rear_right_70fov 15.37 / **Δ −2.35 dB**；对 B4 R0c 时代 gap −9.95 dB 收窄到 −2.35 dB → 扩相机收益 ~+7.6 dB 坐实；Phase C 前置 6/6 = gate 全解）
 
 **Files:**
 - Create: `scripts/drivers/eval_heldout_b6a9.sh`
@@ -115,9 +115,11 @@
 **Interfaces:**
 - Produces: 输入 `<ckpt> <out_tag>` → 两组 render（train-cam 组 / rear_right held-out 组）→ 汇总一行输出：train cc_psnr / held-out cc_psnr / gap / FID，供阶梯每步直接调用。
 
-- [ ] **Step 1: 封装脚本**（B4 四组流程裁成两组；输出目录 `~/work/output/heldout_<tag>/`）。
-- [ ] **Step 2: 用 R4e ckpt 实跑一次**作基线读数（rear_right 此时未参训 = 真 held-out）；双源交叉后入档 Done Log（这就是阶梯的「读数 1」起点）。
-- [ ] **Step 3: Commit** `feat(P0.6): held-out 一键评估驱动 + R4e 基线读数`。
+- [x] **Step 1: 封装脚本**（B4 四组流程裁成两组；输出目录 `~/work/output/heldout_<tag>/`）。
+- [x] **Step 2: 用 R4e ckpt 实跑一次**作基线读数（rear_right 此时未参训 = 真 held-out）；双源交叉后入档 Done Log（这就是阶梯的「读数 1」起点）。
+- [x] **Step 3: Commit** `feat(P0.6): held-out 一键评估驱动 + R4e 基线读数`。
+
+**执行注记（2026-07-09）**：driver 首跑踩坑 = setsid + `ssh -n "... > /tmp/xxx 2>&1 &"` detach 后 launcher redirect fd 关闭，driver 内部 echo/SUMMARY 输出全丢，Monitor 挂 `all done` 关键字 1.5h 才发现两组 render 早已完成；修法 = driver 头加 `exec > >(tee -a "$OUT/driver.log") 2>&1` driver-owned 不依赖 launcher。**同口径 sanity 通过**：P0.6 train cc_psnr_masked 17.73 vs R4e P0.4 主锚 17.75 Δ −0.02 noise 级 ✅。**"rear_right 永久 eval-only" 敏感度**：R4e 时 gap 已经 −2.35 dB（远小于 B4 时代 −10 dB），rear_right 判据敏感度低——Task 12 收尾按全程曲线拍板。
 
 ### Task 7: C1 telew per-camera loss weight（必须 merge main）
 
