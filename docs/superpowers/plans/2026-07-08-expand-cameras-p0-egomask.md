@@ -73,7 +73,7 @@
 - [ ] **Step 3: 回归验证**：`diag_egomask_itar.py` 重跑 → 6/6 相机 nonzero>0；Task 2 的 500 步 smoke 重跑 → 6 台全部出 `[P0.2]` 行。
 - [ ] **Step 4: Commit 脚本** `feat(P0.3): sseg egocar 出现率派生静态 ego mask 脚本 + b6a9 front/back 补齐实跑`（itar 是数据不进 git；preview 关键截图入 commit message 描述或 v5_plan Done Log 引用路径）。
 
-### Task 4: R4e 重锚（30k，ego-mask 单变量）
+### Task 4: R4e 重锚（30k，ego-mask 单变量）✅（2026-07-09 完成，`e0ee7d6` driver + R4e 30k 63min；R4e masked 锚 21.69 / cc 17.75 / road_crop 25.70 / auto 18.71，right_wide masked +4.45 单变量方向坐实）
 
 **Files:**
 - Create: `scripts/drivers/r4e_rebaseline.sh`（沿 `fc93bd3` 正式驱动模式）
@@ -83,10 +83,12 @@
 - Consumes: Task 2/3 完成后的代码 + 补齐 aux；R3p 配方（`ncore_3dgut_mcmc_multilayer_inceptio.yaml`）零改动——单变量 = 仅 ego-mask 生效。
 - Produces: **R4e 锚**（mean/cc/ssim/lpips/road_crop/automobile + per-cam 全套 + iter-6000 val 读数存档作后续 proxy 参照）。
 
-- [ ] **Step 1: 登记 kill-criterion**（run 名 r4e_30k / 观察点 iter 2k：无 NaN、无死层告警、loss 曲线正常 / 砍单动作：停 run 回 Task 2/3 查）。
-- [ ] **Step 2: setsid 驱动启动 30k** + 发射后验证（`pgrep -f '[p]ython.*train.py'` + log 前 50 行含 6 条 `[P0.2]`/派生 mask 行 + valid 像素占比 sanity）。
-- [ ] **Step 3: 完成后双源交叉**（`🎊/⭐` 两表 + metrics.json 一致）；与 R3p 并排入档，**显式标注口径差异**（masked 指标含义变化，不作同口径比较）；ego-mask on/off 定性对比（automobile/road 侧预期受益）写入 Done Log。
-- [ ] **Step 4: Commit 文档同步** `docs(plan): R4e ego-mask 锚入档（口径注记 + iter6k proxy 参照）`。
+- [x] **Step 1: 登记 kill-criterion**（run 名 r4e_30k / 观察点 iter 2k：无 NaN、无死层告警、loss 曲线正常 / 砍单动作：停 run 回 Task 2/3 查）。
+- [x] **Step 2: setsid 驱动启动 30k** + 发射后验证（`pgrep -f '[p]ython.*train.py'` + log 前 50 行含 6 条 `[P0.2]`/派生 mask 行 + valid 像素占比 sanity）。
+- [x] **Step 3: 完成后双源交叉**（`🎊/⭐` 两表 + metrics.json 一致）；与 R3p 并排入档，**显式标注口径差异**（masked 指标含义变化，不作同口径比较）；ego-mask on/off 定性对比（automobile/road 侧预期受益）写入 Done Log。
+- [x] **Step 4: Commit 文档同步** `docs(plan): R4e ego-mask 锚入档（口径注记 + iter6k proxy 参照）`。
+
+**执行注记（2026-07-09）**：iter-6000 val 未打——config `val_frequency` 默认 = 30000 只在训练末做一次 val，Done Log 诚实标注；阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 `trainer.val_frequency`。
 
 ### Task 5: B5 novel FID 链路移植 b6a9
 
