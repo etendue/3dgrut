@@ -21,7 +21,7 @@
 
 ---
 
-### Task 1: EgomaskAuxReader + resolve_ego_valid_mask 纯函数
+### Task 1: EgomaskAuxReader + resolve_ego_valid_mask 纯函数 ✅（2026-07-08 验收通过，4a9f2e6 已合 main）
 
 **Files:**
 - Modify: `threedgrut/datasets/aux_readers.py`（`SsegAuxReader` 之后追加）
@@ -32,13 +32,13 @@
 - Produces: `resolve_ego_valid_mask(sdk_mask_image, clip_dir, camera_id, resolution_hw, dilation_iters) -> np.ndarray`（`(H, W)` bool **valid** 图）：① SDK mask 存在且非全零 → 沿现逻辑 convert("L")→dilate→取反；② 否则若 `discover_aux_path(clip_dir, "egomask")` 命中且 reader `has_camera` → itar mask→dilate→取反；③ 都无 → 全 True。`sdk_mask_image` 为 PIL Image 或 None；`clip_dir` 为 None 时跳过 ②（兼容非 NCore 调用方）。
 - Consumes: 现有 `_open_itar_zarr` / `discover_aux_path`（同文件）。
 
-- [ ] **Step 1: 写失败测试。** 用 fake zarr root（嵌套 dict 风格 stub，monkeypatch `_open_itar_zarr`）构造两相机数据：camA 两帧不同区域非零、camB 全零。断言要点：① `read_static_mask("camA")` 为两帧**并集**（两块区域都 True，精确相等）；② camB 全 False；③ `has_camera("camX")` False、`read_static_mask("camX")` 抛 KeyError；④ `resolve_ego_valid_mask` 三分支——SDK 非零 mask 时**不触碰** itar（传入会炸的 sentinel clip_dir 证明未调用）、SDK None/全零 + itar 有 → valid = not(dilate(itar_mask))、两者皆无 → 全 True 且 shape=resolution_hw；⑤ dilation_iters=0 时 mask 不膨胀（精确相等，二值无公差）。
-- [ ] **Step 2: 跑测试确认失败**（ImportError / AttributeError 级失败，非 collection error）。
-- [ ] **Step 3: 实现 `EgomaskAuxReader` + `resolve_ego_valid_mask`**，风格对齐 `SsegAuxReader`（lazy open + per-camera 子组缓存）；scipy `ndimage.binary_dilation` 与 datasetNcore 现用法一致。
-- [ ] **Step 4: 跑新测试全绿 + 既有 aux 测试回归**（`test_aux_discover_lane.py` 等同目录全套）。
-- [ ] **Step 5: Commit** `feat(P0.2): EgomaskAuxReader + resolve_ego_valid_mask 纯函数（aux itar 直读 ego mask）`。
+- [x] **Step 1: 写失败测试。** 用 fake zarr root（嵌套 dict 风格 stub，monkeypatch `_open_itar_zarr`）构造两相机数据：camA 两帧不同区域非零、camB 全零。断言要点：① `read_static_mask("camA")` 为两帧**并集**（两块区域都 True，精确相等）；② camB 全 False；③ `has_camera("camX")` False、`read_static_mask("camX")` 抛 KeyError；④ `resolve_ego_valid_mask` 三分支——SDK 非零 mask 时**不触碰** itar（传入会炸的 sentinel clip_dir 证明未调用）、SDK None/全零 + itar 有 → valid = not(dilate(itar_mask))、两者皆无 → 全 True 且 shape=resolution_hw；⑤ dilation_iters=0 时 mask 不膨胀（精确相等，二值无公差）。
+- [x] **Step 2: 跑测试确认失败**（ImportError / AttributeError 级失败，非 collection error）。
+- [x] **Step 3: 实现 `EgomaskAuxReader` + `resolve_ego_valid_mask`**，风格对齐 `SsegAuxReader`（lazy open + per-camera 子组缓存）；scipy `ndimage.binary_dilation` 与 datasetNcore 现用法一致。
+- [x] **Step 4: 跑新测试全绿 + 既有 aux 测试回归**（`test_aux_discover_lane.py` 等同目录全套）。
+- [x] **Step 5: Commit** `feat(P0.2): EgomaskAuxReader + resolve_ego_valid_mask 纯函数（aux itar 直读 ego mask）`。
 
-### Task 2: datasetNcore ego-mask fallback 接线
+### Task 2: datasetNcore ego-mask fallback 接线 ✅（2026-07-08 验收通过，cecb6b0 已合 main cc26b08；smoke 6 相机 fallback 全命中 + 960 passed）
 
 **Files:**
 - Modify: `threedgrut/datasets/datasetNcore.py:429-440`（「Statically unmasked pixels (ego mask)」块）
@@ -48,12 +48,12 @@
 - Consumes: Task 1 的 `resolve_ego_valid_mask`。
 - Produces: `datasetNcore` 该块改为单行委托——SDK `camera_sensor.get_mask_images().get("ego")` 与 clip 目录、`camera_model.resolution`、`self.n_camera_mask_dilation_iterations` 传入纯函数；返回值继续赋 `camera_valid_pixels_ego_mask`（下游 L466 `repair_nonfinite_rays` 及缓存路径**不动**）。
 
-- [ ] **Step 1: 写失败测试。** 断言要点：① fallback 激活时（SDK 全零 + itar 有 4 台相机数据）各相机 valid 像素数 = 总数 − dilate 后 mask 数；② PAI 语义回归——SDK 无 'ego' 键 + 无 itar → valid 全 True（与现状逐字节一致）。
-- [ ] **Step 2: 跑测试确认失败。**
-- [ ] **Step 3: 改 datasetNcore 该块**为委托调用 + 一行 sanity 日志（风格对齐 A5 的 `[A5] dyn_mask_cuboid filled via ...`）：fallback 激活时打 `[P0.2] ego mask via aux itar fallback: <camera_id> coverage=<pct>%`。clip 目录取值沿 `discover_aux_path` 在本文件既有用法（L1297 一带的 clip_dir 来源）。
-- [ ] **Step 4: Mac 全套回归**：`.venv/bin/python -m pytest threedgrut/tests/ -x -q` 零失败。
-- [ ] **Step 5: Commit** `feat(P0.2): datasetNcore ego mask SDK缺失/全零时 fallback 读 aux itar（PAI 线字节等价）`。
-- [ ] **Step 6: inceptio 实证**（分支 push → worktree）：跑一个 500 步 smoke（R3p 配方 + `n_iterations=500`），grep 日志确认 6 训练相机**全部**出现 `[P0.2]` fallback 行（P0.3 视觉多边形已补齐 10 台）、coverage 与已知数字量级一致（cross ~8%、right_wide ~1%、back_rear_wide ~0.25%）。
+- [x] **Step 1: 写失败测试。** 断言要点：① fallback 激活时（SDK 全零 + itar 有 4 台相机数据）各相机 valid 像素数 = 总数 − dilate 后 mask 数；② PAI 语义回归——SDK 无 'ego' 键 + 无 itar → valid 全 True（与现状逐字节一致）。
+- [x] **Step 2: 跑测试确认失败。**
+- [x] **Step 3: 改 datasetNcore 该块**为委托调用 + 一行 sanity 日志（风格对齐 A5 的 `[A5] dyn_mask_cuboid filled via ...`）：fallback 激活时打 `[P0.2] ego mask via aux itar fallback: <camera_id> coverage=<pct>%`。clip 目录取值沿 `discover_aux_path` 在本文件既有用法（L1297 一带的 clip_dir 来源）。
+- [x] **Step 4: Mac 全套回归**：`.venv/bin/python -m pytest threedgrut/tests/ -x -q` 零失败。
+- [x] **Step 5: Commit** `feat(P0.2): datasetNcore ego mask SDK缺失/全零时 fallback 读 aux itar（PAI 线字节等价）`。
+- [x] **Step 6: inceptio 实证**（分支 push → worktree）：跑一个 500 步 smoke（R3p 配方 + `n_iterations=500`），grep 日志确认 6 训练相机**全部**出现 `[P0.2]` fallback 行（P0.3 视觉多边形已补齐 10 台）、coverage 与已知数字量级一致（cross ~8%、right_wide ~1%、back_rear_wide ~0.25%）。
 
 ### Task 3: front/back ego mask 派生脚本 + 实跑补齐 ⏭ superseded
 

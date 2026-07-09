@@ -70,7 +70,6 @@ kanban
     Backlog
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
         [B5 E1 外推度量移植 b6a9：novel 6 档 + FID/KID render-only·无悔棋]
-        [P0.2 EgomaskAuxReader + datasetNcore fallback 接线（gate P0.3）：itar 直读 ego mask 三分支 valid 图]
         [P0.4 R4e 重锚（30k，单变量=仅 ego-mask 生效）：R3p 旧锚不可比、口径变化并排入档]
         [P0.5 B5 novel FID 链路移植 b6a9（render-only 无悔棋）]
         [P0.6 held-out 评估一键驱动（B4 协议脚本化）]
@@ -86,6 +85,7 @@ kanban
     "Review"
 
     "Done"
+        [P0.2 EgomaskAuxReader + datasetNcore fallback 接线 ✅ 2026-07-08（4a9f2e6 + cecb6b0，已合 main）：SDK 缺失/全零时 itar 直读三分支 valid 图 + source 标签日志；inceptio 500 步 smoke 6 相机全部 fallback 命中；PAI 线逐字节等价；16 单测 + 960 全套零回归]
         [P0.1 ego mask 双层故障诊断 ✅ 2026-07-08：aux itar 4/6 相机有真 mask 从未接进训练（SDK 内嵌全零）+ front_wide/back_rear_wide 全黑（sseg egocar 有数据可派生）]
         [P0.3 b6a9 视觉多边形静态 ego mask ✅ 2026-07-08（40277d2）：大g 用自包含 HTML 标注器手工标 10 台（reinforce=[] 纯视觉替换）+ inceptio write-once 替换 itar（旧 161KB→aux_backup、新 91KB）+ 回读 10/10 精确匹配；跳过 front_tele/front_standard 纯远景；EgomaskAuxReader/栅格化/合成/写函数纯函数全 Mac TDD 23 单测；下游 P0.2 接线待做则训练即生效]
         [B1 NRE 双臂对照锚 ✅ 2026-07-07：官方 nre-ga b6a9 test/psnr 臂1 19.25 / 臂2 19.09；off-track lateral FID difix 增益 −10.5（3m）/−9.3（6m），difix=离轴解药方向；单变量确认两臂仅差 difix 开关]
@@ -117,7 +117,7 @@ kanban
 | **B4** ★ | B | **held-out 侧相机真 GT off-track 锚** — 现有 3-cam 30k ckpt 在未参训侧相机位姿渲染 vs 真图（真 GT 外推，v4 E1.3 协议反用）→ held-out per-cam psnr/lpips + FID 与训练相机同口径对照 | v4 E1.3 协议 + E5.0 ckpt | 0.5 | ✅ | **2026-07-06 实测**（render-only，worktree @ a5083c8）：held-out cc_psnr 旧锚 7.0 / R0c 9.7 vs train 19.5（gap −10~−12 dB）；扩相机收益 +8.88 dB（思路 B 证据）；双源交叉一致；详见 §4 Done Log |
 | **B5** | B | **E1 外推度量移植 b6a9** — novel 6 档（含 lateral 3m/6m）+ FID/KID（`--render-only` / `--novel-fid` 链路）在 b6a9 config 打通 | v4 E1.1/E1.4 工具 | 0.5 | ⬜ | render-only；**无悔棋三件套之一**；metrics.json 出 novel 档字段，与 B4 真 GT 互证 |
 | **P0.3** ★ | C 前置 | **b6a9 视觉多边形静态 ego mask 替换** — 大g 用自包含 HTML 标注器（浏览器 canvas + 100px 网格 + 滚轮缩放 + Shift 拖拽平移）手工标 10 台顶点数据（reinforce=[] 纯视觉替换）；跳过 front_tele/front_standard（自车不入镜）；write-once 替换 clip 目录 egomask itar，旧 itar 备份 aux_backup/。栅格化/合成/写 API 全 Mac TDD 23 单测（`test_egomask_static.py` 11 + `test_egomask_aux_reader.py` 12）+ inceptio round-trip + 10/10 回读精确匹配 | v5 Phase C 前置 | 1 | ✅ | **2026-07-08 完成**（`40277d2`）；per-cam ego_px 精准：back_rear_wide 5251(0.25%) 最干净、back_rear_fisheye 582379(28%) 最大（车顶弧+vignette）、left/right_wide 后视镜镜体+镜臂完整贴合；下游 P0.2 datasetNcore 接线待做则训练即生效 |
-| **P0.2** | C 前置 | **EgomaskAuxReader + datasetNcore fallback 接线** — reader 已合（`4a9f2e6`，通用相机组发现 + resolve_ego_valid_mask 三分支 + 12 Mac 单测）；剩 datasetNcore.py L429-440 委托 resolve_ego_valid_mask 调用 + 一行 sanity 日志 | v5 Phase C 前置 | 0.5 | 🟡 | reader/纯函数 ✅（`4a9f2e6`），接线待做；PAI 线字节等价不变量已入 v2_architecture §7 |
+| **P0.2** | C 前置 | **EgomaskAuxReader + datasetNcore fallback 接线** — reader（`4a9f2e6`，通用相机组发现 + resolve_ego_valid_mask 三分支 + 12 Mac 单测）+ 接线（`cecb6b0`：`resolve_ego_valid_mask_with_source` 带 source 标签 "sdk"/"itar"/"none"、datasetNcore L429-440 单点委托、itar 分支打 `[P0.2]` coverage 日志、+4 wire 测） | v5 Phase C 前置 | 0.5 | ✅ | **2026-07-08 完成，已合 main（`cc26b08`）**：inceptio 500 步 smoke（p02_wire_smoke）6 训练相机全部 fallback 命中（coverage front 1.91% / cross_L 11.11% / cross_R 10.34% / left 23.63% / right 25.74% / back 0.60%，dilate30 后口径）+ Training Complete；PAI 线逐字节等价（wire 测断言）；Mac 960 passed |
 | **P0.4** | C 前置 | **R4e 重锚（30k，单变量=仅 ego-mask 生效）** — R3p 同配方 + P0.2 接线后 30k，masked 指标口径改变 → 与 R3p 并排入档标注口径差异，防未来跨口径误比 | v5 Phase C 前置 | 1h 机时 | ⬜ | gate=P0.2；单变量 = 仅 ego-mask；ego-mask on/off 干净 A/B（自车像素不再抢监督预算，automobile/road 预期受益） |
 | **P0.5** | C 前置 | **B5 novel FID 链路移植 b6a9**（render-only 无悔棋）—— v4 E1.1/E1.4 工具链在 b6a9 打通；metrics.json 出 `mean_novel_fid_*` | v4 E1.1/E1.4 工具 | 0.5 | ⬜ | 与 B4 真 GT 数字互证 |
 | **P0.6** | C 前置 | **held-out 评估一键驱动** — B4 `--dataset-cameras` render-only 流程封装：输入 ckpt→输出 rear_right held-out cc_psnr/lpips/FID + train 同口径对照 | v4 E1.3 协议 | 0.5 | ⬜ | 阶梯每步四读数之一 |
@@ -134,7 +134,7 @@ kanban
 |---:|---|---:|---|:---:|:---:|
 | **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
 | **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 3/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | 🟡 |
-| **P0** ★ | Phase C 前置（ego-mask 修复 + 评估基建） | **2/6** | P0.1 诊断 ✅ + P0.3 视觉多边形替换 ✅ + P0.2 接线 🟡 + P0.4 R4e 重锚 + P0.5 novel FID 链路 + P0.6 held-out 一键驱动 | PAI 线字节等价不变量 | 🟡 |
+| **P0** ★ | Phase C 前置（ego-mask 修复 + 评估基建） | **3/6** | P0.1 诊断 ✅ + P0.3 视觉多边形替换 ✅ + P0.2 接线 ✅ + P0.4 R4e 重锚 + P0.5 novel FID 链路 + P0.6 held-out 一键驱动 | PAI 线字节等价不变量 | 🟡 |
 | **C** | 扩相机阶梯 3→12 | 0/4 | 12 相机全量纳入或明确收口点 | 每步原相机不退 | ⬜ |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
 | **总计** | — | **10/22** | — | — | — |
@@ -253,6 +253,12 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-08 ★ P0.2 datasetNcore ego-mask fallback 接线完成**（Phase C 前置项；spawned worktree session 执行 + 主会话验收合 main `cc26b08`）：
+  - **接线（`cecb6b0`）**：`aux_readers.py` 升级 `resolve_ego_valid_mask_with_source`（三分支 + source 标签 "sdk"/"itar"/"none"），原 `resolve_ego_valid_mask` 收缩 thin wrapper 保持 Task 1 API 逐字节不变；`datasetNcore.py` L429-440 SDK-only 逻辑 → 单点委托（下游 `repair_nonfinite_rays`/缓存/Batch 注入不动）；itar 分支打 `[P0.2] ego mask via aux itar fallback: <cam> coverage=<pct>%`。
+  - **测试**：+4 wire 测（fallback 像素计数 / **PAI 线逐字节等价断言** / source enum / wrapper 签名回归）→ `test_egomask_aux_reader.py` 16 测；Mac 全套 **960 passed, 12 skipped** 零回归（主会话独立复跑确认）。
+  - **inceptio 500 步 smoke 实证**（p02_wire_smoke，R3p 配方 + nw=10）：**6 训练相机全部 `[P0.2]` fallback 命中**——coverage front_wide 1.91% / cross_left 11.11% / cross_right 10.34% / left_wide 23.63% / right_wide 25.74% / back_rear_wide 0.60%（P0.3 多边形 ∪ 原 itar、dilate30 后口径）；`🥳 Training Complete` + Step 500 Test Metrics 正常出表；`[A1]` ray 极点修复告警共存正常；worktree 已清理。
+  - **效果**：P0.3 的 10 台手工 mask 自此正式进训练/eval 的 masked 口径——P0.4 R4e 重锚 gate 已解除。
 
 - **2026-07-08 ★ P0.3 b6a9 视觉多边形静态 ego mask 替换**（Phase C 前置项）：
   - **背景（P0.1 诊断）**：aux egomask itar 4/6 相机有真 mask（cross_L/R + left/right_wide 25K-177K nonzero）但 datasetNcore.py 读的是 NCore SDK 内嵌 mask（b6a9 sequence 未嵌 → 训练侧全零 → itar mask 从未生效）；front_wide/back_rear_wide itar 里全黑（sseg egocar 有数据可派生）；left/right_wide 侧现有 itar mask 漏后视镜（大g Claude 对比图发现）。
