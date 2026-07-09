@@ -90,7 +90,7 @@
 
 **执行注记（2026-07-09）**：iter-6000 val 未打——config `val_frequency` 默认 = 30000 只在训练末做一次 val，Done Log 诚实标注；阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 `trainer.val_frequency`。
 
-### Task 5: B5 novel FID 链路移植 b6a9
+### Task 5: B5 novel FID 链路移植 b6a9 ✅（2026-07-09 完成，`cb75e15` driver + 8.5min render-only；render 213.80 / lat 6m 231.30 / yaw 60deg 257.31，yaw 严格单调 + LPIPS lateral 严格单调；与 B4 held-out −10dB 方向一致）
 
 **Files:**
 - Create: `scripts/drivers/b5_novel_fid_b6a9.sh`（render-only 驱动）
@@ -100,9 +100,11 @@
 - Consumes: `render.py` 既有 `--novel-fid` / `--render-only` / novel 6 档链路（v4 E1.1/E1.4 工具，本仓库已合 main）；R4e ckpt（Task 4）。
 - Produces: b6a9 metrics.json 出 `mean_novel_fid_*` / `mean_novel_kid_*` 全档字段；与 B4 真 GT 数字互证结论一行。
 
-- [ ] **Step 1: 对 R4e ckpt 跑 novel FID eval**（参数用法对照 v4 E1.4 Done Log 用例；b6a9 config 差异——相机数/分辨率——按报错最小适配，若需代码改动先写回归测试再改）。
-- [ ] **Step 2: 验收字段齐全**（lateral 1/3/6m 各档 FID/KID 单调性 sanity——离轴越远越差为健康信号）+ 双源交叉。
-- [ ] **Step 3: 互证入档**：novel FID 各档 vs B4 held-out gap 方向一致性结论写 Done Log；Commit `feat(B5)+docs(plan)`。
+- [x] **Step 1: 对 R4e ckpt 跑 novel FID eval**（参数用法对照 v4 E1.4 Done Log 用例；b6a9 config 差异——相机数/分辨率——按报错最小适配，若需代码改动先写回归测试再改）。
+- [x] **Step 2: 验收字段齐全**（lateral 1/3/6m 各档 FID/KID 单调性 sanity——离轴越远越差为健康信号）+ 双源交叉。
+- [x] **Step 3: 互证入档**：novel FID 各档 vs B4 held-out gap 方向一致性结论写 Done Log；Commit `feat(B5)+docs(plan)`。
+
+**执行注记（2026-07-09）**：全 8 mode 一次调用（`NOVEL_VIEW_MODES` = legacy 4 + E1.1 lateral_3m/6m + PR #34 yaw_30/60deg），无需 b6a9 特化代码；R4e ckpt 直接可用；KID buffer warning 属预期（累积特征），143 帧 subset 未 OOM；两两独立度量方向一致（B4 held-out cc −10dB × P0.5 lateral 6m FID +17.5 + LPIPS +0.14 × yaw 60deg FID +43.5）。
 
 ### Task 6: held-out 评估一键驱动
 
