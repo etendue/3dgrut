@@ -39,6 +39,7 @@ from threedgrut.datasets.aux_readers import (
     LidarSsegAuxReader,
     SsegAuxReader,
     discover_aux_path,
+    resolve_ego_valid_mask_with_source,
 )
 from threedgrut.datasets.ncore_semantic import (
     DYNAMIC_CLASS_IDS,
@@ -426,16 +427,22 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 camera_id: np.stack([camera_pixels_x_subsample.flatten(), camera_pixels_y_subsample.flatten()], axis=1)
             }
 
-            # Statically unmasked pixels (ego mask)
-            if camera_mask_image := camera_sensor.get_mask_images().get("ego"):
-                camera_mask_array = np.asarray(camera_mask_image.convert("L")) != 0
-                camera_mask_array = ndimage.binary_dilation(
-                    camera_mask_array, iterations=self.n_camera_mask_dilation_iterations
-                )
-                camera_valid_pixels_ego_mask = np.logical_not(camera_mask_array)
-            else:
-                camera_valid_pixels_ego_mask = np.ones(
-                    (int(camera_model.resolution[1].item()), int(camera_model.resolution[0].item())), dtype=bool
+            # Statically unmasked pixels (ego mask) — P0.2: delegate to
+            # resolve_ego_valid_mask_with_source so aux.egomask.zarr.itar (from
+            # nre-tools or the visual-polygon annotator) fills in when the SDK
+            # sequence embeds no 'ego' mask (or an all-zero one). PAI clips
+            # without an egomask itar remain byte-identical (source == "none").
+            camera_valid_pixels_ego_mask, ego_mask_source = resolve_ego_valid_mask_with_source(
+                camera_sensor.get_mask_images().get("ego"),
+                self.sequence_meta_file_path.parent,
+                camera_id,
+                (h, w),
+                self.n_camera_mask_dilation_iterations,
+            )
+            if ego_mask_source == "itar":
+                coverage_pct = 100.0 * (1.0 - float(camera_valid_pixels_ego_mask.mean()))
+                logger.info(
+                    f"[P0.2] ego mask via aux itar fallback: {camera_id} coverage={coverage_pct:.2f}%"
                 )
             self.sequence_cameras_valid_pixels_ego_masks[sequence_id] |= {camera_id: camera_valid_pixels_ego_mask}
 

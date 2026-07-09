@@ -228,40 +228,32 @@ def _dilate_mask(mask: np.ndarray, iterations: int) -> np.ndarray:
     return mask
 
 
-def resolve_ego_valid_mask(
+def resolve_ego_valid_mask_with_source(
     sdk_mask_image,
     clip_dir: Optional[Union[str, Path]],
     camera_id: str,
     resolution_hw: Tuple[int, int],
     dilation_iters: int,
-) -> np.ndarray:
-    """Resolve the ``(H, W)`` bool **valid**-pixel ego mask for one camera.
+) -> Tuple[np.ndarray, str]:
+    """Resolve the ``(H, W)`` bool valid-pixel ego mask and the branch used.
 
-    Three branches, in priority order:
-      1. ``sdk_mask_image`` present AND non-zero → the NCore-SDK sequence embeds
-         a real ego mask: ``convert("L") != 0`` → dilate → ``logical_not``
-         (byte-identical to datasetNcore's existing path).
-      2. else if ``clip_dir`` is not None and an ``aux.egomask.zarr.itar`` exists
-         there whose :class:`EgomaskAuxReader` ``has_camera(camera_id)`` → itar
-         union → dilate → ``logical_not``.
-      3. else → all-True with shape ``resolution_hw`` (nothing masks anything).
+    Three branches, in priority order (source labels in parentheses):
+      1. (``"sdk"``) ``sdk_mask_image`` present AND non-zero → the NCore-SDK
+         sequence embeds a real ego mask: ``convert("L") != 0`` → dilate →
+         ``logical_not`` (byte-identical to datasetNcore's pre-P0.2 path).
+      2. (``"itar"``) else if ``clip_dir`` is not None and an
+         ``aux.egomask.zarr.itar`` exists there whose :class:`EgomaskAuxReader`
+         ``has_camera(camera_id)`` → itar union → dilate → ``logical_not``.
+      3. (``"none"``) else → all-True with shape ``resolution_hw`` (nothing
+         masks anything). Byte-equivalent to ``np.ones((h, w), dtype=bool)``.
 
-    Args:
-        sdk_mask_image: PIL Image (the SDK ``get_mask_images().get("ego")``) or
-            None. When it is all-zero it is treated as absent (falls to 2/3).
-        clip_dir: clip directory to search for the egomask itar, or None to skip
-            branch 2 (non-NCore callers).
-        camera_id: e.g. ``"camera_cross_left_120fov"``.
-        resolution_hw: ``(H, W)`` used for the branch-3 all-True fallback.
-        dilation_iters: morphological dilation iterations; 0 means no dilation.
-
-    The valid mask is ``logical_not`` of the (dilated) ego mask, matching the
-    downstream ``camera_valid_pixels_ego_mask`` semantics.
+    The source label lets callers (datasetNcore) emit a ``[P0.2] ego mask via
+    aux itar fallback`` log line only when branch 2 fires.
     """
     if sdk_mask_image is not None:
         sdk_mask = np.asarray(sdk_mask_image.convert("L")) != 0
         if sdk_mask.any():
-            return np.logical_not(_dilate_mask(sdk_mask, dilation_iters))
+            return np.logical_not(_dilate_mask(sdk_mask, dilation_iters)), "sdk"
 
     if clip_dir is not None:
         itar_path = discover_aux_path(clip_dir, "egomask")
@@ -269,9 +261,25 @@ def resolve_ego_valid_mask(
             reader = EgomaskAuxReader(itar_path)
             if reader.has_camera(camera_id):
                 mask = reader.read_static_mask(camera_id)
-                return np.logical_not(_dilate_mask(mask, dilation_iters))
+                return np.logical_not(_dilate_mask(mask, dilation_iters)), "itar"
 
-    return np.ones(tuple(int(x) for x in resolution_hw), dtype=bool)
+    return np.ones(tuple(int(x) for x in resolution_hw), dtype=bool), "none"
+
+
+def resolve_ego_valid_mask(
+    sdk_mask_image,
+    clip_dir: Optional[Union[str, Path]],
+    camera_id: str,
+    resolution_hw: Tuple[int, int],
+    dilation_iters: int,
+) -> np.ndarray:
+    """Thin wrapper around :func:`resolve_ego_valid_mask_with_source` that
+    returns just the ``(H, W)`` bool valid-pixel mask (Task 1 API — kept for
+    callers that don't need the source label)."""
+    mask, _ = resolve_ego_valid_mask_with_source(
+        sdk_mask_image, clip_dir, camera_id, resolution_hw, dilation_iters
+    )
+    return mask
 
 
 class LidarSsegAuxReader:
