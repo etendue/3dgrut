@@ -177,7 +177,7 @@
 
 - Consumes: Task 9–11 全部读数。
 - [ ] **Step 1: rear_right 去留材料**：其 held-out cc_psnr 全程曲线（R4e→C2→C3→C4）汇总表 → 交大g 拍板（纳入最终配方 vs 永久 eval-only）。
-- [ ] **Step 2: 60k 容量校准**（定型配方一次 60k，吸收 I1 欠训效应；对照同配方 30k——预期每相机有效步数翻倍的增益读数）。
+- [ ] **Step 2: 60k 容量校准（⚠️ 已降级为可选，按 C 阶梯读数再定）**：I1 欠训假设已被否定（2026-07-07 A800 步数 A/B：6-cam 30k→60k Δmean 仅 +0.10 不显著，见 v5_plan §4 Done Log + Issues I1 ✅ 关闭；commit 0f7533a 救回入档）——「相机数增加 → 步数摊薄」在 6-cam 域不是主要瓶颈，退化更指向容量摊薄/多视角张力（I4 / telew 对症）。仅当 C 阶梯 9-11 cam 定型配方出现明确欠拟合信号（train loss 未平台 + per-cam 全面略低）才跑 60k 对照。
 - [ ] **Step 3: 文档回填**：v5_plan §1 看板（P0 组 + C2–C4 状态 + 锚数字）、§0.2 KPI 表、§4 Done Log；v2_architecture §6 文件清单（`EgomaskAuxReader` / `derive_egomask_from_sseg.py` / telew）+ §7 不变量（fallback 字节等价 + camera_loss_weights 默认恒等）两行；mermaid 全角括号自查零输出。
 - [ ] **Step 4: Commit** `docs(plan)+docs(arch): Phase C 阶梯收尾回填`。
 
