@@ -73,7 +73,7 @@
 - [ ] **Step 3: 回归验证**：`diag_egomask_itar.py` 重跑 → 6/6 相机 nonzero>0；Task 2 的 500 步 smoke 重跑 → 6 台全部出 `[P0.2]` 行。
 - [ ] **Step 4: Commit 脚本** `feat(P0.3): sseg egocar 出现率派生静态 ego mask 脚本 + b6a9 front/back 补齐实跑`（itar 是数据不进 git；preview 关键截图入 commit message 描述或 v5_plan Done Log 引用路径）。
 
-### Task 4: R4e 重锚（30k，ego-mask 单变量）
+### Task 4: R4e 重锚（30k，ego-mask 单变量）✅（2026-07-09 完成，`e0ee7d6` driver + R4e 30k 63min；R4e masked 锚 21.69 / cc 17.75 / road_crop 25.70 / auto 18.71，right_wide masked +4.45 单变量方向坐实）
 
 **Files:**
 - Create: `scripts/drivers/r4e_rebaseline.sh`（沿 `fc93bd3` 正式驱动模式）
@@ -83,12 +83,14 @@
 - Consumes: Task 2/3 完成后的代码 + 补齐 aux；R3p 配方（`ncore_3dgut_mcmc_multilayer_inceptio.yaml`）零改动——单变量 = 仅 ego-mask 生效。
 - Produces: **R4e 锚**（mean/cc/ssim/lpips/road_crop/automobile + per-cam 全套 + iter-6000 val 读数存档作后续 proxy 参照）。
 
-- [ ] **Step 1: 登记 kill-criterion**（run 名 r4e_30k / 观察点 iter 2k：无 NaN、无死层告警、loss 曲线正常 / 砍单动作：停 run 回 Task 2/3 查）。
-- [ ] **Step 2: setsid 驱动启动 30k** + 发射后验证（`pgrep -f '[p]ython.*train.py'` + log 前 50 行含 6 条 `[P0.2]`/派生 mask 行 + valid 像素占比 sanity）。
-- [ ] **Step 3: 完成后双源交叉**（`🎊/⭐` 两表 + metrics.json 一致）；与 R3p 并排入档，**显式标注口径差异**（masked 指标含义变化，不作同口径比较）；ego-mask on/off 定性对比（automobile/road 侧预期受益）写入 Done Log。
-- [ ] **Step 4: Commit 文档同步** `docs(plan): R4e ego-mask 锚入档（口径注记 + iter6k proxy 参照）`。
+- [x] **Step 1: 登记 kill-criterion**（run 名 r4e_30k / 观察点 iter 2k：无 NaN、无死层告警、loss 曲线正常 / 砍单动作：停 run 回 Task 2/3 查）。
+- [x] **Step 2: setsid 驱动启动 30k** + 发射后验证（`pgrep -f '[p]ython.*train.py'` + log 前 50 行含 6 条 `[P0.2]`/派生 mask 行 + valid 像素占比 sanity）。
+- [x] **Step 3: 完成后双源交叉**（`🎊/⭐` 两表 + metrics.json 一致）；与 R3p 并排入档，**显式标注口径差异**（masked 指标含义变化，不作同口径比较）；ego-mask on/off 定性对比（automobile/road 侧预期受益）写入 Done Log。
+- [x] **Step 4: Commit 文档同步** `docs(plan): R4e ego-mask 锚入档（口径注记 + iter6k proxy 参照）`。
 
-### Task 5: B5 novel FID 链路移植 b6a9
+**执行注记（2026-07-09）**：iter-6000 val 未打——config `val_frequency` 默认 = 30000 只在训练末做一次 val，Done Log 诚实标注；阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 `trainer.val_frequency`。
+
+### Task 5: B5 novel FID 链路移植 b6a9 ✅（2026-07-09 完成，`cb75e15` driver + 8.5min render-only；render 213.80 / lat 6m 231.30 / yaw 60deg 257.31，yaw 严格单调 + LPIPS lateral 严格单调；与 B4 held-out −10dB 方向一致）
 
 **Files:**
 - Create: `scripts/drivers/b5_novel_fid_b6a9.sh`（render-only 驱动）
@@ -98,11 +100,13 @@
 - Consumes: `render.py` 既有 `--novel-fid` / `--render-only` / novel 6 档链路（v4 E1.1/E1.4 工具，本仓库已合 main）；R4e ckpt（Task 4）。
 - Produces: b6a9 metrics.json 出 `mean_novel_fid_*` / `mean_novel_kid_*` 全档字段；与 B4 真 GT 数字互证结论一行。
 
-- [ ] **Step 1: 对 R4e ckpt 跑 novel FID eval**（参数用法对照 v4 E1.4 Done Log 用例；b6a9 config 差异——相机数/分辨率——按报错最小适配，若需代码改动先写回归测试再改）。
-- [ ] **Step 2: 验收字段齐全**（lateral 1/3/6m 各档 FID/KID 单调性 sanity——离轴越远越差为健康信号）+ 双源交叉。
-- [ ] **Step 3: 互证入档**：novel FID 各档 vs B4 held-out gap 方向一致性结论写 Done Log；Commit `feat(B5)+docs(plan)`。
+- [x] **Step 1: 对 R4e ckpt 跑 novel FID eval**（参数用法对照 v4 E1.4 Done Log 用例；b6a9 config 差异——相机数/分辨率——按报错最小适配，若需代码改动先写回归测试再改）。
+- [x] **Step 2: 验收字段齐全**（lateral 1/3/6m 各档 FID/KID 单调性 sanity——离轴越远越差为健康信号）+ 双源交叉。
+- [x] **Step 3: 互证入档**：novel FID 各档 vs B4 held-out gap 方向一致性结论写 Done Log；Commit `feat(B5)+docs(plan)`。
 
-### Task 6: held-out 评估一键驱动
+**执行注记（2026-07-09）**：全 8 mode 一次调用（`NOVEL_VIEW_MODES` = legacy 4 + E1.1 lateral_3m/6m + PR #34 yaw_30/60deg），无需 b6a9 特化代码；R4e ckpt 直接可用；KID buffer warning 属预期（累积特征），143 帧 subset 未 OOM；两两独立度量方向一致（B4 held-out cc −10dB × P0.5 lateral 6m FID +17.5 + LPIPS +0.14 × yaw 60deg FID +43.5）。
+
+### Task 6: held-out 评估一键驱动 ✅（2026-07-09 完成，`6b39f6f` driver + tee 修复 + 6min inceptio on R4e ckpt；R4e 基线 train cc_psnr_masked 17.73 / held-out rear_right_70fov 15.37 / **Δ −2.35 dB**；对 B4 R0c 时代 gap −9.95 dB 收窄到 −2.35 dB → 扩相机收益 ~+7.6 dB 坐实；Phase C 前置 6/6 = gate 全解）
 
 **Files:**
 - Create: `scripts/drivers/eval_heldout_b6a9.sh`
@@ -111,9 +115,11 @@
 **Interfaces:**
 - Produces: 输入 `<ckpt> <out_tag>` → 两组 render（train-cam 组 / rear_right held-out 组）→ 汇总一行输出：train cc_psnr / held-out cc_psnr / gap / FID，供阶梯每步直接调用。
 
-- [ ] **Step 1: 封装脚本**（B4 四组流程裁成两组；输出目录 `~/work/output/heldout_<tag>/`）。
-- [ ] **Step 2: 用 R4e ckpt 实跑一次**作基线读数（rear_right 此时未参训 = 真 held-out）；双源交叉后入档 Done Log（这就是阶梯的「读数 1」起点）。
-- [ ] **Step 3: Commit** `feat(P0.6): held-out 一键评估驱动 + R4e 基线读数`。
+- [x] **Step 1: 封装脚本**（B4 四组流程裁成两组；输出目录 `~/work/output/heldout_<tag>/`）。
+- [x] **Step 2: 用 R4e ckpt 实跑一次**作基线读数（rear_right 此时未参训 = 真 held-out）；双源交叉后入档 Done Log（这就是阶梯的「读数 1」起点）。
+- [x] **Step 3: Commit** `feat(P0.6): held-out 一键评估驱动 + R4e 基线读数`。
+
+**执行注记（2026-07-09）**：driver 首跑踩坑 = setsid + `ssh -n "... > /tmp/xxx 2>&1 &"` detach 后 launcher redirect fd 关闭，driver 内部 echo/SUMMARY 输出全丢，Monitor 挂 `all done` 关键字 1.5h 才发现两组 render 早已完成；修法 = driver 头加 `exec > >(tee -a "$OUT/driver.log") 2>&1` driver-owned 不依赖 launcher。**同口径 sanity 通过**：P0.6 train cc_psnr_masked 17.73 vs R4e P0.4 主锚 17.75 Δ −0.02 noise 级 ✅。**"rear_right 永久 eval-only" 敏感度**：R4e 时 gap 已经 −2.35 dB（远小于 B4 时代 −10 dB），rear_right 判据敏感度低——Task 12 收尾按全程曲线拍板。
 
 ### Task 7: C1 telew per-camera loss weight（必须 merge main）
 

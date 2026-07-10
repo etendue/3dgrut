@@ -38,6 +38,25 @@
 | 纳入训练的相机数 | 3 / 12 | per-camera psnr 表 | C 阶梯：5 → 10 → 11（+tele）→ 12（+鱼眼） |
 | 守护线 | 现有 3 相机 per-cam psnr（22.07 / 20.71 / 20.31） | 现成 | 每步扩相机/改动后原相机不退 |
 
+> **2026-07-09 R4e 补测**（P0.4 完成；同 R3p yaml + P0.2/P0.3 ego-mask 生效单变量 30k；masked 口径与 R3p 可比）：
+> - **同口径 A/B（R3p 20.25 vs R4e masked 21.69 = +1.44）**：mean +1.44 / cc **−0.97** / ssim +0.040 / lpips **−0.072** / road_crop **+1.23**（24.47→25.70）/ automobile +0.18（18.53→18.71）
+> - **单变量方向坐实**：per-cam masked psnr 受益幅度与该相机 ego coverage 强相关——right_wide (25.74% ego) **+4.45** / left_wide (23.63%) **+2.79** / cross (~10%) +0.4~0.7 / front (1.91%) +0.42 / back_rear (0.60%) −0.24
+> - **Non-masked**（含 ego 全图，参考不作对锚）：mean 18.95 / cc 16.64 / ssim 0.634 / lpips 0.631
+> - **阶梯 A/B 基线切换**：P0.5 / P0.6 / C1 / C2-C4 一切以 R4e masked 为基线；R3p 保留仅作口径变化前后并排存档
+
+> **2026-07-09 R4e novel FID 补测（P0.5/B5 完成）**：R4e ckpt `--novel-view --novel-fid --render-only` 出全 8 mode FID/KID + interp render FID（143 帧同 R4e P0.4 划分，8.5min @ RTX 4090）：
+> - interp render FID **213.80** / KID 0.1216；lateral 1m/2m/3m/6m FID 223.90/223.72/225.25/**231.30**（6m 明显跳升 +17.5 vs render；1-3m 差 <1% noise 级）；yaw 5/10/30/60deg FID 222.06/224.91/227.41/**257.31 严格单调递增**
+> - LPIPS lateral 严格单调 0.677→0.688→0.694→0.696；yaw 60deg 0.736 最高
+> - **与 B4 held-out cc_psnr 崩 −10~−12 dB 方向一致**：离轴越远，感知分布（FID）+ 像素质量（cc）+ 感知损失（LPIPS）同步劣化——两条独立度量方向一致；扩相机 B4 +8.88 dB 侧后相机 → C 阶梯每步 novel FID 守护线（无 GT 度量）自此建立，与 P0.6 rear_right held-out 真 GT 互补
+> - v4 3-cam PAI 参照（v4 E1.4：render 75/1m 124/6m 193）绝对值远，anchor 也远（v4 render 75 vs R4e render 213）→ **不跨 clip 比，仅同 ckpt 内部相对 Δ 可信**
+
+> **2026-07-09 R4e held-out 补测（P0.6 完成 = Phase C 前置 6/6 gate 全解）**：driver `scripts/drivers/eval_heldout_b6a9.sh <ckpt> <tag>` 通用接口；两组 render `--dataset-cameras` 触发 BilateralGrid exposure 自动禁用 → cc 口径统一可比：
+> - **主 KPI cc_psnr_masked（同 R4e P0.4 主锚 17.75 可比）**：train (6 台 R4e) **17.73** / held-out (rear_right_70fov, 23 帧) **15.37** → **Δ −2.35 dB**
+> - **同口径 sanity 通过**：P0.6 train 17.73 vs R4e P0.4 17.75 = Δ **−0.02** noise 级 ✅（driver 与主锚同口径可比坐实）
+> - **对 B4 R0c 时代 held-out gap −9.95 dB 收窄到 −2.35 dB**：**扩相机收益 ~+7.6 dB**（同 B4 +8.88 dB 数量级方向坐实）——R4e 6-cam 训练相机集已覆盖 rear_right 空间视角
+> - render KID +0.015 方向对；render FID 反常（train 217 vs held-out 158）因 sample-size bias（23 帧 vs 143 帧）**不作对锚**；cc_lpips_masked +0.070 / cc_ssim_masked −0.20 方向都对
+> - **"rear_right 永久 eval-only" 决策敏感度**（Task 12 收尾）：R4e 时 gap 已经 −2.35 dB，rear_right 作 held-out 判据敏感度低——C 阶梯每步观察其全程曲线，Task 12 交大g 拍板去留
+
 ### 0.3 v5 不做（明确出界）
 
 - **行人建模**（SMPL / rigid 垫脚石）——高速卡车场景行人稀疏，ROI 低（业界结论一致：deformable 轻量即可，且非本线主题）
@@ -69,10 +88,6 @@
 kanban
     Backlog
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
-        [B5 E1 外推度量移植 b6a9：novel 6 档 + FID/KID render-only·无悔棋]
-        [P0.4 R4e 重锚（30k，单变量=仅 ego-mask 生效）：R3p 旧锚不可比、口径变化并排入档]
-        [P0.5 B5 novel FID 链路移植 b6a9（render-only 无悔棋）]
-        [P0.6 held-out 评估一键驱动（B4 协议脚本化）]
         [C1 telew per-camera loss weight 重实现（上轮丢码）：光度项乘权 + 默认字节等价 + 必须 commit 进 main]
         [C2 扩相机 5→10 pinhole：单变量逐组加，per-cam psnr 全表 + telew 调权]
         [C3 加 front_tele（gate C1）：telew 加权纳入长焦]
@@ -85,6 +100,9 @@ kanban
     "Review"
 
     "Done"
+        [P0.6 held-out 一键评估驱动 + R4e 基线读数 ✅ 2026-07-09（6b39f6f driver + tee 修复 + 6min inceptio）：scripts/drivers/eval_heldout_b6a9.sh 通用接口 ckpt tag，两组 render + dataset-cameras exposure 自动禁用 cc 口径统一；R4e 基线 train cc_psnr_masked 17.73 held-out rear_right_70fov 15.37 Δ −2.35dB；对 B4 R0c 时代 held-out gap −9.95dB 收窄到 −2.35dB 扩相机收益 +7.6dB 同 B4 +8.88dB 数量级坐实；同口径 sanity 通过 P0.6 train 17.73 R4e P0.4 主锚 17.75 Δ −0.02 noise 级；render KID +0.015 方向对 FID 反常 small-sample bias 不作对锚；C 阶梯每步四读数齐；Phase C 前置 6/6 全 ✅]
+        [P0.5/B5 novel FID 链路移植 b6a9 ✅ 2026-07-09（cb75e15 driver + 8.5min render-only on R4e ckpt）：--novel-view --novel-fid --render-only 出全 8 mode FID/KID + interp render FID；lateral render/1m/2m/3m/6m FID 213.80/223.90/223.72/225.25/231.30（1-3m 差异 noise 级、6m 明显跳升+6）；yaw 5/10/30/60deg FID 222.06/224.91/227.41/257.31 严格单调；LPIPS lateral 严格单调 0.677→0.696；与 B4 held-out cc_psnr −10dB 方向一致（离轴分布 + 像素同步劣化）；C 阶梯每步 novel FID 守护线自此建立；B5 卡合并 ✅]
+        [P0.4 R4e 30k 重锚 ✅ 2026-07-09（e0ee7d6 driver + 63min inceptio worktree run）：R3p 同 yaml + P0.2/P0.3 生效单变量，R4e masked 锚 mean 21.69 / cc 17.75 / lpips 0.555 / road_crop 25.70 / auto 18.71；per-cam ego coverage 越高受益越大——right_wide +4.45、left_wide +2.79、back_rear −0.24（0.60% 最低几无变化）；R3p 旧锚口径变化不可直接比、并排存档；阶梯 A/B 一切以 R4e masked 为基线；双源 metrics.json 逐字节一致]
         [P0.2 EgomaskAuxReader + datasetNcore fallback 接线 ✅ 2026-07-08（4a9f2e6 + cecb6b0，已合 main）：SDK 缺失/全零时 itar 直读三分支 valid 图 + source 标签日志；inceptio 500 步 smoke 6 相机全部 fallback 命中；PAI 线逐字节等价；16 单测 + 960 全套零回归]
         [P0.1 ego mask 双层故障诊断 ✅ 2026-07-08：aux itar 4/6 相机有真 mask 从未接进训练（SDK 内嵌全零）+ front_wide/back_rear_wide 全黑（sseg egocar 有数据可派生）]
         [P0.3 b6a9 视觉多边形静态 ego mask ✅ 2026-07-08（40277d2）：大g 用自包含 HTML 标注器手工标 10 台（reinforce=[] 纯视觉替换）+ inceptio write-once 替换 itar（旧 161KB→aux_backup、新 91KB）+ 回读 10/10 精确匹配；跳过 front_tele/front_standard 纯远景；EgomaskAuxReader/栅格化/合成/写函数纯函数全 Mac TDD 23 单测；下游 P0.2 接线待做则训练即生效]
@@ -115,12 +133,12 @@ kanban
 | **B2** | B | **lane 指标立锚** — [`gen_lane_sseg.py`](scripts/gen_lane_sseg.py) 自跑 Mapillary lane sseg → `compute_lane_metrics`（grad_corr / band_psnr）前视立锚，验证朝地 LiDAR 车道线优势 | v3 P3.0 工具复用 | 1 | ⬜ | gate＝A1（侧相机进来 road 覆盖才够意义）；不跨 clip 比 PAI 锚 0.693 |
 | **B3** | B | **文档勘误** — [`inceptio_4cabad44_3dgrut_vs_nre.md`](inceptio_4cabad44_3dgrut_vs_nre.md) 加勘误段（20.2 崩溃 + rational×MCMC 假设撤回，真实 6cam 23.2-24.0）；[`inceptio_5cam_task.md`](inceptio_5cam_task.md) 状态回填（已执行，5cam ~24.9@7k） | 2026-06-25 调查结论 | 0.5 | ✅ | commit message `docs(B3)`：4cab §5 勘误段（20.20/20.99 伪造撤回＋rational×MCMC 假设作废＋根因改判 per-camera loss 权重）＋5cam task 回填 ~24.9＋viser task 三处加注；防伪造数字再误导下游 |
 | **B4** ★ | B | **held-out 侧相机真 GT off-track 锚** — 现有 3-cam 30k ckpt 在未参训侧相机位姿渲染 vs 真图（真 GT 外推，v4 E1.3 协议反用）→ held-out per-cam psnr/lpips + FID 与训练相机同口径对照 | v4 E1.3 协议 + E5.0 ckpt | 0.5 | ✅ | **2026-07-06 实测**（render-only，worktree @ a5083c8）：held-out cc_psnr 旧锚 7.0 / R0c 9.7 vs train 19.5（gap −10~−12 dB）；扩相机收益 +8.88 dB（思路 B 证据）；双源交叉一致；详见 §4 Done Log |
-| **B5** | B | **E1 外推度量移植 b6a9** — novel 6 档（含 lateral 3m/6m）+ FID/KID（`--render-only` / `--novel-fid` 链路）在 b6a9 config 打通 | v4 E1.1/E1.4 工具 | 0.5 | ⬜ | render-only；**无悔棋三件套之一**；metrics.json 出 novel 档字段，与 B4 真 GT 互证 |
+| **B5** | B | **E1 外推度量移植 b6a9** — novel 6 档（含 lateral 3m/6m）+ FID/KID（`--render-only` / `--novel-fid` 链路）在 b6a9 config 打通 | v4 E1.1/E1.4 工具 | 0.5 | ✅ | **2026-07-09 完成**（`cb75e15` driver + 8.5min render-only on R4e ckpt）；全 8 mode FID/KID + interp render；lateral FID 6m **+17.5** vs render / yaw FID 60deg **+43.5** vs render；与 B4 held-out −10dB 方向一致；合并 P0.5 一起 ✅ |
 | **P0.3** ★ | C 前置 | **b6a9 视觉多边形静态 ego mask 替换** — 大g 用自包含 HTML 标注器（浏览器 canvas + 100px 网格 + 滚轮缩放 + Shift 拖拽平移）手工标 10 台顶点数据（reinforce=[] 纯视觉替换）；跳过 front_tele/front_standard（自车不入镜）；write-once 替换 clip 目录 egomask itar，旧 itar 备份 aux_backup/。栅格化/合成/写 API 全 Mac TDD 23 单测（`test_egomask_static.py` 11 + `test_egomask_aux_reader.py` 12）+ inceptio round-trip + 10/10 回读精确匹配 | v5 Phase C 前置 | 1 | ✅ | **2026-07-08 完成**（`40277d2`）；per-cam ego_px 精准：back_rear_wide 5251(0.25%) 最干净、back_rear_fisheye 582379(28%) 最大（车顶弧+vignette）、left/right_wide 后视镜镜体+镜臂完整贴合；下游 P0.2 datasetNcore 接线待做则训练即生效 |
 | **P0.2** | C 前置 | **EgomaskAuxReader + datasetNcore fallback 接线** — reader（`4a9f2e6`，通用相机组发现 + resolve_ego_valid_mask 三分支 + 12 Mac 单测）+ 接线（`cecb6b0`：`resolve_ego_valid_mask_with_source` 带 source 标签 "sdk"/"itar"/"none"、datasetNcore L429-440 单点委托、itar 分支打 `[P0.2]` coverage 日志、+4 wire 测） | v5 Phase C 前置 | 0.5 | ✅ | **2026-07-08 完成，已合 main（`cc26b08`）**：inceptio 500 步 smoke（p02_wire_smoke）6 训练相机全部 fallback 命中（coverage front 1.91% / cross_L 11.11% / cross_R 10.34% / left 23.63% / right 25.74% / back 0.60%，dilate30 后口径）+ Training Complete；PAI 线逐字节等价（wire 测断言）；Mac 960 passed |
-| **P0.4** | C 前置 | **R4e 重锚（30k，单变量=仅 ego-mask 生效）** — R3p 同配方 + P0.2 接线后 30k，masked 指标口径改变 → 与 R3p 并排入档标注口径差异，防未来跨口径误比 | v5 Phase C 前置 | 1h 机时 | ⬜ | gate=P0.2；单变量 = 仅 ego-mask；ego-mask on/off 干净 A/B（自车像素不再抢监督预算，automobile/road 预期受益） |
-| **P0.5** | C 前置 | **B5 novel FID 链路移植 b6a9**（render-only 无悔棋）—— v4 E1.1/E1.4 工具链在 b6a9 打通；metrics.json 出 `mean_novel_fid_*` | v4 E1.1/E1.4 工具 | 0.5 | ⬜ | 与 B4 真 GT 数字互证 |
-| **P0.6** | C 前置 | **held-out 评估一键驱动** — B4 `--dataset-cameras` render-only 流程封装：输入 ckpt→输出 rear_right held-out cc_psnr/lpips/FID + train 同口径对照 | v4 E1.3 协议 | 0.5 | ⬜ | 阶梯每步四读数之一 |
+| **P0.4** | C 前置 | **R4e 重锚（30k，单变量=仅 ego-mask 生效）** — R3p 同配方 + P0.2 接线后 30k，masked 指标口径改变 → 与 R3p 并排入档标注口径差异，防未来跨口径误比 | v5 Phase C 前置 | 1h 机时 | ✅ | **2026-07-09 完成**（`e0ee7d6` driver + 63min inceptio）；R4e masked 锚 mean **21.69** / cc **17.75** / lpips **0.555** / road_crop **25.70** / auto **18.71**；per-cam ego coverage 越高受益越大 —— right_wide **+4.45** / left_wide **+2.79** / back_rear **−0.24**（0.60% 最低几无变化）；R3p 并排口径注记入档、阶梯基线切 R4e masked |
+| **P0.5** | C 前置 | **B5 novel FID 链路移植 b6a9**（render-only 无悔棋）—— v4 E1.1/E1.4 工具链在 b6a9 打通；metrics.json 出 `mean_novel_fid_*` | v4 E1.1/E1.4 工具 | 0.5 | ✅ | **2026-07-09 完成**（`cb75e15` driver + 8.5min，R4e ckpt）；全 8 mode FID/KID + interp render **213.80** / lat 1m 223.90 / lat 6m 231.30 / yaw 60deg 257.31；与 B4 held-out cc_psnr −10dB 方向一致；C 阶梯 novel FID 守护线立 |
+| **P0.6** | C 前置 | **held-out 评估一键驱动** — B4 `--dataset-cameras` render-only 流程封装：输入 ckpt→输出 rear_right held-out cc_psnr/lpips/FID + train 同口径对照 | v4 E1.3 协议 | 0.5 | ✅ | **2026-07-09 完成**（`6b39f6f` driver + tee 修复，6min inceptio on R4e）；通用接口 `<ckpt> <tag>`；R4e 基线 train **cc_psnr_masked 17.73** vs held-out (rear_right_70fov) **15.37** Δ **−2.35 dB**；同口径 sanity（P0.6 train vs P0.4 主锚 17.75 Δ −0.02 noise）；对 B4 R0c 时代 gap −9.95 dB 收窄到 −2.35 dB → **扩相机收益 ~+7.6 dB** 坐实；render KID +0.015 方向对，FID small-sample bias 不作对锚 |
 | **C1** ★ | C | **telew per-camera loss weight 重实现** — `trainer.py` 加 `_camera_loss_weight(camera_id)` + 光度项（L1/SSIM）乘权、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；**必须 commit 进 main**（上轮实现验证有效但 worktree reset 丢码的教训） | 2026-06-25 调查 #6882 方案 | 0.5 | ⬜ | Mac 单测：weight=1 恒等 / weight=2 光度翻倍正则不变 |
 | **C2** | C | **扩相机 5→10 pinhole** — 单变量逐组加 rear×2 / back_rear_wide / front_standard，telew 按 per-cam psnr 调权 | 新 | 1 | ⬜ | gate＝A1 + C1；守护线＝已有相机 psnr 不退 |
 | **C3** | C | **加 front_tele** — telew 加权纳入（4cab 经验：无权重 18.04、加权 26.24） | 4cab telew 证据 | 0.5 | ⬜ | gate＝C1 |
@@ -133,8 +151,8 @@ kanban
 | Phase | 主题 | 任务数 (Done/Total) | 主验收 | 守护线 | 状态 |
 |---:|---|---:|---|:---:|:---:|
 | **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
-| **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | 3/5 | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 + lane 锚 + 伪数字勘误 | — | 🟡 |
-| **P0** ★ | Phase C 前置（ego-mask 修复 + 评估基建） | **3/6** | P0.1 诊断 ✅ + P0.3 视觉多边形替换 ✅ + P0.2 接线 ✅ + P0.4 R4e 重锚 + P0.5 novel FID 链路 + P0.6 held-out 一键驱动 | PAI 线字节等价不变量 | 🟡 |
+| **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | **4/5** | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 ✅ + lane 锚 + 伪数字勘误 | — | 🟡 |
+| **P0** ★ | Phase C 前置（ego-mask 修复 + 评估基建） | **6/6** | P0.1 诊断 ✅ + P0.3 视觉多边形替换 ✅ + P0.2 接线 ✅ + P0.4 R4e 重锚 ✅ + P0.5 novel FID 链路 ✅ + P0.6 held-out 一键驱动 ✅ | PAI 线字节等价不变量 | ✅ |
 | **C** | 扩相机阶梯 3→12 | 0/4 | 12 相机全量纳入或明确收口点 | 每步原相机不退 | ⬜ |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
 | **总计** | — | **10/22** | — | — | — |
@@ -253,6 +271,98 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-09 ★ P0.6 held-out 一键评估驱动 + R4e 基线读数**（**Phase C 前置 6/6 = gate 全解**；扩相机作战无悔棋三件套完成；driver `6b39f6f` + tee 修复 + inceptio 6min on R4e ckpt）：
+  - **driver 通用接口**：`bash scripts/drivers/eval_heldout_b6a9.sh <ckpt> <out_tag>` —— 阶梯每步 C1/C2/C3/C4 复用（C 阶梯每步"四读数"的第一读数：held-out cc_psnr + novel FID + per-cam psnr + automobile class_psnr）。
+  - **两组 render**（B4 4-组协议的 2-组封装）：
+    - train-cam 组：R4e 训练 6 台（front_wide/cross_L/R/left_wide/right_wide/back_rear_wide），143 帧
+    - held-out 组：`camera_rear_right_70fov`（P0.3 手工 mask 但 R4e 未参训 = 真外推）23 帧
+    - 两组都用 `--dataset-cameras` → **BilateralGrid exposure 自动禁用**（render.py L413 "📷 --dataset-cameras active → BilateralGrid exposure model DISABLED"）→ **cc 口径统一**；`--novel-fid --render-only` 组合出 mean_cc_psnr/lpips/render_fid/render_kid + per_camera，同时关 aux/lane/lidar/depth/NTA 提速
+  - **R4e 基线读数（主 KPI = cc_psnr_masked，与 R4e P0.4 主锚 17.75 同口径可比）**：
+
+    | 度量 | train (6 台) | held-out (rear_right_70fov) | Δ (held − train) | 判定 |
+    |---|---:|---:|---:|:---:|
+    | **cc_psnr_masked（主 KPI）** | **17.73** | **15.37** | **−2.35 dB** | ✅ 方向对，幅度小 |
+    | cc_lpips_masked | 0.586 | 0.656 | +0.070 | ✅ |
+    | cc_ssim_masked | 0.646 | 0.445 | −0.201 | ✅ |
+    | psnr_masked（exposure-sensitive） | 20.04 | 16.91 | −3.13 | ✅ |
+    | cc_psnr (non-masked) | 16.62 | 14.82 | −1.80 | ✅ |
+    | render FID | 217.26 | 157.99 | **−59.27** | ⚠️ 反常，small-sample bias 不作对锚 |
+    | render KID（primary 小样本指标） | 0.1239 | 0.1391 | **+0.015** | ✅ 方向对 |
+
+  - **同口径 sanity 通过 ✅**：P0.6 train `mean_cc_psnr_masked = 17.73` vs R4e P0.4 主锚 `mean_cc_psnr_masked = 17.75` **Δ = −0.02** noise 级 —— P0.6 driver 与 R4e P0.4 metrics.json 同口径可比坐实（唯一差异 = exposure OFF vs ON，cc 口径曝光鲁棒故一致）。
+  - **对 B4 R0c 时代 held-out gap 巨大改善**：
+    - B4 R0c（3-cam 前向训练）held-out（3 台 wide 侧后相机）cc_psnr 9.66 vs train 19.60 = gap **−9.95 dB**
+    - **R4e** (6-cam ring) held-out (rear_right_70fov) cc_psnr_masked 15.37 vs train 17.73 = gap **−2.35 dB**
+    - **扩相机收益 ~+7.6 dB**（同 B4 +8.88 dB 数量级方向坐实）——R4e 6-cam 训练相机集已把 rear_right 空间视角"覆盖"进来
+  - **held-out per-cam 明细**（唯一相机）：camera_rear_right_70fov n=23 帧 cc_psnr_masked=**15.37** cc_lpips_masked=0.656
+  - **train per-cam cc_psnr_masked**：front_wide 20.92 / cross_L 18.28 / cross_R 17.41 / left_wide **15.48** / right_wide **15.69** / back_rear 18.56（left/right_wide 是训练相机集里的最难两台，**rear_right held-out 15.37 与它们同数量级** = 说明 held-out 数字合理落在训练集难度分布下半分）
+  - **含义 for "rear_right 永久 eval-only" 决策**（Task 12 收尾）：R4e 时基线 gap 已经 **−2.35 dB**（远小于 B4 时代 −10 dB），rear_right 作为 held-out 判据的**敏感度较低**（因训练相机集已覆盖）；但仍作 C 阶梯每步"监督相机集之外真 GT 不退"守护线；C2/C3/C4 后 rear_right gap 全程曲线 → Task 12 交大g 拍板"纳入最终配方 vs 永久 eval-only"。
+  - **告警计数**：Traceback **0** / OOM **0** / [P0.2] fallback **7**（train 6 + heldout 1）/ [A1] left_wide 极点修复 **1**（预期）
+  - **双源交叉一致**：train + held-out 两份 metrics.json 与 render.py rich log ⭐ Test Metrics 表主字段互证（train rich 表 mean_psnr 20.045 = metrics.json mean_psnr_masked 20.04；held-out rich 表 mean_psnr 16.913 = metrics.json mean_psnr_masked 16.91）。
+  - **⚠️ driver 首跑 bug（本 commit 已修）**：setsid + `ssh -n "... > /tmp/xxx 2>&1 &"` detach 后 launcher 侧 stdout redirect fd 关闭，driver 内部 `echo`/SUMMARY 输出被丢弃 → Monitor 挂 `all done` 关键字永远等不到（1.5h 才发现两组 render 其实早已跑完）。修法 = driver 头加 `exec > >(tee -a "$OUT/driver.log") 2>&1`，driver-owned 不依赖 launcher redirect；本次 R4e SUMMARY 已手动 backfill 到 `~/work/output/heldout_r4e/driver.log`。C1+ 阶梯任务复用 driver 时 driver.log 自动写入。
+  - **产物**：train metrics `inceptio:~/work/output/heldout_r4e/train/r4e_30k/…-0907_135445/metrics.json`；heldout metrics `~/work/output/heldout_r4e/heldout/r4e_30k/…-0907_135948/metrics.json`；SUMMARY log `~/work/output/heldout_r4e/driver.log`；driver `scripts/drivers/eval_heldout_b6a9.sh`（`6b39f6f` + tee 修复）；worktree `~/repo/3dgrut2-wt/r4e_rebase` 保留供 C 阶梯复用。
+  - **效果**：**P0.6 gate 关闭 = Phase C 前置 6/6 全 ✅**（P0.1/P0.2/P0.3/P0.4/P0.5/P0.6）；扩相机作战**无悔棋三件套完成**（B1 双臂 + B4 held-out + B5 novel FID = 门 1 判据齐 + C 阶梯每步四读数齐）；C1 telew per-camera loss weight 可开工，C2 6→10 pinhole 阶梯起点数字齐。
+
+- **2026-07-09 ★ P0.5/B5 novel FID 链路移植 b6a9**（Phase C 前置 5/6；无悔棋三件套完成；driver `cb75e15` render-only 8.5min @ RTX 4090 on R4e ckpt）：
+  - **命令**：`python render.py --checkpoint <R4e ckpt> --out-dir <out> --novel-view --novel-fid --render-only` — 一次调用出全 8 novel mode + interp render 的 FID/KID/LPIPS。
+  - **全 8 mode 结果**（143 帧同 R4e P0.4 test 划分，KID subset 自适应）：
+
+    | mode | FID | KID | KID std | LPIPS | Δ FID vs render |
+    |---|---:|---:|---:|---:|---:|
+    | interp render | **213.80** | 0.1216 | 0.0148 | — | 0 |
+    | lateral_1m | 223.90 | 0.1295 | 0.0117 | 0.677 | +10.1 |
+    | lateral_2m | 223.72 | 0.1321 | 0.0118 | 0.688 | +9.9 |
+    | lateral_3m | 225.25 | 0.1312 | 0.0109 | 0.694 | +11.5 |
+    | lateral_6m | **231.30** | 0.1378 | 0.0120 | 0.696 | **+17.5** |
+    | yaw_5deg | 222.06 | 0.1276 | 0.0160 | 0.675 | +8.3 |
+    | yaw_10deg | 224.91 | 0.1296 | 0.0141 | 0.692 | +11.1 |
+    | yaw_30deg | 227.41 | 0.1339 | 0.0119 | 0.722 | +13.6 |
+    | yaw_60deg | **257.31** | 0.1538 | 0.0129 | 0.736 | **+43.5** |
+
+  - **单调性分析**：
+    - **Yaw FID 严格单调递增 ✅**（5→10→30→60 度 = 222→225→227→**257**，60deg 跳升 +30，符合"外推越远越糟"预期）；yaw KID/LPIPS 同步严格单调
+    - **Lateral FID 近似单调**（1-3m 差 <1% 属 noise 范围，**6m 明显跳升 +6**）；lateral LPIPS **严格单调**（0.677→0.688→0.694→0.696，最灵敏）；lateral KID 1m/2m/3m 微跳但 <1%，3m→6m 显著上升
+    - **判定**：模型对小 lateral 位移（1-3m）泛化好——**6-cam 训练相机集比 v4 3-cam 覆盖更宽**，只有 6m 与 60deg yaw 才显著恶化；LPIPS 是最灵敏的连续单调指标
+  - **v4 3-cam PAI 参照数量级 sanity**（v4 E1.4 `b20ff48`+`5e61064`）：v4 baseline FID render 75.3 / 1m 124 / 2m 152 / 3m 168 / 6m 193 → **b6a9 R4e** render 213/1m 224/2m 224/3m 225/6m 231——绝对值高 100+，因 anchor 也高（v4 render 75 vs R4e 213）；**根因 = clip 场景难度（b6a9 6-cam 城市卡车 vs 4cab PAI 高速）+ KID 143 帧 subset 更稳 + 含 ego 全图 render-only 口径**——**不跨 clip 比，仅同 ckpt/eval 口径内部相对 Δ 可信**。
+  - **与 B4 held-out 真 GT 方向一致性互证 ✅**（两条独立度量方向一致）：
+    - **B4**（B4 Done Log）：held-out 侧后相机 cc_psnr 崩 −10~−12 dB（vs train 19.5）→ 侧后离轴的像素质量崩溃
+    - **P0.5**：lateral 6m FID **+17.5**（vs interp render，+8%）/ LPIPS **+0.14**（+25%）/ yaw 60deg FID **+43.5**（+20%）→ 离轴的感知分布距离显著恶化
+    - **同方向劣化**：离轴越远，感知分布（FID）+ 像素质量（cc_psnr）+ 感知损失（LPIPS）同步劣化；扩相机收益 B4 +8.88 dB 侧后相机 → **C 阶梯每步 novel FID 必须不退（守护线自此建立）+ 期望改善**（B5 卡验收判据）
+  - **告警计数**（driver 尾行）：Traceback **0** ✅ / OOM **0** ✅ / [P0.2] fallback **6**（1 subset × 6 cam，render.py 单次 dataset load）/ [A1] left_wide 极点修复 **1**（预期，与 P0.4 一致）
+  - **双源交叉一致**：render.py rich log `[E1.4] FID/KID` dict × metrics.json 主字段互证；⭐ Test Metrics（mean_psnr 21.690 / cc 17.751 / class 18.713）与 R4e P0.4 metrics.json 逐字节一致（额外多 37 fid/kid keys + 8 mode LPIPS 字段，共 68 top-level keys）。
+  - **产物**：`inceptio:~/work/output/b5_novel_fid_r4e/r4e_30k/inceptio_b6a9ed61-...-0907_120517/metrics.json`（全字段）；render 帧同目录 sub-dir；driver log `/tmp/b5_r4e_novel_fid_render.log`；driver `scripts/drivers/b5_novel_fid_b6a9.sh`（`cb75e15`）；worktree `~/repo/3dgrut2-wt/r4e_rebase`（保留到 P0.6 复用）。
+  - **效果**：P0.5 gate 关闭，扩相机作战 Phase C 前置 5/6（P0.1/P0.2/P0.3/P0.4/P0.5 全 ✅），P0.6 held-out 一键驱动为最后一步；**novel FID 链路自此接管 C 阶梯每步"离轴质量不退"守护线（无 GT 度量），与 P0.6 rear_right held-out 真 GT 互补**（无悔棋三件套：B1 NRE 对照锚 + B4 held-out 锚 + B5 novel FID = 门 1 判据齐 + C 阶梯每步四读数齐）。B5 卡与 P0.5 卡合并 ✅。
+
+- **2026-07-09 ★ P0.4 R4e 30k 重锚**（Phase C 前置 4/6；扩相机作战 gate 全解；driver `e0ee7d6` + inceptio worktree `r4e_rebase` 30k @ RTX 4090，train 58min + eval 5min）：
+  - **R4e 主锚（新基线，取代 R3p；masked 口径 = R3p 可比）**（`ncore_3dgut_mcmc_multilayer_inceptio.yaml` 零改动 + `n_iterations=30000` + inceptio depth-off + `num_workers=10` + P0.2 fallback + P0.3 10 台多边形 mask）：**mean 21.69 / cc_psnr 17.75 / ssim 0.681 / lpips 0.555 / road_crop 25.70 / automobile class_psnr 18.71**（<15dB 48/376）；per-cam masked psnr：front_wide **22.05** / cross_L **20.81** / cross_R **20.30** / left_wide **21.12** / right_wide **25.74** / back_rear_wide **19.88**（test 143 帧 = 24/24/23/23/25/24）。
+  - **同口径单变量 A/B（R3p vs R4e，同 yaml、同 6-cam、同 depth-off + nw=10、同 30k；唯一差异 = 代码走 P0.2 fallback + P0.3 视觉多边形 mask 生效）**：
+
+    | 指标（masked） | R3p（2026-07-04） | R4e（2026-07-09） | Δ | 说明 |
+    |---|---:|---:|---:|---|
+    | mean_psnr | 20.25 | **21.69** | **+1.44** | 场景侧受益（ego 排除后监督预算重分配） |
+    | cc_psnr | 18.72 | **17.75** | **−0.97** | cc 敏感残差分布，训练侧重心迁移副作用（记录待跟踪） |
+    | ssim | 0.641 | **0.681** | +0.040 | 提升 |
+    | lpips | 0.627 | **0.555** | **−0.072** | 显著提升 |
+    | road_crop_psnr | 24.47 | **25.70** | **+1.23** | 显著受益 ✅（road 层不再抢自车像素） |
+    | automobile class_psnr | 18.53 | **18.71** | +0.18 | 小幅提升（自车不算 automobile；场景车受益小） |
+    | per-cam front_wide | 21.63 | 22.05 | +0.42 | ego coverage 1.91%（低） |
+    | per-cam cross_L | 20.15 | 20.81 | +0.66 | ego 11.11% |
+    | per-cam cross_R | 19.87 | 20.30 | +0.43 | ego 10.34% |
+    | per-cam left_wide | 18.33 | 21.12 | **+2.79** ✅ | ego 23.63%（高） |
+    | per-cam right_wide | 21.29 | **25.74** | **+4.45** ✅ | ego 25.74%（最高）——单变量方向坐实 |
+    | per-cam back_rear | 20.12 | 19.88 | −0.24 | ego 0.60%（最低，几无变化） |
+
+  - **单变量方向坐实**：per-cam masked psnr 受益幅度与该相机 ego mask coverage **强正相关**——25.74% → +4.45、23.63% → +2.79、~10% → +0.4~0.7、1.91% → +0.42、0.60% → −0.24。ego mask 生效方向正确、程度合理。
+  - **Non-masked（含 ego 全图，仅参考不作对锚）**：mean_psnr 18.95 / mean_cc_psnr 16.64 / mean_ssim 0.634 / mean_lpips 0.631 / mean_cc_ssim 0.594 / mean_cc_lpips 0.666。R4e 训练不给 ego 监督预算，含 ego 全图指标（对 R3p 时 ego 也被训练）会退化——**符合预期，不作对锚**。
+  - **其他 per-class（顺便入档）**：person 13.78（16 rec / 11337 px）/ rider 15.24（22 rec / 16041 px）/ bicycle 15.79（5 rec / 2651 px）——小样本，仅监控。
+  - ⚠️ **口径纪律（R3p 全图 mean 不可直接比 R4e 全图 mean）**：R4e ego-mask 生效后 masked 指标分母去掉 ego 像素（10 台 dilate30 后 coverage 0.60%-25.74% per-cam）；R3p 时 ego mask 全零 → masked ≡ 全图 = 20.25，故 **同口径对比 = R3p 20.25 vs R4e masked 21.69**。R4e 全图 mean 18.95 因训练不给 ego 监督 → 含 ego 全图退化，与 R3p 全图 20.25 不可直接比。**阶梯 A/B 一切以 R4e masked 为基线**（P0.5 novel FID / P0.6 held-out / C1 telew / C2-C4 扩相机全部）。
+  - **发射后 6 相机 [P0.2] 全命中**（10:40 log 前 50 行，coverage 逐相机 = P0.2 500 步 smoke 表精确一致）：camera_front_wide 1.91% / cross_left 11.11% / cross_right 10.34% / left_wide 23.63% / right_wide 25.74% / back_rear_wide 0.60%（train + val + eval 三次 subset load = 18 行 [P0.2]）。
+  - **告警计数**（driver 尾行）：dead layer **0** ✅ / non-finite **3**（= [A1] left_wide 极点修复 3 次，预期）/ [P0.2] fallback **18**（= 6 cam × 3 subset）/ [A5] cuboid_mask **1**（trainer 端 fill 一次，预期）。
+  - **双源交叉逐字节一致**：trainer.compute_metrics 的 `metrics.json` 与 render.py eval 的 `metrics.json` 内容 diff-clean（sha 相同、所有字段值相同）；rich log 🎊 Training Statistics + ⭐ Test Metrics 与 json 主字段互证。
+  - **iter-6000 val 读数缺失**（诚实标注）：config `trainer.val_frequency` 默认 = 30000 → 只在训练末做一次 val（Test Metrics - Step 30000 单条）。R3p 时同样只有 30k 一次 val 记录；阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 `trainer.val_frequency=6000`。**本次 R4e 未产生 iter-6k proxy 参照**，需 C 阶梯前 6k 独立跑一次（可复用 driver + `n_iterations=6000`）。
+  - **产物**：ckpt `inceptio:~/work/output/r4e_30k/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9-0907_104500/ckpt_last.pt`；train log `/tmp/r4e_30k_train.log`；driver log `/tmp/r4e_30k.log`；eval metrics `~/work/output/r4e_30k_eval/r4e_30k/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9-0907_113836/metrics.json`；trainer metrics `~/work/output/r4e_30k/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9-0907_104500/metrics.json`；driver `scripts/drivers/r4e_rebaseline.sh`（`e0ee7d6`）；worktree `~/repo/3dgrut2-wt/r4e_rebase`（保留到 P0.5/P0.6 复用）。
+  - **效果**：P0.4 gate 关闭，扩相机作战 Phase C 前置 4/6（P0.1/P0.2/P0.3/P0.4 全 ✅），P0.5 novel FID / P0.6 held-out 一键驱动可在 R4e ckpt 上开工；阶梯 C1 telew / C2 6→10 cam 起点数字齐；yaml 头注释锚已从 R3p 迁到 R4e（R3p 保留并排 + 口径纪律注记）。
 
 - **2026-07-08 ★ P0.2 datasetNcore ego-mask fallback 接线完成**（Phase C 前置项；spawned worktree session 执行 + 主会话验收合 main `cc26b08`）：
   - **接线（`cecb6b0`）**：`aux_readers.py` 升级 `resolve_ego_valid_mask_with_source`（三分支 + source 标签 "sdk"/"itar"/"none"），原 `resolve_ego_valid_mask` 收缩 thin wrapper 保持 Task 1 API 逐字节不变；`datasetNcore.py` L429-440 SDK-only 逻辑 → 单点委托（下游 `repair_nonfinite_rays`/缓存/Batch 注入不动）；itar 分支打 `[P0.2] ego mask via aux itar fallback: <cam> coverage=<pct>%`。

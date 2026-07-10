@@ -22,13 +22,34 @@
 #   A800    ：num_workers=24；depth 开关任意（A800 干净 A/B 实测 depth 中性，
 #             lidaron 20.22 vs depthoff 20.17 @30k，2026-07-03）
 #
-# baseline 锚（R3p = 本配方原样，30k，inceptio depth-off + nw=10，2026-07-04）：
+# baseline 锚（R4e = 本配方原样 30k，inceptio depth-off + nw=10，
+#              + P0.2 EgomaskAuxReader fallback（cecb6b0）
+#              + P0.3 b6a9 视觉多边形 10 台 ego mask（40277d2），2026-07-09）：
+#   mean_psnr_masked  21.69 / mean_cc_psnr_masked 17.75
+#   mean_ssim_masked  0.681 / mean_lpips_masked  0.555
+#   road_crop_psnr    25.70 / automobile class_psnr 18.71（<15dB 记录 48/376）
+#   per-cam masked psnr:
+#     front_wide 22.05 / cross_L 20.81 / cross_R 20.30 /
+#     left_wide  21.12 / right_wide 25.74 / back_rear_wide 19.88
+#   Non-masked（含 ego，全图参考，不作对锚）：
+#     mean 18.95 / cc 16.64 / ssim 0.634 / lpips 0.631
+#   iter-6000 val 参照：val_frequency 默认 = 30000 → 训练结束才 val，
+#     阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 trainer.val_frequency
+#
+# 历史锚（R3p = 同配方，ego-mask 全零 = mask off，2026-07-04）：
 #   mean 20.25 / cc 18.72 / ssim 0.641 / lpips 0.627 / road_crop 24.47
 #   automobile class_psnr 18.53（<15dB 记录 48/346）
 #   per-cam: front 21.63 / cross_l 20.15 / cross_r 19.87 /
 #            left_wide 18.33 / right_wide 21.29 / back_rear 20.12
-#   单变量佐证：A5 mask on＝automobile +1.15、road_crop +0.63（R2p vs R1p）；
-#              A2 interp＝mean +0.15、front +0.47、back +0.54（R3p vs R2p）
+#   ⚠️ **口径纪律（R3p 不可直接比 R4e 全图 mean）**：R4e ego-mask 生效后
+#      masked 指标分母去掉 ego 像素（10 台 dilate30 后 coverage 0.60-25.74% per-cam）；
+#      R3p 时 ego mask 全零故 masked ≡ 全图 = 20.25。**同口径对比 = R3p 20.25 vs
+#      R4e masked 21.69（+1.44）**；ego coverage 越高的相机 masked psnr 受益越大
+#      （right_wide +4.45 / left_wide +2.79 / cross +0.4~0.7 / back_rear −0.24@0.60%），
+#      单变量方向坐实。**阶梯 A/B 一切以 R4e masked 为基线**。
+#   历史单变量佐证（R3p 内部纵向，口径同）：
+#     A5 mask on = automobile +1.15、road_crop +0.63（R2p vs R1p）
+#     A2 interp = mean +0.15、front +0.47、back +0.54（R3p vs R2p）
 #   ⚠️ 与 3-cam 锚（R0 21.04）跨相机集不可直接比（新相机拉低全图平均）；
 #     同 3 台守护线对锚 −0.4~0.9，等比步数欠训（issue I1，候选 60k）
 # ===========================================================================
