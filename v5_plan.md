@@ -273,6 +273,8 @@ flowchart TD
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
 
+- **2026-07-10 ★ fix(driver): eval_heldout_b6a9 alarm-count 零匹配触发 set -e 死亡**（`4f2817e`，Task 9 四读数 c2_8cam_30k run 踩到）：driver 头 `set -eo pipefail` + alarm 计数节 4 行 `grep -acE ... | awk` 在两 log 均无匹配时 `grep -c` 返回退出码 1、pipefail 让 pipeline 也返回 1、set -e 立即杀 shell → SUMMARY + `=== all done ===` 尾都被跳过；历史 R4e P0.6 run 侥幸有 traceback 匹配走完，c2 全零告警被顺连炸、SUMMARY 手工提取。修法 = 4 行 pipeline 尾各加 `|| true`，awk `END{print s}` 已保证零匹配印 0、语义不变。Mac bash smoke 复现 buggy→修补 pin 住行为；inceptio dry-run driver 尾段（`sed -n 80,$p` + 现有 c2 outputs，不动 GPU）走完 Traceback=0/OOM=0 全零告警场景 → SUMMARY + `all done` 完整印出、SUMMARY 数字与手工提取一致（held cc_psnr 15.15 / train 16.29 / Δ -1.14）。回归：无（pipeline 退出码在零匹配时 1→0，stdout 数据完全等价）。头注释 4 行 root cause + 踩坑日期防未来 driver copy-paste 同 pattern。
+
 - **2026-07-10 ★ Task 7 C1 telew per-camera photometric loss weight 重实现**（`fd80c1c`，纯 Mac 代码 + 严格 TDD；Task 9 C2 阶梯 6→8 cam 的唯一 gate 落定）：
   - **动因**：2026-06-25 4cab telew 实验已验证 per-camera loss 权重是 front_tele 18.04 崩溃根因（加权后 tele **18.04→26.24**），但 worktree reset 丢码；Phase C 前置 6/6 全解后 Task 9 阻塞于此。
   - **改动**（3 文件，319 行插入，0 行删除）：
