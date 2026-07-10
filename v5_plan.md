@@ -88,7 +88,6 @@
 kanban
     Backlog
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
-        [C1 telew per-camera loss weight 重实现（上轮丢码）：光度项乘权 + 默认字节等价 + 必须 commit 进 main]
         [C2 扩相机 5→10 pinhole：单变量逐组加，per-cam psnr 全表 + telew 调权]
         [C3 加 front_tele（gate C1）：telew 加权纳入长焦]
         [C4 加 2 台 FTheta 鱼眼（最后，单变量）：上游 issue 238 尖刺风险，可弃]
@@ -100,6 +99,7 @@ kanban
     "Review"
 
     "Done"
+        [C1 telew per-camera loss weight 重实现 ✅ 2026-07-10（fd80c1c，纯 Mac 代码 + TDD）：Trainer3DGRUT._camera_loss_weight camera_id float 查表 self.conf.loss.camera_loss_weights 命中返回权重 未命中 None 无 loss 节返回 1.0；get_losses L1344 加权汇总前 loss_l1 loss_ssim 各乘 w 正则项 opacity scale sky bg_cuboid bg_road pose smooth pose boundary pose prior lidar depth road_eff_rank 一律不动；configs base_gs.yaml loss 节新增 camera_loss_weights 空 dict 默认字节等价 CLI ++loss.camera_loss_weights.<camera_id>=w；新测 test_camera_loss_weight.py 11 例 6 unit 5 integration 覆盖默认恒等 2 倍缩放 缺席 dict miss weight zero；stub 补丁 scoped 到本文件 fused_ssim tensor 0.5 与 torch.cuda.nvtx no-op；基线 960 12 → 981 2（+11 新测 +10 nvtx stub 顺带解 importorskip 兄弟；独立跑仍 skip 无回归）；字节等价证明 空 dict 与无 key 逐 key allclose rtol 1e-6 全绿；Task 9 C2 阶梯的唯一 gate 落定]
         [Task 8 C2 aux 前置：b6a9 8-cam sseg + lidar-camvis 全量重跑 ✅ 2026-07-10（纯数据 + 文档，无代码 commit）：8-cam 集＝R4e 6-cam + rear_left_70fov + front_standard_55fov（rear_right 永久 held-out）；run A sseg no-ego-mask 保 P0.3 mask ~18min 8cam+workers 3；run B lidar-seg-camvis 遮挡补丁重建 + estimators.py bind-mount ~18min（补丁位置修正到 intersect_rays 之前才生效、5.3 s/it avg vs 154 s/it 老 bug）；P0.3 手写 egomask itar 缺 zmetadata run B 需临时挪走（backup 命名 TEMPORARILY_MOVED，完成还原）；docker rm -f 半途杀留下 partial itar 用容器 root 清；四项验收：egomask 10 台数字与 Step 0 diag 逐字节相等 + sseg 8 cam 全覆盖含 rear_left 194 帧 front_standard 200 帧 + lidar-sseg road+sidewalk 全帧 41.45% 对 A1 6cam 40.08% +1.37 合理 + camvis 8bit 全覆盖 cam0 17.6% cam7 27.5%；产物落 clip 目录 root 权限、旧 aux 备份 aux_backup_task8_20260710；补丁副本 inceptio ~/repo/aux_patches/ 永久保留；C2 训练可开跑]
         [P0.6 held-out 一键评估驱动 + R4e 基线读数 ✅ 2026-07-09（6b39f6f driver + tee 修复 + 6min inceptio）：scripts/drivers/eval_heldout_b6a9.sh 通用接口 ckpt tag，两组 render + dataset-cameras exposure 自动禁用 cc 口径统一；R4e 基线 train cc_psnr_masked 17.73 held-out rear_right_70fov 15.37 Δ −2.35dB；对 B4 R0c 时代 held-out gap −9.95dB 收窄到 −2.35dB 扩相机收益 +7.6dB 同 B4 +8.88dB 数量级坐实；同口径 sanity 通过 P0.6 train 17.73 R4e P0.4 主锚 17.75 Δ −0.02 noise 级；render KID +0.015 方向对 FID 反常 small-sample bias 不作对锚；C 阶梯每步四读数齐；Phase C 前置 6/6 全 ✅]
         [P0.5/B5 novel FID 链路移植 b6a9 ✅ 2026-07-09（cb75e15 driver + 8.5min render-only on R4e ckpt）：--novel-view --novel-fid --render-only 出全 8 mode FID/KID + interp render FID；lateral render/1m/2m/3m/6m FID 213.80/223.90/223.72/225.25/231.30（1-3m 差异 noise 级、6m 明显跳升+6）；yaw 5/10/30/60deg FID 222.06/224.91/227.41/257.31 严格单调；LPIPS lateral 严格单调 0.677→0.696；与 B4 held-out cc_psnr −10dB 方向一致（离轴分布 + 像素同步劣化）；C 阶梯每步 novel FID 守护线自此建立；B5 卡合并 ✅]
@@ -140,7 +140,7 @@ kanban
 | **P0.4** | C 前置 | **R4e 重锚（30k，单变量=仅 ego-mask 生效）** — R3p 同配方 + P0.2 接线后 30k，masked 指标口径改变 → 与 R3p 并排入档标注口径差异，防未来跨口径误比 | v5 Phase C 前置 | 1h 机时 | ✅ | **2026-07-09 完成**（`e0ee7d6` driver + 63min inceptio）；R4e masked 锚 mean **21.69** / cc **17.75** / lpips **0.555** / road_crop **25.70** / auto **18.71**；per-cam ego coverage 越高受益越大 —— right_wide **+4.45** / left_wide **+2.79** / back_rear **−0.24**（0.60% 最低几无变化）；R3p 并排口径注记入档、阶梯基线切 R4e masked |
 | **P0.5** | C 前置 | **B5 novel FID 链路移植 b6a9**（render-only 无悔棋）—— v4 E1.1/E1.4 工具链在 b6a9 打通；metrics.json 出 `mean_novel_fid_*` | v4 E1.1/E1.4 工具 | 0.5 | ✅ | **2026-07-09 完成**（`cb75e15` driver + 8.5min，R4e ckpt）；全 8 mode FID/KID + interp render **213.80** / lat 1m 223.90 / lat 6m 231.30 / yaw 60deg 257.31；与 B4 held-out cc_psnr −10dB 方向一致；C 阶梯 novel FID 守护线立 |
 | **P0.6** | C 前置 | **held-out 评估一键驱动** — B4 `--dataset-cameras` render-only 流程封装：输入 ckpt→输出 rear_right held-out cc_psnr/lpips/FID + train 同口径对照 | v4 E1.3 协议 | 0.5 | ✅ | **2026-07-09 完成**（`6b39f6f` driver + tee 修复，6min inceptio on R4e）；通用接口 `<ckpt> <tag>`；R4e 基线 train **cc_psnr_masked 17.73** vs held-out (rear_right_70fov) **15.37** Δ **−2.35 dB**；同口径 sanity（P0.6 train vs P0.4 主锚 17.75 Δ −0.02 noise）；对 B4 R0c 时代 gap −9.95 dB 收窄到 −2.35 dB → **扩相机收益 ~+7.6 dB** 坐实；render KID +0.015 方向对，FID small-sample bias 不作对锚 |
-| **C1** ★ | C | **telew per-camera loss weight 重实现** — `trainer.py` 加 `_camera_loss_weight(camera_id)` + 光度项（L1/SSIM）乘权、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；**必须 commit 进 main**（上轮实现验证有效但 worktree reset 丢码的教训） | 2026-06-25 调查 #6882 方案 | 0.5 | ⬜ | Mac 单测：weight=1 恒等 / weight=2 光度翻倍正则不变 |
+| **C1** ★ | C | **telew per-camera loss weight 重实现** — `trainer.py` 加 `_camera_loss_weight(camera_id)` + 光度项（L1/SSIM）乘权、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；**必须 commit 进 main**（上轮实现验证有效但 worktree reset 丢码的教训） | 2026-06-25 调查 #6882 方案 | 0.5 | ✅ | **2026-07-10 完成**（`fd80c1c`）；11 单测（6 unit + 5 integration via SimpleNamespace bind + 沿 conftest stub 模式：fused_ssim + nvtx no-op scoped）；空 dict / 无 key / camera_id 缺席 / miss 分支均返回 1.0；`{camX:2.0}` + `batch.camera_id=camX` 断言 `l1_loss/ssim_loss` = 2× baseline、12 项正则逐项 allclose(rtol 1e-6)；`weight=0.0` 归零；基线 960/12 → 981/2（+11 新测 +10 nvtx stub 顺带解 importorskip 兄弟，独立跑仍 skip 无回归）；Task 9 唯一 gate 解除 |
 | **C2** | C | **扩相机 5→10 pinhole** — 单变量逐组加 rear×2 / back_rear_wide / front_standard，telew 按 per-cam psnr 调权 | 新 | 1 | ⬜ | gate＝A1 + C1；守护线＝已有相机 psnr 不退 |
 | **C3** | C | **加 front_tele** — telew 加权纳入（4cab 经验：无权重 18.04、加权 26.24） | 4cab telew 证据 | 0.5 | ⬜ | gate＝C1 |
 | **C4** | C | **加 2 台 FTheta 鱼眼** — 最后单变量纳入 `camera_front_fisheye` / `camera_back_rear_fisheye`；FTheta 路径 PAI 已证（6cam 26.31），但留意上游 [issue #238](https://github.com/nv-tlabs/3dgrut/issues/238) 鱼眼尖刺 | 新 | 1 | ⬜ | 可弃：尖刺不可控则 10+tele 收口 |
@@ -154,9 +154,9 @@ kanban
 | **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
 | **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | **4/5** | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 ✅ + lane 锚 + 伪数字勘误 | — | 🟡 |
 | **P0** ★ | Phase C 前置（ego-mask 修复 + 评估基建） | **6/6** | P0.1 诊断 ✅ + P0.3 视觉多边形替换 ✅ + P0.2 接线 ✅ + P0.4 R4e 重锚 ✅ + P0.5 novel FID 链路 ✅ + P0.6 held-out 一键驱动 ✅ | PAI 线字节等价不变量 | ✅ |
-| **C** | 扩相机阶梯 3→12 | 0/4 | 12 相机全量纳入或明确收口点 | 每步原相机不退 | ⬜ |
+| **C** | 扩相机阶梯 3→12 | **1/4** | C1 telew ✅ + 12 相机全量纳入或明确收口点 | 每步原相机不退 | 🟡 |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
-| **总计** | — | **10/22** | — | — | — |
+| **总计** | — | **11/22** | — | — | — |
 
 ### 1.4 任务依赖图
 
@@ -272,6 +272,47 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-10 ★ Task 7 C1 telew per-camera photometric loss weight 重实现**（`fd80c1c`，纯 Mac 代码 + 严格 TDD；Task 9 C2 阶梯 6→8 cam 的唯一 gate 落定）：
+  - **动因**：2026-06-25 4cab telew 实验已验证 per-camera loss 权重是 front_tele 18.04 崩溃根因（加权后 tele **18.04→26.24**），但 worktree reset 丢码；Phase C 前置 6/6 全解后 Task 9 阻塞于此。
+  - **改动**（3 文件，319 行插入，0 行删除）：
+    - `threedgrut/trainer.py`：新增 `Trainer3DGRUT._camera_loss_weight(camera_id) -> float` 查表；`get_losses` L1344 加权汇总前 `w_cam = self._camera_loss_weight(getattr(gpu_batch, "camera_id", None))`，`loss_l1 *= w_cam` / `loss_ssim *= w_cam`；正则项（`opacity` / `scale` / `sky` / `bg_cuboid` / `bg_road` / `pose_smooth` / `pose_boundary` / `pose_prior` / `lidar_depth` / `bg_lidar` / `depth_prior` / `road_eff_rank`）一律不动。
+    - `configs/base_gs.yaml` loss 节新增 `camera_loss_weights: {}`（默认空 = 字节等价）+ 头注释；CLI 用法 `++loss.camera_loss_weights.camera_front_tele_30fov=4.0`。
+    - `threedgrut/tests/test_camera_loss_weight.py`（新建）：11 例 = 6 unit + 5 integration。
+  - **语义边界**（`_camera_loss_weight` 分支）：
+
+    | 输入 | 返回 | 单测 |
+    |---|---:|:---|
+    | `camera_id=None` | **1.0** | `test_none_camera_id_returns_one` |
+    | `self.conf.loss` 无 `camera_loss_weights` key | **1.0** | `test_default_missing_key_returns_one` |
+    | `camera_loss_weights: {}`（yaml 默认） | **1.0** | `test_default_empty_dict_returns_one` |
+    | `{camA: 4.0}` + camera_id=`camA` | **4.0** | `test_hit_returns_configured_weight` |
+    | `{camA: 4.0}` + camera_id=`camB` | **1.0** | `test_miss_returns_one` |
+    | `{camA: 0.0}` + camera_id=`camA`（0.0 不被 falsy 吞） | **0.0** | `test_zero_weight_is_valid` |
+
+  - **Integration（Trainer3DGRUT.get_losses 通过 SimpleNamespace bind，沿 conftest stub 模式；scoped stub 补 `fused_ssim` 返回 tensor(0.5) + `torch.cuda.nvtx.range_push/pop` no-op）**：
+
+    | 场景 | 断言 |
+    |---|---|
+    | 默认空 dict vs 无 key | 返回 dict 逐 key `torch.allclose(rtol=1e-6, atol=1e-8)` — **字节等价证明** |
+    | `{camX:2.0}` + `batch.camera_id=camX` | `l1_loss / ssim_loss` = 2× baseline；12 项正则项逐项 `allclose` |
+    | `batch.camera_id` 属性缺失 | w=1.0，全 loss 项与 baseline `allclose` |
+    | camera_id ∉ dict | w=1.0，同上 |
+    | `weight=0.0` | `l1_loss` 与 `ssim_loss` 归零；12 项正则不动 |
+
+  - **回归数字**：
+
+    | 指标 | 基线（069e62d） | C1 后（fd80c1c） | Δ |
+    |---|---:|---:|---:|
+    | passed | 960 | 981 | +21 |
+    | skipped | 12 | 2 | −10 |
+
+    - +11 = 我这 11 例新测。
+    - +10 = `test_learnable_pose_smoothness.py` / `test_pose_anchor.py` 中原 `pytest.importorskip("threedgrut.trainer")` 的兄弟测试；因 alphabetical 收集顺序里本文件先注入 `torch.cuda.nvtx` no-op + `fused_ssim` stub，使 `import threedgrut.trainer` 通过并顺带跑通全绿。**独立跑兄弟文件（不收集 `test_camera_loss_weight.py`）仍 skip = 基线行为，无回归**。
+    - 余 2 skip 为 pre-existing CUDA/nvdiffrast dep gate（`test_layered_gaussians::test_empty_dynamic_rigids_layer_is_device_consistent` + `test_sky_envmap::test_cubemap_forward_when_nvdiffrast_available`），与本改无关。
+  - **字节等价论证链**：yaml 默认 `camera_loss_weights: {}` → `_camera_loss_weight` 走 `camera_id not in weights` 分支 → `return 1.0` → `loss_l1 * 1.0` / `loss_ssim * 1.0` 是 Python float × Tensor identity（PyTorch 不构造新算子节点、无 fp 抖动）→ 与 pre-C1 pass 完全一致；`test_get_losses_default_empty_dict_byte_identical` 用数值断言把它锁死。
+  - **完成定义（Task 7 Step 5 纪律）**：代码 + 测试 **必须合入 main**（防 2026-06-25 worktree reset 丢码复现）；本 commit + docs commit 同分支落 main。
+  - **效果**：Phase C 前置 6/6 全解 + Task 8 C2 aux 落盘 + Task 7 C1 落定 → **Task 9 C2 阶梯（6→8 cam proxy 6k + 30k 四读数）可开跑**；C 阶梯每步 telew 加权可用 CLI 覆盖，无需再改代码；C3 加 `front_tele` 直接复用此接口（4cab 经验 telew=4~8 是收益带）。
 
 - **2026-07-10 ★ Task 8 C2 aux 前置——b6a9 8-cam sseg + lidar-camvis 全量重跑**（无代码 commit，纯数据 + 文档；C2 训练前置全绿；inceptio nre-tools-ga 容器 ~36min 总）：
   - **8-cam 集**：R4e 6 训练相机（`camera_front_wide_120fov` / `cross_L_120fov` / `cross_R_120fov` / `left_wide_90fov` / `right_wide_90fov` / `back_rear_wide_90fov`） + Task 8 新增 `camera_rear_left_70fov` + `camera_front_standard_55fov`；**`camera_rear_right_70fov` 永久 held-out**（不入 aux 相机集）。
