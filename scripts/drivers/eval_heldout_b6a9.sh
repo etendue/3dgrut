@@ -107,9 +107,13 @@ h = json.load(open(hjson))
 def g(m, k, default=None):
     return m.get(k, default)
 
-tc, hc = g(t, "mean_cc_psnr"), g(h, "mean_cc_psnr")
-tp, hp = g(t, "mean_psnr"),    g(h, "mean_psnr")
-tl, hl = g(t, "mean_lpips"),   g(h, "mean_lpips")
+# 主 KPI = *_masked（与 R4e/P0.6 基线口径一致；2026-07-10 Task 9 验收发现
+# 旧版取 non-masked cc_psnr 对 masked 基线错比——held-out 15.15(non-masked)
+# 误对 15.37(masked) 判 −0.22，真实同口径 15.51 vs 15.37 = +0.14）
+tc, hc = g(t, "mean_cc_psnr_masked"), g(h, "mean_cc_psnr_masked")
+tcr, hcr = g(t, "mean_cc_psnr"), g(h, "mean_cc_psnr")  # non-masked 参考
+tp, hp = g(t, "mean_psnr_masked"), g(h, "mean_psnr_masked")
+tl, hl = g(t, "mean_cc_lpips_masked"), g(h, "mean_cc_lpips_masked")
 tf, hf = g(t, "mean_render_fid"), g(h, "mean_render_fid")
 tk, hk = g(t, "mean_render_kid"), g(h, "mean_render_kid")
 tn, hn = len(g(t, "per_camera", {}) or {}), len(g(h, "per_camera", {}) or {})
@@ -124,9 +128,10 @@ def diff(a, b, prec=4):
 print()
 print(f"===================== P0.6 SUMMARY [{tag}] =====================")
 print(f"                     train-cam ({tn})     held-out ({hn})     Δ (held − train)")
-print(f"  cc_psnr           {fmt(tc):>15s}  {fmt(hc):>15s}  {diff(hc, tc):>16s}")
-print(f"  psnr              {fmt(tp):>15s}  {fmt(hp):>15s}  {diff(hp, tp):>16s}")
-print(f"  lpips             {fmt(tl):>15s}  {fmt(hl):>15s}  {diff(hl, tl):>16s}")
+print(f"  cc_psnr_masked ★  {fmt(tc):>15s}  {fmt(hc):>15s}  {diff(hc, tc):>16s}")
+print(f"  cc_psnr (ref)     {fmt(tcr):>15s}  {fmt(hcr):>15s}  {diff(hcr, tcr):>16s}")
+print(f"  psnr_masked       {fmt(tp):>15s}  {fmt(hp):>15s}  {diff(hp, tp):>16s}")
+print(f"  cc_lpips_masked   {fmt(tl):>15s}  {fmt(hl):>15s}  {diff(hl, tl):>16s}")
 print(f"  render FID        {fmt(tf, 2):>15s}  {fmt(hf, 2):>15s}  {diff(hf, tf, 2):>16s}")
 print(f"  render KID        {fmt(tk):>15s}  {fmt(hk):>15s}  {diff(hk, tk):>16s}")
 print()

@@ -35,8 +35,9 @@
 #     front_wide 20.53 / cross_L 17.62 / cross_R 17.37 /
 #     left_wide  15.18 / right_wide  15.44 / back_rear_wide 18.55 /
 #     rear_left  19.34 / front_standard 24.69（新纳入两台均健康）
-#   held-out (rear_right_70fov) cc_psnr 15.15（vs R4e 15.37 = −0.22 持平，
-#     P0.6 driver 4f2817e set -e 修补后正确读出）
+#   held-out (rear_right_70fov) cc_psnr_masked 15.51（vs R4e 15.37 = +0.14 微升；
+#     ⚠️ 2026-07-10 验收更正：旧档 15.15 系 driver 取 non-masked cc_psnr 错对
+#     masked 基线，同口径为 15.51/+0.14，driver key 已修正）
 #   render FID   167.81 (vs R4e 213.80 = −45.99 大幅改善)
 #   novel FID   lateral 1m/2m/3m/6m 172.98 / 177.28 / 179.05 / 182.01（严格单调）
 #              yaw 5/10/30/60deg 171.22 / 173.70 / 177.95 / 213.19（严格单调）
