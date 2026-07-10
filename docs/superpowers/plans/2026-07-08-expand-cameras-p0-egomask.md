@@ -139,15 +139,35 @@
 - [ ] **Step 4: 全套回归**零失败（重点：既有 loss 相关测试不动）。
 - [ ] **Step 5: Commit 并 merge 进 main** `feat(C1): per-camera photometric loss weight（telew 重实现，默认字节等价）`——**完成定义含 main 合入**（2026-06-25 丢码教训）；v5_plan C1 卡 ✅ 同 commit。
 
-### Task 8: C2 前置——新相机 aux 生成（rear_left + front_standard）
+### Task 8: C2 前置——新相机 aux 生成（rear_left + front_standard）✅（2026-07-10 完成，纯数据 + 文档 commit；run A sseg 8-cam ~18min + run B lidar-camvis 8-cam patched ~18min；四项验收全绿）
 
 **Interfaces:**
 - Consumes: CLAUDE.md nre-tools runbook + A1 遮挡补丁（`NRE_LIDARSEG_OCCLUSION=off`，`/tmp/estimators_patched.py` bind-mount）；egomask 兜底走 P0.3 视觉多边形标注器（Task 3 已 supersede；新相机 rear_left/front_standard 的 egomask **大概率已被 P0.3 十台标注覆盖**，Step 2 先 diag 确认）。
 - Produces: 8 相机全套 aux（sseg + egomask + lidar-camvis 覆盖新相机；lidar-sseg 重跑或合并）落主 clip 目录，旧 aux 备份。
 
-- [ ] **Step 1: 容器 run A**（sseg + egomask，8 相机 id 列表，`--parallel-mode --workers-per-gpu=3`）+ run B（lidar-seg camvis，遮挡补丁下 0.7s/帧）；itar write-once 纪律——完整跑完再替换，绝不中途 stop。
-- [ ] **Step 2: 验收**：`diag_egomask_itar.py` 扫 8 相机——egomask 缺失/全黑者用 P0.3 视觉多边形标注器补齐 + 目检；lidar-sseg road 占比量级复核（A1 修复后 ~40% 参照）。
-- [ ] **Step 3: 结果与命令记录入 v5_plan Done Log**（无代码 commit，文档 commit）。
+- [x] **Step 1: 容器 run A**（sseg + egomask，8 相机 id 列表，`--parallel-mode --workers-per-gpu=3`）+ run B（lidar-seg camvis，遮挡补丁下 0.7s/帧）；itar write-once 纪律——完整跑完再替换，绝不中途 stop。
+- [x] **Step 2: 验收**：`diag_egomask_itar.py` 扫 8 相机——egomask 缺失/全黑者用 P0.3 视觉多边形标注器补齐 + 目检；lidar-sseg road 占比量级复核（A1 修复后 ~40% 参照）。
+- [x] **Step 3: 结果与命令记录入 v5_plan Done Log**（无代码 commit，文档 commit）。
+
+**执行注记（2026-07-10）**：
+- **8-cam 集**（R4e 6-cam + rear_left_70fov + front_standard_55fov；rear_right_70fov 永久 held-out）确认。
+- **P0.3 egomask 完美保留**：run A 用 `--no-ego-mask`，10 台相机 nonzero 数值 Step 0 diag 与 Step 2 验收逐字节相等（back_rear_fisheye 582379、rear_left 130175 等）；rear_left 已含 P0.3 mask、front_standard 故意跳过（自车不入镜、验收 ego19 首帧 0.2% 印证）。
+- **A1 遮挡补丁需重建 + 位置修正**：`/tmp/estimators_patched.py` 因 inceptio 重启丢失；从容器 `nre-tools-ga:latest` 提取原始 `estimators.py`（`/app/apps/nre_tools.runfiles/_main/apps/aux_gen/estimators.py`）重建，**关键**——补丁必须在 `intersector.intersect_rays()` 调用**之前**短路（原以为遮挡检查是慢瓶颈，实际 `intersect_rays` 本身才是 154s/帧的元凶）；补丁位置错则速度依旧 8-9h；正确版本落 5.3s/帧 avg（8-cam vs A1 时代 6-cam 0.7s/it 稍慢是 camvis 8 相机 loop 开销，非补丁问题）。落盘 `inceptio:~/repo/aux_patches/estimators_patched.py` 永久保留 + Mac scratchpad 一份。
+- **P0.3 egomask 需临时挪走 run B**：P0.3 手工写的 egomask itar 缺 `.zmetadata.cbor.xz`（CLAUDE.md 记录坑）→ 容器 `AuxShardDataLoader.from_sequence_loader` 启动时 `KeyError`；run B 前把 egomask mv 到 `aux_backup_task8_20260710/egomask_p03_TEMPORARILY_MOVED_FOR_RUNB.itar`，run B 完成后 mv 回原名；run B 用 `--no-ego-mask` 不产覆盖。
+- **两个 partial itar 清理坑**：run B v3 iter 慢发现补丁未生效被 `docker rm -f` 强杀，留下 2 个 root-owned partial `lidar-camvis.zarr.itar` + `lidar-sseg.zarr.itar`（`invalid index header`）；用 `docker run --entrypoint bash -v … rm -f` 以 root 身份删；下轮启动前必检 partial。
+- **产物**（`inceptio:/home/inceptio/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/`）：
+  - `*.aux.sseg.zarr.itar` 33.6MB（Jul 10 10:57，8 cam，root）
+  - `*.aux.lidar-camvis.zarr.itar` 2.7MB（Jul 10 11:51，8-cam bitpacked uint8）
+  - `*.aux.lidar-sseg.zarr.itar` 7.9MB（Jul 10 11:51）
+  - `*.aux-meta.json` 1586B（Jul 10 11:51）
+  - `*.aux.egomask.zarr.itar` 91KB（**未动**，P0.3 Jul 8 16:52，10 台 mask）
+  - 旧 aux mv 到 `aux_backup_task8_20260710/`（sseg + lidar-camvis + lidar-sseg + aux-meta.json 六月旧版）。
+- **四项验收**：
+  - **① egomask 10 台保留** ✅（数字与 Step 0 diag 逐字节相等）
+  - **② sseg 8-cam 全覆盖** ✅（rear_left 194 帧、front_standard 200 帧；road+sidewalk 首帧 36.4-72.0%；front_standard ego19=0.2% = 自车不入镜坐实）
+  - **③ lidar-sseg road+sidewalk 全帧占比 41.45%**（46.98M / 113.34M pts 全 200 帧）—— A1 修复后 6-cam 参照 40.08%，8-cam +1.37% 合理（新增朝下相机贡献路面覆盖），补丁生效再次坐实
+  - **④ camvis (N_pts, 1) uint8 bitpacked**：mid 帧 575940 pts，8 bit 全被覆盖（cam0 17.6% - cam7 27.5%，侧后相机点数密度较高），无相机漏 camvis
+- **告警计数**：Traceback **0** / OOM **0** / `--no-ego-mask` 生效（egomask itar 未被覆盖）
 
 ### Task 9: C2 阶梯 run（6 → 8 cam）
 

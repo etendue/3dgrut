@@ -100,6 +100,7 @@ kanban
     "Review"
 
     "Done"
+        [Task 8 C2 aux 前置：b6a9 8-cam sseg + lidar-camvis 全量重跑 ✅ 2026-07-10（纯数据 + 文档，无代码 commit）：8-cam 集＝R4e 6-cam + rear_left_70fov + front_standard_55fov（rear_right 永久 held-out）；run A sseg no-ego-mask 保 P0.3 mask ~18min 8cam+workers 3；run B lidar-seg-camvis 遮挡补丁重建 + estimators.py bind-mount ~18min（补丁位置修正到 intersect_rays 之前才生效、5.3 s/it avg vs 154 s/it 老 bug）；P0.3 手写 egomask itar 缺 zmetadata run B 需临时挪走（backup 命名 TEMPORARILY_MOVED，完成还原）；docker rm -f 半途杀留下 partial itar 用容器 root 清；四项验收：egomask 10 台数字与 Step 0 diag 逐字节相等 + sseg 8 cam 全覆盖含 rear_left 194 帧 front_standard 200 帧 + lidar-sseg road+sidewalk 全帧 41.45% 对 A1 6cam 40.08% +1.37 合理 + camvis 8bit 全覆盖 cam0 17.6% cam7 27.5%；产物落 clip 目录 root 权限、旧 aux 备份 aux_backup_task8_20260710；补丁副本 inceptio ~/repo/aux_patches/ 永久保留；C2 训练可开跑]
         [P0.6 held-out 一键评估驱动 + R4e 基线读数 ✅ 2026-07-09（6b39f6f driver + tee 修复 + 6min inceptio）：scripts/drivers/eval_heldout_b6a9.sh 通用接口 ckpt tag，两组 render + dataset-cameras exposure 自动禁用 cc 口径统一；R4e 基线 train cc_psnr_masked 17.73 held-out rear_right_70fov 15.37 Δ −2.35dB；对 B4 R0c 时代 held-out gap −9.95dB 收窄到 −2.35dB 扩相机收益 +7.6dB 同 B4 +8.88dB 数量级坐实；同口径 sanity 通过 P0.6 train 17.73 R4e P0.4 主锚 17.75 Δ −0.02 noise 级；render KID +0.015 方向对 FID 反常 small-sample bias 不作对锚；C 阶梯每步四读数齐；Phase C 前置 6/6 全 ✅]
         [P0.5/B5 novel FID 链路移植 b6a9 ✅ 2026-07-09（cb75e15 driver + 8.5min render-only on R4e ckpt）：--novel-view --novel-fid --render-only 出全 8 mode FID/KID + interp render FID；lateral render/1m/2m/3m/6m FID 213.80/223.90/223.72/225.25/231.30（1-3m 差异 noise 级、6m 明显跳升+6）；yaw 5/10/30/60deg FID 222.06/224.91/227.41/257.31 严格单调；LPIPS lateral 严格单调 0.677→0.696；与 B4 held-out cc_psnr −10dB 方向一致（离轴分布 + 像素同步劣化）；C 阶梯每步 novel FID 守护线自此建立；B5 卡合并 ✅]
         [P0.4 R4e 30k 重锚 ✅ 2026-07-09（e0ee7d6 driver + 63min inceptio worktree run）：R3p 同 yaml + P0.2/P0.3 生效单变量，R4e masked 锚 mean 21.69 / cc 17.75 / lpips 0.555 / road_crop 25.70 / auto 18.71；per-cam ego coverage 越高受益越大——right_wide +4.45、left_wide +2.79、back_rear −0.24（0.60% 最低几无变化）；R3p 旧锚口径变化不可直接比、并排存档；阶梯 A/B 一切以 R4e masked 为基线；双源 metrics.json 逐字节一致]
@@ -271,6 +272,60 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-10 ★ Task 8 C2 aux 前置——b6a9 8-cam sseg + lidar-camvis 全量重跑**（无代码 commit，纯数据 + 文档；C2 训练前置全绿；inceptio nre-tools-ga 容器 ~36min 总）：
+  - **8-cam 集**：R4e 6 训练相机（`camera_front_wide_120fov` / `cross_L_120fov` / `cross_R_120fov` / `left_wide_90fov` / `right_wide_90fov` / `back_rear_wide_90fov`） + Task 8 新增 `camera_rear_left_70fov` + `camera_front_standard_55fov`；**`camera_rear_right_70fov` 永久 held-out**（不入 aux 相机集）。
+  - **run A 命令**（sseg 全量重跑 + `--no-ego-mask` 保 P0.3 mask）：
+    ```
+    docker run --rm --gpus all -v <CLIP>:/workdir/data -v /home/inceptio/data/torch_cache:/home/.cache/torch \
+      nvcr.io/nvidia/nre/nre-tools-ga:latest ncore-aux-data \
+      --dataset-path=/workdir/data/<STEM>.json --output-dir=/workdir/data \
+      --camera-id <8 相机各一次> \
+      --segmentation-backend=mask2former --no-ego-mask --no-lidar-seg-camvis \
+      --depth-backend=none --dinov2-backend=none \
+      --parallel-mode --workers-per-gpu=3 --zarr-store-type=itar --store-meta
+    ```
+    耗时：**~18 min**（8 相机 3 batches，mask2former 2s/it avg on RTX 4090 24GB）；产物 `*.aux.sseg.zarr.itar` **33.6 MB** + `*.aux-meta.json`。
+  - **run B 命令**（lidar-seg + camvis 全量重跑，遮挡补丁 bind-mount + 环境变量门）：
+    ```
+    docker run --rm --gpus all -e NRE_LIDARSEG_OCCLUSION=off \
+      -v /tmp/estimators_patched.py:/app/apps/nre_tools.runfiles/_main/apps/aux_gen/estimators.py:ro \
+      -v <CLIP>:/workdir/data -v /home/inceptio/data/torch_cache:/home/.cache/torch \
+      nvcr.io/nvidia/nre/nre-tools-ga:latest ncore-aux-data \
+      --dataset-path=/workdir/data/<STEM>.json --output-dir=/workdir/data \
+      --camera-id <8 相机各一次> \
+      --segmentation-backend=none --no-ego-mask --lidar-seg-camvis \
+      --depth-backend=none --dinov2-backend=none \
+      --num-threads=8 --zarr-store-type=itar --store-meta
+    ```
+    耗时：**~18 min**（200 lidar 帧 avg **5.28 s/it**，vs A1 bug 时代 154 s/it → **~29× 提速**；vs A1 修复后 6-cam 0.7 s/it 稍慢是 camvis loop 8 相机开销）；产物 `*.aux.lidar-camvis.zarr.itar` **2.7 MB** + `*.aux.lidar-sseg.zarr.itar` **7.9 MB** + 新 `*.aux-meta.json`。
+  - **A1 遮挡补丁重建**（inceptio /tmp 因重启丢失）：
+    - 从容器提取原始 `estimators.py`（`/app/apps/nre_tools.runfiles/_main/apps/aux_gen/estimators.py`，837 行）→ 加 `import os` + 在 `intersector.intersect_rays(camera_positions_lidar, camera_pc_rays)` 调用前加环境变量门 `NRE_LIDARSEG_OCCLUSION=off ⇒ non_occluded_points = np.ones(len(camera_pc_rays), dtype=bool)`（短路整个 intersect_rays + pcu 求交 + depth-cull 块）。
+    - **关键教训**：v5_plan A1 老条目描述"跳过遮挡检查"，但真实瓶颈是 **`intersector.intersect_rays()` 本身**（153 s/frame on b6a9）；补丁**必须**在该调用前短路，放到 `non_occluded_points: np.ndarray = face_indices < 0` **之后**（即 v1 位置）不起效——face_indices 已经是 intersect_rays 结果、慢的部分早已发生。v1 补丁走了 5.3s→154s 反复直到定位；Done Log 明确记录避免下次再踩。
+    - 补丁副本永久落 **`inceptio:~/repo/aux_patches/estimators_patched.py`** + Mac scratchpad；下次重建对拍 md5。
+  - **P0.3 egomask itar 保留纪律**：
+    - run A 用 `--no-ego-mask` 明确不产 egomask 覆盖；egomask itar mtime **2026-07-08 16:52 未动** ✅
+    - run B 前 P0.3 egomask itar（手写、缺 `.zmetadata.cbor.xz`）触发容器 `AuxShardDataLoader` `KeyError`；**修法** = 临时挪出 CLIP 到 `aux_backup_task8_20260710/egomask_p03_TEMPORARILY_MOVED_FOR_RUNB.itar`（命名带 label 防混淆），run B 完成后 mv 回原名（inceptio 用户所有权，91 KB 完整回归）
+  - **两个 partial itar 清坑**：run B v3 iter 慢（补丁位置错误）被 `docker rm -f` 强杀 → 留 2 个 **root-owned partial** `lidar-camvis.zarr.itar` (115 KB) + `lidar-sseg.zarr.itar` (342 KB) 触发下次 `IndexedTarStore: invalid index header`；用 `docker run --entrypoint bash -v <CLIP>:/w nre-tools-ga:latest -c "rm -f /w/*.aux.lidar-*.zarr.itar"` 以 root 身份删；启动新 run 前必检 partial（`ls *.aux.lidar-*.itar` 若非全 200 帧尺寸则 partial）。
+  - **四项验收（全绿 ✅）**：
+
+    | 项 | 验收结果 | 判定 |
+    |---|---|:---:|
+    | ① egomask 10 台未被 run A 覆盖 | back_rear_fisheye 582379 / back_rear_wide 5251 / cross_L 165079 / cross_R 150790 / front_fisheye 137549 / front_wide 25014 / left_wide 360199 / **rear_left 130175** / rear_right 131139 / right_wide 398098 —— 与 Step 0 diag 数字**逐字节相等** | ✅ |
+    | ② sseg 8-cam 全覆盖 + 抽帧解码 | 8 台首帧 road+sidewalk **36.4-72.0%**（front_standard 36.4 / cross_L 42.8 / cross_R 43.3 / front_wide 40.7 / rear_left 47.2 / back_rear 43.2 / left_wide 67.1 / right_wide 72.0）+ ego19 **0.2-7.0%**（front_standard 0.2 = 自车不入镜坐实 P0.3 故意跳过） | ✅ |
+    | ③ lidar-sseg road+sidewalk 全 200 帧占比 | **46,976,087 / 113,335,955 = 41.45%**（vs A1 修复后 6-cam 参照 **40.08%**，8-cam **+1.37%**，新增朝下相机 rear_left/front_standard 贡献路面覆盖合理），mid frame class dist：road 209k / sidewalk 13k / building 80k / vegetation 147k / car 26k | ✅ |
+    | ④ camvis bit-packed uint8 (N_pts, 1) | mid 帧 575940 pts，8 bit 全被覆盖：cam0 17.6% / cam1 9.2% / cam2 1.8% / cam3 10.5% / cam4 10.4% / cam5 26.8% / cam6 24.4% / cam7 27.5%；侧后相机点密度较高，无相机漏 camvis | ✅ |
+
+  - **告警计数**：Traceback **0** / OOM **0** / KeyError（run B 前 egomask 触发）**1**（已修 = 临时挪走）/ invalid index header（partial 触发）**1**（已修 = 容器 root 删）/ 补丁位置错重跑 **2**（已修 = intersect_rays 前短路）
+  - **产物路径**（`inceptio:~/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/`）：
+    - `*.aux.sseg.zarr.itar` 33.6 MB（Jul 10 10:57 root）
+    - `*.aux.lidar-camvis.zarr.itar` 2.7 MB（Jul 10 11:51 root）
+    - `*.aux.lidar-sseg.zarr.itar` 7.9 MB（Jul 10 11:51 root）
+    - `*.aux-meta.json` 1586 B（Jul 10 11:51 root）
+    - `*.aux.egomask.zarr.itar` 91 KB（**mtime Jul 8 16:52 未动**，P0.3 10 台 mask）
+    - `aux_backup_task8_20260710/`（旧 6-cam sseg + 旧 lidar-camvis + 旧 lidar-sseg + 旧 aux-meta.json 备份）
+  - **产物 log**：`/tmp/task8_runA.log`（run A 全 log）、`/tmp/task8_runB.log`（run B v4 成功 log，含 200/200 [17:35, 5.28s/it]）
+  - **效果**：**C2 训练前置全绿**（8-cam sseg/lidar-camvis/lidar-sseg/egomask 齐 + 补丁永久落盘 + 备份规范）；Task 9 C2 6→8 cam proxy/30k 可直接开跑，等 Task 7 C1 telew 落地即启动阶梯首步。与 Task 7 C1 telew 完全并行不冲突（本任务纯数据、C1 纯代码）。
 
 - **2026-07-09 ★ P0.6 held-out 一键评估驱动 + R4e 基线读数**（**Phase C 前置 6/6 = gate 全解**；扩相机作战无悔棋三件套完成；driver `6b39f6f` + tee 修复 + inceptio 6min on R4e ckpt）：
   - **driver 通用接口**：`bash scripts/drivers/eval_heldout_b6a9.sh <ckpt> <out_tag>` —— 阶梯每步 C1/C2/C3/C4 复用（C 阶梯每步"四读数"的第一读数：held-out cc_psnr + novel FID + per-cam psnr + automobile class_psnr）。
