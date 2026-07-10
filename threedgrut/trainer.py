@@ -1339,6 +1339,16 @@ class Trainer3DGRUT:
             with torch.cuda.nvtx.range("loss-road-eff-rank"):
                 loss_road_eff_rank = compute_effective_rank_loss(self.model.layers["road"].scale)
 
+        # C1 — per-camera photometric loss weight. Scales L1 + SSIM (only the
+        # photometric terms) so a config like
+        # ``loss.camera_loss_weights.camera_front_tele_30fov=4.0`` boosts that
+        # camera's supervision without touching opacity / scale / sky / lidar
+        # regularization. Empty dict (base_gs.yaml default) → w=1.0 →
+        # byte-identical to pre-C1.
+        w_cam = self._camera_loss_weight(getattr(gpu_batch, "camera_id", None))
+        loss_l1 = loss_l1 * w_cam
+        loss_ssim = loss_ssim * w_cam
+
         # Total loss
         loss = (
             lambda_l1 * loss_l1
@@ -1374,6 +1384,32 @@ class Trainer3DGRUT:
             depth_prior_loss=self.lambda_depth_prior * loss_depth_prior,
             road_eff_rank_loss=lambda_road_eff_rank * loss_road_eff_rank,
         )
+
+    # -------------------------------------------------------------------- C1
+    def _camera_loss_weight(self, camera_id) -> float:
+        """Per-camera scale factor applied to the photometric loss (L1 + SSIM).
+
+        Looks up ``self.conf.loss.camera_loss_weights[camera_id]``. Returns
+        1.0 whenever the section is missing/empty, the camera_id is None, or
+        the id isn't in the dict — keeping the default byte-identical to
+        pre-C1. A weight of 0.0 is a legitimate configuration (silences that
+        camera's photometric supervision) and is preserved verbatim.
+        """
+        if camera_id is None:
+            return 1.0
+        loss_conf = getattr(self.conf, "loss", None)
+        if loss_conf is None:
+            return 1.0
+        weights = (
+            loss_conf.get("camera_loss_weights", None)
+            if hasattr(loss_conf, "get")
+            else getattr(loss_conf, "camera_loss_weights", None)
+        )
+        if weights is None:
+            return 1.0
+        if camera_id not in weights:
+            return 1.0
+        return float(weights[camera_id])
 
     # ---------------------------------------------------------------- T8/B3
     def _bg_cuboid_conf(self, trainer_conf) -> dict:
