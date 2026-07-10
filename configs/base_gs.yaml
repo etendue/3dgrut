@@ -233,6 +233,15 @@ loss:
   use_scale: false
   lambda_scale: 0.0
 
+  # C1 — per-camera photometric loss weight.
+  # Maps camera_id → scale factor applied to L1 + SSIM (only the photometric
+  # terms; opacity / scale / sky / lidar regs stay untouched). Default {} =
+  # byte-identical to pre-C1 (Trainer3DGRUT._camera_loss_weight returns 1.0
+  # for any lookup on an empty dict). CLI usage:
+  #   ++loss.camera_loss_weights.camera_front_tele_30fov=4.0
+  # A weight of 0.0 is legal (silences that camera's photometric supervision).
+  camera_loss_weights: {}
+
 # Post-processing configuration
 post_processing:
   method: null # Possible values: null, "ppisp"
