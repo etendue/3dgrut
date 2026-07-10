@@ -4,9 +4,10 @@
 # v5 任务A baseline — inceptio 车型（12-cam 平台）multilayer 配方——相机子集可按 C 阶梯扩减，PAI 线继续用 ncore_3dgut_mcmc_multilayer 不受影响（2026-07-04 固化）
 #
 # 在 ncore_3dgut_mcmc_multilayer 之上叠两个经实测验证的修正：
-#   1. dataset.camera_ids  = inceptio 12 相机车型的 6-cam 子集
-#      （3 前向 + 2 朝地侧相机 + 1 后视；road lidar-sseg 覆盖 40.1%，
-#        修复链见 v5_plan.md 2026-07-02/03 Done Log，road 点 2117×）
+#   1. dataset.camera_ids  = inceptio 12 相机车型的 8-cam 子集
+#      （C2 Task 9 阶梯 6→8 晋级 2026-07-10；加入 rear_left_70fov + front_standard_55fov；
+#        rear_right_70fov 永久 held-out 保 P0.6 eval 唯一外推 anchor；road lidar-sseg
+#        覆盖 41.45%，vs 6-cam 40.08% +1.37 合理）
 #   2. loss.use_opacity    = false —— base_mcmc 默认的全局 opacity 正则
 #      （λ=0.01 无可见性加权）在 6-cam 采样稀释下压死全部非豁免层
 #      （bg 100% / dyn 84-99% 死亡，A800 双卡单变量 S-c/S-d 坐实）；
@@ -22,19 +23,40 @@
 #   A800    ：num_workers=24；depth 开关任意（A800 干净 A/B 实测 depth 中性，
 #             lidaron 20.22 vs depthoff 20.17 @30k，2026-07-03）
 #
-# baseline 锚（R4e = 本配方原样 30k，inceptio depth-off + nw=10，
+# baseline 锚（R5c = 本配方 8-cam 30k C2 晋级配方，inceptio depth-off + nw=10，
 #              + P0.2 EgomaskAuxReader fallback（cecb6b0）
-#              + P0.3 b6a9 视觉多边形 10 台 ego mask（40277d2），2026-07-09）：
+#              + P0.3 b6a9 视觉多边形 10 台 ego mask（40277d2）
+#              + Task 8 8-cam aux（run A/B run 2026-07-10）+ C1 telew per-cam
+#              loss weight 可用（camera_loss_weights: {}默认字节等价），2026-07-10）：
+#   mean_psnr_masked  21.77 / mean_cc_psnr_masked 18.63
+#   mean_ssim_masked  0.6715 / mean_lpips_masked 0.5610
+#   road_crop_psnr    25.91 / automobile class_psnr 18.74（<15dB 记录 46/518）
+#   per-cam masked cc_psnr:
+#     front_wide 20.53 / cross_L 17.62 / cross_R 17.37 /
+#     left_wide  15.18 / right_wide  15.44 / back_rear_wide 18.55 /
+#     rear_left  19.34 / front_standard 24.69（新纳入两台均健康）
+#   held-out (rear_right_70fov) cc_psnr 15.15（vs R4e 15.37 = −0.22 持平，
+#     P0.6 driver 4f2817e set -e 修补后正确读出）
+#   render FID   167.81 (vs R4e 213.80 = −45.99 大幅改善)
+#   novel FID   lateral 1m/2m/3m/6m 172.98 / 177.28 / 179.05 / 182.01（严格单调）
+#              yaw 5/10/30/60deg 171.22 / 173.70 / 177.95 / 213.19（严格单调）
+#              → 8-cam gaussian coverage 改善显著提升 novel view 质量
+#   train alarm: dead 0 / non-finite 3（A1 极点预期）/ [P0.2] fallback 21 / [A5] cuboid 1
+#   iter-6000 val 参照：val_frequency 默认 = 30000 → 训练结束才 val，
+#     阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 trainer.val_frequency
+#
+# 历史锚 R4e（6-cam，本配方 pre-C2 晋级，2026-07-09，保并排以便跨阶梯口径追溯）：
 #   mean_psnr_masked  21.69 / mean_cc_psnr_masked 17.75
-#   mean_ssim_masked  0.681 / mean_lpips_masked  0.555
+#   mean_ssim_masked  0.681  / mean_lpips_masked  0.555
 #   road_crop_psnr    25.70 / automobile class_psnr 18.71（<15dB 记录 48/376）
 #   per-cam masked psnr:
 #     front_wide 22.05 / cross_L 20.81 / cross_R 20.30 /
 #     left_wide  21.12 / right_wide 25.74 / back_rear_wide 19.88
 #   Non-masked（含 ego，全图参考，不作对锚）：
 #     mean 18.95 / cc 16.64 / ssim 0.634 / lpips 0.631
-#   iter-6000 val 参照：val_frequency 默认 = 30000 → 训练结束才 val，
-#     阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 trainer.val_frequency
+#   held-out (rear_right_70fov) cc_psnr 15.37（P0.6 R4e 基线）
+#   render FID / novel FID：P0.5 render 213.80 / lat 1m 223.90 / lat 6m 231.30
+#     / yaw 60deg 257.31（严格单调）
 #
 # 历史锚（R3p = 同配方，ego-mask 全零 = mask off，2026-07-04）：
 #   mean 20.25 / cc 18.72 / ssim 0.641 / lpips 0.627 / road_crop 24.47
@@ -59,6 +81,11 @@ defaults:
   - _self_
 
 dataset:
+  # C2 Task 9 阶梯 6→8 cam 晋级配方（2026-07-10）：加入 rear_left_70fov +
+  # front_standard_55fov；rear_right_70fov 永久 held-out（P0.6 唯一 held-out）。
+  # Task 9 6k proxy 判定：shared 6-cam mean cc_psnr_masked −0.28 dB 过守护线（≤0.3），
+  # 新相机 rear_left 18.48 / front_standard 23.72 均健康无需 telew；30k KPI 大幅改善
+  # mean_cc_psnr_masked +0.88、road_crop +0.21、render FID −45.99、held-out 持平。
   camera_ids:
     - camera_front_wide_120fov
     - camera_cross_left_120fov
@@ -66,6 +93,8 @@ dataset:
     - camera_left_wide_90fov
     - camera_right_wide_90fov
     - camera_back_rear_wide_90fov
+    - camera_rear_left_70fov
+    - camera_front_standard_55fov
   # A2（v5）：cuboid pose 插值到各相机自身曝光时刻（消 cross 相机 ~100ms 拖影）。
   # R3p vs R2p 单变量：mean +0.15 / front +0.47 / back +0.54，无回退项。
   cuboid_ts_mode: per_camera_interp
