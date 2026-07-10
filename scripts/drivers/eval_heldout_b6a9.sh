@@ -83,10 +83,14 @@ HJSON=$(find "$OUT/heldout" -name metrics.json 2>/dev/null | head -1)
 
 echo
 echo "--- 告警计数（两 log 合计）:"
-echo -n "Traceback           : "; grep -acE "Traceback"                                            "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}'
-echo -n "OOM/CUDA err        : "; grep -acE "OutOfMemory|CUDA out of memory|CUDA error"           "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}'
-echo -n "exposure disable告警: "; grep -acE "dataset-cameras active|BilateralGrid.*disabled"      "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}'
-echo -n "[P0.2] fallback     : "; grep -acE "\[P0.2\] ego mask via aux itar fallback"             "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}'
+# `grep -c` 无匹配时退出码 1；在 set -eo pipefail 下 pipeline 也返回 1，会
+# 杀掉整个 driver（Task 9 四读数 2026-07-10 c2_8cam_30k run 踩到：两 log 全零
+# 告警时 driver 死在 Traceback 计数行、SUMMARY + all done 尾都被跳过）。
+# 每行末尾 `|| true` 保护，awk `END{print s}` 保证零匹配印 0，语义不变。
+echo -n "Traceback           : "; grep -acE "Traceback"                                            "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}' || true
+echo -n "OOM/CUDA err        : "; grep -acE "OutOfMemory|CUDA out of memory|CUDA error"           "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}' || true
+echo -n "exposure disable告警: "; grep -acE "dataset-cameras active|BilateralGrid.*disabled"      "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}' || true
+echo -n "[P0.2] fallback     : "; grep -acE "\[P0.2\] ego mask via aux itar fallback"             "$OUT/train_render.log" "$OUT/heldout_render.log" | awk -F: '{s+=$2}END{print s}' || true
 
 echo
 echo "--- metrics.json paths:"
