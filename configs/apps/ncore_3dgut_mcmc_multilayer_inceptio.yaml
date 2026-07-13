@@ -4,10 +4,12 @@
 # v5 任务A baseline — inceptio 车型（12-cam 平台）multilayer 配方——相机子集可按 C 阶梯扩减，PAI 线继续用 ncore_3dgut_mcmc_multilayer 不受影响（2026-07-04 固化）
 #
 # 在 ncore_3dgut_mcmc_multilayer 之上叠两个经实测验证的修正：
-#   1. dataset.camera_ids  = inceptio 12 相机车型的 8-cam 子集
-#      （C2 Task 9 阶梯 6→8 晋级 2026-07-10；加入 rear_left_70fov + front_standard_55fov；
+#   1. dataset.camera_ids  = inceptio 12 相机车型的 9-cam 子集
+#      （C3 Task 10 阶梯 8→9 晋级 2026-07-12；C2 8-cam 之上加入 camera_front_tele_30fov；
 #        rear_right_70fov 永久 held-out 保 P0.6 eval 唯一外推 anchor；road lidar-sseg
-#        覆盖 41.45%，vs 6-cam 40.08% +1.37 合理）
+#        覆盖 49.65%，vs 8-cam 41.45% +8.20 合理——front_tele 长焦贡献远端 road pts）
+#      ⚠️ **R6t 锚数字依赖 CLI 覆盖 ++loss.camera_loss_weights.camera_front_tele_30fov=2.0**
+#      （yaml 默认 loss.camera_loss_weights: {} 字节等价；未加 telew 会跑出别的数字）
 #   2. loss.use_opacity    = false —— base_mcmc 默认的全局 opacity 正则
 #      （λ=0.01 无可见性加权）在 6-cam 采样稀释下压死全部非豁免层
 #      （bg 100% / dyn 84-99% 死亡，A800 双卡单变量 S-c/S-d 坐实）；
@@ -23,28 +25,43 @@
 #   A800    ：num_workers=24；depth 开关任意（A800 干净 A/B 实测 depth 中性，
 #             lidaron 20.22 vs depthoff 20.17 @30k，2026-07-03）
 #
-# baseline 锚（R5c = 本配方 8-cam 30k C2 晋级配方，inceptio depth-off + nw=10，
-#              + P0.2 EgomaskAuxReader fallback（cecb6b0）
-#              + P0.3 b6a9 视觉多边形 10 台 ego mask（40277d2）
-#              + Task 8 8-cam aux（run A/B run 2026-07-10）+ C1 telew per-cam
-#              loss weight 可用（camera_loss_weights: {}默认字节等价），2026-07-10）：
+# baseline 锚（R6t = 本配方 9-cam 30k C3 晋级配方 + telew，inceptio depth-off + nw=10，
+#              + P0.2/P0.3/P0.6/C1 全就位 + Task 10 9-cam aux（run A sseg + run B lidar-camvis
+#              patched v2 补丁 short-circuit BEFORE intersect_rays），
+#              **CLI 覆盖 ++loss.camera_loss_weights.camera_front_tele_30fov=2.0** 2026-07-12）：
+#   mean_psnr_masked  22.09 / mean_cc_psnr_masked 19.11
+#   mean_ssim_masked  0.6736 / mean_lpips_masked 0.5651
+#   road_crop_psnr    26.22 / automobile class_psnr 18.60（<15dB 记录 69/653）
+#   per-cam masked cc_psnr:
+#     front_wide 20.70 / cross_L 17.78 / cross_R 17.34 /
+#     left_wide  14.83 / right_wide  15.14 / back_rear_wide 18.40 /
+#     rear_left  19.11 / front_standard 23.91 /
+#     ★ front_tele 24.25（4cab 无权重 18.04 参照带 → telew=2.0 拉起 +6.21 dB）
+#   shared 8-cam mean cc_psnr_masked 18.401（vs R5c 全 8 mean 18.63 = -0.229 过守护 ≤0.3）
+#   held-out (rear_right_70fov) cc_psnr_masked 15.48（vs R5c 15.51 = -0.03 持平 noise 级；
+#     物理直觉合理：加前向长焦对后向 held-out 无影响，扩相机收益侧后视驱动）
+#   render FID   160.35 (vs R5c 167.81 = −7.46 改善)
+#   novel FID   lateral 1m/2m/3m/6m 163.91 / 165.12 / 167.46 / 171.68（严格单调，全档 -9~-12）
+#              yaw 5/10/30/60deg 164.69 / 164.53 / 179.25 / 219.79（5-10 改善 -6~-9，
+#                60deg +6.60 微退——长焦大角度 yaw novel view 拟合天花板，可接受）
+#              → front_tele 加权 novel view lateral 全档大改善坐实
+#   train alarm: dead 0 / non-finite 3（A1 极点预期）/ [P0.2] fallback 21 / [A5] cuboid 1
+#   train 60min 30s + eval 8min 6s = 68min 40s（vs R5c 66min 略慢因 +1 cam）
+#
+# 历史锚 R5c（8-cam，本配方 pre-C3 晋级，2026-07-10，保并排以便跨阶梯口径追溯）：
 #   mean_psnr_masked  21.77 / mean_cc_psnr_masked 18.63
 #   mean_ssim_masked  0.6715 / mean_lpips_masked 0.5610
 #   road_crop_psnr    25.91 / automobile class_psnr 18.74（<15dB 记录 46/518）
 #   per-cam masked cc_psnr:
 #     front_wide 20.53 / cross_L 17.62 / cross_R 17.37 /
 #     left_wide  15.18 / right_wide  15.44 / back_rear_wide 18.55 /
-#     rear_left  19.34 / front_standard 24.69（新纳入两台均健康）
+#     rear_left  19.34 / front_standard 24.69
 #   held-out (rear_right_70fov) cc_psnr_masked 15.51（vs R4e 15.37 = +0.14 微升；
 #     ⚠️ 2026-07-10 验收更正：旧档 15.15 系 driver 取 non-masked cc_psnr 错对
 #     masked 基线，同口径为 15.51/+0.14，driver key 已修正）
 #   render FID   167.81 (vs R4e 213.80 = −45.99 大幅改善)
 #   novel FID   lateral 1m/2m/3m/6m 172.98 / 177.28 / 179.05 / 182.01（严格单调）
 #              yaw 5/10/30/60deg 171.22 / 173.70 / 177.95 / 213.19（严格单调）
-#              → 8-cam gaussian coverage 改善显著提升 novel view 质量
-#   train alarm: dead 0 / non-finite 3（A1 极点预期）/ [P0.2] fallback 21 / [A5] cuboid 1
-#   iter-6000 val 参照：val_frequency 默认 = 30000 → 训练结束才 val，
-#     阶梯 6k proxy 需另跑独立 6k run 或 CLI 覆盖 trainer.val_frequency
 #
 # 历史锚 R4e（6-cam，本配方 pre-C2 晋级，2026-07-09，保并排以便跨阶梯口径追溯）：
 #   mean_psnr_masked  21.69 / mean_cc_psnr_masked 17.75
@@ -82,11 +99,12 @@ defaults:
   - _self_
 
 dataset:
-  # C2 Task 9 阶梯 6→8 cam 晋级配方（2026-07-10）：加入 rear_left_70fov +
-  # front_standard_55fov；rear_right_70fov 永久 held-out（P0.6 唯一 held-out）。
-  # Task 9 6k proxy 判定：shared 6-cam mean cc_psnr_masked −0.28 dB 过守护线（≤0.3），
-  # 新相机 rear_left 18.48 / front_standard 23.72 均健康无需 telew；30k KPI 大幅改善
-  # mean_cc_psnr_masked +0.88、road_crop +0.21、render FID −45.99、held-out 持平。
+  # C3 Task 10 阶梯 8→9 cam 晋级配方（2026-07-12）：C2 8-cam 之上加 camera_front_tele_30fov；
+  # rear_right_70fov 永久 held-out（P0.6 唯一 held-out）。
+  # Task 10 6k proxy 判定：shared 8-cam mean cc_psnr_masked −0.234 dB 过守护线（≤0.3），
+  # front_tele proxy 23.41 远超 healthy 阈值（>18），初值 telew=2.0 无需 0.5 档步进；
+  # 30k KPI mean_cc_psnr_masked +0.48、road_crop +0.31、render FID −7.46、held-out 持平。
+  # ⚠️ R6t 锚必须 CLI ++loss.camera_loss_weights.camera_front_tele_30fov=2.0（yaml 保持默认空）
   camera_ids:
     - camera_front_wide_120fov
     - camera_cross_left_120fov
@@ -96,6 +114,7 @@ dataset:
     - camera_back_rear_wide_90fov
     - camera_rear_left_70fov
     - camera_front_standard_55fov
+    - camera_front_tele_30fov
   # A2（v5）：cuboid pose 插值到各相机自身曝光时刻（消 cross 相机 ~100ms 拖影）。
   # R3p vs R2p 单变量：mean +0.15 / front +0.47 / back +0.54，无回退项。
   cuboid_ts_mode: per_camera_interp

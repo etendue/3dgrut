@@ -88,7 +88,6 @@
 kanban
     Backlog
         [B2 lane 指标立锚：gen_lane_sseg 自跑 + compute_lane_metrics，兑现朝地 LiDAR 优势（冻结至战役门后）]
-        [C3 加 front_tele（gate C1）：telew 加权纳入长焦]
         [C4 加 2 台 FTheta 鱼眼（最后，单变量）：上游 issue 238 尖刺风险，可弃]
         [D1 poseopt 迁移 b6a9（gate A2+A3）：P1.2 配方（boundary+prior+smooth）上 36 tracks]
         [D2 cuboid autogen 收尾决策：PR 40 去留 + eval yaw 约定定案 + 纯几何路线关闭入档]
@@ -98,6 +97,7 @@ kanban
     "Review"
 
     "Done"
+        [C3 Task 10 阶梯 8→9 cam 晋级 ✅ 2026-07-12（5dc3f3b C3 driver 三件套 proxy+30k+fourread；aux 数据 A/B patched v2 补丁修正）：9-cam 集＝C2 8-cam + camera_front_tele_30fov（rear_right 永久 held-out）；aux 前置 A1 补丁 v1 位置错在 intersect_rays 后 175s/frame 灾难 → v2 短路移到调用前 5.28s/frame 恢复 Task 8 号称速度；telew=2.0 从 4cab 证据起点直接命中，proxy 双臂 6k 57min shared 8mean cc_psnr_masked −0.234 dB 过守护线 ≤0.3 front_tele 23.41 healthy；30k 60min30s + eval 8min mean_cc_psnr_masked 19.11 vs R5c 18.63 +0.48 road_crop +0.31 automobile 18.60 -0.14 微退 front_tele 24.25 【4cab 无权重 18.04 参照 telew 拉起 +6.21】；四读数 ① held-out rear_right cc_masked 15.48 vs R5c 15.51 -0.03 持平 noise 级（前向长焦对后向 held-out 无影响物理直觉合理） ② novel FID render 160.35 vs R5c 167.81 −7.46 改善 lateral 1m/6m 163.91/171.68 全档 -9~-12 大改善 yaw 5/60deg 164.69/219.79（5deg 改善 60deg +6.6 微退）③ shared 8mean 18.401 -0.229 过 ④ automobile -0.14；yaml camera_ids 8→9 头注释锚 R6t 更新 R5c/R4e 保并排 R6t 依赖 CLI ++loss.camera_loss_weights.camera_front_tele_30fov=2.0；train alarm dead 0 non-finite 3 A1 极点预期 P0.2 fallback 21 A5 cuboid 1；lidar-sseg road+sidewalk 49.65% vs 8-cam 41.45% +8.20 front_tele 长焦贡献远端 road pts 合理]
         [C2 Task 9 阶梯 6→8 cam 晋级 ✅ 2026-07-10（a8709eb proxy + 440567f 30k + 5ed8f5a fourread driver，含 fix 4f2817e set-e）：8-cam 集＝R4e 6-cam + rear_left_70fov + front_standard_55fov；rear_right 永久 held-out；proxy 双臂 6k 51min shared 6mean cc_psnr_masked −0.28dB 过守护线 ≤0.3；30k 66min mean_cc_psnr_masked 18.63 vs R4e 17.75 +0.88 dB road_crop +0.21 automobile 18.74 持平；四读数 ① held-out rear_right cc_masked 15.51 vs R4e 15.37 +0.14 微升（验收更正，原 15.15 系 non-masked 错口径） ② novel FID render 167.81 vs R4e 213.80 −45.99 大幅改善 lateral 严格单调 172.98→182.01 yaw 严格单调 171.22→213.19 ③ shared 6 mean 17.45 −0.30 dB 过 ④ automobile +0.03；新相机健康 rear_left 19.34 front_standard 24.69 无 telew 需求；yaml camera_ids 6→8 头注释锚 R5c 更新 R4e 保并排；train alarm dead 0 non-finite 3 A1 极点预期 P0.2 fallback 21 A5 cuboid 1；SIGHUP cascade 教训 nohup+setsid+disown 三件套；踩 driver set-e bug 已修 4f2817e 合入 main 919cceb]
         [C1 telew per-camera loss weight 重实现 ✅ 2026-07-10（fd80c1c，纯 Mac 代码 + TDD）：Trainer3DGRUT._camera_loss_weight camera_id float 查表 self.conf.loss.camera_loss_weights 命中返回权重 未命中 None 无 loss 节返回 1.0；get_losses L1344 加权汇总前 loss_l1 loss_ssim 各乘 w 正则项 opacity scale sky bg_cuboid bg_road pose smooth pose boundary pose prior lidar depth road_eff_rank 一律不动；configs base_gs.yaml loss 节新增 camera_loss_weights 空 dict 默认字节等价 CLI ++loss.camera_loss_weights.<camera_id>=w；新测 test_camera_loss_weight.py 11 例 6 unit 5 integration 覆盖默认恒等 2 倍缩放 缺席 dict miss weight zero；stub 补丁 scoped 到本文件 fused_ssim tensor 0.5 与 torch.cuda.nvtx no-op；基线 960 12 → 981 2（+11 新测 +10 nvtx stub 顺带解 importorskip 兄弟；独立跑仍 skip 无回归）；字节等价证明 空 dict 与无 key 逐 key allclose rtol 1e-6 全绿；Task 9 C2 阶梯的唯一 gate 落定]
         [Task 8 C2 aux 前置：b6a9 8-cam sseg + lidar-camvis 全量重跑 ✅ 2026-07-10（纯数据 + 文档，无代码 commit）：8-cam 集＝R4e 6-cam + rear_left_70fov + front_standard_55fov（rear_right 永久 held-out）；run A sseg no-ego-mask 保 P0.3 mask ~18min 8cam+workers 3；run B lidar-seg-camvis 遮挡补丁重建 + estimators.py bind-mount ~18min（补丁位置修正到 intersect_rays 之前才生效、5.3 s/it avg vs 154 s/it 老 bug）；P0.3 手写 egomask itar 缺 zmetadata run B 需临时挪走（backup 命名 TEMPORARILY_MOVED，完成还原）；docker rm -f 半途杀留下 partial itar 用容器 root 清；四项验收：egomask 10 台数字与 Step 0 diag 逐字节相等 + sseg 8 cam 全覆盖含 rear_left 194 帧 front_standard 200 帧 + lidar-sseg road+sidewalk 全帧 41.45% 对 A1 6cam 40.08% +1.37 合理 + camvis 8bit 全覆盖 cam0 17.6% cam7 27.5%；产物落 clip 目录 root 权限、旧 aux 备份 aux_backup_task8_20260710；补丁副本 inceptio ~/repo/aux_patches/ 永久保留；C2 训练可开跑]
@@ -142,7 +142,7 @@ kanban
 | **P0.6** | C 前置 | **held-out 评估一键驱动** — B4 `--dataset-cameras` render-only 流程封装：输入 ckpt→输出 rear_right held-out cc_psnr/lpips/FID + train 同口径对照 | v4 E1.3 协议 | 0.5 | ✅ | **2026-07-09 完成**（`6b39f6f` driver + tee 修复，6min inceptio on R4e）；通用接口 `<ckpt> <tag>`；R4e 基线 train **cc_psnr_masked 17.73** vs held-out (rear_right_70fov) **15.37** Δ **−2.35 dB**；同口径 sanity（P0.6 train vs P0.4 主锚 17.75 Δ −0.02 noise）；对 B4 R0c 时代 gap −9.95 dB 收窄到 −2.35 dB → **扩相机收益 ~+7.6 dB** 坐实；render KID +0.015 方向对，FID small-sample bias 不作对锚 |
 | **C1** ★ | C | **telew per-camera loss weight 重实现** — `trainer.py` 加 `_camera_loss_weight(camera_id)` + 光度项（L1/SSIM）乘权、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；**必须 commit 进 main**（上轮实现验证有效但 worktree reset 丢码的教训） | 2026-06-25 调查 #6882 方案 | 0.5 | ✅ | **2026-07-10 完成**（`fd80c1c`）；11 单测（6 unit + 5 integration via SimpleNamespace bind + 沿 conftest stub 模式：fused_ssim + nvtx no-op scoped）；空 dict / 无 key / camera_id 缺席 / miss 分支均返回 1.0；`{camX:2.0}` + `batch.camera_id=camX` 断言 `l1_loss/ssim_loss` = 2× baseline、12 项正则逐项 allclose(rtol 1e-6)；`weight=0.0` 归零；基线 960/12 → 981/2（+11 新测 +10 nvtx stub 顺带解 importorskip 兄弟，独立跑仍 skip 无回归）；Task 9 唯一 gate 解除 |
 | **C2** | C | **扩相机 6→8 pinhole**（Task 9 阶梯，+`rear_left_70fov` + `front_standard_55fov`；`rear_right_70fov` 永久 held-out）— 单变量 CLI 覆盖 `dataset.camera_ids`；6k proxy 双臂判 shared 守护线（≤0.3 dB）后晋级 30k；四读数 ①held-out ②novel FID ③per-cam ④automobile 全绿即 yaml 落地 | 新 | 1 | ✅ | **2026-07-10 完成**（`a8709eb` proxy driver + `440567f` 30k + `5ed8f5a` fourread + `4f2817e` fix set-e）；30k mean_cc_psnr_masked **18.63** vs R4e 17.75 = **+0.88**；held-out rear_right cc_psnr_masked **15.51** = +0.14 微升（⚠️ 验收更正：原 15.15 系 non-masked 错口径，driver 已修）；render FID 167.81 vs 213.80 = **−45.99 大幅改善**；lateral 1m→6m 172.98→182.01 严格单调；yaw 5→60deg 171.22→213.19 严格单调；shared 6 −0.30 过守护线；新相机 rear_left 19.34 / front_standard 24.69 无 telew；automobile +0.03 持平；yaml 头注释锚 R5c 更新 + camera_ids 8-cam 就位；下阶梯 Task 10 加 front_tele（gate C1 telew 权重直接派上用场） |
-| **C3** | C | **加 front_tele** — telew 加权纳入（4cab 经验：无权重 18.04、加权 26.24） | 4cab telew 证据 | 0.5 | ⬜ | gate＝C1 |
+| **C3** | C | **加 front_tele** — telew 加权纳入（4cab 经验：无权重 18.04、加权 26.24） | 4cab telew 证据 | 0.5 | ✅ | **2026-07-12 完成**（`5dc3f3b` C3 driver 三件套 + patch v2 修 A1 补丁位置）；30k mean_cc_psnr_masked **19.11** vs R5c 18.63 = **+0.48**；front_tele cc_psnr_masked **24.25**（4cab 无权重 18.04 参照，telew=2.0 拉 +6.21）；held-out rear_right cc_psnr_masked **15.48** = -0.03 持平（前向长焦对后向 held-out 无影响物理合理）；render FID **160.35** vs 167.81 = **-7.46 改善** lateral 1m/6m 163.91/171.68 全档 -9~-12 大改善；shared 8 mean 18.401 = -0.229 过守护 ≤0.3；automobile 18.60 -0.14 微退；yaml 头注释锚 R6t 更新 R5c/R4e 保并排 R6t 依赖 CLI `++loss.camera_loss_weights.camera_front_tele_30fov=2.0`；踩坑 A1 patch v1 位置错在 intersect_rays 后 175s/frame 灾难 → v2 短路移到之前 5.28s/frame 恢复 |
 | **C4** | C | **加 2 台 FTheta 鱼眼** — 最后单变量纳入 `camera_front_fisheye` / `camera_back_rear_fisheye`；FTheta 路径 PAI 已证（6cam 26.31），但留意上游 [issue #238](https://github.com/nv-tlabs/3dgrut/issues/238) 鱼眼尖刺 | 新 | 1 | ⬜ | 可弃：尖刺不可控则 10+tele 收口 |
 | **D1** | D | **poseopt 迁移 b6a9** — v3 P1.2 配方（boundary anchor + prior + temporal smooth）上 36 真 tracks，对照 A3 锚看动态车清晰度 | v3 P1.2（class +1.03 证据） | 1.5 | ⬜ | gate＝A2 + A3 锚；4cab 教训不适用（那是 init 错，b6a9 是真标注） |
 | **D2** | D | **cuboid autogen 收尾决策** — ① PR #40 去留（建议：merge 作离线工具保留，autogen 仅限无标注 clip 的 demo 用途）② eval `_yaw_of()` 约定定案（对已知角 box 直查 pose 矩阵，半小时）③ 纯几何 L-shape 路线正式关闭入档；备选记录：无标注 clip 未来走 CenterPoint+MOT 开源链换前端、复用 PR #40 V4 shard 基建 | PR #40 + 2026-06-26 L-shape session | 0.5 | ⬜ | 决策级任务，大g 拍板 |
@@ -154,7 +154,7 @@ kanban
 | **A** ★ | b6a9 质量解锁（短刀，全部有诊断有解法；+A5 新增） | **5/5** | road 有色 + cuboid 对齐 + 车辆锚入档 + lidar 监督定论 + pinhole gate 修复 | 3-cam per-cam psnr 不退 | ✅（[PR #44](https://github.com/etendue/3dgrut/pull/44)） |
 | **B** ★ | 对标定锚 + off-track 评估（战役无悔棋） | **4/5** | NRE gap 双臂实测化 + held-out off-track 锚 + novel FID 链路 ✅ + lane 锚 + 伪数字勘误 | — | 🟡 |
 | **P0** ★ | Phase C 前置（ego-mask 修复 + 评估基建） | **6/6** | P0.1 诊断 ✅ + P0.3 视觉多边形替换 ✅ + P0.2 接线 ✅ + P0.4 R4e 重锚 ✅ + P0.5 novel FID 链路 ✅ + P0.6 held-out 一键驱动 ✅ | PAI 线字节等价不变量 | ✅ |
-| **C** | 扩相机阶梯 3→12 | **2/4** | C1 telew ✅ + C2 6→8 cam ✅ + 剩 C3/C4 | 每步原相机不退 | 🟡 |
+| **C** | 扩相机阶梯 3→12 | **3/4** | C1 telew ✅ + C2 6→8 cam ✅ + C3 +front_tele ✅ + 剩 C4 | 每步原相机不退 | 🟡 |
 | **D** | 动态质量 + 收尾 | 0/2 | poseopt 增益入档 + autogen 去留定案 | class_psnr 不退 | ⬜ |
 | **总计** | — | **12/22** | — | — | — |
 
@@ -272,6 +272,50 @@ flowchart TD
 - **2026-06-24 4cab NRE 锚方法论**：NRE 28.99 / 3dgrut 单 cam 28.44，runbook 现成（→B1）。
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
+
+- **2026-07-12 ★ Task 10 C3 阶梯 8→9 cam 晋级**（`5dc3f3b` C3 driver 三件套 proxy+30k+fourread + inceptio 侧 A1 补丁 v2 位置修正 `~/repo/aux_patches/estimators_patched.py`；总墙钟 aux 前置 A 7min + B 17min35s + proxy 双臂 6k 57min + 30k 60min30s + eval 8min + fourread heldout 6min + novel FID 13min ≈ **2h5min**）：
+  - **9-cam 集**：C2 8-cam + `camera_front_tele_30fov`（`camera_rear_right_70fov` 永久 held-out 保 P0.6 唯一 held-out）。
+  - **A1 补丁 v2 修正**（防未来 Task 11 C4 复踩）：`~/repo/aux_patches/estimators_patched.py` v1 位置在 `intersector.intersect_rays()` **调用之后**（line 646-651 `non_occluded_points = face_indices < 0` init 之后），**未生效** —— run B 首启 175 s/frame（vs Task 8 号称 5.3 s/frame）灾难，13/200 帧 37min 全跑 9h+。修法 = 用 python 脚本原地重写补丁位置到 **`intersect_rays` 调用之前**（下游只用 `non_occluded_points`，不依赖 `face_indices`/`bary_coords`/`ray_intersection_distances`），短路时直接 `non_occluded_points = np.ones(len(camera_pc_rays), dtype=bool)`。v2 patch 200/200 帧 17:35 total = **5.28 s/frame avg = Task 8 号称速度**，坐实"补丁必须在 intersect_rays 之前"铁律。v1 副本备份 `.bak_v1_wrongloc`。
+  - **Step 1 aux 前置**（clip 目录 8-cam 旧 aux 挪进 `aux_backup_task10_20260710/`；P0.3 egomask run B 前挪临时名 `TEMPORARILY_MOVED_FOR_RUNB` run B 后挪回）：
+    - **run A 9-cam sseg**（`--no-ego-mask` 保 P0.3 mask，`--parallel-mode --workers-per-gpu=3`，6:20 sseg 主循环 + 后处理 ≈ 7min，产物 39.68 MB）：9 相机全覆盖含 front_tele，sseg egocar19 first/mid/last 11171/19392/10778（~0.5-0.9%，mask2former 长焦反光边缘微检；训练时 P0.2 fallback 走全 True valid mask 分支自车不入镜物理合理）。
+    - **run B v2 9-cam lidar-camvis**（patched `estimators_patched.py` bind-mount v2 + `NRE_LIDARSEG_OCCLUSION=off`，17:35 = 200 帧 × 5.28 s/frame）：产物 lidar-camvis 3.6 MB + lidar-sseg 7.9 MB。
+    - **四项验收全绿**（表格）：
+
+      | 项 | 验收结果 | vs Task 8 参照 | 判定 |
+      |---|---|---|:---:|
+      | ① egomask 10 台 nonzero 未被覆盖 | back_rear_fisheye 582379 / rear_left 130175 / ... 逐字节相等 Step 0 diag | 完全相同 | ✅ |
+      | ② sseg 9-cam 全覆盖含 front_tele | front_tele egocar first/mid/last=11171/19392/10778（~0.5-0.9%） | 9 相机全出现 | ✅ |
+      | ③ lidar-sseg road+sidewalk 全 200 帧占比 | **49.65%**（47M/94.7M pts labeled） | 8-cam 41.45%，**+8.20%**（front_tele 长焦贡献远端 road pts 合理）| ✅ |
+      | ④ camvis 9-cam bitpacked 覆盖 | shape=**(N,2) uint8**（16 bits 扩容适配 9-cam）；mid bit 0=17.35% / bit 7=27.17% / **bit 15=7.44% (front_tele)** | bit 0/7 vs 8-cam 17.6%/27.5% 逐 bit sanity；front_tele bit 15 长焦前向合理 | ✅ |
+  - **Step 2 6k proxy 双臂**（判定通过，57min）：Arm A 8-cam @6k mean_cc_psnr_masked 17.94；Arm B 9-cam @6k +telew=2.0 = 18.36。**shared 8-cam mean −0.234 dB** ≤ 0.3 守护线过；**front_tele proxy 23.41**（远超 healthy 阈值 >18，初值 telew=2.0 直接命中，无需 0.5 档步进）；weakest camera left/right_wide 退 -0.72/-0.69（本身最弱组 ~14-15dB）；Arm A/B alarm 全绿（dead=0，non-finite=3 A1 极点预期，P0.2 fallback 21，A5 cuboid 1）。
+  - **Step 3 30k KPI**（68min40s train+eval）：
+
+    | 度量 | R5c 8-cam 30k | **C3 9-cam 30k +tele tw=2.0** | Δ | 判定 |
+    |---|---:|---:|---:|:---:|
+    | mean_psnr_masked | 21.77 | **22.09** | +0.32 | 微升 |
+    | mean_cc_psnr_masked | 18.63 | **19.11** | **+0.48** | **改善** ✅ |
+    | mean_ssim_masked | 0.6715 | 0.6736 | +0.0021 | 持平 |
+    | mean_lpips_masked | 0.5610 | 0.5651 | +0.0041 | 微退 noise 级 |
+    | road_crop_psnr | 25.91 | **26.22** | **+0.31** | 改善 |
+    | automobile class_psnr | 18.74 | 18.60 | -0.14 | 微退 <0.3 |
+    | class_psnr_n_low_15db | 46/518 (8.9%) | 69/653 (10.6%) | records +135 rate +1.7pp | 微退 |
+    | front_tele cc_psnr_masked | --- | **24.25** | ★new | 4cab 无权重 18.04 → +6.21 dB |
+
+  - **Step 4 四读数**（全部 masked 口径，13min heldout+novel FID）：
+
+    | 读数 | R5c C2 8-cam 30k | **C3 9-cam 30k** | Δ | 判定 |
+    |---|---:|---:|---:|:---:|
+    | ① held-out rear_right cc_psnr_masked | 15.51 | **15.48** | -0.03 | 持平 noise 级 |
+    | ② render FID | 167.81 | **160.35** | **−7.46** | **改善** ✅ |
+    | ② novel FID lateral 1m/2m/3m/6m | 172.98 / 177.28 / 179.05 / 182.01 | 163.91 / 165.12 / 167.46 / 171.68 | -9.07/-12.16/-11.59/-10.33 | **全档大改善** ✅ |
+    | ② novel FID yaw 5/10/30/60deg | 171.22 / 173.70 / 177.95 / 213.19 | 164.69 / 164.53 / 179.25 / 219.79 | -6.53/-9.17/+1.30/+6.60 | 5-10 改善 30/60 微退（长焦大角度 novel view 拟合天花板 可接受）|
+    | ③ shared 8-cam mean cc_psnr_masked | 18.63 (全 8) | **18.401** (shared 8) | **-0.229** | **过守护 ≤0.3** ✅ |
+    | ④ automobile class_psnr | 18.74 | 18.60 | -0.14 | 微退 |
+
+  - **含义 for "rear_right held-out"**：C3 时 gap 稳定在 −0.03（相对 R5c 15.51），说明**扩相机收益源自侧后视相机集**（rear_left/front_standard）；**前向长焦对后向 rear_right 天然无贡献**（物理直觉合理）。→ Task 12 收尾 rear_right 去留判据敏感度低。
+  - **含义 for novel view 天花板**：yaw 30/60deg 微退 +1.3/+6.6，是长焦相机加入后 lidar-sseg road_pts 覆盖变化影响 novel view geometry；但 lateral 全档大改善 -9~-12 是 front_tele 学得的远端 road/sky 几何直接贡献。综合 render FID -7.46 说明 novel view 生成整体质量提升。
+  - **文档同步**：`configs/apps/ncore_3dgut_mcmc_multilayer_inceptio.yaml` `camera_ids` 8→9（加 `camera_front_tele_30fov`）+ 头注释锚 R6t 更新 + R5c/R4e 保并排 + R6t 依赖 CLI `++loss.camera_loss_weights.camera_front_tele_30fov=2.0` 明确注明（yaml 保持默认空 dict 字节等价，PAI 线不受影响）；v5_plan §1.1 kanban Backlog→Done + §1.2 表 ⬜→✅ + §1.3 Phase C 2/4→3/4。
+  - **效果 + 下一步**：**C 阶梯 3/4**（C1 telew ✅ + C2 6→8 ✅ + C3 +tele ✅），Phase C 顶层 13/22 进度；**C4 加 2 台 FTheta 鱼眼**是最后一步（上游 issue #238 尖刺风险 → proxy 若不可控则 9-cam 收口，Task 11 计划已列可弃路径）。C4 aux 前置继续走 nre-tools nre-tools-ga 容器 + **v2 补丁**（不要再用 v1 位置）；telew 接口 C1 已就位，鱼眼是否需要类似加权按 C4 proxy 数字决定（front_tele 从 4cab 证据知先例，鱼眼无先例数据要 6k proxy 首次试 telew=1.0 起点）。
 
 - **2026-07-10 ★ Task 9 C2 阶梯 6→8 cam 晋级**（`a8709eb` proxy driver + `440567f` 30k driver + `5ed8f5a` fourread driver + `4f2817e` fix set-e + yaml/plan 回填；总墙钟 proxy 51min + 30k 66min + fourread 6min + novel FID 10min ≈ 2h20min）：
   - **8-cam 集**：R4e 6-cam + `camera_rear_left_70fov` + `camera_front_standard_55fov`；`camera_rear_right_70fov` 永久 held-out 保 P0.6 唯一 held-out 参照。
