@@ -48,6 +48,21 @@
 #   train alarm: dead 0 / non-finite 3（A1 极点预期）/ [P0.2] fallback 21 / [A5] cuboid 1
 #   train 60min 30s + eval 8min 6s = 68min 40s（vs R5c 66min 略慢因 +1 cam）
 #
+# **标准配置决策（2026-07-14，大g确认）**：R6t 9-cam 是 Inceptio 数据的
+# 默认/标准训练配置。C4 11-cam（+front/back FTheta fisheye）已完成 30k 与四读数，
+# 但不晋级默认 YAML：
+#   - mean_cc_psnr_masked 18.27 vs 9-cam 19.11 = **−0.83 dB**
+#   - road_crop_psnr 25.26 vs 26.22 = **−0.96 dB**
+#   - automobile/class psnr 17.68 vs 18.60 = **−0.92 dB**
+#   - front/rear fisheye cc_masked = 17.54 / 12.00（rear fisheye 是明显弱项）
+#   - held-out rear_right cc_masked 15.42 vs 15.48 = −0.06（持平）
+#   - 正收益：novel FID 全档改善，lateral 1m/6m 163.91/171.68 →
+#     157.60/163.66，yaw 60° 219.79 → 202.62；说明鱼眼提供更宽 angular coverage，
+#     对大视角/离轴生成有研究价值。
+#   - 当前代价：固定 30k/容量下与既有 9 cam 竞争，训练视角/road/vehicle 指标退化；
+#     rear fisheye 重建弱，且上游 #238 尖刺/边缘质量风险仍在。故鱼眼保留为
+#     research/optional extension，不进入标准配方。C4 driver 与 ckpt 留档可复现实验。
+#
 # 历史锚 R5c（8-cam，本配方 pre-C3 晋级，2026-07-10，保并排以便跨阶梯口径追溯）：
 #   mean_psnr_masked  21.77 / mean_cc_psnr_masked 18.63
 #   mean_ssim_masked  0.6715 / mean_lpips_masked 0.5610

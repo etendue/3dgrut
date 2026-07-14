@@ -60,3 +60,46 @@ def mat_to_wxyz(c2w: np.ndarray) -> np.ndarray:
     # Normalize to unit length; round-off from large matrices can drift.
     q /= max(np.linalg.norm(q), 1e-12)
     return q
+
+
+def wxyz_to_mat(q: np.ndarray) -> np.ndarray:
+    """Convert a unit ``(w, x, y, z)`` quaternion to a homogeneous 4x4 matrix."""
+    q = np.asarray(q, dtype=np.float64)
+    if q.shape != (4,):
+        raise ValueError(f"q must have shape (4,), got {q.shape}")
+    q = q / max(np.linalg.norm(q), 1e-12)
+    w, x, y, z = q
+    out = np.eye(4, dtype=np.float64)
+    out[:3, :3] = np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+    return out
+
+
+def slerp_wxyz(q0: np.ndarray, q1: np.ndarray, alpha: float) -> np.ndarray:
+    """Shortest-arc spherical interpolation between normalized wxyz quaternions."""
+    q0 = np.asarray(q0, dtype=np.float64)
+    q1 = np.asarray(q1, dtype=np.float64)
+    if q0.shape != (4,) or q1.shape != (4,):
+        raise ValueError(f"q0/q1 must have shape (4,), got {q0.shape}/{q1.shape}")
+    q0 = q0 / max(np.linalg.norm(q0), 1e-12)
+    q1 = q1 / max(np.linalg.norm(q1), 1e-12)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = float(np.clip(dot, -1.0, 1.0))
+    if dot > 0.9995:
+        out = (1.0 - float(alpha)) * q0 + float(alpha) * q1
+        return out / max(np.linalg.norm(out), 1e-12)
+    theta = float(np.arccos(dot))
+    out = (
+        np.sin((1.0 - float(alpha)) * theta) * q0
+        + np.sin(float(alpha) * theta) * q1
+    ) / np.sin(theta)
+    return out / max(np.linalg.norm(out), 1e-12)

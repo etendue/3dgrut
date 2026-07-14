@@ -163,6 +163,29 @@ def test_ego_pose_at_nearest():
     assert md.ego_pose_at(5000)[0, 3] == 40.0  # past end → clamp
 
 
+def test_ego_trajectory_positions_prefer_rig_origin():
+    block = _make_viz_block(N_ego=3)
+    camera = block["ego"]["poses_c2w"]
+    camera[:, 2, 3] = 2.3
+    rig = camera.clone()
+    rig[:, 0, 3] -= 4.1
+    rig[:, 2, 3] = 0.0
+    block["ego"]["rig_poses_c2w"] = rig
+
+    md = FourDMetadata.from_ckpt({"viz_4d": block})
+
+    np.testing.assert_allclose(md.ego_trajectory_positions(), rig[:, :3, 3].numpy())
+    assert not np.allclose(md.ego_trajectory_positions(), camera[:, :3, 3].numpy())
+
+
+def test_ego_trajectory_positions_fall_back_for_legacy_checkpoint():
+    block = _make_viz_block(N_ego=3)
+    md = FourDMetadata.from_ckpt({"viz_4d": block})
+    np.testing.assert_allclose(
+        md.ego_trajectory_positions(), block["ego"]["poses_c2w"][:, :3, 3].numpy()
+    )
+
+
 def test_empty_tracks_block():
     block = _make_viz_block()
     block["tracks"] = {}

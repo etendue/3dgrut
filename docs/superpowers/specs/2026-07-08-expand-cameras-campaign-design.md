@@ -80,7 +80,7 @@ P0 估时：P0.2+P0.3 约 1 天（Mac 代码 + inceptio 脚本）；P0.4 约 1h 
 | **C1** | —（纯 Mac 代码） | telew per-camera loss weight 重实现：`trainer.py` 光度项（L1/SSIM）乘 `_camera_loss_weight(camera_id)`、正则项不动；`configs/base_gs.yaml` 加 `loss.camera_loss_weights: {}`（默认空 = 字节等价）；CLI `++loss.camera_loss_weights.<camera_id>=w` 覆盖。Mac 单测：weight=1 恒等 / weight=2 光度翻倍正则不变。**完成定义 = 代码 + 测试 merge 进 main**（2026-06-25 丢码教训） | P0 不阻塞，可并行 |
 | **C2** | 6 → 8（+rear_left、+front_standard） | rear_right 留 eval-only；新相机先补 aux（sseg + egomask + lidar camvis，遮挡 bug 已修 0.7s/帧；egomask 缺则走 P0.3 派生路径）；弱相机用 telew 调权 | P0 + C1 |
 | **C3** | 8 → 9（+front_tele） | 4cab 证据：无权重 18.04 → telew 加权 26.24 | C1 |
-| **C4** | 9 → 11（+2 台 FTheta 鱼眼） | **可弃项**：上游 [issue #238](https://github.com/nv-tlabs/3dgrut/issues/238) 鱼眼尖刺不可控则 9-cam 收口；FTheta 数据路径 PAI 已证 | C2/C3 守护线不破 |
+| **C4** | 9 → 11（+2 台 FTheta 鱼眼） | **已评估、不晋级标准配置**：novel FID 全档改善（更宽 angular coverage），但 mean CC −0.83 dB、road −0.96 dB、automobile −0.92 dB，rear fisheye 仅 12.00 dB；9-cam R6t 收口，鱼眼作为 research/optional extension 保留 | 2026-07-14 决策 |
 | **收尾** | 配方定型 | ① rear_right 去留：对比其 held-out 曲线全程数据决定是否纳入最终配方；② **60k 容量校准**（吸收 I1 欠训效应：相机数增加 → 每相机有效步数摊薄；阶梯期间统一 30k 保单变量，定型后一次 60k 校准）；③ 锚数字入 v5_plan §4 Done Log + §0.2 KPI 表 | 阶梯完成 |
 
 ## 5. 实验纪律（沿战役 spec §5，全文有效）

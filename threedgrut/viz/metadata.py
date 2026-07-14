@@ -199,8 +199,34 @@ def _extract_ego(dataset, conf) -> dict:
     else:
         poses_c2w = torch.from_numpy(poses_full)
 
+    # Camera poses remain the rendering/frustum contract. The UI trajectory,
+    # however, represents the vehicle and therefore needs the NCore rig origin.
+    rig_poses_c2w = None
+    if ts_np.size > 0:
+        try:
+            pose_graph = dataset.sequence_loaders[dataset.sequence_id].pose_graph
+            rig_native = pose_graph.evaluate_poses(
+                "rig", "world", ts_np.astype(np.uint64)
+            )
+            rig_native = np.asarray(rig_native, dtype=np.float64).reshape(-1, 4, 4)
+            T_w2wg = np.asarray(
+                getattr(dataset, "T_world_to_world_global", np.eye(4)),
+                dtype=np.float64,
+            )
+            rig_world_global = np.einsum("ij,njk->nik", T_w2wg, rig_native)
+            if rig_world_global.shape[0] == poses_c2w.shape[0]:
+                rig_poses_c2w = torch.from_numpy(rig_world_global.astype(np.float32))
+        except Exception as e:
+            logger.warning(
+                f"[viz_4d] rig trajectory extraction failed: {e}; "
+                "legacy camera-center fallback remains available"
+            )
+
     return {
         "poses_c2w": _to_cpu_float32(poses_c2w),
+        "rig_poses_c2w": (
+            _to_cpu_float32(rig_poses_c2w) if rig_poses_c2w is not None else None
+        ),
         "frame_timestamps_us": torch.from_numpy(ts_np),
         "primary_camera_id": primary_id,
         "primary_camera_fov_y_rad": fov_y,

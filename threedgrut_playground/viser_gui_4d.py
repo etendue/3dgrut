@@ -48,13 +48,20 @@ from kaolin.render.camera import Camera
 from threedgrut.layers.layered_model import LayeredGaussians
 from threedgrut.utils.misc import quaternion_to_so3
 from threedgrut_playground.engine import Engine3DGRUT
+from threedgrut_playground.utils.camera_render_state import (
+    CameraModelKind,
+    CameraRenderState,
+    resolve_camera_render_state,
+)
 from threedgrut_playground.utils.cuboid import (
     class_color,
     cuboid_world_edges,
     instance_color,
 )
 from threedgrut_playground.utils.difix_client import DifixClient
+from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
 from threedgrut_playground.utils.harmonizer_client import HarmonizerTemporalClient
+from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
 from threedgrut_playground.utils.viser_math import mat_to_wxyz
 from threedgrut_playground.utils.viser_overlay_compositor import (
     PolylineLayerSpec,
@@ -161,7 +168,10 @@ class Viser4DViewer:
         self._follow_camera_enabled: bool = False
         self._cam_dropdown = None
         self._show_follow_cam = None
+        self._camera_status = None
         self._current_dropdown_cam: Optional[str] = None
+        self._active_camera_state: Optional[CameraRenderState] = None
+        self._active_render_wh: Optional[tuple[int, int]] = None
         # T8.13: when FourDMetadata carries FTheta polynomial intrinsics
         # (viz_4d schema_v2), the viewer pipes them straight into
         # engine.render_pass and locks the rendered W×H to the trained
@@ -227,19 +237,25 @@ class Viser4DViewer:
                 subdivide_n=20,
                 world_to_camera_flip=np.eye(4),
             )
-            if metadata is not None:
-                if metadata.ego_poses_c2w.size > 0:
-                    ego_pts = metadata.ego_poses_c2w[:, :3, 3].astype(np.float64)
-                    if ego_pts.shape[0] >= 2:
-                        self._overlay_static_ego_polylines = [ego_pts]
-                for tid, t in metadata.tracks.items():
-                    mask = t["frame_info"]
-                    poses = t["poses"]
-                    if mask is None or poses is None or mask.sum() < 2:
-                        continue
-                    centers = poses[mask, :3, 3].astype(np.float64)
-                    if centers.shape[0] >= 2:
-                        self._overlay_static_track_polylines.append((str(t.get("class", "unknown")), centers))
+        # These caches are world-space and independent of the active camera
+        # projection. Build them even when the initial camera is not FTheta so
+        # a later dropdown switch to any calibrated image-space overlay has
+        # trajectory content available immediately.
+        if metadata is not None:
+            if metadata.ego_poses_c2w.size > 0:
+                ego_pts = metadata.ego_trajectory_positions().astype(np.float64)
+                if ego_pts.shape[0] >= 2:
+                    self._overlay_static_ego_polylines = [ego_pts]
+            for tid, t in metadata.tracks.items():
+                mask = t["frame_info"]
+                poses = t["poses"]
+                if mask is None or poses is None or mask.sum() < 2:
+                    continue
+                centers = poses[mask, :3, 3].astype(np.float64)
+                if centers.shape[0] >= 2:
+                    self._overlay_static_track_polylines.append(
+                        (str(t.get("class", "unknown")), centers)
+                    )
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -360,15 +376,17 @@ class Viser4DViewer:
             # Initialise the pose controls to this client's starting camera.
             self._sync_pose_gui_from_camera(client.camera)
 
-        # E2.7 (H1): swap engine FTheta + render WH to the initial cam's
-        # intrinsics once at startup, so the very first rendered backdrop
-        # uses the selected camera's projection. _snap_clients_to_camera
-        # also iterates connected clients (none yet at this point — safe
-        # no-op for client part; the FTheta swap is what we want here).
-        if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
-            self._snap_clients_to_camera(self._initial_cam_id, self._t_us_current)
-            self._current_dropdown_cam = self._initial_cam_id
-            print(f"[E2.7] engine FTheta + dropdown locked to " f"'{self._initial_cam_id}'", flush=True)
+        # Resolve one atomic initial camera state after GUI construction. This
+        # keeps dropdown, client pose, engine projection and render resolution
+        # on the same camera instead of letting GUI primary-camera defaults
+        # overwrite --initial_cam_id.
+        if self._current_dropdown_cam is not None and self._current_dropdown_cam in self._multi_cam_poses:
+            state = self._set_active_camera(self._current_dropdown_cam, self._t_us_current)
+            print(
+                f"[viz_4d] active camera='{state.camera_id}' "
+                f"model={state.model_kind.value} render={state.resolution}",
+                flush=True,
+            )
         elif self._initial_cam_id:
             print(
                 f"[E2.7-WARN] initial_cam_id='{self._initial_cam_id}' "
@@ -528,14 +546,15 @@ class Viser4DViewer:
                 def _(_, _self=self):
                     _self.need_update = True
 
-            # T8.13: FTheta mode locks render W×H to trained resolution
-            # (principal_point is in pixels); hide the slider + show why.
-            if self.ftheta_render_wh is not None:
+            # Calibrated FTheta/OpenCVPinhole modes lock W×H to the resolution
+            # used to derive their polynomial parameters / per-pixel rays.
+            if self._active_render_wh is not None:
                 self.resolution_slider.visible = False
                 with folder:
-                    w, h = self.ftheta_render_wh
+                    w, h = self._active_render_wh
                     self.server.gui.add_markdown(
-                        f"⚠️ **FTheta 模式**: render W×H 锁定到 " f"`{w}×{h}` (训练分辨率)，不可调节。"
+                        f"⚠️ **Calibrated camera**: render W×H 锁定到 "
+                        f"`{w}×{h}`，不可调节。"
                     )
 
         # Per-layer Gaussian render toggles. Nested as a sub-folder under
@@ -736,8 +755,10 @@ class Viser4DViewer:
             cam_options = (
                 sorted(self._multi_cam_poses.keys()) if self._multi_cam_poses else [self.meta.ego_primary_camera_id]
             )
-            initial_cam = (
-                self.meta.ego_primary_camera_id if self.meta.ego_primary_camera_id in cam_options else cam_options[0]
+            initial_cam = self._choose_initial_camera_id(
+                cam_options,
+                initial_cam_id=self._initial_cam_id,
+                metadata_primary=self.meta.ego_primary_camera_id,
             )
             self._current_dropdown_cam = initial_cam
             self._cam_dropdown = self.server.gui.add_dropdown(
@@ -748,6 +769,11 @@ class Viser4DViewer:
             self._show_follow_cam = self.server.gui.add_checkbox(
                 "Follow Camera",
                 False,
+            )
+            self._camera_status = self.server.gui.add_text(
+                "Camera status",
+                initial_value="not resolved",
+                disabled=True,
             )
             # BUG-1c (2026-06-10): the "FTheta overlay (debug)" toggle is
             # GONE. In FTheta mode the overlay is the ONLY correct projection
@@ -856,7 +882,7 @@ class Viser4DViewer:
         assert self.meta is not None
         if self.meta.ego_poses_c2w.size == 0:
             return
-        pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float32)
+        pts = self.meta.ego_trajectory_positions().astype(np.float32)
         # BUG-1c (2026-06-10): in FTheta mode the trajectory polyline rides
         # the overlay path (_collect_overlay_layer_specs) so it shares the
         # backdrop's fisheye projection — the 3D line_segments primitive was
@@ -1084,80 +1110,147 @@ class Viser4DViewer:
         assert self.meta is not None
         if self.h_ego_frustum is None:
             return
-        # E2.7 P4 fix: when --initial_cam_id is given and present in
-        # multi_cam_poses, use THAT camera's c2w as the ego-frustum pose.
-        # Default NCore meta.ego_pose_at returns the primary camera which is
-        # the alphabetical first sensor (camera_cross_left_120fov) — its
-        # mount points down-left (A-pillar blindspot coverage), making the
-        # frustum visually "point at the ground" instead of "point forward".
-        # The user expects a dashcam-style forward frustum.
+        # The frustum is a selected-camera widget, not a startup-camera widget.
+        # Re-resolve at the current timestamp so it shares the same interpolated
+        # pose as Follow Camera and the Gaussian backdrop.
         pose = None
-        if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
-            entry = self._multi_cam_poses[self._initial_cam_id]
-            c2w_arr = entry["c2w"]
-            ts_arr = entry["timestamps_us"]
-            if c2w_arr.shape[0] > 0 and ts_arr.size > 0:
-                idx = int(np.searchsorted(ts_arr, int(t_us)))
-                idx = max(0, min(idx, ts_arr.size - 1))
-                pose = c2w_arr[idx]
+        if (
+            self._current_dropdown_cam is not None
+            and self._current_dropdown_cam in self._multi_cam_poses
+        ):
+            state = resolve_camera_render_state(
+                self._current_dropdown_cam,
+                self._multi_cam_poses[self._current_dropdown_cam],
+                int(t_us),
+            )
+            pose = state.pose_sample.c2w
+        elif self._active_camera_state is not None:
+            pose = self._active_camera_state.pose_sample.c2w
         if pose is None:
             pose = self.meta.ego_pose_at(t_us)
         self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
         self.h_ego_frustum.position = pose[:3, 3]
 
-    def _snap_clients_to_camera(self, cam_id: Optional[str], t_us: int) -> None:
-        """V3-VIZ.3: snap viewer to ``cam_id``'s c2w at the nearest frame ≤ t_us.
+    @staticmethod
+    def _choose_initial_camera_id(
+        cam_options, *, initial_cam_id: Optional[str], metadata_primary: Optional[str]
+    ) -> str:
+        options = list(cam_options)
+        if not options:
+            raise ValueError("camera options must be non-empty")
+        if initial_cam_id in options:
+            return str(initial_cam_id)
+        if metadata_primary in options:
+            return str(metadata_primary)
+        return str(options[0])
 
-        Also swaps the engine's FTheta intrinsics + render WH so the Gaussian
-        backdrop uses the SELECTED camera's polynomial — otherwise the engine
-        keeps using primary camera's intrinsics and front_wide vs front_tele
-        renders identically (since browser pinhole approx ignores FTheta).
-        """
+    @staticmethod
+    def _active_camera_status_text(state: CameraRenderState) -> str:
+        sample = state.pose_sample
+        resolution = (
+            f"{state.resolution[0]}×{state.resolution[1]}"
+            if state.resolution is not None
+            else "free"
+        )
+        pose_mode = (
+            f"interpolated {sample.left_idx}→{sample.right_idx} "
+            f"α={sample.alpha:.3f}"
+            if sample.interpolated
+            else f"frame {sample.left_idx}"
+        )
+        overlay = (
+            f"{state.model_kind.value} image-space"
+            if state.model_kind is not CameraModelKind.IDEAL_PINHOLE
+            else "browser ideal-pinhole"
+        )
+        warning = ""
+        if sample.source_gap_us > 250_000:
+            warning = f" | WARNING source gap={sample.source_gap_us / 1000.0:.1f} ms"
+        return (
+            f"camera: {state.camera_id} | model: {state.model_kind.value} | "
+            f"render: {resolution} | pose: {pose_mode} | "
+            f"nearest Δt={sample.nearest_dt_us / 1000.0:.1f} ms | "
+            f"overlay: {overlay}{warning}"
+        )
+
+    def _apply_camera_state(self, state: CameraRenderState) -> None:
+        """Apply every projection field together so no camera state leaks."""
+        self._active_camera_state = state
+        self._current_dropdown_cam = state.camera_id
+        self.ftheta_intrinsics = state.ftheta_dict
+        self.ftheta_render_wh = (
+            state.resolution if state.model_kind is CameraModelKind.FTHETA else None
+        )
+        self.opencv_pinhole_intrinsics = state.opencv_pinhole_dict
+        self.opencv_pinhole_rays = state.opencv_pinhole_rays
+        self.opencv_pinhole_render_wh = (
+            state.resolution
+            if state.model_kind is CameraModelKind.OPENCV_PINHOLE
+            else None
+        )
+        self._active_render_wh = (
+            state.resolution
+            if state.model_kind is not CameraModelKind.IDEAL_PINHOLE
+            else None
+        )
+        self._overlay_compositor = self._build_overlay_compositor(state)
+        if self._cam_dropdown is not None and self._cam_dropdown.value != state.camera_id:
+            self._cam_dropdown.value = state.camera_id
+        camera_status = getattr(self, "_camera_status", None)
+        if camera_status is not None:
+            camera_status.value = self._active_camera_status_text(state)
+
+    @staticmethod
+    def _build_overlay_compositor(
+        state: CameraRenderState,
+    ) -> Optional[Viser4DOverlayCompositor]:
+        if state.resolution is None:
+            return None
+        width, height = state.resolution
+        if state.model_kind is CameraModelKind.FTHETA:
+            projector = FthetaForwardProjector(
+                state.ftheta_dict, world_to_camera_flip=np.eye(4)
+            )
+            subdivide_n = 20
+        elif state.model_kind is CameraModelKind.OPENCV_PINHOLE:
+            projector = PinholeForwardProjector(
+                state.opencv_pinhole_dict, world_to_camera_flip=np.eye(4)
+            )
+            subdivide_n = 4
+        else:
+            return None
+        return Viser4DOverlayCompositor(
+            projector, height=height, width=width, subdivide_n=subdivide_n
+        )
+
+    def _set_active_camera(
+        self, cam_id: str, t_us: int, *, snap_clients: bool = True
+    ) -> CameraRenderState:
+        if cam_id not in self._multi_cam_poses:
+            raise KeyError(f"unknown camera '{cam_id}'")
+        state = resolve_camera_render_state(
+            cam_id, self._multi_cam_poses[cam_id], int(t_us)
+        )
+        self._apply_camera_state(state)
+        pose = state.pose_sample.c2w
+        if snap_clients:
+            R = pose[:3, :3]
+            forward_world = R @ np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            up_world = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
+            for client in self.server.get_clients().values():
+                client.camera.wxyz = mat_to_wxyz(pose)
+                client.camera.position = pose[:3, 3]
+                client.camera.look_at = pose[:3, 3] + 10.0 * forward_world
+                client.camera.up_direction = up_world
+                client.camera.fov = state.fov_y_rad
+        self.need_update = True
+        return state
+
+    def _snap_clients_to_camera(self, cam_id: Optional[str], t_us: int) -> None:
+        """Backward-compatible wrapper around atomic camera-state selection."""
         if cam_id is None or cam_id not in self._multi_cam_poses:
             return
-        entry = self._multi_cam_poses[cam_id]
-        c2w_arr = entry["c2w"]
-        ts_arr = entry["timestamps_us"]
-        if ts_arr.size == 0:
-            return
-        idx = int(np.searchsorted(ts_arr, int(t_us)))
-        idx = max(0, min(idx, ts_arr.size - 1))
-        if idx > 0 and abs(int(ts_arr[idx - 1]) - t_us) < abs(int(ts_arr[idx]) - t_us):
-            idx -= 1
-        pose = c2w_arr[idx]
-        R = pose[:3, :3]
-        forward_world = R @ np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        up_world = R @ np.array([0.0, -1.0, 0.0], dtype=np.float32)
-        # Swap engine intrinsics so backdrop matches this camera's projection.
-        new_ftheta = entry.get("ftheta_dict")
-        new_res = entry.get("resolution")
-        new_fov = float(entry.get("fov_y_rad", 1.5708))
-        if new_ftheta is not None and new_res is not None:
-            self.ftheta_intrinsics = new_ftheta
-            self.ftheta_render_wh = new_res
-            # Rebuild compositor at the new render resolution so any overlay
-            # path that still uses it (ego/track trajectories) stays in sync.
-            if self._overlay_compositor is not None:
-                from threedgrut_playground.utils.viser_overlay_compositor import (
-                    Viser4DOverlayCompositor,
-                )
-
-                # BUG-1: flip=identity to stay co-aligned with the backdrop
-                # camera (+Z forward) — see __init__ compositor comment.
-                self._overlay_compositor = Viser4DOverlayCompositor(
-                    ftheta_dict=new_ftheta,
-                    height=new_res[1],
-                    width=new_res[0],
-                    subdivide_n=20,
-                    world_to_camera_flip=np.eye(4),
-                )
-        for client in self.server.get_clients().values():
-            client.camera.wxyz = mat_to_wxyz(pose)
-            client.camera.position = pose[:3, 3]
-            client.camera.look_at = pose[:3, 3] + 10.0 * forward_world
-            client.camera.up_direction = up_world
-            client.camera.fov = new_fov
-        self.need_update = True
+        self._set_active_camera(cam_id, t_us, snap_clients=True)
 
     def _snap_clients_to_ego(self, t_us: int) -> None:
         """Snap every connected viser client's free camera onto the ego pose
@@ -1557,10 +1650,10 @@ class Viser4DViewer:
         interval = 0.0
         for client in self.server.get_clients().values():
             try:
-                # T8.13 FTheta path locks W×H to trained resolution; pinhole
-                # path keeps the user-controllable slider (T8.12 behavior).
-                if self.ftheta_render_wh is not None:
-                    W, H = self.ftheta_render_wh
+                # Calibrated FTheta/OpenCVPinhole paths lock W×H to the
+                # resolution used for their polynomial parameters / pixel rays.
+                if self._active_render_wh is not None:
+                    W, H = self._active_render_wh
                 else:
                     W = self.resolution_slider.value
                     H = int(self.resolution_slider.value / client.camera.aspect)
@@ -1851,6 +1944,13 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
             c2w_native = np.asarray(c2w_native, dtype=np.float64).reshape(-1, 4, 4)
             c2w_wg = np.einsum("ij,njk->nik", T_w2wg, c2w_native).astype(np.float32)
             ts = np.asarray(sensor.frames_timestamps_us)[np.asarray(frame_indices), end_col].astype(np.int64)
+            # Vehicle/rig origin at exactly the same camera timestamps. This is
+            # distinct from c2w: the latter is the sensor optical center.
+            rig_native = ds.sequence_loaders[seq_id].pose_graph.evaluate_poses(
+                "rig", "world", ts.astype(np.uint64)
+            )
+            rig_native = np.asarray(rig_native, dtype=np.float64).reshape(-1, 4, 4)
+            rig_c2w_wg = np.einsum("ij,njk->nik", T_w2wg, rig_native).astype(np.float32)
             # Per-camera FTheta intrinsics (so dropdown switch actually changes
             # what the engine renders, not just the viewer pose). Falls back
             # to None for non-FTheta cameras (pinhole/distorted) — engine then
@@ -1912,6 +2012,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
                 print(f"[viz_4d] cam {cam_id}: intrinsics extract failed ({e})", flush=True)
             out[cam_id] = {
                 "c2w": c2w_wg,
+                "rig_poses_c2w": rig_c2w_wg,
                 "timestamps_us": ts,
                 "ftheta_dict": ftheta_dict,
                 "resolution": resolution,
@@ -1929,6 +2030,23 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
     except Exception as e:
         print(f"[viz_4d] multi-camera load failed: {e}", flush=True)
         return {}
+
+
+def _hydrate_ego_rig_poses(metadata, multi_cam_poses: dict) -> bool:
+    """Fill legacy checkpoint metadata with manifest-derived rig poses."""
+    if metadata is None or metadata.ego_rig_poses_c2w is not None:
+        return False
+    entry = multi_cam_poses.get(metadata.ego_primary_camera_id)
+    if not entry:
+        return False
+    rig = entry.get("rig_poses_c2w")
+    if rig is None:
+        return False
+    rig = np.asarray(rig, dtype=np.float32)
+    if rig.shape != metadata.ego_poses_c2w.shape:
+        return False
+    metadata.ego_rig_poses_c2w = rig
+    return True
 
 
 def _load_metadata(ckpt: dict, dataset_path: Optional[str], default_config: str) -> Optional[FourDMetadata]:
@@ -2728,6 +2846,12 @@ def main() -> None:
     multi_cam_poses = _load_multi_cam_poses(args.dataset_path, args.default_gs_config)
     if multi_cam_poses:
         print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available " f"for dropdown / Follow Camera")
+        if _hydrate_ego_rig_poses(metadata, multi_cam_poses):
+            print(
+                "[viz_4d] Ego trajectory uses manifest rig/body origins "
+                "(not primary-camera optical centers)",
+                flush=True,
+            )
 
     # E2.7 P1/P4 diagnostic: dump NCore metadata frame origin vs USDZ gaussian
     # center side-by-side so the operator can immediately tell if the two are
