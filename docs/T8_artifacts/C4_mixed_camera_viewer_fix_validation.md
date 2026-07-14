@@ -1,8 +1,8 @@
 # C4 Mixed-Camera Viser Fix Validation
 
 Date: 2026-07-14
-Branch: `fix/viser-mixed-camera`
-Validated commit: `6575bed` plus documentation-only follow-up
+Implementation branch: `fix/viser-mixed-camera`（merge target: `main`）
+Validated implementation range: `0159698..66f668a` plus C4 decision/docs follow-up
 Host: `inceptio` / RTX 4090 / renderer `3dgrt`
 
 ## Checkpoint
@@ -15,8 +15,8 @@ Host: `inceptio` / RTX 4090 / renderer `3dgrt`
 
 ## Automated gates
 
-- Mac focused viewer/projector/parity suite: `109 passed`
-- Mac full suite: `1004 passed, 2 skipped`
+- Mac focused viewer/projector/parity/rig-trajectory suite: `55 passed`（latest focused gate）
+- Mac full suite after rig-origin fix: `1008 passed, 2 skipped`
 - inceptio focused suite: `39 passed`
 - Python compile and `git diff --check`: passed
 - Runtime log: no traceback/error after camera switching and playback
@@ -74,6 +74,12 @@ Remaining visible defects are checkpoint/model-quality phenomena rather than the
 - foreground road texture fragmentation.
 
 This validation restores the viewer as evidence for camera-selection and projection-state correctness. It does not by itself promote C4 or prove model-quality parity at the image periphery.
+
+### Fisheye display limitation（accepted, no frontend change for now）
+
+The renderer produces the FTheta raster with calibrated polynomial rays, and the Python-side overlays share that image-space projection. However, viser 1.0.29 displays `set_background_image()` as a texture on a plane attached to a Three.js `PerspectiveCamera`; plane scale and orientation come from perspective focal length/film size/quaternion. Viser therefore has no native FTheta camera model and cannot faithfully represent a near-180° polynomial image as an interactive perspective viewport. Peripheral cropping, rotated-plane white corners, or a center-dominant “rectified-looking” presentation can remain even when the underlying FTheta raster is correct.
+
+Decision on 2026-07-14: keep the current implementation. A future exact solution would require a screen-space calibrated 2D view/fullscreen quad or a nonlinear fisheye shader, not further scalar-FOV tuning.
 
 ## Native/viewer radial parity status
 

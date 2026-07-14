@@ -1162,7 +1162,7 @@ The implementation is complete only when all conditions hold:
 - [x] Ego frustum follows the selected camera, not startup camera.
 - [x] Follow Camera uses translation lerp + quaternion SLERP and reports large source gaps.
 - [ ] Native/viewer parity metrics distinguish viewer error from checkpoint peripheral blur. Comparator is implemented/tested, but exact UI-free viewer PNG dump is still missing; no fabricated browser-screenshot PSNR is accepted.
-- [x] Focused and full Mac suites pass (`109 passed`; full `1004 passed, 2 skipped`).
+- [x] Focused and full Mac suites pass（latest focused `55 passed`; full after rig-origin fix `1008 passed, 2 skipped`）.
 - [x] C4 inceptio switch matrix and playback pass; evidence is archived in `docs/T8_artifacts/C4_mixed_camera_viewer_fix_validation.md`.
 - [x] Buglist, architecture invariant, skill, and validation report are updated.
 

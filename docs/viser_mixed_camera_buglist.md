@@ -69,19 +69,21 @@ C4 viewer 启动时同时出现：
 
 ## 3. Bug 状态总览
 
-| ID | 名称 | 状态 | 优先级 | 影响 |
+| ID | 名称 | 当前状态 | 优先级 | 当前结论 |
 |---|---|---|---|---|
-| MC-1 | initial camera 被 GUI primary camera 覆盖 | 🔴 已确认 | P0 | UI、pose、projection 三者可能不一致 |
-| MC-2 | camera switch 未原子更新 projection state | 🔴 已确认 | P0 | FTheta / OpenCVPinhole 参数串台 |
-| MC-3 | FTheta → pinhole 不清 stale FTheta state | 🔴 已确认 | P0 | pinhole 相机可能继续按旧鱼眼模型渲染 |
-| MC-4 | OpenCVPinhole intrinsics/rays 不随 dropdown 更新 | 🔴 已确认 | P0 | 中心尚可、外围错采样/模糊/变形 |
-| MC-5 | overlay compositor 不能从 `None` 动态创建 | 🔴 已确认 | P0 | FTheta cuboid/trajectory 回退 browser pinhole，外围严重错位 |
-| MC-6 | 非 FTheta distorted pinhole overlay 仍用 browser ideal pinhole | 🔴 已确认 | P1 | OpenCVPinhole 相机外围 overlay 漂移 |
-| MC-7 | ego frustum 绑定 `_initial_cam_id` 而非当前 dropdown camera | 🔴 已确认 | P1 | 切相机后 frustum 仍属于旧相机 |
-| MC-8 | Follow Camera nearest-frame 阶梯跳动 | 🔴 已确认 | P1 | 10 Hz 正常约 1 m 跳，缺帧可达 5–7 m |
-| MC-9 | Camera dropdown / engine state 缺少可见诊断 | 🔴 已确认 | P1 | 用户无法知道实际使用的 model / intrinsics / source frame |
-| MC-10 | “中清边糊”归因不明 | 🟡 待隔离 | P1 | 无法区分 checkpoint 欠约束与 viewer projection mismatch |
-| MC-11 | mixed-camera 自动回归覆盖缺失 | 🔴 已确认 | P0 | 单相机测试全绿但切换状态机持续回归 |
+| MC-1 | initial camera 被 GUI primary camera 覆盖 | ✅ 已修复 | P0 | CLI initial camera、dropdown、pose 与 projection state 已统一；有单测和 C4 启动验收 |
+| MC-2 | camera switch 未原子更新 projection state | ✅ 已修复 | P0 | `CameraRenderState` + 单一 apply 路径；mixed switch matrix 通过 |
+| MC-3 | FTheta → pinhole 不清 stale FTheta state | ✅ 已修复 | P0 | 切到 OpenCVPinhole 时显式清空 FTheta fields；transition test 通过 |
+| MC-4 | OpenCVPinhole intrinsics/rays 不随 dropdown 更新 | ✅ 已修复 | P0 | intrinsics、per-pixel rays 与 native resolution 随 camera 原子切换 |
+| MC-5 | overlay compositor 不能从 `None` 动态创建 | ✅ 已修复 | P0 | OpenCVPinhole → FTheta 可动态创建 compositor；world-space trajectory cache 与初始 model 解耦 |
+| MC-6 | 非 FTheta distorted pinhole overlay 仍用 browser ideal pinhole | ✅ 代码已修复，待扩大人工复核 | P1 | calibrated OpenCVPinhole 已接 `PinholeForwardProjector`；单测与 C4 抽查通过，但外围多目标对齐仍应接受人工回归反馈 |
+| MC-7 | ego frustum 绑定 `_initial_cam_id` 而非当前 dropdown camera | ✅ 已修复 | P1 | frustum 重新解析当前 selected camera state；单测通过 |
+| MC-8 | Follow Camera nearest-frame 阶梯跳动 | 🟡 核心问题已修，数据缺帧仍存在 | P1 | nearest snap 已改为 translation lerp + rotation SLERP；200–600 ms source gap 无法凭空恢复，只显示 warning，仍需人工评估大 gap 观感 |
+| MC-9 | Camera dropdown / engine state 缺少可见诊断 | ✅ 已修复 | P1 | Camera status 显示 camera/model/resolution/pose interpolation/Δt/overlay/warning |
+| MC-10 | “中清边糊”归因不明 | 🟡 未关闭 | P1 | comparator 已实现，但缺 deterministic UI-free viewer frame dump，尚无合法 native/viewer center-periphery parity 数字 |
+| MC-11 | mixed-camera 自动回归覆盖缺失 | ✅ 已修复 | P0 | 新增 mixed transition、resolution、overlay lifecycle、frustum、interpolation 回归测试 |
+
+> 本表记录 `0159698..66f668a` mixed-camera + rig-origin 修复及 C4 实机验收证据。若人工操作可稳定复现与表中“已修复”相冲突的现象，对应条目应立即重新打开，而不是用现有单测结论否定人工观察。
 
 ---
 
@@ -500,7 +502,7 @@ front_wide
 
 ## 8. 2026-07-14 修复状态
 
-实现分支：`fix/viser-mixed-camera`
+实现提交范围：`0159698..66f668a`（目标分支：`main`）
 
 | Phase | 状态 | 证据 |
 |---|---|---|
@@ -510,7 +512,9 @@ front_wide
 | D radial parity comparator | 🟡 | 比较器与单测完成；缺 deterministic UI-free viewer PNG dump，未声称真实 parity 数字 |
 | E inceptio C4 视觉验收 | ✅ | `docs/T8_artifacts/C4_mixed_camera_viewer_fix_validation.md` |
 
-验证结果：Mac focused `109 passed`；Mac full `1004 passed, 2 skipped`；inceptio focused
+验证结果：latest focused `55 passed`；Mac full `1008 passed, 2 skipped`；inceptio focused
 `39 passed`。C4 切换 fisheye/wide/tele/rear-fisheye/cross-left/wide 无 stale state，
-Follow Camera 使用插值 pose。残留的近场块状 splat、floaters、远景模糊归为模型质量
+Follow Camera 使用插值 pose；Ego trajectory 改用 pose-graph `rig` origin，C4 首帧 camera
+`z=2.4504` 改为 rig `z=0.0029`，局部 road median 差约 −0.13 m。残留的近场块状
+splat、floaters、远景模糊归为模型质量
 现象；在 exact viewer frame dump 补齐前，不声称 center/periphery native parity 已量化。

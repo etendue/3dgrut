@@ -189,9 +189,9 @@
 ### Task 11: C4 阶梯 run（+2 台 FTheta 鱼眼 → 11 cam，可弃）
 
 - Consumes: Task 10 晋级配方；上游 [issue #238](https://github.com/nv-tlabs/3dgrut/issues/238) 鱼眼尖刺风险；PAI 线 FTheta 路径已证。
-- [ ] **Step 1: 登记 kill-criterion（本任务整体可弃）**：proxy 出现不可控尖刺伪影（目检）或守护线破 >0.5 dB 且 telew 调不回 → **弃**，9-cam 收口，弃因入档。
-- [ ] **Step 2: 鱼眼 aux 补齐**（Task 8 流程，FTheta 相机 id）→ 6k proxy → 判定。
-- [ ] **Step 3: 存活则 30k + 四读数 + 判定入档**（同 Task 9 流程）。
+- [x] **Step 1: 登记 kill-criterion（本任务整体可弃）**：proxy 出现不可控尖刺伪影（目检）或守护线破 >0.5 dB 且 telew 调不回 → **弃**，9-cam 收口，弃因入档。
+- [x] **Step 2: 鱼眼 aux 补齐**（Task 8 流程，FTheta 相机 id）→ 6k proxy → 判定。
+- [x] **Step 3: 30k + 四读数 + 判定入档**：11-cam mean CC/road/automobile 相对 9-cam 分别 −0.83/−0.96/−0.92 dB；front/rear fisheye 17.54/12.00；held-out rear-right 持平；novel FID 全档改善。**决策：不晋级默认配置，9-cam R6t 收口；11-cam 留作 research/optional extension。**
 
 ### Task 12: 收尾——rear_right 判定 + 60k 校准 + 文档回填
 
