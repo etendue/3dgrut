@@ -63,29 +63,41 @@ class Viser4DOverlayCompositor:
 
     def __init__(
         self,
-        ftheta_dict: dict,
-        height: int,
-        width: int,
+        projector_or_ftheta=None,
+        height: int = 0,
+        width: int = 0,
         subdivide_n: int = 20,
         world_to_camera_flip: "np.ndarray | None" = None,
+        **legacy_kwargs,
     ):
-        """``world_to_camera_flip`` is forwarded to FthetaForwardProjector.
+        """Create a calibrated image-space compositor.
 
-        None keeps the projector's legacy default (FLIP_VISER_TO_OPENCV).
-        BUG-1 (2026-06-10): the viewer must pass ``np.eye(4)`` — the c2w it
-        feeds composite() is the SAME matrix the engine renders the backdrop
-        with, whose viewing direction is the +Z column (FTheta rays have
-        rz=cos(theta)>0, see ftheta_intrinsics.ftheta_pixels_to_camera_rays).
-        The legacy Z-flip pointed the overlay camera 180° away from the
-        backdrop camera, so wireframes were mirror-projections of the tracks
-        BEHIND the ego — plausibly placed on a fore-aft symmetric street,
-        which is how the original B2 probe mis-calibrated it. Verified on
-        inceptio: bus track 405 (12 m ahead, visible in the backdrop)
-        projects to its rendered position with flip=I and is fully invisible
-        (0/8 corners) with the legacy flip; GT raw-camera validation
-        (validate_cuboid_7cam, flip=I) hugs the real vehicles.
+        New callers pass a projector implementing ``project_points`` and
+        ``project_polylines``. For backward compatibility, callers may still
+        pass an FTheta dict positionally or as ``ftheta_dict=...``; in that
+        case this constructor builds ``FthetaForwardProjector`` exactly as the
+        historical API did.
         """
-        self.projector = FthetaForwardProjector(ftheta_dict, world_to_camera_flip=world_to_camera_flip)
+        if "ftheta_dict" in legacy_kwargs:
+            if projector_or_ftheta is not None:
+                raise TypeError("pass projector_or_ftheta or ftheta_dict, not both")
+            projector_or_ftheta = legacy_kwargs.pop("ftheta_dict")
+        if legacy_kwargs:
+            raise TypeError(f"unexpected arguments: {sorted(legacy_kwargs)}")
+        if isinstance(projector_or_ftheta, dict):
+            projector = FthetaForwardProjector(
+                projector_or_ftheta, world_to_camera_flip=world_to_camera_flip
+            )
+        else:
+            projector = projector_or_ftheta
+            required = ("project_points", "project_polylines")
+            if not all(hasattr(projector, name) for name in required):
+                raise TypeError(
+                    "projector must implement project_points and project_polylines"
+                )
+        if projector is None:
+            raise TypeError("projector or ftheta_dict is required")
+        self.projector = projector
         self.renderer = OverlayRenderer(height=height, width=width)
         self.subdivide_n = int(subdivide_n)
         self.height = int(height)

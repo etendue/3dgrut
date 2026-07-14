@@ -59,7 +59,9 @@ from threedgrut_playground.utils.cuboid import (
     instance_color,
 )
 from threedgrut_playground.utils.difix_client import DifixClient
+from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
 from threedgrut_playground.utils.harmonizer_client import HarmonizerTemporalClient
+from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
 from threedgrut_playground.utils.viser_math import mat_to_wxyz
 from threedgrut_playground.utils.viser_overlay_compositor import (
     PolylineLayerSpec,
@@ -234,19 +236,25 @@ class Viser4DViewer:
                 subdivide_n=20,
                 world_to_camera_flip=np.eye(4),
             )
-            if metadata is not None:
-                if metadata.ego_poses_c2w.size > 0:
-                    ego_pts = metadata.ego_poses_c2w[:, :3, 3].astype(np.float64)
-                    if ego_pts.shape[0] >= 2:
-                        self._overlay_static_ego_polylines = [ego_pts]
-                for tid, t in metadata.tracks.items():
-                    mask = t["frame_info"]
-                    poses = t["poses"]
-                    if mask is None or poses is None or mask.sum() < 2:
-                        continue
-                    centers = poses[mask, :3, 3].astype(np.float64)
-                    if centers.shape[0] >= 2:
-                        self._overlay_static_track_polylines.append((str(t.get("class", "unknown")), centers))
+        # These caches are world-space and independent of the active camera
+        # projection. Build them even when the initial camera is not FTheta so
+        # a later dropdown switch to any calibrated image-space overlay has
+        # trajectory content available immediately.
+        if metadata is not None:
+            if metadata.ego_poses_c2w.size > 0:
+                ego_pts = metadata.ego_poses_c2w[:, :3, 3].astype(np.float64)
+                if ego_pts.shape[0] >= 2:
+                    self._overlay_static_ego_polylines = [ego_pts]
+            for tid, t in metadata.tracks.items():
+                mask = t["frame_info"]
+                poses = t["poses"]
+                if mask is None or poses is None or mask.sum() < 2:
+                    continue
+                centers = poses[mask, :3, 3].astype(np.float64)
+                if centers.shape[0] >= 2:
+                    self._overlay_static_track_polylines.append(
+                        (str(t.get("class", "unknown")), centers)
+                    )
         # T8.12-FIX: explicit viser client camera fov on connect / Reset View.
         # Reference repo tools/viser_multilayer_nurec.py:280 hard-sets
         # client.camera.fov = math.radians(90); we never did and used viser's
@@ -1150,8 +1158,32 @@ class Viser4DViewer:
             if state.model_kind is not CameraModelKind.IDEAL_PINHOLE
             else None
         )
+        self._overlay_compositor = self._build_overlay_compositor(state)
         if self._cam_dropdown is not None and self._cam_dropdown.value != state.camera_id:
             self._cam_dropdown.value = state.camera_id
+
+    @staticmethod
+    def _build_overlay_compositor(
+        state: CameraRenderState,
+    ) -> Optional[Viser4DOverlayCompositor]:
+        if state.resolution is None:
+            return None
+        width, height = state.resolution
+        if state.model_kind is CameraModelKind.FTHETA:
+            projector = FthetaForwardProjector(
+                state.ftheta_dict, world_to_camera_flip=np.eye(4)
+            )
+            subdivide_n = 20
+        elif state.model_kind is CameraModelKind.OPENCV_PINHOLE:
+            projector = PinholeForwardProjector(
+                state.opencv_pinhole_dict, world_to_camera_flip=np.eye(4)
+            )
+            subdivide_n = 4
+        else:
+            return None
+        return Viser4DOverlayCompositor(
+            projector, height=height, width=width, subdivide_n=subdivide_n
+        )
 
     def _set_active_camera(
         self, cam_id: str, t_us: int, *, snap_clients: bool = True

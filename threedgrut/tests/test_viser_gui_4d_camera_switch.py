@@ -96,6 +96,12 @@ def _bypass_viewer(mod):
     viewer.opencv_pinhole_rays = None
     viewer.opencv_pinhole_render_wh = None
     viewer._overlay_compositor = None
+    viewer._overlay_static_ego_polylines = []
+    viewer._overlay_static_track_polylines = []
+    viewer.h_cuboid_lines = None
+    viewer.h_ego_traj = None
+    viewer.h_track_trajectories = None
+    viewer._cuboid_label_handles = {}
     viewer._current_dropdown_cam = None
     viewer._cam_dropdown = None
     viewer.need_update = False
@@ -149,6 +155,19 @@ def test_calibrated_camera_uses_native_render_resolution(viewer_module):
     assert viewer._active_render_wh == (6, 4)
     viewer._set_active_camera("legacy", 500_000, snap_clients=False)
     assert viewer._active_render_wh is None
+
+
+def test_calibrated_camera_switch_builds_matching_overlay_projector(viewer_module):
+    from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
+    from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
+
+    viewer = _bypass_viewer(viewer_module)
+    viewer._set_active_camera("wide", 0, snap_clients=False)
+    assert isinstance(viewer._overlay_compositor.projector, PinholeForwardProjector)
+    viewer._set_active_camera("fish_front", 0, snap_clients=False)
+    assert isinstance(viewer._overlay_compositor.projector, FthetaForwardProjector)
+    viewer._set_active_camera("legacy", 0, snap_clients=False)
+    assert viewer._overlay_compositor is None
 
 
 def test_set_active_camera_rejects_unknown_camera(viewer_module):

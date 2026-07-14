@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 from threedgrut_playground.utils.cuboid import cuboid_world_edges
+from threedgrut_playground.utils.ftheta_projector import FthetaForwardProjector
+from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector
 from threedgrut_playground.utils.viser_overlay_compositor import (
     PolylineLayerSpec,
     Viser4DOverlayCompositor,
@@ -27,6 +29,37 @@ def _ftheta_dict():
         "max_angle": np.pi / 2 - 0.01,
         "linear_cde": np.array([1.0, 0.0, 0.0], dtype=np.float32),
     }
+
+
+def _pinhole_dict():
+    return {
+        "resolution": np.array([1920, 1080], dtype=np.int64),
+        "principal_point": np.array([960.0, 540.0], dtype=np.float64),
+        "focal_length": np.array([800.0, 800.0], dtype=np.float64),
+        "radial_coeffs": np.zeros(6, dtype=np.float64),
+        "tangential_coeffs": np.zeros(2, dtype=np.float64),
+        "thin_prism_coeffs": np.zeros(4, dtype=np.float64),
+    }
+
+
+@pytest.mark.parametrize(
+    "projector",
+    [
+        FthetaForwardProjector(_ftheta_dict(), world_to_camera_flip=np.eye(4)),
+        PinholeForwardProjector(_pinhole_dict(), world_to_camera_flip=np.eye(4)),
+    ],
+)
+def test_compositor_accepts_calibrated_projector(projector):
+    cmp = Viser4DOverlayCompositor(projector, height=1080, width=1920)
+    backdrop = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+    layer = PolylineLayerSpec(
+        name="axis",
+        polylines_world=[np.array([[-1.0, 0.0, 10.0], [1.0, 0.0, 10.0]])],
+        color=(0, 255, 0, 255),
+    )
+    out = cmp.composite(backdrop, [layer], np.eye(4))
+    assert out.shape == backdrop.shape
+    assert np.any(out != backdrop)
 
 
 def test_compositor_empty_layers_returns_backdrop():
