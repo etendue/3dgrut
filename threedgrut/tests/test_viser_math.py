@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from threedgrut_playground.utils.viser_math import mat_to_wxyz
+from threedgrut_playground.utils.viser_math import mat_to_wxyz, slerp_wxyz, wxyz_to_mat
 
 
 def _quat_to_mat(q: np.ndarray) -> np.ndarray:
@@ -68,3 +68,25 @@ def test_canonical_sign_positive_w():
     q = mat_to_wxyz(R)
     # The canonical 180°-z quaternion is (0, 0, 0, 1); allow w very near 0.
     assert q[0] >= 0.0
+
+
+def test_wxyz_to_mat_roundtrip():
+    c2w = np.eye(4, dtype=np.float64)
+    angle = np.deg2rad(70.0)
+    c2w[:3, :3] = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    rebuilt = wxyz_to_mat(mat_to_wxyz(c2w))
+    np.testing.assert_allclose(rebuilt[:3, :3], c2w[:3, :3], atol=1e-6)
+
+
+def test_slerp_wxyz_midpoint_short_arc():
+    q0 = np.array([1.0, 0.0, 0.0, 0.0])
+    q1 = np.array([0.0, 0.0, 0.0, 1.0])
+    q = slerp_wxyz(q0, q1, 0.5)
+    R = wxyz_to_mat(q)[:3, :3]
+    np.testing.assert_allclose(R[:2, :2], [[0.0, -1.0], [1.0, 0.0]], atol=1e-5)
