@@ -87,12 +87,24 @@ def _mock_dataset(
         )
     camera_sensor = SimpleNamespace(frames_timestamps_us=raw_ts)
     seq_id = "test_seq"
+    rig_poses = poses.copy()
+    rig_poses[:, 0, 3] -= 4.0
+    rig_poses[:, 2, 3] = 0.0
+
+    class _PoseGraph:
+        def evaluate_poses(self, source, target, timestamps):
+            assert source == "rig"
+            assert target == "world"
+            return rig_poses[: len(np.atleast_1d(timestamps))]
+
     ds = SimpleNamespace(
         sequence_id=seq_id,
         camera_ids=["front_long"],
         camera_train_frame_indices={"front_long": frame_indices},
         sequence_camera_sensors={seq_id: {"front_long": camera_sensor}},
         sequence_camera_models={seq_id: {"front_long": camera_model}},
+        sequence_loaders={seq_id: SimpleNamespace(pose_graph=_PoseGraph())},
+        T_world_to_world_global=np.eye(4, dtype=np.float64),
         get_poses=lambda: poses,
     )
     if with_lidar:
@@ -210,6 +222,12 @@ def test_extract_smoke(real_conf):
     assert md["sequence_id"] == "test_seq"
     # ego
     assert md["ego"]["poses_c2w"].shape == (5, 4, 4)
+    assert md["ego"]["rig_poses_c2w"].shape == (5, 4, 4)
+    assert torch.allclose(md["ego"]["rig_poses_c2w"][:, 2, 3], torch.zeros(5))
+    assert not torch.allclose(
+        md["ego"]["rig_poses_c2w"][:, :3, 3],
+        md["ego"]["poses_c2w"][:, :3, 3],
+    )
     assert md["ego"]["frame_timestamps_us"].shape == (5,)
     assert md["ego"]["primary_camera_id"] == "front_long"
     assert md["ego"]["primary_camera_aspect"] == pytest.approx(1600.0 / 900.0)

@@ -36,7 +36,7 @@ class FourDMetadata:
 
     schema_version: int
     sequence_id: str
-    ego_poses_c2w: np.ndarray  # (N, 4, 4) float32
+    ego_poses_c2w: np.ndarray  # (N, 4, 4) float32, primary camera→world
     ego_frame_timestamps_us: np.ndarray  # (N,) int64
     ego_primary_camera_id: str
     ego_primary_fov_y_rad: float
@@ -63,6 +63,7 @@ class FourDMetadata:
     initial_c2w: np.ndarray
     t_us_first: int
     t_us_last: int
+    ego_rig_poses_c2w: Optional[np.ndarray] = None  # rig/body→world
 
     @classmethod
     def from_ckpt(cls, ckpt: dict) -> Optional["FourDMetadata"]:
@@ -97,6 +98,11 @@ class FourDMetadata:
             schema_version=int(viz.get("schema_version", 1)),
             sequence_id=str(viz.get("sequence_id", "unknown")),
             ego_poses_c2w=_to_np(ego.get("poses_c2w")).astype(np.float32),
+            ego_rig_poses_c2w=(
+                _to_np(ego.get("rig_poses_c2w")).astype(np.float32)
+                if ego.get("rig_poses_c2w") is not None
+                else None
+            ),
             ego_frame_timestamps_us=_to_np(ego.get("frame_timestamps_us")).astype(np.int64),
             ego_primary_camera_id=str(ego.get("primary_camera_id", "primary")),
             ego_primary_fov_y_rad=float(ego.get("primary_camera_fov_y_rad", 0.78)),
@@ -205,3 +211,10 @@ class FourDMetadata:
         if idx > 0 and abs(int(ts[idx - 1]) - t_us) < abs(int(ts[idx]) - t_us):
             idx -= 1
         return self.ego_poses_c2w[idx]
+
+    def ego_trajectory_positions(self) -> np.ndarray:
+        """Return vehicle/rig origins, with legacy camera-center fallback."""
+        poses = self.ego_rig_poses_c2w
+        if poses is None or poses.size == 0:
+            poses = self.ego_poses_c2w
+        return poses[:, :3, 3]

@@ -215,6 +215,31 @@ def test_follow_camera_midpoint_uses_interpolated_pose(viewer_module):
     assert viewer._active_camera_state.pose_sample.interpolated is True
 
 
+def test_hydrate_ego_rig_poses_uses_primary_camera_manifest_entry(viewer_module):
+    meta = SimpleNamespace(
+        ego_primary_camera_id="wide",
+        ego_poses_c2w=np.zeros((2, 4, 4), dtype=np.float32),
+        ego_rig_poses_c2w=None,
+    )
+    rig = np.tile(np.eye(4, dtype=np.float32)[None], (2, 1, 1))
+    rig[:, 2, 3] = -2.3
+    entries = {"wide": {"rig_poses_c2w": rig}}
+
+    assert viewer_module._hydrate_ego_rig_poses(meta, entries) is True
+    np.testing.assert_allclose(meta.ego_rig_poses_c2w, rig)
+
+
+def test_hydrate_ego_rig_poses_rejects_wrong_length(viewer_module):
+    meta = SimpleNamespace(
+        ego_primary_camera_id="wide",
+        ego_poses_c2w=np.zeros((2, 4, 4), dtype=np.float32),
+        ego_rig_poses_c2w=None,
+    )
+    entries = {"wide": {"rig_poses_c2w": np.zeros((3, 4, 4), dtype=np.float32)}}
+    assert viewer_module._hydrate_ego_rig_poses(meta, entries) is False
+    assert meta.ego_rig_poses_c2w is None
+
+
 def test_set_active_camera_rejects_unknown_camera(viewer_module):
     viewer = _bypass_viewer(viewer_module)
     with pytest.raises(KeyError, match="unknown camera"):

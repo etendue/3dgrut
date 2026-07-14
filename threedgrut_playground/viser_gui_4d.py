@@ -243,7 +243,7 @@ class Viser4DViewer:
         # trajectory content available immediately.
         if metadata is not None:
             if metadata.ego_poses_c2w.size > 0:
-                ego_pts = metadata.ego_poses_c2w[:, :3, 3].astype(np.float64)
+                ego_pts = metadata.ego_trajectory_positions().astype(np.float64)
                 if ego_pts.shape[0] >= 2:
                     self._overlay_static_ego_polylines = [ego_pts]
             for tid, t in metadata.tracks.items():
@@ -882,7 +882,7 @@ class Viser4DViewer:
         assert self.meta is not None
         if self.meta.ego_poses_c2w.size == 0:
             return
-        pts = self.meta.ego_poses_c2w[:, :3, 3].astype(np.float32)
+        pts = self.meta.ego_trajectory_positions().astype(np.float32)
         # BUG-1c (2026-06-10): in FTheta mode the trajectory polyline rides
         # the overlay path (_collect_overlay_layer_specs) so it shares the
         # backdrop's fisheye projection — the 3D line_segments primitive was
@@ -1944,6 +1944,13 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
             c2w_native = np.asarray(c2w_native, dtype=np.float64).reshape(-1, 4, 4)
             c2w_wg = np.einsum("ij,njk->nik", T_w2wg, c2w_native).astype(np.float32)
             ts = np.asarray(sensor.frames_timestamps_us)[np.asarray(frame_indices), end_col].astype(np.int64)
+            # Vehicle/rig origin at exactly the same camera timestamps. This is
+            # distinct from c2w: the latter is the sensor optical center.
+            rig_native = ds.sequence_loaders[seq_id].pose_graph.evaluate_poses(
+                "rig", "world", ts.astype(np.uint64)
+            )
+            rig_native = np.asarray(rig_native, dtype=np.float64).reshape(-1, 4, 4)
+            rig_c2w_wg = np.einsum("ij,njk->nik", T_w2wg, rig_native).astype(np.float32)
             # Per-camera FTheta intrinsics (so dropdown switch actually changes
             # what the engine renders, not just the viewer pose). Falls back
             # to None for non-FTheta cameras (pinhole/distorted) — engine then
@@ -2005,6 +2012,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
                 print(f"[viz_4d] cam {cam_id}: intrinsics extract failed ({e})", flush=True)
             out[cam_id] = {
                 "c2w": c2w_wg,
+                "rig_poses_c2w": rig_c2w_wg,
                 "timestamps_us": ts,
                 "ftheta_dict": ftheta_dict,
                 "resolution": resolution,
@@ -2022,6 +2030,23 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
     except Exception as e:
         print(f"[viz_4d] multi-camera load failed: {e}", flush=True)
         return {}
+
+
+def _hydrate_ego_rig_poses(metadata, multi_cam_poses: dict) -> bool:
+    """Fill legacy checkpoint metadata with manifest-derived rig poses."""
+    if metadata is None or metadata.ego_rig_poses_c2w is not None:
+        return False
+    entry = multi_cam_poses.get(metadata.ego_primary_camera_id)
+    if not entry:
+        return False
+    rig = entry.get("rig_poses_c2w")
+    if rig is None:
+        return False
+    rig = np.asarray(rig, dtype=np.float32)
+    if rig.shape != metadata.ego_poses_c2w.shape:
+        return False
+    metadata.ego_rig_poses_c2w = rig
+    return True
 
 
 def _load_metadata(ckpt: dict, dataset_path: Optional[str], default_config: str) -> Optional[FourDMetadata]:
@@ -2821,6 +2846,12 @@ def main() -> None:
     multi_cam_poses = _load_multi_cam_poses(args.dataset_path, args.default_gs_config)
     if multi_cam_poses:
         print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available " f"for dropdown / Follow Camera")
+        if _hydrate_ego_rig_poses(metadata, multi_cam_poses):
+            print(
+                "[viz_4d] Ego trajectory uses manifest rig/body origins "
+                "(not primary-camera optical centers)",
+                flush=True,
+            )
 
     # E2.7 P1/P4 diagnostic: dump NCore metadata frame origin vs USDZ gaussian
     # center side-by-side so the operator can immediately tell if the two are
