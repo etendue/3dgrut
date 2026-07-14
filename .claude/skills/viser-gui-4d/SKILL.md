@@ -65,8 +65,8 @@ extend / relaunch).
 
 ```bash
 ssh <host> "export PATH=<env-bin>:\$PATH && export CUDA_VISIBLE_DEVICES=0 \
-  && cd <repo> && rm -f /tmp/viser_<tag>.log \
-  && nohup timeout 3600 python threedgrut_playground/viser_gui_4d.py \
+  && cd <repo> && export PYTHONPATH=\$PWD && rm -f /tmp/viser_<tag>.log \
+  && nohup timeout 3600 python -m threedgrut_playground.viser_gui_4d \
        --gs_object <ckpt.pt> --dataset_path <manifest.json> --port 8090 \
        --renderer 3dgut \
        > /tmp/viser_<tag>.log 2>&1 & echo PID \$!"
@@ -136,3 +136,21 @@ a live viewer. Trust the port + GPU numbers over pgrep counts.
 - **Fourier-albedo / poseopt ckpts render correctly** — time-varying albedo and dynamic
   poses both resolve their frame `t` from the same `timestamp_us → _resolve_pose_idx`
   path the viewer already drives, so no special handling is needed.
+- **Mixed pinhole + FTheta state was fixed on `fix/viser-mixed-camera` (2026-07-14).**
+  Camera selection now resolves one `CameraRenderState`: dropdown, client pose, FTheta or
+  OpenCVPinhole intrinsics/rays, native render resolution, overlay projector and frustum
+  all identify the same camera. The C4 switch matrix fisheye → wide → tele → rear-fisheye
+  → cross-left → wide passed on inceptio. Always inspect the disabled **Camera status**
+  field after switching; it reports camera/model/resolution/pose source/overlay.
+- **Follow Camera now uses SE(3) interpolation.** Translation is linear and rotation uses
+  shortest-arc quaternion SLERP. Camera status reports left/right frames, alpha, nearest
+  timestamp error and warns when the source-frame gap exceeds 250 ms.
+- **Worktree launch import pitfall.** An editable install may still resolve package modules
+  from the main checkout. In a remote worktree, prefer `PYTHONPATH=$PWD python -m
+  threedgrut_playground.viser_gui_4d`; direct `python threedgrut_playground/viser_gui_4d.py`
+  can fail to import newly-added sibling modules even though the files are present.
+- **Radial native/viewer parity still requires exact frame dumps.**
+  `scripts/validate_viser_render_parity.py` compares matching UI-free PNG trees and reports
+  full/center/peripheral MAE+PSNR. Do not compare browser screenshots to native renders:
+  browser scaling and the GUI make those numbers meaningless. If no deterministic viewer
+  dump exists, report the parity evidence as missing rather than inventing a score.
