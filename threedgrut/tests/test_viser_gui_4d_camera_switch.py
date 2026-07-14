@@ -170,6 +170,51 @@ def test_calibrated_camera_switch_builds_matching_overlay_projector(viewer_modul
     assert viewer._overlay_compositor is None
 
 
+def test_status_text_identifies_projection_and_pose_source(viewer_module):
+    viewer = _bypass_viewer(viewer_module)
+    state = viewer._set_active_camera("fish_front", 500_000, snap_clients=False)
+    text = viewer._active_camera_status_text(state)
+    assert "camera: fish_front" in text
+    assert "model: FTheta" in text
+    assert "render: 6×4" in text
+    assert "interpolated" in text
+    assert "overlay: FTheta image-space" in text
+
+
+def test_status_text_warns_on_large_pose_gap(viewer_module):
+    viewer = _bypass_viewer(viewer_module)
+    viewer._multi_cam_poses["gappy"] = _entry(opencv_tag=4.0)
+    viewer._multi_cam_poses["gappy"]["timestamps_us"] = np.array([0, 600_000], dtype=np.int64)
+    state = viewer._set_active_camera("gappy", 300_000, snap_clients=False)
+    text = viewer._active_camera_status_text(state)
+    assert "WARNING" in text
+    assert "600.0 ms" in text
+
+
+def test_ego_frustum_uses_current_camera_state(viewer_module):
+    viewer = _bypass_viewer(viewer_module)
+    viewer.meta = SimpleNamespace(ego_pose_at=lambda _: np.eye(4, dtype=np.float32))
+    viewer.h_ego_frustum = SimpleNamespace(wxyz=None, position=None)
+    viewer._set_active_camera("fish_rear", 500_000, snap_clients=False)
+    viewer._update_ego_frustum(500_000)
+    np.testing.assert_allclose(viewer.h_ego_frustum.position, [65.0, 0.0, 0.0])
+
+
+def test_follow_camera_midpoint_uses_interpolated_pose(viewer_module):
+    viewer = _bypass_viewer(viewer_module)
+    camera = SimpleNamespace(
+        wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+        position=np.array([-1.0, 0.0, 0.0]),
+        look_at=np.zeros(3),
+        up_direction=np.array([0.0, -1.0, 0.0]),
+        fov=0.0,
+    )
+    viewer.server = SimpleNamespace(get_clients=lambda: {"c": SimpleNamespace(camera=camera)})
+    viewer._set_active_camera("wide", 500_000, snap_clients=True)
+    np.testing.assert_allclose(camera.position, [5.0, 0.0, 0.0], atol=1e-6)
+    assert viewer._active_camera_state.pose_sample.interpolated is True
+
+
 def test_set_active_camera_rejects_unknown_camera(viewer_module):
     viewer = _bypass_viewer(viewer_module)
     with pytest.raises(KeyError, match="unknown camera"):

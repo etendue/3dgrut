@@ -168,6 +168,7 @@ class Viser4DViewer:
         self._follow_camera_enabled: bool = False
         self._cam_dropdown = None
         self._show_follow_cam = None
+        self._camera_status = None
         self._current_dropdown_cam: Optional[str] = None
         self._active_camera_state: Optional[CameraRenderState] = None
         self._active_render_wh: Optional[tuple[int, int]] = None
@@ -769,6 +770,11 @@ class Viser4DViewer:
                 "Follow Camera",
                 False,
             )
+            self._camera_status = self.server.gui.add_text(
+                "Camera status",
+                initial_value="not resolved",
+                disabled=True,
+            )
             # BUG-1c (2026-06-10): the "FTheta overlay (debug)" toggle is
             # GONE. In FTheta mode the overlay is the ONLY correct projection
             # path (BUG-1/1b/1c verified); the legacy pinhole line_segments
@@ -1104,22 +1110,22 @@ class Viser4DViewer:
         assert self.meta is not None
         if self.h_ego_frustum is None:
             return
-        # E2.7 P4 fix: when --initial_cam_id is given and present in
-        # multi_cam_poses, use THAT camera's c2w as the ego-frustum pose.
-        # Default NCore meta.ego_pose_at returns the primary camera which is
-        # the alphabetical first sensor (camera_cross_left_120fov) — its
-        # mount points down-left (A-pillar blindspot coverage), making the
-        # frustum visually "point at the ground" instead of "point forward".
-        # The user expects a dashcam-style forward frustum.
+        # The frustum is a selected-camera widget, not a startup-camera widget.
+        # Re-resolve at the current timestamp so it shares the same interpolated
+        # pose as Follow Camera and the Gaussian backdrop.
         pose = None
-        if self._initial_cam_id and self._initial_cam_id in self._multi_cam_poses:
-            entry = self._multi_cam_poses[self._initial_cam_id]
-            c2w_arr = entry["c2w"]
-            ts_arr = entry["timestamps_us"]
-            if c2w_arr.shape[0] > 0 and ts_arr.size > 0:
-                idx = int(np.searchsorted(ts_arr, int(t_us)))
-                idx = max(0, min(idx, ts_arr.size - 1))
-                pose = c2w_arr[idx]
+        if (
+            self._current_dropdown_cam is not None
+            and self._current_dropdown_cam in self._multi_cam_poses
+        ):
+            state = resolve_camera_render_state(
+                self._current_dropdown_cam,
+                self._multi_cam_poses[self._current_dropdown_cam],
+                int(t_us),
+            )
+            pose = state.pose_sample.c2w
+        elif self._active_camera_state is not None:
+            pose = self._active_camera_state.pose_sample.c2w
         if pose is None:
             pose = self.meta.ego_pose_at(t_us)
         self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
@@ -1137,6 +1143,35 @@ class Viser4DViewer:
         if metadata_primary in options:
             return str(metadata_primary)
         return str(options[0])
+
+    @staticmethod
+    def _active_camera_status_text(state: CameraRenderState) -> str:
+        sample = state.pose_sample
+        resolution = (
+            f"{state.resolution[0]}×{state.resolution[1]}"
+            if state.resolution is not None
+            else "free"
+        )
+        pose_mode = (
+            f"interpolated {sample.left_idx}→{sample.right_idx} "
+            f"α={sample.alpha:.3f}"
+            if sample.interpolated
+            else f"frame {sample.left_idx}"
+        )
+        overlay = (
+            f"{state.model_kind.value} image-space"
+            if state.model_kind is not CameraModelKind.IDEAL_PINHOLE
+            else "browser ideal-pinhole"
+        )
+        warning = ""
+        if sample.source_gap_us > 250_000:
+            warning = f" | WARNING source gap={sample.source_gap_us / 1000.0:.1f} ms"
+        return (
+            f"camera: {state.camera_id} | model: {state.model_kind.value} | "
+            f"render: {resolution} | pose: {pose_mode} | "
+            f"nearest Δt={sample.nearest_dt_us / 1000.0:.1f} ms | "
+            f"overlay: {overlay}{warning}"
+        )
 
     def _apply_camera_state(self, state: CameraRenderState) -> None:
         """Apply every projection field together so no camera state leaks."""
@@ -1161,6 +1196,9 @@ class Viser4DViewer:
         self._overlay_compositor = self._build_overlay_compositor(state)
         if self._cam_dropdown is not None and self._cam_dropdown.value != state.camera_id:
             self._cam_dropdown.value = state.camera_id
+        camera_status = getattr(self, "_camera_status", None)
+        if camera_status is not None:
+            camera_status.value = self._active_camera_status_text(state)
 
     @staticmethod
     def _build_overlay_compositor(
