@@ -76,11 +76,11 @@ C4 viewer 启动时同时出现：
 | MC-3 | FTheta → pinhole 不清 stale FTheta state | ✅ 已修复 | P0 | 切到 OpenCVPinhole 时显式清空 FTheta fields；transition test 通过 |
 | MC-4 | OpenCVPinhole intrinsics/rays 不随 dropdown 更新 | ✅ 已修复 | P0 | intrinsics、per-pixel rays 与 native resolution 随 camera 原子切换 |
 | MC-5 | overlay compositor 不能从 `None` 动态创建 | ✅ 已修复 | P0 | OpenCVPinhole → FTheta 可动态创建 compositor；world-space trajectory cache 与初始 model 解耦 |
-| MC-6 | 非 FTheta distorted pinhole overlay 仍用 browser ideal pinhole | ✅ 代码已修复，待扩大人工复核 | P1 | calibrated OpenCVPinhole 已接 `PinholeForwardProjector`；单测与 C4 抽查通过，但外围多目标对齐仍应接受人工回归反馈 |
+| MC-6 | 非 FTheta distorted pinhole overlay 投影公式 | 🔴 重新打开 | P1 | `PinholeForwardProjector` 已证实把 6 项 OpenCV rational radial coefficients 错当普通 polynomial，且忽略 thin-prism / SDK validity gate；wide 外围可数值发散，需按 NCore SDK parity 重写 |
 | MC-7 | ego frustum 绑定 `_initial_cam_id` 而非当前 dropdown camera | ✅ 已修复 | P1 | frustum 重新解析当前 selected camera state；单测通过 |
 | MC-8 | Follow Camera nearest-frame 阶梯跳动 | 🟡 核心问题已修，数据缺帧仍存在 | P1 | nearest snap 已改为 translation lerp + rotation SLERP；200–600 ms source gap 无法凭空恢复，只显示 warning，仍需人工评估大 gap 观感 |
 | MC-9 | Camera dropdown / engine state 缺少可见诊断 | ✅ 已修复 | P1 | Camera status 显示 camera/model/resolution/pose interpolation/Δt/overlay/warning |
-| MC-10 | “中清边糊”归因不明 | 🟡 未关闭 | P1 | comparator 已实现，但缺 deterministic UI-free viewer frame dump，尚无合法 native/viewer center-periphery parity 数字 |
+| MC-10 | “中清边糊”/外围眩晕 | 🟡 高置信根因已定位，待 A/B | P1 | OpenCV rational wide camera 约 35–37% 外围 pixels 为 finite inverse rays、但 forward projection `valid=False`；dataset 未屏蔽这些 supervision pixels。PAI/FTheta 以成对 polynomial + `max_angle` 共用有效域，无同类症状。详见 [`inceptio_opencv_rational_peripheral_blur_analysis_2026-07-14.md`](inceptio_opencv_rational_peripheral_blur_analysis_2026-07-14.md) |
 | MC-11 | mixed-camera 自动回归覆盖缺失 | ✅ 已修复 | P0 | 新增 mixed transition、resolution、overlay lifecycle、frustum、interpolation 回归测试 |
 
 > 本表记录 `0159698..66f668a` mixed-camera + rig-origin 修复及 C4 实机验收证据。若人工操作可稳定复现与表中“已修复”相冲突的现象，对应条目应立即重新打开，而不是用现有单测结论否定人工观察。
