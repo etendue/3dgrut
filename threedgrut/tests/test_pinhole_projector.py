@@ -201,3 +201,167 @@ def test_scalar_focal_length_accepted():
     assert vis[0]
     assert uv[0, 0] == pytest.approx(320.0)
     assert uv[0, 1] == pytest.approx(240.0)
+
+
+# ---- Test 12: six radial coefficients use rational numerator/denominator --
+def _rational_pinhole_dict():
+    """Large image so visibility does not hide numeric differences."""
+    return {
+        "resolution": np.array([4000, 3000], dtype=np.int64),
+        "principal_point": np.array([2000.0, 1500.0]),
+        "focal_length": np.array([1000.0, 1000.0]),
+        "radial_coeffs": np.array([0.10, 0.02, 0.003, 0.04, 0.005, 0.0006]),
+        "tangential_coeffs": np.zeros(2),
+        "thin_prism_coeffs": np.zeros(4),
+    }
+
+
+def test_six_radial_coefficients_use_rational_denominator():
+    """OpenCV rational model: icD = (1 + k1·r² + k2·r⁴ + k3·r⁶) /
+                                 (1 + k4·r² + k5·r⁴ + k6·r⁶)
+
+    Current code treats k4-k6 as polynomial powers; this test should RED.
+    """
+    cfg = _rational_pinhole_dict()
+    proj = PinholeForwardProjector(cfg)
+    point = np.array([[0.5, 0.25, 1.0]])
+
+    uv, visible = proj.project_points(point, np.eye(4))
+
+    x, y = 0.5, 0.25
+    r2 = x * x + y * y
+    k1, k2, k3, k4, k5, k6 = cfg["radial_coeffs"]
+    numerator = 1.0 + r2 * (k1 + r2 * (k2 + r2 * k3))
+    denominator = 1.0 + r2 * (k4 + r2 * (k5 + r2 * k6))
+    scale = numerator / denominator
+    expected = np.array(
+        [[2000.0 + 1000.0 * x * scale, 1500.0 + 1000.0 * y * scale]]
+    )
+    np.testing.assert_allclose(uv, expected, atol=1e-9)
+    assert visible[0]
+
+
+# ---- Test 13: denominator-near-boundary regression test -------------------
+# ---- Test 14: thin-prism coefficients match OpenCV model ------------------
+def test_thin_prism_coefficients_match_opencv_model():
+    """Thin-prism terms add r²·(s1 + r²·s2) in x and r²·(s3 + r²·s4) in y.
+
+    Current code ignores thin_prism_coeffs; this test should RED.
+    """
+    cfg = _identity_pinhole_dict()
+    cfg["thin_prism_coeffs"] = np.array([0.01, -0.002, -0.015, 0.003])
+    proj = PinholeForwardProjector(cfg)
+    point = np.array([[1.0, 0.5, 5.0]])
+
+    uv, visible = proj.project_points(point, np.eye(4))
+
+    x, y = 0.2, 0.1
+    r2 = x * x + y * y
+    dx = r2 * (0.01 + r2 * -0.002)
+    dy = r2 * (-0.015 + r2 * 0.003)
+    expected = np.array([[320.0 + 500.0 * (x + dx), 240.0 + 500.0 * (y + dy)]])
+    np.testing.assert_allclose(uv, expected, atol=1e-9)
+    assert visible[0]
+
+
+# ---- Test 15: radial scale outside NCore trust interval is invalid ---------
+def test_radial_scale_outside_ncore_trust_interval_is_invalid():
+    """icD > 1.2 (strong barrel) must mark point invisible.
+
+    Current code has no trust gate; this test should RED.
+    """
+    cfg = _identity_pinhole_dict()
+    cfg["resolution"] = np.array([4000, 3000])
+    cfg["principal_point"] = np.array([2000.0, 1500.0])
+    cfg["radial_coeffs"] = np.array([0.3, 0, 0, 0, 0, 0])
+    proj = PinholeForwardProjector(cfg)
+    _, visible = proj.project_points(np.array([[1.0, 0.0, 1.0]]), np.eye(4))
+    assert not visible[0], "icD > 1.2 should be invalid"
+
+
+def test_radial_scale_below_ncore_trust_interval_is_invalid():
+    """icD < 0.8 (strong pincushion) must mark point invisible."""
+    cfg = _identity_pinhole_dict()
+    cfg["resolution"] = np.array([4000, 3000])
+    cfg["principal_point"] = np.array([2000.0, 1500.0])
+    cfg["radial_coeffs"] = np.array([-0.3, 0, 0, 0, 0, 0])
+    proj = PinholeForwardProjector(cfg)
+    _, visible = proj.project_points(np.array([[1.0, 0.0, 1.0]]), np.eye(4))
+    assert not visible[0], "icD < 0.8 should be invalid"
+
+
+# ---- Test 16: short array compatibility -----------------------------------
+def test_missing_radial_coeffs_ideal_pinhole():
+    """Zero radial coefficients -> ideal pinhole."""
+    cfg = _identity_pinhole_dict()
+    del cfg["radial_coeffs"]
+    proj = PinholeForwardProjector(cfg)
+    uv, vis = proj.project_points(np.array([[0.0, 0.0, 10.0]]), np.eye(4))
+    assert vis[0]
+    np.testing.assert_allclose(uv[0], [320.0, 240.0], atol=1e-9)
+
+
+def test_single_radial_coeff_as_numerator():
+    """[k1] should behave as numerator k1, denominator zeros."""
+    cfg = _identity_pinhole_dict()
+    cfg["radial_coeffs"] = np.array([0.1])
+    proj = PinholeForwardProjector(cfg)
+    uv, vis = proj.project_points(np.array([[1.0, 1.0, 5.0]]), np.eye(4))
+    assert vis[0]
+    # With polynomial model r=1+k1*r², numerator/denominator=1+k1*r² too
+    # since denominator = 1 + 0 = 1. Both models agree for single coeff.
+    x, y = 0.2, 0.2
+    r2 = x * x + y * y
+    expected_u = 320.0 + 500.0 * x * (1.0 + 0.1 * r2)
+    expected_v = 240.0 + 500.0 * y * (1.0 + 0.1 * r2)
+    np.testing.assert_allclose(uv[0], [expected_u, expected_v], atol=1e-9)
+
+
+def test_too_many_radial_coeffs_raises():
+    """More than 6 radial coefficients should raise ValueError."""
+    cfg = _identity_pinhole_dict()
+    cfg["radial_coeffs"] = np.arange(7, dtype=np.float64)
+    with pytest.raises(ValueError, match="6"):
+        PinholeForwardProjector(cfg)
+
+
+def test_missing_tangential_coeffs_ideal_pinhole():
+    """Missing tangential key -> treat as zeros, ideal pinhole."""
+    cfg = _identity_pinhole_dict()
+    del cfg["tangential_coeffs"]
+    proj = PinholeForwardProjector(cfg)
+    uv, vis = proj.project_points(np.array([[0.0, 0.0, 10.0]]), np.eye(4))
+    assert vis[0]
+    np.testing.assert_allclose(uv[0], [320.0, 240.0], atol=1e-9)
+
+
+def test_empty_thin_prism_tolerated():
+    """Missing or empty thin_prism_coeffs still produces pinhole projection."""
+    cfg = _identity_pinhole_dict()
+    proj = PinholeForwardProjector(cfg)
+    uv, vis = proj.project_points(np.array([[0.0, 0.0, 10.0]]), np.eye(4))
+    assert vis[0]
+    np.testing.assert_allclose(uv[0], [320.0, 240.0], atol=1e-9)
+
+
+def test_rational_denominator_near_unity_next():
+    """A config where icD ~ 1.0 but denominator != 1 must hit exact pixels.
+
+    This prevents an implementation that merely ignores coefficients 4-6
+    from passing.  Neither the numerator nor denominator equals 1.0, but
+    the ratio should yield the same result as an ideal pinhole.
+    """
+    cfg = _rational_pinhole_dict()
+    # k1=0.2, k2=0.0, k3=0.0, k4=0.2, k5=0.0, k6=0.0
+    cfg["radial_coeffs"] = np.array([0.2, 0.0, 0.0, 0.2, 0.0, 0.0])
+    proj = PinholeForwardProjector(cfg)
+    point = np.array([[0.5, 0.25, 1.0]])
+
+    uv, visible = proj.project_points(point, np.eye(4))
+
+    # icD = (1 + 0.2·r²) / (1 + 0.2·r²) = 1.0 exactly
+    # so the result must equal ideal pinhole
+    x, y = 0.5, 0.25
+    expected = np.array([[2000.0 + 1000.0 * x, 1500.0 + 1000.0 * y]])
+    np.testing.assert_allclose(uv, expected, atol=1e-9)
+    assert visible[0]

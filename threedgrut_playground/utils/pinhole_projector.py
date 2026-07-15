@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Forward projection for OpenCV pinhole cameras (with radial / tangential
-distortion) — world 3D → image 2D, numpy only.
+"""Forward projection for OpenCV pinhole cameras — world 3D → image 2D, numpy only.
 
 Mirror of ``ftheta_projector.py`` for NCore's ``OpenCVPinholeCameraModel``
 (and, when distortion is absent, the trivial pinhole case used by the viser
@@ -8,15 +7,45 @@ viewer's default browser projection). Used by the 7-camera cuboid overlay
 validation script (``scripts/validate_cuboid_7cam.py``) so the same call
 shape works for both FTheta and pinhole cameras.
 
-Distortion model matches OpenCV's ``cv2.projectPoints`` formulation:
-    r²       = x_n² + y_n²
-    radial   = 1 + k1·r² + k2·r⁴ + k3·r⁶ + k4·r⁸ + k5·r¹⁰ + ...
-    x_dist   = x_n · radial + 2·p1·x_n·y_n + p2·(r² + 2·x_n²)
-    y_dist   = y_n · radial + p1·(r² + 2·y_n²) + 2·p2·x_n·y_n
+Distortion model matches NCore / 3DGUT / OpenCV's rational model (not the
+older six-term polynomial):
 
-NCore stores ``radial_coeffs`` as an ascending list (k1, k2, k3, ...) and
-``tangential_coeffs`` as ``[p1, p2]``. ``thin_prism_coeffs`` is currently
-ignored (rare on NCore v4 vehicle cameras); add it if a real camera needs it.
+    r²       = x_n² + y_n²
+    r⁴       = r²·r²
+    r⁶       = r⁴·r²
+
+    icD_num  = 1 + k1·r² + k2·r⁴ + k3·r⁶
+    icD_den  = 1 + k4·r² + k5·r⁴ + k6·r⁶
+    icD      = icD_num / icD_den
+
+    a1       = 2·x_n·y_n
+    a2       = r² + 2·x_n²
+    a3       = r² + 2·y_n²
+
+    delta_x  = p1·a1 + p2·a2 + r²·(s1 + r²·s2)
+    delta_y  = p1·a3 + p2·a1 + r²·(s3 + r²·s4)
+
+    x_dist   = x_n·icD + delta_x
+    y_dist   = y_n·icD + delta_y
+
+The six radial coefficients (k1,k2,k3,k4,k5,k6) are **not** a six-term
+polynomial — the first three form the numerator, the last three form the
+denominator.  The "rational" name comes from this numerator/denominator form.
+
+A point is visible (visible=True) only when **all** of:
+  - camera-frame z > 0
+  - icD is finite and in the trust interval (0.8, 1.2)
+  - projected pixel is within the image rectangle
+  - uv coordinates are finite
+
+This 0.8 < icD < 1.2 trust gate matches NCore SDK's
+``OpenCVPinholeCameraModel.__compute_distortion()`` and 3DGUT's
+``cameraProjections.cuh:72-118``.  Outside this interval the radial model
+is unreliable (e.g. fringe artifacts on wide cameras) and the point is
+treated as invalid for overlay drawing.
+
+NCore stores ``radial_coeffs`` as (k1,k2,k3,k4,k5,k6),
+``tangential_coeffs`` as (p1,p2), and ``thin_prism_coeffs`` as (s1,s2,s3,s4).
 
 Pure numpy; no torch, no viser, no kaolin — Mac-testable.
 """
@@ -29,10 +58,49 @@ import numpy as np
 
 from .projector_common import subdivide_polyline
 
+# Maximum coefficient counts
+_MAX_RADIAL = 6
+_MAX_TANGENTIAL = 2
+_MAX_THIN_PRISM = 4
+
+# NCore/3DGUT radial trust interval
+_RADIAL_TRUST_LOWER = 0.8
+_RADIAL_TRUST_UPPER = 1.2
+
+
+def _pad_coefficients(values, size, name):
+    """Normalise an optional coefficient array to fixed *size*, padding with zeros.
+
+    Parameters
+    ----------
+    values : array-like or None
+        Input coefficients (e.g. [k1, k2]) or None/missing.
+    size : int
+        Desired output length.
+    name : str
+        Human-readable name for error messages.
+
+    Returns
+    -------
+    np.ndarray
+        1-D float64 array of length *size*.
+
+    Raises
+    ------
+    ValueError
+        If *values* has more than *size* elements.
+    """
+    if values is None:
+        return np.zeros(size, dtype=np.float64)
+    arr = np.asarray(values, dtype=np.float64).ravel()
+    if arr.size > size:
+        raise ValueError(f"{name} supports at most {size} coefficients, got {arr.size}")
+    return np.pad(arr, (0, size - arr.size))
+
 
 class PinholeForwardProjector:
     """Projects world-space 3D points to pixels through an OpenCV pinhole
-    + optional polynomial distortion.
+    + rational / tangential / thin-prism distortion.
 
     Defaults to ``world_to_camera_flip = identity`` because the canonical use
     case is the NCore raw-camera validation path, where ``T_camera_to_world``
@@ -74,8 +142,15 @@ class PinholeForwardProjector:
             self.fx = float(fl_arr[0])
             self.fy = float(fl_arr[1])
 
-        self.radial_coeffs = np.asarray(pinhole_dict.get("radial_coeffs", []), dtype=np.float64).ravel()
-        self.tangential_coeffs = np.asarray(pinhole_dict.get("tangential_coeffs", []), dtype=np.float64).ravel()
+        self.radial_coeffs = _pad_coefficients(
+            pinhole_dict.get("radial_coeffs"), _MAX_RADIAL, "radial_coeffs"
+        )
+        self.tangential_coeffs = _pad_coefficients(
+            pinhole_dict.get("tangential_coeffs"), _MAX_TANGENTIAL, "tangential_coeffs"
+        )
+        self.thin_prism_coeffs = _pad_coefficients(
+            pinhole_dict.get("thin_prism_coeffs"), _MAX_THIN_PRISM, "thin_prism_coeffs"
+        )
 
         if world_to_camera_flip is None:
             world_to_camera_flip = np.eye(4)
@@ -91,8 +166,11 @@ class PinholeForwardProjector:
     ) -> tuple[np.ndarray, np.ndarray]:
         """3D world points → (uv: (N, 2) pixels, visible: (N,) bool).
 
-        ``visible[i]`` is True iff cam-frame z > 0 (in front of the camera)
-        AND projected pixel is inside the image rectangle.
+        ``visible[i]`` is True iff:
+          - camera-frame z > 0 (in front of the camera)
+          - icD is finite and in the NCore trust interval (0.8, 1.2)
+          - projected pixel is inside the image rectangle
+          - uv coordinates are finite
         """
         pts = np.asarray(points_world, dtype=np.float64)
         if pts.ndim != 2 or pts.shape[1] != 3:
@@ -118,34 +196,61 @@ class PinholeForwardProjector:
         x_n = x / safe_z
         y_n = y / safe_z
 
-        if self.radial_coeffs.size > 0 or self.tangential_coeffs.size > 0:
-            r2 = x_n * x_n + y_n * y_n
-            # radial = 1 + k1·r² + k2·r⁴ + k3·r⁶ + ...
-            radial = np.ones_like(r2)
-            r_pow = r2.copy()
-            for k in self.radial_coeffs:
-                radial = radial + k * r_pow
-                r_pow = r_pow * r2
+        # ---- Rational radial distortion (NCore/3DGUT compatible) ----------
+        k1, k2, k3, k4, k5, k6 = (
+            self.radial_coeffs[0],
+            self.radial_coeffs[1],
+            self.radial_coeffs[2],
+            self.radial_coeffs[3],
+            self.radial_coeffs[4],
+            self.radial_coeffs[5],
+        )
 
-            if self.tangential_coeffs.size >= 2:
-                p1 = float(self.tangential_coeffs[0])
-                p2 = float(self.tangential_coeffs[1])
-                x_dist = x_n * radial + 2.0 * p1 * x_n * y_n + p2 * (r2 + 2.0 * x_n * x_n)
-                y_dist = y_n * radial + p1 * (r2 + 2.0 * y_n * y_n) + 2.0 * p2 * x_n * y_n
-            else:
-                x_dist = x_n * radial
-                y_dist = y_n * radial
-        else:
-            x_dist = x_n
-            y_dist = y_n
+        r2 = x_n * x_n + y_n * y_n
+        r4 = r2 * r2
+        r6 = r4 * r2
+
+        num = 1.0 + k1 * r2 + k2 * r4 + k3 * r6
+        den = 1.0 + k4 * r2 + k5 * r4 + k6 * r6
+
+        # Guard denominator zero / near-zero
+        den_safe = np.where(np.abs(den) < 1e-12, 1.0, den)
+        icD = num / den_safe
+        icD = np.where(np.abs(den) < 1e-12, np.inf, icD)
+
+        # ---- Tangential distortion ----------------------------------------
+        p1 = self.tangential_coeffs[0]
+        p2 = self.tangential_coeffs[1]
+        a1 = 2.0 * x_n * y_n
+        a2 = r2 + 2.0 * x_n * x_n
+        a3 = r2 + 2.0 * y_n * y_n
+        delta_x_tan = p1 * a1 + p2 * a2
+        delta_y_tan = p1 * a3 + p2 * a1
+
+        # ---- Thin-prism distortion ----------------------------------------
+        s1, s2, s3, s4 = (
+            self.thin_prism_coeffs[0],
+            self.thin_prism_coeffs[1],
+            self.thin_prism_coeffs[2],
+            self.thin_prism_coeffs[3],
+        )
+        delta_x_tp = r2 * (s1 + r2 * s2)
+        delta_y_tp = r2 * (s3 + r2 * s4)
+
+        # ---- Combined distorted coordinates -------------------------------
+        x_dist = x_n * icD + delta_x_tan + delta_x_tp
+        y_dist = y_n * icD + delta_y_tan + delta_y_tp
 
         u = self.fx * x_dist + self.cx
         v = self.fy * y_dist + self.cy
         uv = np.stack([u, v], axis=-1)
 
+        # ---- Visibility mask ----------------------------------------------
         z_pos = z > 0
+        valid_radial = np.isfinite(icD) & (icD > _RADIAL_TRUST_LOWER) & (icD < _RADIAL_TRUST_UPPER)
         in_bound = (u >= 0) & (u < self.width) & (v >= 0) & (v < self.height)
-        visible = z_pos & in_bound
+        uv_finite = np.isfinite(uv).all(axis=1)
+        visible = z_pos & valid_radial & in_bound & uv_finite
         return uv, visible
 
     def project_polylines(
