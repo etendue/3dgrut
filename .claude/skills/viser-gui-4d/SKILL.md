@@ -157,6 +157,7 @@ a live viewer. Trust the port + GPU numbers over pgrep counts.
   Do not try to fix this with scalar FOV tuning. The accepted current policy is no frontend
   change; an exact future solution needs a screen-space 2D calibrated view/fullscreen quad
   or nonlinear fisheye shader.
+- **OpenCVPinhole six radial coefficients are rational numerator/denominator, not six polynomial powers.** The `PinholeForwardProjector` in `threedgrut_playground/utils/pinhole_projector.py` implements the full OpenCV rational model with tangential and thin-prism terms, plus the NCore/3DGUT `0.8 < icD < 1.2` radial trust gate. When debugging overlay alignment on calibrated OpenCVPinhole cameras, verify against the NCore SDK `OpenCVPinholeCameraModel` forward projection rather than assuming ideal-pinhole behavior. NCore SDK parity for 5 real cameras was validated in `fix/viser-opencv-rational-overlay` (commit range `e5aee25..132261e`): 100% validity agreement, MAE 0.000017–0.000036 px.
 - **Radial native/viewer parity still requires exact frame dumps.**
   `scripts/validate_viser_render_parity.py` compares matching UI-free PNG trees and reports
   full/center/peripheral MAE+PSNR. Do not compare browser screenshots to native renders:
