@@ -33,42 +33,59 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import torch
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-import ncore.data as _nd  # noqa: E402
+import ncore.data.v4 as _v4  # noqa: E402
+import ncore.sensors as _sensors  # noqa: E402
 
 from threedgrut_playground.utils.pinhole_projector import PinholeForwardProjector  # noqa: E402
 
 
-def _discover_camera_ids(manifest_path: str) -> list[str]:
-    """Open the manifest and discover all ``OpenCVPinholeCameraModel`` camera ids."""
-    seq = _nd.CameraSequence(manifest_path)
+def _open_sequence(manifest_path: str):
+    """Open an NCore V4 sequence, return (loader, camera_ids)."""
+    reader = _v4.SequenceComponentGroupsReader([manifest_path])
+    loader = _v4.SequenceLoaderV4(reader)
+    return loader, list(loader.camera_ids)
+
+
+def _discover_pinhole_camera_ids(loader) -> list[str]:
+    """Discover all ``OpenCVPinholeCameraModel`` camera ids."""
     ids: list[str] = []
-    for cam_id in seq.camera_ids:
-        model = seq.camera_model(cam_id)
-        if isinstance(model, _nd.OpenCVPinholeCameraModel):
-            ids.append(cam_id)
-    return sorted(ids)
+    for cam_id in loader.camera_ids:
+        sens = loader.get_camera_sensor(cam_id)
+        params = sens.model_parameters
+        # Check by constructing a model and testing the type
+        try:
+            model = _sensors.CameraModel.from_parameters(
+                params, device="cpu", dtype=torch.float32
+            )
+            if isinstance(model, _sensors.OpenCVPinholeCameraModel):
+                ids.append(cam_id)
+        except Exception:
+            pass  # not a supported camera model for this test
+    return ids
 
 
-def _sample_pixels(width: int, height: int, stride: int) -> np.ndarray:
+def _sample_pixels(width: int, height: int, stride: int) -> torch.Tensor:
     """Build a representative set of pixel coordinates.
 
-    Returns (N, 2) int64 array of:
+    Returns (N, 2) int64 tensor of:
       - stride-grid sample
       - image centre
       - four edge midpoints (top, bottom, left, right)
       - four corners
     """
-    xs, ys = np.meshgrid(
-        np.arange(0, width, stride, dtype=np.int64),
-        np.arange(0, height, stride, dtype=np.int64),
+    xs, ys = torch.meshgrid(
+        torch.arange(0, width, stride, dtype=torch.int64),
+        torch.arange(0, height, stride, dtype=torch.int64),
+        indexing="xy",
     )
-    grid = np.stack([xs.ravel(), ys.ravel()], axis=1)
+    grid = torch.stack([xs.ravel(), ys.ravel()], dim=1)
 
-    specials = np.array(
+    specials = torch.tensor(
         [
             [width // 2, height // 2],  # centre
             [width // 2, 0],  # top edge mid
@@ -80,15 +97,18 @@ def _sample_pixels(width: int, height: int, stride: int) -> np.ndarray:
             [0, height - 1],  # bottom-left corner
             [width - 1, height - 1],  # bottom-right corner
         ],
-        dtype=np.int64,
+        dtype=torch.int64,
     )
-    return np.unique(np.vstack([grid, specials]), axis=0)
+    return torch.unique(torch.cat([grid, specials], dim=0), dim=0)
 
 
 def _build_intrinsics_dict(model_params) -> dict:
     """Build the pinhole_dict expected by PinholeForwardProjector."""
     return {
-        "resolution": model_params.resolution,
+        "resolution": (
+            int(model_params.resolution[0]),
+            int(model_params.resolution[1]),
+        ),
         "principal_point": np.asarray(model_params.principal_point, dtype=np.float64),
         "focal_length": np.asarray(model_params.focal_length, dtype=np.float64),
         "radial_coeffs": np.asarray(model_params.radial_coeffs, dtype=np.float64),
@@ -99,7 +119,7 @@ def _build_intrinsics_dict(model_params) -> dict:
 
 def validate_camera(
     camera_id: str,
-    model: _nd.OpenCVPinholeCameraModel,
+    loader,
     stride: int,
     valid_mae_threshold: float,
 ) -> dict:
@@ -107,9 +127,18 @@ def validate_camera(
 
     Returns a stats dict.
     """
-    params = model.get_parameters()
-    width = int(params.resolution[0])
-    height = int(params.resolution[1])
+    sens = loader.get_camera_sensor(camera_id)
+    params = sens.model_parameters
+    model = _sensors.CameraModel.from_parameters(
+        params, device="cpu", dtype=torch.float32
+    )
+
+    if not isinstance(model, _sensors.OpenCVPinholeCameraModel):
+        print(f"  SKIP {camera_id}: not an OpenCVPinholeCameraModel (got {type(model).__name__})", flush=True)
+        return {"camera_id": camera_id, "skipped": True}
+
+    width = int(model.resolution[0].item())
+    height = int(model.resolution[1].item())
 
     print(f"  camera={camera_id}  resolution={width}x{height}", flush=True)
 
@@ -118,25 +147,28 @@ def validate_camera(
     n_pixels = pixels.shape[0]
     print(f"    sampled {n_pixels} pixels (stride={stride})", flush=True)
 
-    # 2. SDK: pixels → rays → pixels round-trip
-    rays = model.pixels_to_camera_rays(pixels)
-    sdk_pixels, sdk_valid = model.camera_rays_to_pixels(rays)
+    # 2. SDK: pixels -> rays -> pixels round-trip
+    rays = model.pixels_to_camera_rays(pixels)  # (N, 3) tensor
+    sdk_image_result = model.camera_rays_to_image_points(rays)
+    sdk_pixel_result = model.camera_rays_to_pixels(rays)
 
-    sdk_pixels_arr = np.asarray(sdk_pixels, dtype=np.float64)
-    sdk_valid_arr = np.asarray(sdk_valid, dtype=bool)
+    # Float image points are the numerical oracle for the projector. Integer
+    # pixels are floor(image_points), so comparing against them introduces the
+    # expected ~0.5 px pixel-centre offset and is only a round-trip sanity check.
+    sdk_image_points_arr = sdk_image_result.image_points.cpu().numpy().astype(np.float64)
+    sdk_pixels_arr = sdk_pixel_result.pixels.cpu().numpy().astype(np.float64)
+    sdk_valid_arr = sdk_image_result.valid_flag.cpu().numpy().astype(bool)
     n_sdk_valid = int(sdk_valid_arr.sum())
 
-    # 3. NumPy projector: feed rays as world points with identity c2w
-    rays_np = np.asarray(rays, dtype=np.float64)  # (N, 3) camera-space rays
+    # 3. NumPy projector: feed rays as world rays with identity c2w
+    rays_np = rays.cpu().numpy().astype(np.float64)  # (N, 3) camera-space rays
     intrinsics = _build_intrinsics_dict(params)
     proj = PinholeForwardProjector(intrinsics, world_to_camera_flip=np.eye(4))
     uv_proj, visible_proj = proj.project_points(rays_np, np.eye(4))
 
     # 4. Compare visibility flags
-    # SDK valid_flag = True means the forward projection converged
-    # within the rational model's domain.
-    # PinholeForwardProjector visible includes image-bound check.
-    # For comparison we need to apply the same image-bound check to SDK.
+    # SDK valid_flag = True means forward projection converged within the rational model's domain.
+    # Apply image-bound check to SDK for fair comparison.
     sdk_in_bound = (
         (sdk_pixels_arr[:, 0] >= 0)
         & (sdk_pixels_arr[:, 0] < width)
@@ -155,12 +187,17 @@ def validate_camera(
     n_both = int(both_visible.sum())
 
     if n_both > 0:
-        diffs = np.abs(uv_proj[both_visible] - sdk_pixels_arr[both_visible])
+        diffs = np.abs(uv_proj[both_visible] - sdk_image_points_arr[both_visible])
         mae = float(diffs.mean())
         max_err = float(diffs.max())
+        integer_roundtrip = np.array_equal(
+            np.floor(uv_proj[both_visible]).astype(np.int32),
+            sdk_pixels_arr[both_visible].astype(np.int32),
+        )
     else:
         mae = float("nan")
         max_err = float("nan")
+        integer_roundtrip = True
 
     print(
         f"    SDK valid={n_sdk_valid}/{n_pixels}  SDK visible={n_sdk_visible}/{n_pixels}  "
@@ -169,7 +206,8 @@ def validate_camera(
     )
     print(
         f"    agreement={n_agree}/{n_pixels} ({agreement_pct:.2f}%)  "
-        f"both-visible={n_both}  MAE={mae:.6f}px  max_err={max_err:.6f}px",
+        f"both-visible={n_both}  image-point MAE={mae:.6f}px  "
+        f"max_err={max_err:.6f}px  integer_roundtrip={integer_roundtrip}",
         flush=True,
     )
 
@@ -186,7 +224,8 @@ def validate_camera(
         "n_both_visible": n_both,
         "mae_px": mae,
         "max_err_px": max_err,
-        "passed": agreement_pct >= 99.5 and mae < valid_mae_threshold,
+        "integer_roundtrip": integer_roundtrip,
+        "passed": agreement_pct >= 99.5 and mae < valid_mae_threshold and integer_roundtrip,
     }
 
 
@@ -210,29 +249,27 @@ def main(argv=None) -> int:
 
     manifest_path = str(Path(args.manifest).expanduser().resolve())
 
-    # 1. Discover cameras
+    # 1. Open sequence and discover cameras
+    loader, all_camera_ids = _open_sequence(manifest_path)
+
     if args.camera_ids:
         camera_ids = args.camera_ids
     else:
-        camera_ids = _discover_camera_ids(manifest_path)
+        camera_ids = _discover_pinhole_camera_ids(loader)
 
     if not camera_ids:
         print("No OpenCVPinhole cameras found in manifest.")
         return 1
 
     print(f"Manifest: {manifest_path}")
-    print(f"Cameras ({len(camera_ids)}): {', '.join(camera_ids)}")
+    print(f"All cameras: {', '.join(all_camera_ids)}")
+    print(f"Testing OpenCVPinhole cameras ({len(camera_ids)}): {', '.join(camera_ids)}")
     print()
 
-    # 2. Open the sequence once and validate each camera
-    seq = _nd.CameraSequence(manifest_path)
+    # 2. Validate each camera
     results: list[dict] = []
     for cam_id in camera_ids:
-        model = seq.camera_model(cam_id)
-        if not isinstance(model, _nd.OpenCVPinholeCameraModel):
-            print(f"  SKIP {cam_id}: not an OpenCVPinholeCameraModel (got {type(model).__name__})", flush=True)
-            continue
-        stats = validate_camera(cam_id, model, args.stride, args.valid_mae_threshold)
+        stats = validate_camera(cam_id, loader, args.stride, args.valid_mae_threshold)
         results.append(stats)
 
     # 3. Summary
@@ -240,12 +277,15 @@ def main(argv=None) -> int:
     print("=" * 72)
     print("SUMMARY")
     print("=" * 72)
-    n_passed = sum(1 for r in results if r["passed"])
-    n_total = len(results)
-    all_agreement = [r["agreement_pct"] for r in results]
-    all_mae = [r["mae_px"] for r in results if not np.isnan(r["mae_px"])]
+    n_passed = sum(1 for r in results if r.get("passed"))
+    n_total = len([r for r in results if not r.get("skipped")])
+    all_pct = [r["agreement_pct"] for r in results if not r.get("skipped")]
+    all_mae = [r["mae_px"] for r in results if not r.get("skipped") and not np.isnan(r["mae_px"])]
 
     for r in results:
+        if r.get("skipped"):
+            print(f"  [SKIP] {r['camera_id']}")
+            continue
         status = "PASS" if r["passed"] else "FAIL"
         print(
             f"  [{status}] {r['camera_id']:>40s}: "
@@ -257,8 +297,8 @@ def main(argv=None) -> int:
 
     print()
     print(f"  Passed: {n_passed}/{n_total}")
-    if all_agreement:
-        print(f"  Agreement range: {min(all_agreement):.2f}% – {max(all_agreement):.2f}%")
+    if all_pct:
+        print(f"  Agreement range: {min(all_pct):.2f}% – {max(all_pct):.2f}%")
     if all_mae:
         print(f"  MAE range: {min(all_mae):.6f} – {max(all_mae):.6f} px")
     print()
