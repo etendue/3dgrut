@@ -27,6 +27,8 @@ import torch
 
 DEFAULT_DEVICE = torch.device("cuda")
 
+from threedgrut.utils.logger import logger
+
 
 def fov2focal(fov_radians: float, pixels: int):
     return pixels / (2 * math.tan(fov_radians / 2))
@@ -671,3 +673,122 @@ def repair_nonfinite_rays(rays: np.ndarray, valid_mask: np.ndarray | None) -> in
     if valid_mask is not None and not flat_input:
         valid_mask[bad] = False
     return n_bad
+
+
+def compute_forward_valid_pixel_mask(camera_model, rays: np.ndarray) -> np.ndarray:
+    """Return a bool mask from ``camera_rays_to_pixels().valid_flag``.
+
+    Projects ``rays`` (``[H, W, 3]`` or ``[N, 3]``) back through the camera
+    model's forward projection and returns a bool mask with shape ``rays.shape[:-1]``
+    indicating which rays project to valid pixel coordinates.
+
+    For ``OpenCVPinholeCameraModel`` the rational polynomial distortion polynomial's
+    denominator can diverge, producing ``valid_flag=False`` even for rays that came
+    from integer pixel locations.  ``FThetaCameraModel`` and
+    ``OpenCVFisheyeCameraModel`` are always all-valid (no-op).
+
+    Args:
+        camera_model: An NCore camera model with ``camera_rays_to_pixels`` method.
+        rays: ``[H, W, 3]`` or ``[N, 3]`` float array of camera-space ray directions.
+
+    Returns:
+        Bool mask shaped ``rays.shape[:-1]``.  ``True`` = ray projects to a valid
+        pixel (within the finite trust domain).
+
+    Raises:
+        ValueError: If the number of valid-flag elements does not match the number
+            of input rays, or if the input is empty.
+    """
+    flat_input = rays.ndim == 2
+    rays_flat = rays.reshape(-1, 3) if not flat_input else rays
+
+    n_rays = rays_flat.shape[0]
+    if n_rays == 0:
+        raise ValueError("compute_forward_valid_pixel_mask: received empty rays (no pixels).")
+
+    result = camera_model.camera_rays_to_pixels(rays_flat)
+    # result.valid_flag is a torch.Tensor of shape (n_rays,), dtype bool
+    valid_flag = result.valid_flag
+    if isinstance(valid_flag, torch.Tensor):
+        valid_flag = valid_flag.cpu().numpy()
+
+    if valid_flag.shape[0] != n_rays:
+        raise ValueError(
+            f"compute_forward_valid_pixel_mask: camera_rays_to_pixels returned "
+            f"{valid_flag.shape[0]} valid flags for {n_rays} rays — "
+            f"element count mismatch."
+        )
+
+    mask = valid_flag.astype(bool)
+    if not flat_input:
+        h, w = rays.shape[0], rays.shape[1]
+        mask = mask.reshape(h, w)
+    return mask
+
+
+def maybe_apply_forward_valid_mask(
+    camera_model,
+    rays: np.ndarray,
+    ego_mask: np.ndarray,
+    camera_id: str,
+    enabled: bool,
+) -> bool:
+    """Optionally AND a forward-valid pixel mask into ``ego_mask``.
+
+    When ``enabled=True`` and the camera model is an OpenCVPinholeCameraModel
+    (rational polynomial distortion), projects the camera-space ``rays`` back
+    through ``camera_rays_to_pixels()`` and masks out pixels where the forward
+    projection is invalid.  For FThetaCameraModel and OpenCVFisheyeCameraModel
+    the function is a strict no-op (no forward projection is called).
+
+    The operation is **in-place** on ``ego_mask`` (ANDed in).  Kept/removed pixel
+    counts are logged via ``threedgrut.utils.logger.logger``.
+
+    Args:
+        camera_model: An NCore camera model.
+        rays: ``[H, W, 3]`` full-resolution camera-space ray directions.
+        ego_mask: ``[H, W]`` bool ego mask, modified in place.
+        camera_id: Camera identifier for logging.
+        enabled: Master switch — when False the function returns immediately.
+
+    Returns:
+        True if the mask was modified (forward validity was applied), False if
+        no-op (disabled, FTheta, or OpenCVFisheye).
+    """
+    if not enabled:
+        return False
+
+    # Guard: only OpenCVPinholeCameraModel has the rational-polynomial
+    # forward-valid mismatch that we need to mask.  FTheta and OpenCVFisheye
+    # share the same polynomial pair for forward/inverse, so their valid_flag
+    # is always all-True.
+    # Use isinstance when ncore.sensors is available (production);
+    # fall back to class-name check for Mac test environments or when
+    # ncore.sensors is stubbed (pytest conftest stub is a MagicMock).
+    _is_pinhole = False
+    try:
+        from ncore.sensors import OpenCVPinholeCameraModel
+        if isinstance(OpenCVPinholeCameraModel, type) and isinstance(camera_model, OpenCVPinholeCameraModel):
+            _is_pinhole = True
+    except (ImportError, TypeError):
+        pass
+    if not _is_pinhole and camera_model.__class__.__name__ == "OpenCVPinholeCameraModel":
+        _is_pinhole = True
+    if not _is_pinhole:
+        return False
+
+    forward_valid = compute_forward_valid_pixel_mask(camera_model, rays)
+
+    n_before = int(ego_mask.sum())
+    ego_mask &= forward_valid
+    n_after = int(ego_mask.sum())
+    n_removed = n_before - n_after
+
+    if n_removed > 0:
+        kept_pct = 100.0 * n_after / max(n_before, 1)
+        logger.info(
+            f"[PIN-MASK-1] {camera_id}: forward-valid mask removed "
+            f"{n_removed}/{n_before} pixels ({kept_pct:.2f}% kept)"
+        )
+
+    return True

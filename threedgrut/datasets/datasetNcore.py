@@ -60,6 +60,7 @@ from threedgrut.datasets.utils import (
     create_pixel_coords,
     get_center_and_diag,
     get_worker_id,
+    maybe_apply_forward_valid_mask,
     repair_nonfinite_rays,
 )
 from threedgrut.utils.logger import logger
@@ -126,6 +127,9 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # loss. Default False → Stage 1-10 path byte-identical.
         load_depth_prior: bool = False,
         depth_prior_aux_root: Optional[str] = None,
+        # PIN-MASK-1: forward-valid supervision mask from camera_rays_to_pixels().
+        # Default False so existing run configs are byte-identical.
+        mask_forward_invalid_pixels: bool = False,
     ):
         super().__init__()
 
@@ -208,6 +212,10 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         self.depth_prior_aux_root: Optional[str] = depth_prior_aux_root
         self._depth_prior_reader: Optional["DepthV2AuxReader"] = None
         self._depth_prior_reader_initialized: bool = False
+
+        # PIN-MASK-1: forward-valid supervision mask from camera_rays_to_pixels().
+        # Default False so existing run configs are byte-identical.
+        self.mask_forward_invalid_pixels: bool = mask_forward_invalid_pixels
 
         self.split: str = split
 
@@ -481,6 +489,20 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     f"ray(s) (+{_n_bad_sub} in val subsample) and masked the "
                     f"pixel(s) invalid — rational-distortion pole, see "
                     f"repair_nonfinite_rays"
+                )
+
+            # PIN-MASK-1: forward-valid supervision mask.  AND the
+            # camera_rays_to_pixels().valid_flag into the ego mask for
+            # OpenCVPinholeCameraModel (rational-polynomial cameras where the
+            # forward and inverse projections have different trust domains).
+            # FTheta and OpenCVFisheye are skipped (same polynomial pair).
+            if self.mask_forward_invalid_pixels and isinstance(camera_model, ncore.sensors.OpenCVPinholeCameraModel):
+                maybe_apply_forward_valid_mask(
+                    camera_model,
+                    self.sequence_cameras_all_rays[sequence_id][camera_id],
+                    camera_valid_pixels_ego_mask,
+                    camera_id,
+                    enabled=True,
                 )
 
         # Pre-compute per-camera resolutions for the current split (used for GPU ray cache lookup)
