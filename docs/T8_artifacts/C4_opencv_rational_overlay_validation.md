@@ -1,7 +1,7 @@
 # C4 OpenCV Rational Overlay Validation
 
 Date: 2026-07-15
-Implementation branch: `fix/viser-opencv-rational-overlay`（do not merge to main）
+Implementation branch: `fix/viser-opencv-rational-overlay`（validated before merge）
 Validated implementation range: `e5aee25..132261e` plus this commit
 Host: `inceptio` / RTX 4090 / NCore SDK v4
 
@@ -90,11 +90,11 @@ Results:
 
 | Camera | Resolution | Samples | Vis. Agreement | Valid MAE (px) | Max Err (px) | Integer RTT |
 |--------|-----------|--------:|:--------------:|:--------------:|:------------:|:-----------:|
-| `front_standard_55fov` | 1920×1080 | 837 | 100% | 0.000017 | 0.000048 | ✔ |
-| `front_tele_30fov` | 1920×1080 | 837 | 100% | 0.000036 | 0.000070 | ✔ |
-| `front_wide_120fov` | 1920×1080 | 837 | 100% | 0.000017 | 0.000048 | ✔ |
-| `cross_left_120fov` | 1920×1080 | 837 | 100% | 0.000018 | 0.000041 | ✔ |
-| `left_wide_90fov` | 1920×1080 | 837 | 100% | 0.000018 | 0.000041 | ✔ |
+| `front_standard_55fov` | 1920×1080 | 517 | 100% | 0.000023 | 0.000221 | ✔ |
+| `front_tele_30fov` | 1920×1080 | 517 | 100% | 0.000036 | 0.002402 | ✔ |
+| `front_wide_120fov` | 1920×1080 | 517 | 100% | 0.000019 | 0.000197 | ✔ |
+| `cross_left_120fov` | 1920×1080 | 517 | 100% | 0.000018 | 0.000137 | ✔ |
+| `left_wide_90fov` | 1920×1080 | 517 | 100% | 0.000017 | 0.000105 | ✔ |
 
 - **Validity agreement: 100%** — projector `visible` matches SDK `valid_flag` after image-bound check for every sample across all 5 cameras.
 - **Image-point MAE: 0.000017–0.000036 px** — several orders of magnitude below the 0.05 px threshold, dominated by SDK's `float32` → `float64` rounding.

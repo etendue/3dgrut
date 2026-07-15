@@ -521,7 +521,7 @@ splat、floaters、远景模糊归为模型质量
 
 ## 9. 2026-07-15 OpenCV Rational Overlay 修复
 
-实现提交范围：`e5aee25..132261e` + 本 commit（目标分支：`fix/viser-opencv-rational-overlay`，不合并 main）
+实现提交范围：`e5aee25..35032c2` + parity evidence correction（分支：`fix/viser-opencv-rational-overlay`）
 
 | Phase | 状态 | 证据 |
 |---|---|---|
@@ -532,4 +532,4 @@ splat、floaters、远景模糊归为模型质量
 | E MC-6 关闭（MC-10 保持打开） | ✅ | 本 buglist MC-6 行已改为 ✅ 已关闭 |
 
 验证结果：focused `21 passed`；overlay integration `36 passed`；Mac full `1018 passed, 2 skipped`；
-py_compile + diff-check clean。`PinholeForwardProjector` ipD 匹配 NCore SDK 及 3DGUT CUDA kernel。不改变 FTheta、数据集或训练。MC-10 保持 🟡 打开。
+py_compile + diff-check clean。`PinholeForwardProjector` 的 `icD` 匹配 NCore SDK 及 3DGUT CUDA kernel。不改变 FTheta、数据集或训练。MC-10 保持 🟡 打开。
