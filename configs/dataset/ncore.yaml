@@ -49,6 +49,12 @@ val_frame_interval: 8  # Every 8th frame is validation (12.5% val, 87.5% train)
 # Property name to retrieve lidar point RGB colors from (if available)
 lidar_color_generic_data_name: rgb
 
+# PIN-MASK-1: forward-valid supervision mask from camera_rays_to_pixels().
+# When true, masks out pixels where the rational-polynomial forward projection
+# produces an invalid flag (OpenCVPinholeCameraModel only).  Default false
+# ensures existing run configs are byte-identical.
+mask_forward_invalid_pixels: false
+
 # Training parameters
 train:
   window_size: 256  # Not used when sample_full_image=true (full images used)

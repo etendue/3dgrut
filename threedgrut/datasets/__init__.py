@@ -146,6 +146,7 @@ def make(name: str, config, ray_jitter):
                 lidar_depth_aux_root=config.dataset.get("lidar_depth_aux_root", None),  # T11.C1
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1
                 depth_prior_aux_root=config.dataset.get("depth_prior_aux_root", None),  # T11.D1
+                mask_forward_invalid_pixels=config.dataset.get("mask_forward_invalid_pixels", False),  # PIN-MASK-1
             )
             # Validation uses same temporal window as training by default
             train_seek_offset = config.dataset.train.get("seek_offset_sec", 0.0)
@@ -187,6 +188,7 @@ def make(name: str, config, ray_jitter):
                 lidar_depth_aux_root=config.dataset.get("lidar_depth_aux_root", None),  # T11.C1 (val)
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1 (val)
                 depth_prior_aux_root=config.dataset.get("depth_prior_aux_root", None),  # T11.D1 (val)
+                mask_forward_invalid_pixels=config.dataset.get("mask_forward_invalid_pixels", False),  # PIN-MASK-1
             )
         case _:
             raise ValueError(
@@ -269,6 +271,7 @@ def make_test(name: str, config):
                     "load_lidar_depth_map", False
                 ),  # T11.F1 (test): feeds mean_lidar_psnr
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.F1 (test)
+                mask_forward_invalid_pixels=config.dataset.get("mask_forward_invalid_pixels", False),  # PIN-MASK-1
             )
         case _:
             raise ValueError(
