@@ -15,8 +15,8 @@ kanban
   active[In Progress]
     PIN-MASK-1[PIN-MASK-1 forward-valid supervision mask]
   review[Review]
-    PIN-OVL-1[PIN-OVL-1 Viser rational overlay SDK parity]
   done[Done]
+    PIN-OVL-1[PIN-OVL-1 Viser rational overlay SDK parity]
 ```
 
 > Mermaid 标签一律使用全角括号，避免仓库渲染器解析失败。
@@ -25,7 +25,7 @@ kanban
 
 | ID | Task | Status | Owner | Branch / Worktree | Acceptance gate | Evidence |
 |---|---|---|---|---|---|---|
-| PIN-OVL-1 | Viser OpenCV rational overlay projector | 🔵 Review | overlay finalizer subagent | `fix/viser-opencv-rational-overlay` / `.claude/worktrees/viser-opencv-rational-overlay` | rational numerator/denominator + tangential + thin-prism + `0.8<icD<1.2`; focused/full tests; five real cameras SDK validity 100% agreement; float image-point MAE <0.05 px; MC-6 closed only | Plan `docs/superpowers/plans/2026-07-14-viser-opencv-rational-overlay-fix.md`; commits `89df9eb`, `132261e`; inceptio measured MAE 0.000017–0.000036 px |
+| PIN-OVL-1 | Viser OpenCV rational overlay projector | ✅ Done | overlay subagent + main review | merged from `fix/viser-opencv-rational-overlay` | rational numerator/denominator + tangential + thin-prism + `0.8<icD<1.2`; focused/full tests; five real cameras SDK validity 100% agreement; float image-point MAE <0.05 px; MC-6 closed only | Commits `89df9eb`, `132261e`, `35032c2`, `934c91b`; 517 samples/camera; MAE 0.000017–0.000036 px; full `1018 passed, 2 skipped`; merge commit recorded in Done Log |
 | PIN-MASK-1 | OpenCV rational forward-valid supervision mask | 🟡 In Progress | implementation subagent | `fix/pinhole-forward-valid-mask` / `.claude/worktrees/pinhole-forward-valid-mask` | opt-in config default false; OpenCVPinhole only; train/val/test same mask; PAI/FTheta no-op; per-camera coverage log; CPU regression + real b6a9 probe; no training yet | Plan to be written at `docs/superpowers/plans/2026-07-15-pinhole-forward-valid-mask.md` |
 | PIN-AB-1 | 5 秒 9-camera baseline vs mask A/B | ⬜ Ready, depends PIN-MASK-1 | GPU experiment subagent | same feature branch or dedicated experiment worktree | same 9 cameras/R6t/depth-off/nw=10/seed/steps/window; only mask flag differs; report radial fixed-region metrics, forward-valid metrics, center and standard/tele guards; no cross-mask overall-PSNR miscomparison | Output under `docs/T8_artifacts/pinhole_forward_valid_ab/`; update this board with run IDs and metrics |
 | PIN-UT-1 | `ut_require_all_sigma_points_valid=true` single-variable test | ⬜ Backlog, conditional | unassigned | dedicated experiment branch/worktree | run only if PIN-AB-1 supports contract hypothesis but valid-edge artifacts remain; compare against winning mask arm | Not started |
@@ -62,3 +62,4 @@ flowchart LR
 ## 6. Done Log
 
 - 2026-07-15：建立 PIN Kanban；把 overlay 修复、forward-valid mask、5 秒 A/B 与条件式 UT test 拆成四张独立卡。PIN-MASK-1 进入执行，PIN-OVL-1 进入 Review。
+- 2026-07-15：PIN-OVL-1 ✅。`PinholeForwardProjector` 改为 OpenCV rational + tangential + thin-prism + trust gate；inceptio 五相机、517 samples/camera validity agreement 100%，MAE 0.000017–0.000036 px，integer RTT 全通过；Mac full 1018 passed/2 skipped；MC-6 关闭、MC-10 保持待 PIN-MASK/PIN-AB。
