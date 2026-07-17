@@ -292,6 +292,17 @@ def test_log_validation_allows_real_rich_wrapped_repair_warning(tmp_path: Path) 
     }
 
 
+def test_log_validation_allows_real_rich_wrapped_final_checkpoint(tmp_path: Path) -> None:
+    log = tmp_path / "train.log"
+    wrapped = _successful_log().replace(
+        '💾 Saved checkpoint to: "/run/ckpt_last.pt"',
+        "💾 Saved checkpoint to:                              logger.py:71\n" '           "/run/ckpt_last.pt"',
+    )
+    log.write_text(wrapped, encoding="utf-8")
+
+    validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
+
+
 def test_real_rich_probe_log_passes_validator_module_cli(tmp_path: Path) -> None:
     log = tmp_path / "armP.log"
     log.write_text(_real_rich_probe_log(), encoding="utf-8")
@@ -356,6 +367,9 @@ def test_log_validation_rejects_only_fatal_sentinels_and_unrepaired_rays(tmp_pat
     [
         "Training Statistics\nTest Metrics\n",
         _successful_log().replace('💾 Saved checkpoint to: "/run/ckpt_last.pt"\n', ""),
+        _successful_log().replace("Saved checkpoint to:", "Saved checkpoint at:"),
+        _successful_log().replace("ckpt_last.pt", "ckpt_1.pt"),
+        _successful_log().replace("ckpt_last.pt", "not_ckpt_last.pt"),
         _successful_log().replace(_frame_count_block(), _frame_count_block(zero_camera=SEVEN_CAMERAS[0])),
         _successful_log().replace(_frame_count_block(), _frame_count_block(omit_camera=SEVEN_CAMERAS[0])),
     ],

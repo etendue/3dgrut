@@ -50,7 +50,7 @@ _NONFINITE_CAMERA_RAY = re.compile(r"non-finite\s+camera\s+ray", flags=re.IGNORE
 _RICH_SOURCE_COLUMN = re.compile(r"\s+[A-Za-z0-9_./-]+\.py:\d+\s*$")
 _TRAIN_FRAME_HEADER = re.compile(r"NCoreDataset\s+(?:\[train\]\s+)?frame counts\s+\(after\s+temporal\s+filtering\):")
 _TRAIN_FRAME_LINE = re.compile(r"\b(camera_[A-Za-z0-9_]+):\s+(\d+)\s+frames\b")
-_FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"[^"]*ckpt_last\.pt"')
+_FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_last\.pt"')
 _REQUIRED_SOURCE_NAMES = frozenset({"dataset_manifest", "config", "artifact", "driver", "validator"})
 _REQUIRED_OUTPUT_NAMES = frozenset({"parsed_yaml", "checkpoint", "metrics", "train_log", "eval_log"})
 _EXPECTED_LAYERS = ["background", "road", "dynamic_rigids", "sky_envmap"]
@@ -141,7 +141,7 @@ def validate_training_log(path: str | Path, arm: str, artifact_path: str | Path)
     for summary in ("Training Statistics", "Test Metrics"):
         if summary not in text:
             raise ValueError(f"{arm} training log missing {summary!r}")
-    if _FINAL_CHECKPOINT_LINE.search(text) is None:
+    if _FINAL_CHECKPOINT_LINE.search(normalized) is None:
         raise ValueError(f"{arm} training log has no final ckpt_last save signal")
 
     override_logged = re.search(r"\[PIN-FTHETA\].*explicit override enabled", text) is not None
