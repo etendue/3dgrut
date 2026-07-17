@@ -1,0 +1,27 @@
+# @package _global_
+# PIN-FTHETA matched Arm F configuration.
+#
+# User-approved 2026-07-17 deviation from the original 9-camera plan:
+# camera_front_standard_55fov and camera_front_tele_30fov are excluded from
+# both A/B arms because their fitted representation did not pass the strict
+# survey gate. The tele-camera loss weight is therefore intentionally absent.
+
+defaults:
+  - /apps/ncore_3dgut_mcmc_multilayer_inceptio
+  - _self_
+
+dataset:
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_left_wide_90fov
+    - camera_right_wide_90fov
+    - camera_back_rear_wide_90fov
+    - camera_rear_left_70fov
+  ftheta_params_path: scripts/pin_ftheta_b6a9_7cam_params.json
+  # Matched A/B contract: retained identically to Arm P, but the dataset's
+  # OpenCVPinhole isinstance guard makes this a strict no-op for FTheta.
+  mask_forward_invalid_pixels: true
+  # Keep the shared config valid: this is mutually exclusive with the mask.
+  opencv_pinhole_use_validity_domain: false

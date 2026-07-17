@@ -51,6 +51,7 @@ from threedgrut_playground.engine import Engine3DGRUT
 from threedgrut_playground.utils.camera_render_state import (
     CameraModelKind,
     CameraRenderState,
+    merge_checkpoint_camera_models,
     resolve_camera_render_state,
 )
 from threedgrut_playground.utils.cuboid import (
@@ -2937,6 +2938,34 @@ def main() -> None:
     # Follow Camera). Empty when --dataset_path not provided → dropdown
     # falls back to {primary} only.
     multi_cam_poses = _load_multi_cam_poses(args.dataset_path, args.default_gs_config)
+    if metadata is not None and metadata.camera_models:
+        if args.dataset_path is not None and not multi_cam_poses:
+            raise RuntimeError(
+                "schema_v3 checkpoint declares active camera models, but no "
+                "manifest camera poses could be loaded; refusing viewer "
+                "ideal-pinhole fallback"
+            )
+        if multi_cam_poses:
+            # The checkpoint, not the raw manifest, owns both the active
+            # camera set and the projection model learned by this run. This
+            # restricts the dropdown to the approved seven-camera experiment
+            # and atomically replaces raw OpenCV state with each camera's
+            # stored FTheta parameters + native resolution.
+            multi_cam_poses = merge_checkpoint_camera_models(
+                multi_cam_poses, metadata.camera_models
+            )
+            print(
+                f"[PIN-FTHETA viewer] bound {len(multi_cam_poses)} active "
+                "checkpoint camera contracts (no ideal-pinhole fallback)",
+                flush=True,
+            )
+        else:
+            print(
+                "[PIN-FTHETA viewer] dataset_path not supplied; only the "
+                "checkpoint primary camera pose is available (stored FTheta "
+                "intrinsics remain active)",
+                flush=True,
+            )
     if multi_cam_poses:
         print(f"[viz_4d] V3-VIZ.3: {len(multi_cam_poses)} cameras available " f"for dropdown / Follow Camera")
         if _hydrate_ego_rig_poses(metadata, multi_cam_poses):

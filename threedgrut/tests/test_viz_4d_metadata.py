@@ -140,12 +140,13 @@ def _model_with_tracks(real_conf, *, with_metadata: bool = True):
 
 
 # ----------------------------------------------------------------- tests
-def test_schema_version_is_2(real_conf):
-    # T8.13: viz_4d schema bumped to v2 with FTheta dict + resolution.
+def test_schema_version_is_3(real_conf):
+    # PIN-FTHETA: v3 adds ordered contracts for every active camera while
+    # retaining the v2 primary-camera aliases for old viewers.
     model = _model_with_tracks(real_conf)
     dataset = _mock_dataset(n_frames=3)
     md = extract_4d_metadata(model, dataset, real_conf)
-    assert md["schema_version"] == 2
+    assert md["schema_version"] == 3
 
 
 def test_detect_primary_camera_returns_ftheta_dict_for_ncore(real_conf):

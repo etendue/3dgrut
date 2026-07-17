@@ -101,8 +101,9 @@ def test_inject_extract_to_ckpt_roundtrip_preserves_ftheta(tmp_path, monkeypatch
     torch.save(ckpt, p)
     loaded = torch.load(p, weights_only=False)
 
-    # T8.13 contract: v2 schema + 8 FTheta keys + (W, H) tuple survive save/load.
-    assert loaded["viz_4d"]["schema_version"] == 2
+    # PIN-FTHETA contract: v3 all-camera schema plus the v2 primary aliases
+    # survive save/load.
+    assert loaded["viz_4d"]["schema_version"] == 3
     ego = loaded["viz_4d"]["ego"]
     assert ego["primary_camera_intrinsics_FTheta"] is not None
     assert set(ego["primary_camera_intrinsics_FTheta"].keys()) >= {

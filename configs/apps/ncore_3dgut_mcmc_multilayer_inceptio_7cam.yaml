@@ -1,0 +1,25 @@
+# @package _global_
+# PIN-FTHETA matched Arm P configuration.
+#
+# User-approved 2026-07-17 deviation: train only the seven cameras whose
+# OpenCV-to-FTheta fits passed the strict survey gate. Explicitly keep the
+# override off for the pinhole control arm and do not apply a tele loss weight.
+
+defaults:
+  - /apps/ncore_3dgut_mcmc_multilayer_inceptio
+  - _self_
+
+dataset:
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_left_wide_90fov
+    - camera_right_wide_90fov
+    - camera_back_rear_wide_90fov
+    - camera_rear_left_70fov
+  ftheta_params_path: null
+  # Matched A/B contract: active for this OpenCV pinhole arm.
+  mask_forward_invalid_pixels: true
+  # Mutually exclusive with the legacy SDK-domain forward-valid mask above.
+  opencv_pinhole_use_validity_domain: false

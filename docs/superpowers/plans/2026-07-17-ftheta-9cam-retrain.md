@@ -3,6 +3,8 @@
 > **For agentic workers:** Execute this plan task-by-task with checkbox tracking. Do not treat a FTheta viewer rendering of a pinhole-trained checkpoint as evidence that FTheta training succeeds.
 >
 > **Dependency:** Complete or reuse the parameter-fitting and full-image validation work in [`2026-07-15-pinhole-ftheta-conversion-validation.md`](2026-07-15-pinhole-ftheta-conversion-validation.md), especially PIN-FTHETA-2/3/4, before starting GPU training.
+>
+> **2026-07-17 user-approved scope revision:** Keep the completed nine-camera survey as historical calibration evidence, but Tasks 2-7 now run a matched **seven-camera** Arm P/Arm F experiment. Both arms exclude `camera_front_standard_55fov` and `camera_front_tele_30fov`, and neither arm applies the tele-camera loss weight. This revision supersedes later references to nine-camera training/metadata/metrics; existing `9cam` plan and artifact filenames remain unchanged for traceability.
 
 ## Goal
 
@@ -16,6 +18,14 @@ Arm F: FTheta rays + FTheta 3DGUT projection
 ```
 
 Both arms must use the same camera IDs, source frames, poses, resolution, seed, loss, layer configuration, iteration count, and evaluation protocol.
+
+Both seven-camera experiment configs must explicitly set
+`dataset.mask_forward_invalid_pixels=true` and
+`dataset.opencv_pinhole_use_validity_domain=false`. The forward-valid mask is
+active for Arm P's OpenCV pinhole models. It is a strict no-op for Arm F because
+the dataset applies it only to `OpenCVPinholeCameraModel` instances; retaining
+the same setting in both arms preserves the matched A/B while disabling the
+mutually exclusive calibrated validity-domain path in both.
 
 ## Non-goals
 

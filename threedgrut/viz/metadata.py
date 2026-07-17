@@ -5,10 +5,10 @@ The on-disk layout produced by ``extract_4d_metadata`` is consumed by
 ``threedgrut_playground.viser_gui_4d`` (the new 4D viewer) and persisted under
 ``ckpt["viz_4d"]`` by ``Trainer.save_checkpoint`` when ``conf.viz_4d.enabled``.
 
-Schema (schema_version=1) — see plan §2.1:
+Schema (schema_version=3) — see plan §2.1:
 
     {
-        "schema_version":     1,
+        "schema_version":     3,
         "dataset_type":       "ncore",
         "sequence_id":        str,
         "ego": {
@@ -19,6 +19,14 @@ Schema (schema_version=1) — see plan §2.1:
             "primary_camera_aspect":    float,
         },
         "tracks": {tid: {"poses", "size", "frame_info", "class"}},
+        "camera_models": {
+            camera_id: {
+                "model_type": "FTheta" | "OpenCVPinhole" | "IdealPinhole",
+                "native_resolution": (W, H),
+                "intrinsics_FTheta": {eight-key FTheta dictionary},
+                "parameter_fingerprint": str | None,
+            },
+        },
         "tracks_camera_timestamps_us": Tensor[F] int64,
         "lidar": {
             "road_xyz" / "road_rgb" / "dynamic_xyz" / "dynamic_rgb": Tensor or None,
@@ -28,10 +36,11 @@ Schema (schema_version=1) — see plan §2.1:
                             "t_us_first", "t_us_last"},
     }
 
-Failure model: every section is independently try/except'd. A failing sub-
-extractor returns an empty/None placeholder rather than raising so that an
-incomplete dataset (e.g. tracks not populated) still produces a partially-
-useful viz_4d block.
+Failure model: camera-model extraction is fail-fast because silently omitting an
+active FTheta contract would make the viewer fall back to the wrong projection.
+The remaining optional sections are independently best-effort: a failing
+sub-extractor returns an empty/None placeholder so an incomplete dataset (for
+example, tracks not populated) can still produce a partially useful block.
 """
 
 from __future__ import annotations
@@ -43,7 +52,20 @@ import torch
 
 from threedgrut.utils.logger import logger
 
-SCHEMA_VERSION = 2  # T8.13: ego.primary_camera_intrinsics_FTheta + primary_camera_resolution
+SCHEMA_VERSION = 3  # PIN-FTHETA: all active camera models + native resolutions
+
+FTHETA_REQUIRED_KEYS = frozenset(
+    {
+        "resolution",
+        "shutter_type",
+        "principal_point",
+        "reference_poly",
+        "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly",
+        "max_angle",
+        "linear_cde",
+    }
+)
 
 
 # --------------------------------------------------------------------- helpers
@@ -65,6 +87,131 @@ def _subsample(t: torch.Tensor, k: Optional[int]) -> torch.Tensor:
         return t
     perm = torch.randperm(t.shape[0])[:k]
     return t[perm]
+
+
+def _as_numpy(value: Any, dtype=None) -> np.ndarray:
+    """Convert torch/NCore/numpy values without relying on uint64 torch support."""
+    if torch.is_tensor(value):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value, dtype=dtype)
+
+
+def _camera_resolution(camera_model) -> tuple[int, int]:
+    raw = _as_numpy(camera_model.resolution, np.int64).reshape(-1)
+    if raw.size != 2:
+        raise ValueError(f"camera resolution must contain W,H, got shape {raw.shape}")
+    resolution = (int(raw[0]), int(raw[1]))
+    if resolution[0] <= 0 or resolution[1] <= 0:
+        raise ValueError(f"camera resolution must be positive, got {resolution}")
+    return resolution
+
+
+def _extract_ftheta_dict(camera_model) -> Optional[dict]:
+    """Return the portable eight-key FTheta contract, or ``None`` for pinhole."""
+    if getattr(camera_model, "max_angle", None) is None or not hasattr(
+        camera_model, "get_parameters"
+    ):
+        return None
+    params = camera_model.get_parameters()
+    # OpenCVFisheye models can also expose max_angle + get_parameters(), but
+    # they do not implement the 3DGUT FTheta polynomial contract. Requiring
+    # the complete native parameter surface preserves legacy mixed-camera
+    # checkpoints without relabelling another fisheye model as FTheta.
+    required_attrs = {
+        "resolution",
+        "shutter_type",
+        "principal_point",
+        "reference_poly",
+        "pixeldist_to_angle_poly",
+        "angle_to_pixeldist_poly",
+        "max_angle",
+        "linear_cde",
+    }
+    if any(not hasattr(params, key) for key in required_attrs):
+        return None
+    result = {
+        "resolution": _as_numpy(params.resolution, np.int64),
+        "shutter_type": params.shutter_type.name,
+        "principal_point": _as_numpy(params.principal_point, np.float32),
+        "reference_poly": params.reference_poly.name,
+        "pixeldist_to_angle_poly": _as_numpy(
+            params.pixeldist_to_angle_poly, np.float32
+        ),
+        "angle_to_pixeldist_poly": _as_numpy(
+            params.angle_to_pixeldist_poly, np.float32
+        ),
+        "max_angle": float(params.max_angle),
+        "linear_cde": _as_numpy(params.linear_cde, np.float32),
+    }
+    missing = FTHETA_REQUIRED_KEYS.difference(result)
+    if missing:  # defensive: construction above should make this impossible
+        raise ValueError(f"FTheta parameters missing keys: {sorted(missing)}")
+    return result
+
+
+def _legacy_camera_model_type(camera_model) -> str:
+    name = type(camera_model).__name__
+    if "OpenCVPinhole" in name or hasattr(camera_model, "radial_coeffs"):
+        return "OpenCVPinhole"
+    return "IdealPinhole"
+
+
+def _extract_camera_models(dataset) -> dict[str, dict]:
+    """Persist every active camera's model contract in checkpoint order.
+
+    ``ftheta_override_enabled`` marks the matched Arm F path. In that mode a
+    non-FTheta active camera is a corrupt experiment and must abort checkpoint
+    creation; silently writing a pinhole/empty entry would let Viser render an
+    ideal-pinhole approximation that training never used.
+    """
+    sequence_id = dataset.sequence_id
+    camera_ids = list(getattr(dataset, "camera_ids", ()) or ())
+    models = dataset.sequence_camera_models[sequence_id]
+    strict_ftheta = bool(getattr(dataset, "ftheta_override_enabled", False))
+    fingerprints = getattr(dataset, "ftheta_parameter_fingerprints", {}) or {}
+
+    out: dict[str, dict] = {}
+    for camera_id in camera_ids:
+        if camera_id not in models:
+            raise ValueError(f"active camera '{camera_id}' has no camera model")
+        camera_model = models[camera_id]
+        resolution = _camera_resolution(camera_model)
+        try:
+            ftheta_dict = _extract_ftheta_dict(camera_model)
+        except Exception as exc:
+            raise ValueError(
+                f"active camera '{camera_id}' FTheta extraction failed: {exc}"
+            ) from exc
+
+        if strict_ftheta and ftheta_dict is None:
+            raise ValueError(
+                f"active camera '{camera_id}' is not FTheta while "
+                "ftheta_override_enabled=True"
+            )
+
+        model_type = (
+            "FTheta"
+            if ftheta_dict is not None
+            else _legacy_camera_model_type(camera_model)
+        )
+        entry: dict[str, Any] = {
+            "model_type": model_type,
+            "native_resolution": resolution,
+        }
+        if ftheta_dict is not None:
+            ftheta_resolution = tuple(
+                int(x) for x in np.asarray(ftheta_dict["resolution"]).reshape(-1)
+            )
+            if ftheta_resolution != resolution:
+                raise ValueError(
+                    f"active camera '{camera_id}' resolution mismatch: "
+                    f"model={resolution}, FTheta={ftheta_resolution}"
+                )
+            entry["intrinsics_FTheta"] = ftheta_dict
+            if camera_id in fingerprints:
+                entry["parameter_fingerprint"] = str(fingerprints[camera_id])
+        out[str(camera_id)] = entry
+    return out
 
 
 # --------------------------------------------------------------------- ego
@@ -98,8 +245,7 @@ def _detect_primary_camera(dataset):
         camera_id = dataset.camera_ids[0]
         seq_id = dataset.sequence_id
         camera_model = dataset.sequence_camera_models[seq_id][camera_id]
-        w = int(camera_model.resolution[0].item())
-        h = int(camera_model.resolution[1].item())
+        w, h = _camera_resolution(camera_model)
         aspect = (w / h) if h > 0 else fallback_aspect
         resolution = (w, h)
 
@@ -120,27 +266,14 @@ def _detect_primary_camera(dataset):
         ftheta_dict = None
         if max_angle is not None and hasattr(camera_model, "get_parameters"):
             try:
-                params = camera_model.get_parameters()
-                # T8.13 follow-up fix: NCore FTheta params.resolution comes back
-                # as numpy.uint64 (e.g. [1920, 1080]). torch.as_tensor refuses
-                # uint64 (torch has no native uint64 dtype) → TypeError silently
-                # swallowed by the except below → ftheta_dict=None and the whole
-                # T8.13 fisheye projection path silently degrades to pinhole
-                # approx in viser_gui_4d. Cast uint64 → int64 via numpy BEFORE
-                # touching torch; the other fields (principal_point, polynomials,
-                # linear_cde) are already float32 so they round-trip fine.
-                ftheta_dict = {
-                    "resolution": np.asarray(params.resolution, dtype=np.int64),
-                    "shutter_type": params.shutter_type.name,
-                    "principal_point": _to_cpu_float32(torch.as_tensor(params.principal_point)).numpy(),
-                    "reference_poly": params.reference_poly.name,
-                    "pixeldist_to_angle_poly": _to_cpu_float32(torch.as_tensor(params.pixeldist_to_angle_poly)).numpy(),
-                    "angle_to_pixeldist_poly": _to_cpu_float32(torch.as_tensor(params.angle_to_pixeldist_poly)).numpy(),
-                    "max_angle": float(params.max_angle),
-                    "linear_cde": _to_cpu_float32(torch.as_tensor(params.linear_cde)).numpy(),
-                }
+                # NCore returns resolution as uint64. Convert through numpy so
+                # torch's lack of uint64 support cannot silently erase FTheta.
+                ftheta_dict = _extract_ftheta_dict(camera_model)
             except Exception as e:
-                logger.warning(f"[viz_4d] FTheta intrinsics extraction failed: {e}; ftheta_dict=None")
+                logger.warning(
+                    f"[viz_4d] FTheta intrinsics extraction failed: {e}; "
+                    "ftheta_dict=None"
+                )
                 ftheta_dict = None
 
         return str(camera_id), float(fov_y), float(aspect), ftheta_dict, resolution
@@ -452,6 +585,10 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
     dataset_type = "ncore"
     sequence_id = str(getattr(dataset, "sequence_id", "unknown"))
 
+    # This is intentionally outside the section-level best-effort fallbacks.
+    # An explicit FTheta training arm must never write an incomplete camera
+    # contract that the viewer could later interpret as ideal pinhole.
+    camera_models = _extract_camera_models(dataset)
     ego = _extract_ego(dataset, conf)
     tracks, shared_ts = _extract_tracks(model)
     if include_lidar:
@@ -485,6 +622,7 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
         "schema_version": SCHEMA_VERSION,
         "dataset_type": dataset_type,
         "sequence_id": sequence_id,
+        "camera_models": camera_models,
         "ego": ego,
         "tracks": tracks,
         "tracks_camera_timestamps_us": shared_ts,
@@ -493,7 +631,8 @@ def extract_4d_metadata(model, dataset, conf) -> dict:
     }
     logger.info(
         f"[viz_4d] packed schema_v{SCHEMA_VERSION} "
-        f"({len(tracks)} tracks, ego_N={ego['poses_c2w'].shape[0]}, "
+        f"({len(tracks)} tracks, cameras={len(camera_models)}, "
+        f"ego_N={ego['poses_c2w'].shape[0]}, "
         f"road_pts={lidar.get('road_subsample')})"
     )
     return out
