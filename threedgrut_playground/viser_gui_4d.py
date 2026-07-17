@@ -1873,6 +1873,108 @@ def _print_startup_diagnostics(viewer: "Viser4DViewer", ckpt: dict) -> None:
     print("[T8.13-DIAG] ============================================================")
 
 
+def _build_opencv_pinhole_viewer_contract(dataset, sequence_id, camera_id: str, params) -> tuple[dict, np.ndarray]:
+    """Build the viewer OpenCVPinhole contract from the dataset contract.
+
+    ``NCoreDataset`` already computed pixel-centred (+0.5), configurable
+    high-precision inverse rays for every camera.  Reusing that cache is
+    important: calling the NCore SDK's ``pixels_to_camera_rays`` here would
+    silently return to its hard-coded 10-iteration inverse and make the viewer
+    disagree with train/eval at the wide-camera periphery.
+
+    The CUDA projector also needs the same calibrated radial-domain
+    certificate as train/eval.  Without ``max_valid_r2`` tracer.py deliberately
+    falls back to the legacy ``0.8 < icD < 1.2`` ellipse.
+    """
+    from threedgrut.datasets.utils import compute_max_valid_r2, compute_opencv_pinhole_rays
+
+    def _as_numpy(value, dtype=None):
+        if hasattr(value, "detach"):
+            value = value.detach()
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+        if hasattr(value, "numpy"):
+            value = value.numpy()
+        return np.asarray(value, dtype=dtype)
+
+    resolution = _as_numpy(params.resolution, np.int64)
+    W, H = int(resolution[0]), int(resolution[1])
+    principal_point = _as_numpy(params.principal_point, np.float32)
+    focal_length = _as_numpy(params.focal_length, np.float32)
+    radial_coeffs = _as_numpy(params.radial_coeffs, np.float32)
+    tangential_coeffs = _as_numpy(params.tangential_coeffs, np.float32)
+    thin_prism_coeffs = _as_numpy(params.thin_prism_coeffs, np.float32)
+
+    pinhole_dict = {
+        "resolution": resolution,
+        "shutter_type": params.shutter_type.name,
+        "principal_point": principal_point,
+        "focal_length": focal_length,
+        "radial_coeffs": radial_coeffs,
+        "tangential_coeffs": tangential_coeffs,
+        "thin_prism_coeffs": thin_prism_coeffs,
+    }
+
+    cached_rays = (
+        getattr(dataset, "sequence_cameras_all_rays", {})
+        .get(sequence_id, {})
+        .get(camera_id)
+    )
+    expected_shape = (H, W, 3)
+    if cached_rays is not None and np.shape(cached_rays) == expected_shape:
+        rays = _as_numpy(cached_rays, np.float32)
+        ray_source = "NCoreDataset cached pixel-centred rays"
+    else:
+        # Defensive fallback for old/custom dataset implementations.  Keep the
+        # exact train/eval pixel-centre and iteration contract here as well.
+        iterations = int(getattr(dataset, "opencv_pinhole_inverse_iterations", 30))
+        xs, ys = np.meshgrid(
+            np.arange(W, dtype=np.float32),
+            np.arange(H, dtype=np.float32),
+            indexing="xy",
+        )
+        pixels = np.stack([xs, ys], axis=-1).reshape(-1, 2) + 0.5
+        rays = compute_opencv_pinhole_rays(
+            pixels,
+            principal_point,
+            focal_length,
+            radial_coeffs,
+            tangential_coeffs,
+            thin_prism_coeffs,
+            max_iterations=iterations,
+        ).reshape(expected_shape)
+        ray_source = f"viewer fallback ({iterations} inverse iterations, +0.5 pixel centres)"
+
+    domain_status = "disabled"
+    if bool(getattr(dataset, "opencv_pinhole_use_validity_domain", True)):
+        margin = float(getattr(dataset, "opencv_pinhole_validity_margin", 0.1))
+        try:
+            max_valid_r2 = compute_max_valid_r2(
+                principal_point=principal_point,
+                focal_length=focal_length,
+                radial_coeffs=radial_coeffs,
+                tangential_coeffs=tangential_coeffs,
+                thin_prism_coeffs=thin_prism_coeffs,
+                image_size=(W, H),
+                margin=margin,
+            )
+        except ValueError as exc:
+            domain_status = f"certificate failed ({exc}); legacy gate retained"
+        else:
+            # Pass the explicit flag as well as max_valid_r2.  tracer.py can
+            # infer the former, but carrying both makes the viewer contract
+            # unambiguous and robust to zero-valued/legacy dictionaries.
+            pinhole_dict["has_validity_domain"] = True
+            pinhole_dict["max_valid_r2"] = float(max_valid_r2)
+            domain_status = f"max_valid_r2={max_valid_r2:.6f}, margin={margin:.3f}"
+
+    print(
+        f"[PIN-CAM-1 viewer] {camera_id}: {ray_source}; {domain_status}",
+        flush=True,
+    )
+    return pinhole_dict, rays
+
+
 def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> dict:
     """V3-VIZ.3: extract per-camera per-frame c2w + timestamps for the
     Camera dropdown + Follow Camera modes.
@@ -1980,27 +2082,18 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
                     }
                     fov_y_rad = 2.0 * float(max_angle)
                 elif isinstance(cam_model, ncore.sensors.OpenCVPinholeCameraModel):
-                    # E2.7-OPCV: same T8.13 fix as FTheta — bypass kaolin's
-                    # pinhole raygen; use NCore SDK's rational distortion
-                    # inverse to pre-compute camera-space rays that match the
-                    # training contract (datasetNcore.py:443/449).
+                    # E2.7-OPCV / PIN-CAM-1 viewer parity: bypass kaolin's
+                    # pinhole raygen, reuse NCoreDataset's 30-iteration +0.5
+                    # pixel-centred rays, and carry the calibrated CUDA radial
+                    # validity domain.  Recomputing through the SDK here would
+                    # silently restore its legacy 10-iteration inverse.
                     p = cam_model.get_parameters()
-                    opencv_pinhole_dict = {
-                        "resolution": np.asarray(p.resolution, dtype=np.int64),
-                        "shutter_type": p.shutter_type.name,
-                        "principal_point": np.asarray(p.principal_point, dtype=np.float32),
-                        "focal_length": np.asarray(p.focal_length, dtype=np.float32),
-                        "radial_coeffs": np.asarray(p.radial_coeffs, dtype=np.float32),
-                        "tangential_coeffs": np.asarray(p.tangential_coeffs, dtype=np.float32),
-                        "thin_prism_coeffs": np.asarray(p.thin_prism_coeffs, dtype=np.float32),
-                    }
-                    xs = np.arange(W, dtype=np.int64)
-                    ys = np.arange(H, dtype=np.int64)
-                    px, py = np.meshgrid(xs, ys, indexing="xy")
-                    pixels = np.stack([px, py], axis=-1).reshape(-1, 2)
-                    rays = cam_model.pixels_to_camera_rays(pixels)
-                    rays = rays.detach().cpu().numpy() if hasattr(rays, "detach") else np.asarray(rays)
-                    opencv_pinhole_rays = rays.reshape(H, W, 3).astype(np.float32)
+                    opencv_pinhole_dict, opencv_pinhole_rays = _build_opencv_pinhole_viewer_contract(
+                        ds,
+                        seq_id,
+                        cam_id,
+                        p,
+                    )
                     fy = float(cam_model.focal_length[1])
                     if fy > 0:
                         fov_y_rad = 2.0 * float(np.arctan(0.5 * H / fy))

@@ -63,6 +63,18 @@ def _opencv_dict(tag: float) -> dict:
     }
 
 
+def _opencv_params(width: int = 6, height: int = 4):
+    return SimpleNamespace(
+        resolution=np.array([width, height], dtype=np.int64),
+        shutter_type=SimpleNamespace(name="GLOBAL"),
+        principal_point=np.array([width / 2.0, height / 2.0], dtype=np.float32),
+        focal_length=np.array([4.0, 4.0], dtype=np.float32),
+        radial_coeffs=np.zeros(6, dtype=np.float32),
+        tangential_coeffs=np.zeros(2, dtype=np.float32),
+        thin_prism_coeffs=np.zeros(4, dtype=np.float32),
+    )
+
+
 def _entry(*, offset=0.0, ftheta=False, opencv_tag=None) -> dict:
     rays = None if opencv_tag is None else np.full((4, 6, 3), opencv_tag, dtype=np.float32)
     return {
@@ -168,6 +180,69 @@ def test_calibrated_camera_switch_builds_matching_overlay_projector(viewer_modul
     assert isinstance(viewer._overlay_compositor.projector, FthetaForwardProjector)
     viewer._set_active_camera("legacy", 0, snap_clients=False)
     assert viewer._overlay_compositor is None
+
+
+def test_viewer_opencv_contract_reuses_dataset_rays_and_certifies_domain(viewer_module):
+    cached = np.arange(4 * 6 * 3, dtype=np.float32).reshape(4, 6, 3)
+    dataset = SimpleNamespace(
+        sequence_cameras_all_rays={"seq": {"wide": cached}},
+        opencv_pinhole_inverse_iterations=30,
+        opencv_pinhole_use_validity_domain=True,
+        opencv_pinhole_validity_margin=0.1,
+    )
+
+    intrinsics, rays = viewer_module._build_opencv_pinhole_viewer_contract(
+        dataset, "seq", "wide", _opencv_params()
+    )
+
+    np.testing.assert_array_equal(rays, cached)
+    assert intrinsics["has_validity_domain"] is True
+    assert intrinsics["max_valid_r2"] > 0.0
+
+
+def test_viewer_opencv_contract_can_explicitly_disable_certificate(viewer_module):
+    cached = np.zeros((4, 6, 3), dtype=np.float32)
+    dataset = SimpleNamespace(
+        sequence_cameras_all_rays={"seq": {"wide": cached}},
+        opencv_pinhole_use_validity_domain=False,
+    )
+
+    intrinsics, _ = viewer_module._build_opencv_pinhole_viewer_contract(
+        dataset, "seq", "wide", _opencv_params()
+    )
+
+    assert "has_validity_domain" not in intrinsics
+    assert "max_valid_r2" not in intrinsics
+
+
+def test_viewer_opencv_contract_fallback_uses_pixel_centres_and_configured_iterations(
+    viewer_module, monkeypatch
+):
+    captured = {}
+
+    def fake_inverse(pixel_coords, *args, max_iterations, **kwargs):
+        captured["pixel_coords"] = pixel_coords.copy()
+        captured["max_iterations"] = max_iterations
+        rays = np.zeros((len(pixel_coords), 3), dtype=np.float32)
+        rays[:, 2] = 1.0
+        return rays
+
+    utils_module = sys.modules["threedgrut.datasets.utils"]
+    monkeypatch.setattr(utils_module, "compute_opencv_pinhole_rays", fake_inverse)
+    dataset = SimpleNamespace(
+        sequence_cameras_all_rays={},
+        opencv_pinhole_inverse_iterations=37,
+        opencv_pinhole_use_validity_domain=False,
+    )
+
+    _, rays = viewer_module._build_opencv_pinhole_viewer_contract(
+        dataset, "seq", "wide", _opencv_params()
+    )
+
+    assert rays.shape == (4, 6, 3)
+    assert captured["max_iterations"] == 37
+    np.testing.assert_array_equal(captured["pixel_coords"][0], [0.5, 0.5])
+    np.testing.assert_array_equal(captured["pixel_coords"][-1], [5.5, 3.5])
 
 
 def test_status_text_identifies_projection_and_pose_source(viewer_module):
