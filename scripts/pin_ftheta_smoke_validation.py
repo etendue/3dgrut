@@ -53,7 +53,8 @@ _LOGICAL_MESSAGE_START = re.compile(
 )
 _TRAIN_FRAME_HEADER = re.compile(r"NCoreDataset\s+(?:\[train\]\s+)?frame counts\s+\(after\s+temporal\s+filtering\):")
 _TRAIN_FRAME_LINE = re.compile(r"\b(camera_[A-Za-z0-9_]+):\s+(\d+)\s+frames\b")
-_FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_last\.pt"')
+# Rich may hard-wrap the quoted basename after ``ckpt_`` in redirected logs.
+_FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_\s*last\.pt"')
 _FTHETA_OVERRIDE_ENABLED = re.compile(
     r"\[PIN-FTHETA\]\s+NCoreDataset\s+(?:\[train\]\s+)?"
     r"explicit\s+override\s+enabled:\s+.{0,300}?cameras=7(?=\s|$|[;,])",

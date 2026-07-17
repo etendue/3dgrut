@@ -312,6 +312,39 @@ def test_log_validation_allows_real_rich_wrapped_final_checkpoint(tmp_path: Path
     validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
 
 
+@pytest.mark.parametrize("arm", ["P", "F"])
+def test_log_validation_allows_real_rich_wrap_inside_final_checkpoint_basename(tmp_path: Path, arm: str) -> None:
+    log = tmp_path / f"arm{arm}.log"
+    wrapped_checkpoint = (
+        "[16:12:37] [INFO] 💾 Saved checkpoint to:                           logger.py:68\n"
+        '           "/home/inceptio/work/output/pin_ftheta_phase4_full_ab_ed\n'
+        "           8d9de/20260717T071749Z_pid2564736/train_outputs/incepti\n"
+        "           o_b6a9ed61/ckpt_\n"
+        '           last.pt"'
+    )
+    wrapped = _successful_log(arm=arm).replace(
+        '💾 Saved checkpoint to: "/run/ckpt_last.pt"',
+        wrapped_checkpoint,
+    )
+    log.write_text(wrapped, encoding="utf-8")
+
+    validate_training_log(log, arm, FTHETA_ARTIFACT_PATH)
+
+
+def test_log_validation_rejects_rich_wrapped_nonfinal_checkpoint_name(tmp_path: Path) -> None:
+    log = tmp_path / "train.log"
+    wrapped = _successful_log().replace(
+        '💾 Saved checkpoint to: "/run/ckpt_last.pt"',
+        "💾 Saved checkpoint to:                              logger.py:68\n"
+        '           "/run/not_ckpt_\n'
+        '           last.pt"',
+    )
+    log.write_text(wrapped, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no final ckpt_last save signal"):
+        validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
+
+
 def test_real_rich_probe_log_passes_validator_module_cli(tmp_path: Path) -> None:
     log = tmp_path / "armP.log"
     log.write_text(_real_rich_probe_log(), encoding="utf-8")
