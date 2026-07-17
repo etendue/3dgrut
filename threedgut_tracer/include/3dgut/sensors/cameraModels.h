@@ -25,6 +25,10 @@ struct OpenCVPinholeProjectionParameters {
     tcnn::vec<6> radialCoeffs;
     tcnn::vec2 tangentialCoeffs;
     tcnn::vec4 thinPrismCoeffs;
+    // Keep this POD-compatible for placement in CameraModelParameters' union.
+    // Default false/0 are assigned by the host-side factory bindings.
+    bool hasValidityDomain;
+    float maxValidR2;
 };
 
 struct OpenCVFisheyeProjectionParameters {

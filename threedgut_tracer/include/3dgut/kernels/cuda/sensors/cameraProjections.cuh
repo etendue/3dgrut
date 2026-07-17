@@ -91,18 +91,43 @@ static inline __device__ bool projectPoint(const OpenCVPinholeProjectionParamete
 
     const float icD_numerator   = 1.f + r2 * (sensorParams.radialCoeffs[0] + r2 * (sensorParams.radialCoeffs[1] + r2 * sensorParams.radialCoeffs[2]));
     const float icD_denominator = 1.f + r2 * (sensorParams.radialCoeffs[3] + r2 * (sensorParams.radialCoeffs[4] + r2 * sensorParams.radialCoeffs[5]));
-    const float icD             = icD_numerator / icD_denominator;
+    constexpr float kDenominatorEpsilon = 1e-6f;
+    const bool noDenominatorPole = isfinite(icD_denominator) && icD_denominator > kDenominatorEpsilon;
+    const float icD = noDenominatorPole ? icD_numerator / icD_denominator : 0.f;
 
     const tcnn::vec2 delta = tcnn::vec2{
         sensorParams.tangentialCoeffs[0] * a1 + sensorParams.tangentialCoeffs[1] * a2 + r2 * (sensorParams.thinPrismCoeffs[0] + r2 * sensorParams.thinPrismCoeffs[1]),
         sensorParams.tangentialCoeffs[0] * a3 + sensorParams.tangentialCoeffs[1] * a1 + r2 * (sensorParams.thinPrismCoeffs[2] + r2 * sensorParams.thinPrismCoeffs[3])};
 
+    bool validRadial = false;
+
+    if (sensorParams.hasValidityDomain) {
+        // Certified validity domain: exact rational monotonicity check
+        // Compute radial derivative d(r*icD)/dr = icD + 2*r² * (N'*D - N*D') / D²
+        const float N_prime = sensorParams.radialCoeffs[0] + r2 * (2.f * sensorParams.radialCoeffs[1] + r2 * 3.f * sensorParams.radialCoeffs[2]);
+        const float D_prime = sensorParams.radialCoeffs[3] + r2 * (2.f * sensorParams.radialCoeffs[4] + r2 * 3.f * sensorParams.radialCoeffs[5]);
+        const float radialDerivative = icD + 2.f * r2 * (N_prime * icD_denominator - icD_numerator * D_prime) / (icD_denominator * icD_denominator);
+
+        constexpr float kRadialDerivativeEpsilon = 1e-6f;
+
+        validRadial = isfinite(r2)
+                   && isfinite(icD)
+                   && isfinite(icD_denominator)
+                   && isfinite(radialDerivative)
+                   && r2 >= 0.f
+                   && r2 <= sensorParams.maxValidR2
+                   && noDenominatorPole
+                   && radialDerivative > kRadialDerivativeEpsilon;
+    } else {
+        // Legacy: fixed icD range for uncertified cameras
+        constexpr float kMinRadialDist = 0.8f, kMaxRadialDist = 1.2f;
+        validRadial = noDenominatorPole && (icD > kMinRadialDist) && (icD < kMaxRadialDist);
+    }
+
     // Project using ideal pinhole model (apply radial / tangential / thin-prism distortions)
     // in case radial distortion is within limits
     const tcnn::vec2 uvND = icD * uvNormalized + delta;
 
-    constexpr float kMinRadialDist = 0.8f, kMaxRadialDist = 1.2f;
-    const bool validRadial = (icD > kMinRadialDist) && (icD < kMaxRadialDist);
     if (validRadial) {
         projected = uvND * sensorParams.focalLength + sensorParams.principalPoint;
     } else {

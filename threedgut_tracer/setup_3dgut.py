@@ -67,6 +67,7 @@ def setup_3dgut(conf):
         f"-DGAUSSIAN_UT_DELTA={ut_delta}",
         f"-DGAUSSIAN_UT_IN_IMAGE_MARGIN_FACTOR={conf.render.splat.ut_in_image_margin_factor}",
         f"-DGAUSSIAN_UT_REQUIRE_ALL_SIGMA_POINTS_VALID={to_cpp_bool(conf.render.splat.ut_require_all_sigma_points_valid)}",
+        f"-DGAUSSIAN_UT_VALID_ONLY={to_cpp_bool(getattr(conf.render.splat, 'ut_valid_only', True))}",
         # -- Culling --
         f"-DGAUSSIAN_RECT_BOUNDING={to_cpp_bool(conf.render.splat.rect_bounding)}",
         f"-DGAUSSIAN_TIGHT_OPACITY_BOUNDING={to_cpp_bool(conf.render.splat.tight_opacity_bounding)}",

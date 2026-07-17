@@ -52,9 +52,24 @@ lidar_color_generic_data_name: rgb
 # PIN-MASK-1: forward-valid supervision mask from camera_rays_to_pixels().
 # When true, masks out pixels where the rational-polynomial forward projection
 # produces an invalid flag (OpenCVPinholeCameraModel only).  Default false
-# ensures existing run configs are byte-identical.
+# ensures existing run configs are byte-identical. This legacy SDK-domain mask
+# is mutually exclusive with opencv_pinhole_use_validity_domain=true.
 mask_forward_invalid_pixels: false
 
+# PIN-CAM-1: OpenCV rational pixel-to-ray inverse convergence iterations.
+# NCore SDK hard-codes 10, which leaves wide-camera peripheral rays several
+# pixels from the forward solution. 30 reduces b6a9 front-wide max residual
+# below 0.02 px. Set 10 only for legacy reproduction.
+opencv_pinhole_inverse_iterations: 30
+# PIN-CAM-1c: certify the rational forward domain over the image plus the
+# same fractional margin used by 3DGUT's UT projection.
+opencv_pinhole_validity_margin: 0.1
+# PIN-CAM-1c: enable calibrated OpenCV rational validity domain certificates.
+# When false, omit max_valid_r2 so the CUDA projector keeps the legacy
+# 0.8 < icD < 1.2 gate. Inverse-iteration fixes remain independent. Do not
+# combine true with mask_forward_invalid_pixels=true: that mask uses the SDK's
+# legacy gate and would discard the calibrated periphery restored here.
+opencv_pinhole_use_validity_domain: true
 # Training parameters
 train:
   window_size: 256  # Not used when sample_full_image=true (full images used)
@@ -76,4 +91,3 @@ train:
 val:
   seek_offset_sec: 0.0
   duration_sec: -1  # -1 = use all available frames in the dataset
-

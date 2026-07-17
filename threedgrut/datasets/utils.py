@@ -792,3 +792,268 @@ def maybe_apply_forward_valid_mask(
         )
 
     return True
+
+
+def _compute_distortion_np(xy: np.ndarray, radial_coeffs: np.ndarray,
+                           tangential_coeffs: np.ndarray,
+                           thin_prism_coeffs: np.ndarray):
+    """Pure-NumPy version of ``OpenCVPinholeCameraModel.__compute_distortion``.
+
+    Args:
+        xy: ``(N, 2)`` normalized image coordinates (ideal pinhole).
+        radial_coeffs: ``(6,)`` rational radial distortion coefficients
+            ``[k1, k2, k3, k4, k5, k6]``.
+        tangential_coeffs: ``(2,)`` tangential distortion ``[p1, p2]``.
+        thin_prism_coeffs: ``(4,)`` thin-prism coefficients.
+
+    Returns:
+        Tuple ``(icD, delta_x, delta_y, r_2)`` matching the NCore
+        ``__compute_distortion`` signature.
+    """
+    x = xy[:, 0]
+    y = xy[:, 1]
+    x2 = x * x
+    y2 = y * y
+    r2 = x2 + y2
+    xy_prod = x * y
+    a1 = 2.0 * xy_prod
+    a2 = r2 + 2.0 * x2
+    a3 = r2 + 2.0 * y2
+
+    # Rational radial distortion
+    r4 = r2 * r2
+    r6 = r4 * r2
+    icD_num = 1.0 + r2 * (radial_coeffs[0] + r2 * (radial_coeffs[1] + r2 * radial_coeffs[2]))
+    icD_den = 1.0 + r2 * (radial_coeffs[3] + r2 * (radial_coeffs[4] + r2 * radial_coeffs[5]))
+    icD = icD_num / icD_den
+
+    # Tangential + thin-prism distortion
+    delta_x = (tangential_coeffs[0] * a1
+               + tangential_coeffs[1] * a2
+               + r2 * (thin_prism_coeffs[0] + r2 * thin_prism_coeffs[1]))
+    delta_y = (tangential_coeffs[0] * a3
+               + tangential_coeffs[1] * a1
+               + r2 * (thin_prism_coeffs[2] + r2 * thin_prism_coeffs[3]))
+
+    return icD, delta_x, delta_y, r2
+
+
+def compute_opencv_pinhole_rays(
+    pixel_coords: np.ndarray,
+    principal_point: np.ndarray,
+    focal_length: np.ndarray,
+    radial_coeffs: np.ndarray,
+    tangential_coeffs: np.ndarray,
+    thin_prism_coeffs: np.ndarray,
+    max_iterations: int = 30,
+    stop_mse_px2: float = 1e-12,
+    _convergence_diagnostics: bool = False,
+) -> np.ndarray:
+    """High-precision ``pixels_to_camera_rays`` for OpenCVPinholeCameraModel.
+
+    Replicates the exact NCore iterative undistortion formula
+    (``__iterative_undistort`` + ``__compute_distortion``) but with a
+    configurable ``max_iterations`` defaulting to 30 instead of the SDK's
+    hard-coded 10.  Pure-NumPy, no ``ncore`` or ``torch`` dependency.
+
+    The SDK's 10-iteration cap causes under-convergence at wide FOV edges
+    (max forward residual >5 px on b6a9 front-wide at 10 iters).  30 iterations
+    reduces the max to <0.02 px.
+
+    Args:
+        pixel_coords: ``(N, 2)`` float32 pixel coordinates (with +0.5 center
+            offset applied, i.e. the same as what ``pixels_to_image_points``
+            produces internally).
+        principal_point: ``(2,)`` ``(cx, cy)``.
+        focal_length: ``(2,)`` ``(fx, fy)``.
+        radial_coeffs: ``(6,)`` rational radial coeffs ``[k1..k6]``.
+        tangential_coeffs: ``(2,)`` tangential coeffs ``[p1, p2]``.
+        thin_prism_coeffs: ``(4,)`` thin-prism coeffs.
+        max_iterations: Max Newton-like iterations (default 30).
+        stop_mse_px2: Early-stop MSE threshold (same default as SDK).
+        _convergence_diagnostics: If True, also return per-point convergence
+            info (see returns).
+
+    Returns:
+        Normalized ray directions ``(N, 3)`` float32, same as
+        ``camera_model.pixels_to_camera_rays(pixel_coords)``.
+
+        When ``_convergence_diagnostics=True``, returns a tuple
+        ``(rays, n_iters, final_mse_px2)`` where ``n_iters`` is the actual
+        iteration count and ``final_mse_px2`` is the mean squared error.
+    """
+    pixel_coords = np.asarray(pixel_coords)
+    principal_point = np.asarray(principal_point)
+    focal_length = np.asarray(focal_length)
+    radial_coeffs = np.asarray(radial_coeffs)
+    tangential_coeffs = np.asarray(tangential_coeffs)
+    thin_prism_coeffs = np.asarray(thin_prism_coeffs)
+    if pixel_coords.ndim != 2 or pixel_coords.shape[1] != 2:
+        raise ValueError(f"pixel_coords must have shape (N, 2), got {pixel_coords.shape}")
+    expected_shapes = {
+        "principal_point": (principal_point, (2,)),
+        "focal_length": (focal_length, (2,)),
+        "radial_coeffs": (radial_coeffs, (6,)),
+        "tangential_coeffs": (tangential_coeffs, (2,)),
+        "thin_prism_coeffs": (thin_prism_coeffs, (4,)),
+    }
+    for name, (value, expected) in expected_shapes.items():
+        if value.shape != expected:
+            raise ValueError(f"{name} must have shape {expected}, got {value.shape}")
+    if max_iterations < 1:
+        raise ValueError(f"max_iterations must be >= 1, got {max_iterations}")
+    if np.any(focal_length == 0):
+        raise ValueError("focal_length entries must be non-zero")
+
+    # Step 1: ideal pinhole unprojection (same as SDK)
+    cam_rays_0 = (pixel_coords.astype(np.float64) - principal_point.astype(np.float64)) \
+        / focal_length.astype(np.float64)
+
+    cam_rays = cam_rays_0.copy()
+    n_iters = 0
+    mse = float("inf")
+
+    for _ in range(max_iterations):
+        n_iters += 1
+        icD, delta_x, delta_y, _ = _compute_distortion_np(
+            cam_rays, radial_coeffs, tangential_coeffs, thin_prism_coeffs
+        )
+
+        # Build delta array: (N, 2)
+        delta = np.column_stack([delta_x, delta_y])
+        icD_col = icD[:, None]
+
+        # Update: cam_rays_{t+1} = (cam_rays_0 - delta) / icD
+        cam_rays_new = (cam_rays_0 - delta) / icD_col
+
+        # Residual for convergence check (same as SDK: cam_rays - cam_rays_new)
+        residual = cam_rays.astype(np.float64) - cam_rays_new.astype(np.float64)
+        mse = float(np.mean(residual * residual))
+
+        cam_rays = cam_rays_new
+
+        if mse <= stop_mse_px2:
+            break
+
+    # Step 2: form 3D rays [x, y, 1.0] and normalize (same as SDK)
+    ones = np.ones((cam_rays.shape[0], 1), dtype=np.float64)
+    rays_3d = np.concatenate([cam_rays, ones], axis=1)
+    norm = np.linalg.norm(rays_3d, axis=1, keepdims=True)
+    rays = (rays_3d / norm).astype(np.float32)
+
+    if _convergence_diagnostics:
+        return rays, n_iters, mse
+
+    return rays
+
+
+def _validate_opencv_radial_domain(
+    radial_coeffs: np.ndarray,
+    max_r2: float,
+    *,
+    samples: int = 16384,
+    epsilon: float = 1e-6,
+) -> None:
+    """Prove the rational radial map is pole-free and monotonic on a domain."""
+    radial = np.asarray(radial_coeffs, dtype=np.float64)
+    if radial.shape != (6,) or not np.isfinite(radial).all():
+        raise ValueError("radial_coeffs must be a finite (6,) array")
+    if not np.isfinite(max_r2) or max_r2 < 0.0 or samples < 2:
+        raise ValueError("max_r2 must be finite/non-negative and samples >= 2")
+    s = np.linspace(0.0, max_r2, samples, dtype=np.float64)
+    numerator = 1.0 + s * (radial[0] + s * (radial[1] + s * radial[2]))
+    denominator = 1.0 + s * (radial[3] + s * (radial[4] + s * radial[5]))
+    numerator_prime = radial[0] + 2.0 * radial[1] * s + 3.0 * radial[2] * s * s
+    denominator_prime = radial[3] + 2.0 * radial[4] * s + 3.0 * radial[5] * s * s
+    if not np.isfinite(numerator).all() or not np.isfinite(denominator).all() or np.any(denominator <= epsilon):
+        raise ValueError("unsafe OpenCV rational domain: denominator pole or non-positive denominator")
+    scale = numerator / denominator
+    derivative = scale + 2.0 * s * (
+        numerator_prime * denominator - numerator * denominator_prime
+    ) / (denominator * denominator)
+    if not np.isfinite(derivative).all() or np.any(derivative <= epsilon):
+        raise ValueError("unsafe OpenCV rational domain: radial mapping is non-monotonic or folded")
+
+
+def validate_opencv_pinhole_domain_options(
+    mask_forward_invalid_pixels: bool,
+    use_validity_domain: bool,
+) -> None:
+    """Reject the legacy SDK mask combined with the calibrated CUDA domain."""
+    if mask_forward_invalid_pixels and use_validity_domain:
+        raise ValueError(
+            "mask_forward_invalid_pixels uses the legacy SDK validity gate and cannot be enabled "
+            "together with opencv_pinhole_use_validity_domain"
+        )
+
+
+def compute_max_valid_r2(
+    principal_point: np.ndarray,
+    focal_length: np.ndarray,
+    radial_coeffs: np.ndarray,
+    tangential_coeffs: np.ndarray,
+    thin_prism_coeffs: np.ndarray,
+    image_size: tuple[int, int],
+    margin: float = 0.1,
+    boundary_samples_per_edge: int = 4096,
+    inverse_iterations: int = 80,
+) -> float:
+    """Certify the largest ideal normalized radius in an expanded image domain.
+
+    The renderer's validity gate operates on the *undistorted* normalized ray
+    radius, so dividing distorted image corners by focal length is incorrect for
+    a rational wide-angle calibration.  This function densely samples the
+    continuous boundary of the image plus its UT margin, applies the same
+    high-precision OpenCV rational inverse used for dataset rays, then returns
+    ``max((ray_x/ray_z)^2 + (ray_y/ray_z)^2)``.
+
+    RGB is never read or remapped; this is calibration-only geometry.
+    """
+    pp = np.asarray(principal_point, dtype=np.float64)
+    fl = np.asarray(focal_length, dtype=np.float64)
+    radial = np.asarray(radial_coeffs, dtype=np.float64)
+    tangential = np.asarray(tangential_coeffs, dtype=np.float64)
+    thin_prism = np.asarray(thin_prism_coeffs, dtype=np.float64)
+    w, h = int(image_size[0]), int(image_size[1])
+    if pp.shape != (2,) or fl.shape != (2,) or w <= 0 or h <= 0:
+        raise ValueError("principal_point/focal_length must be (2,) and image_size must be positive")
+    if radial.shape != (6,) or tangential.shape != (2,) or thin_prism.shape != (4,):
+        raise ValueError("distortion arrays must have shapes radial=(6,), tangential=(2,), thin_prism=(4,)")
+    if not np.isfinite(pp).all() or not np.isfinite(fl).all() or np.any(fl <= 0.0):
+        raise ValueError("principal_point must be finite and focal_length must be finite and positive")
+    if not np.isfinite(margin) or margin < 0.0:
+        raise ValueError("margin must be finite and non-negative")
+    if boundary_samples_per_edge < 2:
+        raise ValueError("boundary_samples_per_edge must be >= 2")
+
+    margin_x, margin_y = w * margin, h * margin
+    x_min, x_max = -margin_x, w + margin_x
+    y_min, y_max = -margin_y, h + margin_y
+    xs = np.linspace(x_min, x_max, boundary_samples_per_edge, dtype=np.float64)
+    ys = np.linspace(y_min, y_max, boundary_samples_per_edge, dtype=np.float64)
+    boundary_pixels = np.concatenate(
+        [
+            np.column_stack([xs, np.full_like(xs, y_min)]),
+            np.column_stack([xs, np.full_like(xs, y_max)]),
+            np.column_stack([np.full_like(ys, x_min), ys]),
+            np.column_stack([np.full_like(ys, x_max), ys]),
+        ],
+        axis=0,
+    )
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        rays = compute_opencv_pinhole_rays(
+            boundary_pixels,
+            pp,
+            fl,
+            radial,
+            tangential,
+            thin_prism,
+            max_iterations=inverse_iterations,
+            stop_mse_px2=0.0,
+        ).astype(np.float64)
+    if not np.isfinite(rays).all() or np.any(np.abs(rays[:, 2]) < 1e-12):
+        raise ValueError("unsafe OpenCV rational domain: inverse diverged, indicating a pole or fold")
+    xy_ideal = rays[:, :2] / rays[:, 2:3]
+    max_r2 = float(np.max(np.sum(xy_ideal * xy_ideal, axis=1)))
+    _validate_opencv_radial_domain(radial, max_r2)
+    return max_r2

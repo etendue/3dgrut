@@ -146,46 +146,59 @@ struct GUTProjector : Params, UTParams {
 
         int numValidPoints = 0;
         tcnn::vec2 projectedSigmaPoints[2 * UTParams::D + 1];
+        bool validSigmaPoints[2 * UTParams::D + 1];
 
         constexpr float Lambda = UTParams::Alpha * UTParams::Alpha * (UTParams::D + UTParams::Kappa) - UTParams::D;
 
-        if (threedgut::projectPointWithShutter<UTParams::NRollingShutterIterations>(
+        validSigmaPoints[0] = threedgut::projectPointWithShutter<UTParams::NRollingShutterIterations>(
                 particleMean,
                 resolution,
                 sensorModel,
                 sensorShutterState,
                 UTParams::ImageMarginFactor,
-                projectedSigmaPoints[0])) {
+                projectedSigmaPoints[0]);
+        if (validSigmaPoints[0]) {
             numValidPoints++;
         }
-        particleProjCenter = projectedSigmaPoints[0] * (Lambda / (UTParams::D + Lambda));
 
         constexpr float weightI = 1.f / (2.f * (UTParams::D + Lambda));
+        constexpr float weight0Mean = Lambda / (UTParams::D + Lambda);
+        const bool accumulateCenter = !GAUSSIAN_UT_VALID_ONLY || validSigmaPoints[0];
+        float validMeanWeight = accumulateCenter ? weight0Mean : 0.f;
+        particleProjCenter = accumulateCenter ? projectedSigmaPoints[0] * weight0Mean : tcnn::vec2::zero();
 #pragma unroll
         for (int i = 0; i < UTParams::D; ++i) {
             const tcnn::vec3 delta = UTParams::Delta * particleScale[i] * particleRotation[i]; ///< CHECK : column or row ?
 
-            if (threedgut::projectPointWithShutter<UTParams::NRollingShutterIterations>(
+            validSigmaPoints[i + 1] = threedgut::projectPointWithShutter<UTParams::NRollingShutterIterations>(
                     particleMean + delta,
                     resolution,
                     sensorModel,
                     sensorShutterState,
                     UTParams::ImageMarginFactor,
-                    projectedSigmaPoints[i + 1])) {
+                    projectedSigmaPoints[i + 1]);
+            if (validSigmaPoints[i + 1]) {
                 numValidPoints++;
             }
-            particleProjCenter += weightI * projectedSigmaPoints[i + 1];
+            if (!GAUSSIAN_UT_VALID_ONLY || validSigmaPoints[i + 1]) {
+                particleProjCenter += weightI * projectedSigmaPoints[i + 1];
+                validMeanWeight += weightI;
+            }
 
-            if (threedgut::projectPointWithShutter<UTParams::NRollingShutterIterations>(
+            validSigmaPoints[i + 1 + UTParams::D] = threedgut::projectPointWithShutter<UTParams::NRollingShutterIterations>(
                     particleMean - delta,
                     resolution,
                     sensorModel,
                     sensorShutterState,
                     UTParams::ImageMarginFactor,
-                    projectedSigmaPoints[i + 1 + UTParams::D])) {
+                    projectedSigmaPoints[i + 1 + UTParams::D]);
+            if (validSigmaPoints[i + 1 + UTParams::D]) {
                 numValidPoints++;
             }
-            particleProjCenter += weightI * projectedSigmaPoints[i + 1 + UTParams::D];
+            if (!GAUSSIAN_UT_VALID_ONLY || validSigmaPoints[i + 1 + UTParams::D]) {
+                particleProjCenter += weightI * projectedSigmaPoints[i + 1 + UTParams::D];
+                validMeanWeight += weightI;
+            }
         }
 
         if constexpr (UTParams::RequireAllSigmaPoints) {
@@ -196,19 +209,51 @@ struct GUTProjector : Params, UTParams {
             return false;
         }
 
-        {
-            const tcnn::vec2 centeredPoint = projectedSigmaPoints[0] - particleProjCenter;
-            constexpr float weight0        = Lambda / (UTParams::D + Lambda) + (1.f - UTParams::Alpha * UTParams::Alpha + UTParams::Beta);
-            particleProjCovariance         = weight0 * tcnn::vec3(centeredPoint.x * centeredPoint.x,
-                                                                  centeredPoint.x * centeredPoint.y,
-                                                                  centeredPoint.y * centeredPoint.y);
-        }
+        constexpr float kWeightEpsilon = 1e-8f;
+        const bool useEqualWeights = !isfinite(validMeanWeight) || validMeanWeight <= kWeightEpsilon;
+        if (useEqualWeights) {
+            // This occurs, for example, when only the center survives and its
+            // mean weight is zero (alpha=1, kappa=0). Preserve the existing
+            // "at least one valid point" contract with a finite equal-weight
+            // estimate instead of rejecting the Gaussian.
+            const float equalWeight = 1.f / static_cast<float>(numValidPoints);
+            particleProjCenter = tcnn::vec2::zero();
 #pragma unroll
-        for (int i = 0; i < 2 * UTParams::D; ++i) {
-            const tcnn::vec2 centeredPoint = projectedSigmaPoints[i + 1] - particleProjCenter;
-            particleProjCovariance += weightI * tcnn::vec3(centeredPoint.x * centeredPoint.x,
-                                                           centeredPoint.x * centeredPoint.y,
-                                                           centeredPoint.y * centeredPoint.y);
+            for (int i = 0; i < 2 * UTParams::D + 1; ++i) {
+                if (validSigmaPoints[i]) {
+                    particleProjCenter += equalWeight * projectedSigmaPoints[i];
+                }
+            }
+            particleProjCovariance = tcnn::vec3::zero();
+#pragma unroll
+            for (int i = 0; i < 2 * UTParams::D + 1; ++i) {
+                if (validSigmaPoints[i]) {
+                    const tcnn::vec2 centeredPoint = projectedSigmaPoints[i] - particleProjCenter;
+                    particleProjCovariance += equalWeight * tcnn::vec3(centeredPoint.x * centeredPoint.x,
+                                                                        centeredPoint.x * centeredPoint.y,
+                                                                        centeredPoint.y * centeredPoint.y);
+                }
+            }
+        } else {
+            particleProjCenter /= validMeanWeight;
+            constexpr float weight0 = Lambda / (UTParams::D + Lambda) + (1.f - UTParams::Alpha * UTParams::Alpha + UTParams::Beta);
+            if (!GAUSSIAN_UT_VALID_ONLY || validSigmaPoints[0]) {
+                const tcnn::vec2 centeredPoint = projectedSigmaPoints[0] - particleProjCenter;
+                particleProjCovariance = (weight0 / validMeanWeight) * tcnn::vec3(centeredPoint.x * centeredPoint.x,
+                                                                                  centeredPoint.x * centeredPoint.y,
+                                                                                  centeredPoint.y * centeredPoint.y);
+            } else {
+                particleProjCovariance = tcnn::vec3::zero();
+            }
+#pragma unroll
+            for (int i = 0; i < 2 * UTParams::D; ++i) {
+                if (!GAUSSIAN_UT_VALID_ONLY || validSigmaPoints[i + 1]) {
+                    const tcnn::vec2 centeredPoint = projectedSigmaPoints[i + 1] - particleProjCenter;
+                    particleProjCovariance += (weightI / validMeanWeight) * tcnn::vec3(centeredPoint.x * centeredPoint.x,
+                                                                                       centeredPoint.x * centeredPoint.y,
+                                                                                       centeredPoint.y * centeredPoint.y);
+                }
+            }
         }
 
         return true;

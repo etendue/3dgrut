@@ -446,6 +446,8 @@ class Tracer:
             return camera_model_parameters, Tracer.__create_sensor_pose_from_R_T(R_start, T_start, R_end, T_end)
 
         elif (K := gpu_batch.intrinsics_OpenCVPinholeCameraModelParameters) is not None:
+            has_validity = bool(K.get("has_validity_domain", K.get("max_valid_r2", 0.0) > 0.0))
+            max_valid_r2 = float(K.get("max_valid_r2", 0.0)) if has_validity else 0.0
             camera_model_parameters = _3dgut_plugin.fromOpenCVPinholeCameraModelParameters(
                 resolution=K["resolution"],
                 shutter_type=SHUTTER_TYPE_MAP[K["shutter_type"]],
@@ -454,6 +456,8 @@ class Tracer:
                 radial_coeffs=K["radial_coeffs"],
                 tangential_coeffs=K["tangential_coeffs"],
                 thin_prism_coeffs=K.get("thin_prism_coeffs", np.zeros((4,), dtype=np.float32)),
+                has_validity_domain=has_validity,
+                max_valid_r2=max_valid_r2,
             )
             return camera_model_parameters, Tracer.__create_sensor_pose_from_R_T(R_start, T_start, R_end, T_end)
 

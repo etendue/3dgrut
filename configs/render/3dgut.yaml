@@ -21,6 +21,9 @@ splat: # 3DGUT-specific settings
   ut_kappa: 0.0
   ut_in_image_margin_factor: 0.1
   ut_require_all_sigma_points_valid: false
+  # PIN-CAM-1c: exclude invalid projection fallback coordinates from the UT
+  # mean/covariance. Set false only to reproduce the legacy renderer in A/B.
+  ut_valid_only: true
   # rendering
   k_buffer_size: 0  # 0 means unsorted
   global_z_order: true

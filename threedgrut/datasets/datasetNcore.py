@@ -56,12 +56,15 @@ from threedgrut.datasets.tracks_loader import (
 )
 from threedgrut.datasets.utils import (
     PointCloud,
+    compute_max_valid_r2,
+    compute_opencv_pinhole_rays,
     create_camera_visualization,
     create_pixel_coords,
     get_center_and_diag,
     get_worker_id,
     maybe_apply_forward_valid_mask,
     repair_nonfinite_rays,
+    validate_opencv_pinhole_domain_options,
 )
 from threedgrut.utils.logger import logger
 from threedgrut.utils.misc import to_torch
@@ -130,6 +133,15 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # PIN-MASK-1: forward-valid supervision mask from camera_rays_to_pixels().
         # Default False so existing run configs are byte-identical.
         mask_forward_invalid_pixels: bool = False,
+        # PIN-INVERSE: configurable iterations for OpenCVPinhole inverse ray
+        # convergence.  30 = high precision (<0.02 px max residual at edges);
+        # 10 = reproduce old SDK behaviour (~7 px max residual on b6a9 wide).
+        opencv_pinhole_inverse_iterations: int = 30,
+        # PIN-CAM-1c: margin factor for computing maxValidR2 over expanded image domain.
+        # 0.1 = 10% margin on each side of the image for continuous UT sigma points.
+        opencv_pinhole_validity_margin: float = 0.1,
+        # PIN-CAM-1c: when false, never emit max_valid_r2 certificates.
+        opencv_pinhole_use_validity_domain: bool = True,
     ):
         super().__init__()
 
@@ -217,6 +229,17 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # Default False so existing run configs are byte-identical.
         self.mask_forward_invalid_pixels: bool = mask_forward_invalid_pixels
 
+        # PIN-INVERSE: configurable iterations for OpenCVPinhole inverse ray convergence.
+        self.opencv_pinhole_inverse_iterations: int = opencv_pinhole_inverse_iterations
+        # PIN-CAM-1c: margin for computing calibrated pinhole validity domain.
+        if not np.isfinite(opencv_pinhole_validity_margin) or opencv_pinhole_validity_margin < 0.0:
+            raise ValueError("opencv_pinhole_validity_margin must be finite and non-negative")
+        self.opencv_pinhole_validity_margin: float = opencv_pinhole_validity_margin
+        self.opencv_pinhole_use_validity_domain: bool = bool(opencv_pinhole_use_validity_domain)
+        validate_opencv_pinhole_domain_options(
+            self.mask_forward_invalid_pixels,
+            self.opencv_pinhole_use_validity_domain,
+        )
         self.split: str = split
 
         # load single-sequence NCore V4 meta-file
@@ -457,16 +480,71 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             # Precompute all rays
             h_rays = h
             w_rays = w
+
+            # PIN-INVERSE: for OpenCVPinholeCameraModel, use the high-precision
+            # pure-NumPy helper with configurable iterations instead of the SDK's
+            # hard-coded 10-iteration 'pixels_to_camera_rays' path.
+            # FThetaCameraModel and OpenCVFisheyeCameraModel are strict no-op.
+            # When external_distortion is present, fall back to SDK path
+            # (the helper cannot handle external distortion without importing
+            # ncore's ExternalDistortionModel types).
+            _is_opencv_pinhole = isinstance(camera_model, ncore.sensors.OpenCVPinholeCameraModel)
+            _ncore_pinhole = _is_opencv_pinhole and camera_model.external_distortion is None
+            if _is_opencv_pinhole and camera_model.external_distortion is not None:
+                logger.warning(
+                    f"[PIN-CAM-1] {camera_id}: external distortion is present; "
+                    "falling back to the NCore SDK inverse ray path"
+                )
+            def _as_numpy(value):
+                if hasattr(value, "detach"):
+                    value = value.detach()
+                if hasattr(value, "cpu"):
+                    value = value.cpu()
+                if hasattr(value, "numpy"):
+                    value = value.numpy()
+                return np.asarray(value)
+
+            if _ncore_pinhole and self.opencv_pinhole_inverse_iterations > 0:
+                logger.info(
+                    f"[PIN-CAM-1] {camera_id}: computing OpenCV pinhole rays with "
+                    f"{self.opencv_pinhole_inverse_iterations} inverse iterations"
+                )
+                _px = self.sequence_cameras_all_pixels[sequence_id][camera_id].astype(np.float32)
+                _rays = compute_opencv_pinhole_rays(
+                    _px + 0.5,  # convert integer pixel indices → +0.5 image points
+                    _as_numpy(camera_model.principal_point).astype(np.float32),
+                    _as_numpy(camera_model.focal_length).astype(np.float32),
+                    _as_numpy(camera_model.radial_coeffs).astype(np.float32),
+                    _as_numpy(camera_model.tangential_coeffs).astype(np.float32),
+                    _as_numpy(camera_model.thin_prism_coeffs).astype(np.float32),
+                    max_iterations=self.opencv_pinhole_inverse_iterations,
+                ).reshape(h_rays, w_rays, 3)
+            else:
+                _rays = (
+                    camera_model.pixels_to_camera_rays(self.sequence_cameras_all_pixels[sequence_id][camera_id])
+                    .reshape(h_rays, w_rays, 3)
+                    .numpy()
+                )
             self.sequence_cameras_all_rays[sequence_id] |= {
-                camera_id: camera_model.pixels_to_camera_rays(self.sequence_cameras_all_pixels[sequence_id][camera_id])
-                .reshape(h_rays, w_rays, 3)
-                .numpy()
+                camera_id: _rays
             }
 
+            # Subsampled rays (validation) — same PIN-INVERSE treatment
+            _px_sub = self.sequence_cameras_pixels_subsample[sequence_id][camera_id]
+            if _ncore_pinhole and self.opencv_pinhole_inverse_iterations > 0:
+                _rays_sub = compute_opencv_pinhole_rays(
+                    _px_sub.astype(np.float32) + 0.5,
+                    _as_numpy(camera_model.principal_point).astype(np.float32),
+                    _as_numpy(camera_model.focal_length).astype(np.float32),
+                    _as_numpy(camera_model.radial_coeffs).astype(np.float32),
+                    _as_numpy(camera_model.tangential_coeffs).astype(np.float32),
+                    _as_numpy(camera_model.thin_prism_coeffs).astype(np.float32),
+                    max_iterations=self.opencv_pinhole_inverse_iterations,
+                )
+            else:
+                _rays_sub = camera_model.pixels_to_camera_rays(_px_sub).numpy()
             self.sequence_cameras_rays_subsample[sequence_id] |= {
-                camera_id: camera_model.pixels_to_camera_rays(
-                    self.sequence_cameras_pixels_subsample[sequence_id][camera_id]
-                ).numpy()
+                camera_id: _rays_sub
             }
 
             # A1 — rational-distortion pole guard: pixels_to_camera_rays can
@@ -1624,7 +1702,6 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         if intrinsics_result is not None:
             intrinsics_params, model_type_name = intrinsics_result
             batch_dict[f"intrinsics_{model_type_name}"] = intrinsics_params
-
         # --- Frame / camera indices (PPISP post-processing) ----------------------
         if "frame_idx" in batch:
             frame_idx = batch["frame_idx"]
@@ -1739,6 +1816,32 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             # Distortion coefficients are resolution-independent and preserved through transform().
             # Each camera model type produces a dict matching the tracer's expected keys.
             if isinstance(camera_model, ncore.sensors.OpenCVPinholeCameraModel):
+                # PIN-CAM-1c: compute maxValidR2 over expanded continuous image domain
+                margin = self.opencv_pinhole_validity_margin
+                def _as_numpy(value):
+                    if hasattr(value, "detach"):
+                        value = value.detach()
+                    if hasattr(value, "cpu"):
+                        value = value.cpu()
+                    return np.asarray(value)
+
+                max_r2 = None
+                if self.opencv_pinhole_use_validity_domain:
+                    try:
+                        max_r2 = compute_max_valid_r2(
+                            principal_point=_as_numpy(scaled_params.principal_point),
+                            focal_length=_as_numpy(scaled_params.focal_length),
+                            radial_coeffs=_as_numpy(scaled_params.radial_coeffs),
+                            tangential_coeffs=_as_numpy(scaled_params.tangential_coeffs),
+                            thin_prism_coeffs=_as_numpy(scaled_params.thin_prism_coeffs),
+                            image_size=(int(scaled_params.resolution[0]), int(scaled_params.resolution[1])),
+                            margin=margin,
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            f"[PIN-CAM-1c] {camera_id}: could not certify OpenCV rational validity domain "
+                            f"({exc}); retaining the legacy 0.8 < icD < 1.2 gate"
+                        )
                 params_dict = {
                     "resolution": scaled_params.resolution,
                     "shutter_type": scaled_params.shutter_type.name,
@@ -1748,6 +1851,9 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     "tangential_coeffs": scaled_params.tangential_coeffs,
                     "thin_prism_coeffs": scaled_params.thin_prism_coeffs,
                 }
+                if max_r2 is not None:
+                    params_dict["max_valid_r2"] = max_r2
+
             elif isinstance(camera_model, ncore.sensors.OpenCVFisheyeCameraModel):
                 params_dict = {
                     "resolution": scaled_params.resolution,

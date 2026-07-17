@@ -147,6 +147,9 @@ def make(name: str, config, ray_jitter):
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1
                 depth_prior_aux_root=config.dataset.get("depth_prior_aux_root", None),  # T11.D1
                 mask_forward_invalid_pixels=config.dataset.get("mask_forward_invalid_pixels", False),  # PIN-MASK-1
+                opencv_pinhole_inverse_iterations=config.dataset.get("opencv_pinhole_inverse_iterations", 30),  # PIN-CAM-1
+                opencv_pinhole_validity_margin=config.dataset.get("opencv_pinhole_validity_margin", 0.1),  # PIN-CAM-1c
+                opencv_pinhole_use_validity_domain=config.dataset.get("opencv_pinhole_use_validity_domain", True),  # PIN-CAM-1c
             )
             # Validation uses same temporal window as training by default
             train_seek_offset = config.dataset.train.get("seek_offset_sec", 0.0)
@@ -189,6 +192,9 @@ def make(name: str, config, ray_jitter):
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.D1 (val)
                 depth_prior_aux_root=config.dataset.get("depth_prior_aux_root", None),  # T11.D1 (val)
                 mask_forward_invalid_pixels=config.dataset.get("mask_forward_invalid_pixels", False),  # PIN-MASK-1
+                opencv_pinhole_inverse_iterations=config.dataset.get("opencv_pinhole_inverse_iterations", 30),  # PIN-CAM-1
+                opencv_pinhole_validity_margin=config.dataset.get("opencv_pinhole_validity_margin", 0.1),  # PIN-CAM-1c
+                opencv_pinhole_use_validity_domain=config.dataset.get("opencv_pinhole_use_validity_domain", True),  # PIN-CAM-1c
             )
         case _:
             raise ValueError(
@@ -272,6 +278,9 @@ def make_test(name: str, config):
                 ),  # T11.F1 (test): feeds mean_lidar_psnr
                 load_depth_prior=config.dataset.get("load_depth_prior", False),  # T11.F1 (test)
                 mask_forward_invalid_pixels=config.dataset.get("mask_forward_invalid_pixels", False),  # PIN-MASK-1
+                opencv_pinhole_inverse_iterations=config.dataset.get("opencv_pinhole_inverse_iterations", 30),  # PIN-CAM-1
+                opencv_pinhole_validity_margin=config.dataset.get("opencv_pinhole_validity_margin", 0.1),  # PIN-CAM-1c
+                opencv_pinhole_use_validity_domain=config.dataset.get("opencv_pinhole_use_validity_domain", True),  # PIN-CAM-1c
             )
         case _:
             raise ValueError(

@@ -38,7 +38,9 @@ fromOpenCVPinholeCameraModelParameters(std::array<uint64_t, 2> _resolution,
                                        std::array<float, 2> focal_length,
                                        std::array<float, 6> radial_coeffs,
                                        std::array<float, 2> tangential_coeffs,
-                                       std::array<float, 4> thin_prism_coeffs) {
+                                       std::array<float, 4> thin_prism_coeffs,
+                                       bool has_validity_domain,
+                                       float max_valid_r2) {
     threedgut::CameraModelParameters params;
     params.shutterType = static_cast<threedgut::CameraModelParameters::ShutterType>(shutter_type);
     params.modelType   = threedgut::CameraModelParameters::OpenCVPinholeModel;
@@ -52,6 +54,8 @@ fromOpenCVPinholeCameraModelParameters(std::array<uint64_t, 2> _resolution,
     params.ocvPinholeParams.radialCoeffs     = *reinterpret_cast<const tcnn::vec<6>*>(radial_coeffs.data());
     params.ocvPinholeParams.tangentialCoeffs = *reinterpret_cast<const tcnn::vec2*>(tangential_coeffs.data());
     params.ocvPinholeParams.thinPrismCoeffs  = *reinterpret_cast<const tcnn::vec4*>(thin_prism_coeffs.data());
+    params.ocvPinholeParams.hasValidityDomain = has_validity_domain;
+    params.ocvPinholeParams.maxValidR2       = max_valid_r2;
     return params;
 }
 
@@ -129,7 +133,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("focal_length"),
           py::arg("radial_coeffs"),
           py::arg("tangential_coeffs"),
-          py::arg("thin_prism_coeffs"));
+          py::arg("thin_prism_coeffs"),
+          py::arg("has_validity_domain") = false,
+          py::arg("max_valid_r2") = 0.f);
 
     m.def("fromOpenCVFisheyeCameraModelParameters", &fromOpenCVFisheyeCameraModelParameters,
           py::arg("resolution"),
