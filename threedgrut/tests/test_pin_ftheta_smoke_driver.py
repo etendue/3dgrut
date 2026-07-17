@@ -251,6 +251,15 @@ def _real_rich_probe_log() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _real_rich_ftheta_log() -> str:
+    return (
+        "[13:17:40] [INFO] [PIN-FTHETA] NCoreDataset  explicit override    logger.py:68\n"
+        "           enabled: path=scripts/pin_ftheta_b6a9_7cam_params.json\n"
+        "           cameras=7\n"
+        "[13:17:41] [INFO] [P0.2] ego mask via aux itar fallback           logger.py:68\n" + _real_rich_probe_log()
+    )
+
+
 def test_log_validation_allows_known_containment_messages(tmp_path: Path) -> None:
     log = tmp_path / "train.log"
     log.write_text(
@@ -328,6 +337,33 @@ def test_real_rich_probe_log_passes_validator_module_cli(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
 
 
+def test_real_rich_ftheta_override_passes_function_and_module_cli(tmp_path: Path) -> None:
+    log = tmp_path / "armF.log"
+    log.write_text(_real_rich_ftheta_log(), encoding="utf-8")
+    validate_training_log(log, "F", FTHETA_ARTIFACT_PATH)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.pin_ftheta_smoke_validation",
+            "log",
+            "--path",
+            str(log),
+            "--arm",
+            "F",
+            "--artifact",
+            str(FTHETA_ARTIFACT_PATH),
+        ],
+        cwd=ROOT,
+        env=_validator_subprocess_env(tmp_path),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_log_validation_requires_ftheta_override_only_for_arm_f(tmp_path: Path) -> None:
     log = tmp_path / "train.log"
     log.write_text(_successful_log(arm="F"), encoding="utf-8")
@@ -337,6 +373,30 @@ def test_log_validation_requires_ftheta_override_only_for_arm_f(tmp_path: Path) 
         validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
 
     log.write_text(_successful_log(), encoding="utf-8")
+    with pytest.raises(ValueError, match="Arm F did not log"):
+        validate_training_log(log, "F", FTHETA_ARTIFACT_PATH)
+
+
+@pytest.mark.parametrize(
+    "override_line",
+    [
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=6",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7.5",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7foo",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7_enabled",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7e1",
+        "[PIN-FTHETA] NCoreDataset [train] non-explicit override enabled: cameras=7",
+        "[PIN-FTHETA] NCoreDataset [train] explicit fallback enabled: cameras=7",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7; falling back to native",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7; " "runtime selected native fallback",
+        "[PIN-FTHETA] NCoreDataset [train] explicit override enabled: cameras=7\n"
+        "[PIN-FTHETA] camera construction failed; falling back to native",
+    ],
+)
+def test_log_validation_rejects_invalid_ftheta_override_claims(tmp_path: Path, override_line: str) -> None:
+    log = tmp_path / "train.log"
+    log.write_text(f"{override_line}\n{_successful_log()}", encoding="utf-8")
+
     with pytest.raises(ValueError, match="Arm F did not log"):
         validate_training_log(log, "F", FTHETA_ARTIFACT_PATH)
 

@@ -48,9 +48,22 @@ _REPAIRED_CAMERA_RAY = re.compile(
 )
 _NONFINITE_CAMERA_RAY = re.compile(r"non-finite\s+camera\s+ray", flags=re.IGNORECASE)
 _RICH_SOURCE_COLUMN = re.compile(r"\s+[A-Za-z0-9_./-]+\.py:\d+\s*$")
+_LOGICAL_MESSAGE_START = re.compile(
+    r"^(?:(?:\[\d{2}:\d{2}:\d{2}\]\s*)?" r"\[(?:INFO|WARNING|ERROR|DEBUG|CRITICAL)\]\s+|" r"\[[A-Z][A-Z0-9_.-]*\]\s+)"
+)
 _TRAIN_FRAME_HEADER = re.compile(r"NCoreDataset\s+(?:\[train\]\s+)?frame counts\s+\(after\s+temporal\s+filtering\):")
 _TRAIN_FRAME_LINE = re.compile(r"\b(camera_[A-Za-z0-9_]+):\s+(\d+)\s+frames\b")
 _FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_last\.pt"')
+_FTHETA_OVERRIDE_ENABLED = re.compile(
+    r"\[PIN-FTHETA\]\s+NCoreDataset\s+(?:\[train\]\s+)?"
+    r"explicit\s+override\s+enabled:\s+.{0,300}?cameras=7(?=\s|$|[;,])",
+    flags=re.IGNORECASE,
+)
+_FTHETA_OVERRIDE_ATTEMPT = re.compile(r"\[PIN-FTHETA\].{0,300}?\boverride\b", flags=re.IGNORECASE)
+_FTHETA_FALLBACK = re.compile(
+    r"\[PIN-FTHETA\].{0,1000}?\b(?:fallback|falling\s+back)\b",
+    flags=re.IGNORECASE,
+)
 _REQUIRED_SOURCE_NAMES = frozenset({"dataset_manifest", "config", "artifact", "driver", "validator"})
 _REQUIRED_OUTPUT_NAMES = frozenset({"parsed_yaml", "checkpoint", "metrics", "train_log", "eval_log"})
 _EXPECTED_LAYERS = ["background", "road", "dynamic_rigids", "sky_envmap"]
@@ -61,6 +74,24 @@ def _normalize_rich_log(text: str) -> str:
 
     without_source_columns = "\n".join(_RICH_SOURCE_COLUMN.sub("", line).rstrip() for line in text.splitlines())
     return re.sub(r"\s+", " ", without_source_columns).strip()
+
+
+def _rich_logical_messages(text: str) -> list[str]:
+    """Rebuild Rich-wrapped messages while retaining their boundaries."""
+
+    messages: list[str] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        line = _RICH_SOURCE_COLUMN.sub("", raw_line).strip()
+        if not line:
+            continue
+        if current and _LOGICAL_MESSAGE_START.match(line):
+            messages.append(re.sub(r"\s+", " ", " ".join(current)).strip())
+            current = []
+        current.append(line)
+    if current:
+        messages.append(re.sub(r"\s+", " ", " ".join(current)).strip())
+    return messages
 
 
 def _arm(value: str) -> str:
@@ -144,10 +175,13 @@ def validate_training_log(path: str | Path, arm: str, artifact_path: str | Path)
     if _FINAL_CHECKPOINT_LINE.search(normalized) is None:
         raise ValueError(f"{arm} training log has no final ckpt_last save signal")
 
-    override_logged = re.search(r"\[PIN-FTHETA\].*explicit override enabled", text) is not None
-    if arm == "F" and not override_logged:
+    ftheta_messages = [message for message in _rich_logical_messages(text) if "[PIN-FTHETA]" in message]
+    override_enabled = any(_FTHETA_OVERRIDE_ENABLED.search(message) is not None for message in ftheta_messages)
+    fallback_logged = any(_FTHETA_FALLBACK.search(message) is not None for message in ftheta_messages)
+    override_attempted = any(_FTHETA_OVERRIDE_ATTEMPT.search(message) is not None for message in ftheta_messages)
+    if arm == "F" and (not override_enabled or fallback_logged):
         raise ValueError("Arm F did not log the strict FTheta dataset override")
-    if arm == "P" and override_logged:
+    if arm == "P" and (override_attempted or fallback_logged):
         raise ValueError("Arm P unexpectedly enabled the FTheta dataset override")
     camera_ids, _, _ = _artifact_contract(artifact_path)
     return _train_frame_counts(text, camera_ids)
