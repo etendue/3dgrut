@@ -23,6 +23,7 @@ FTHETA_PARAMS="scripts/pin_ftheta_b6a9_7cam_params.json"
 CONFIG_FILE="configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam.yaml"
 DRIVER_FILE="scripts/pin_ftheta_9cam_smoke.sh"
 VALIDATOR_FILE="scripts/pin_ftheta_smoke_validation.py"
+VALIDATOR_MODULE="scripts.pin_ftheta_smoke_validation"
 RUN_ID="$(date -u '+%Y%m%dT%H%M%SZ')_$(date +%s%N)_pid$$_r${RANDOM}"
 RUN_ROOT="$RUN_BASE/$RUN_ID"
 TRAIN_OUTPUT_ROOT="$RUN_ROOT/train_outputs"
@@ -37,7 +38,7 @@ cd "$REPO_DIR"
 mkdir -p "$RUN_BASE"
 mkdir "$RUN_ROOT"
 mkdir "$RUN_ROOT/arms" "$TRAIN_OUTPUT_ROOT" "$EVAL_OUTPUT_ROOT"
-python "$VALIDATOR_FILE" manifest-create \
+python -m "$VALIDATOR_MODULE" manifest-create \
   --path "$RUN_MANIFEST" --run-id "$RUN_ID" --repo-root "$REPO_DIR" \
   --dataset-manifest "$DATA_PATH" --config "$CONFIG_FILE" \
   --artifact "$FTHETA_PARAMS" --driver "$DRIVER_FILE" --validator "$VALIDATOR_FILE"
@@ -73,7 +74,7 @@ run_arm() {
   local train_log="$ARM_ROOT/train.log"
   local eval_log="$ARM_ROOT/eval.log"
   mkdir "$ARM_ROOT"
-  python "$VALIDATOR_FILE" manifest-verify --path "$RUN_MANIFEST" --repo-root "$REPO_DIR"
+  python -m "$VALIDATOR_MODULE" manifest-verify --path "$RUN_MANIFEST" --repo-root "$REPO_DIR"
 
   echo "=== PIN-FTHETA Arm $arm train start: $name $(date '+%F %T') ==="
   python train.py --config-name apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam \
@@ -82,7 +83,7 @@ run_arm() {
     dataset.ftheta_params_path="$ftheta_params_path" \
     > "$train_log" 2>&1
 
-  python "$VALIDATOR_FILE" log \
+  python -m "$VALIDATOR_MODULE" log \
     --path "$train_log" --arm "$arm" --artifact "$FTHETA_PARAMS"
 
   local checkpoint parsed_yaml
@@ -90,7 +91,7 @@ run_arm() {
   [ -n "$checkpoint" ] || { echo "ERROR: Arm $arm checkpoint missing"; exit 1; }
   parsed_yaml="$(dirname "$checkpoint")/parsed.yaml"
   [ -f "$parsed_yaml" ] || { echo "ERROR: Arm $arm parsed.yaml missing"; exit 1; }
-  python "$VALIDATOR_FILE" checkpoint \
+  python -m "$VALIDATOR_MODULE" checkpoint \
     --path "$checkpoint" --arm "$arm" --artifact "$FTHETA_PARAMS" \
     --input-manifest "$DATA_PATH"
 
@@ -101,9 +102,9 @@ run_arm() {
   local metrics_path
   metrics_path=$(find "$EVAL_OUTPUT_ROOT/$name" -name metrics.json -print -quit)
   [ -n "$metrics_path" ] || { echo "ERROR: Arm $arm metrics.json missing"; exit 1; }
-  python "$VALIDATOR_FILE" metrics \
+  python -m "$VALIDATOR_MODULE" metrics \
     --path "$metrics_path" --artifact "$FTHETA_PARAMS"
-  python "$VALIDATOR_FILE" record-arm \
+  python -m "$VALIDATOR_MODULE" record-arm \
     --manifest "$RUN_MANIFEST" --arm "$arm" --parsed-yaml "$parsed_yaml" \
     --checkpoint "$checkpoint" --metrics "$metrics_path" \
     --train-log "$train_log" --eval-log "$eval_log" \
@@ -114,7 +115,7 @@ run_arm() {
 
 run_arm "P" "null"
 run_arm "F" "scripts/pin_ftheta_b6a9_7cam_params.json"
-python "$VALIDATOR_FILE" finalize \
+python -m "$VALIDATOR_MODULE" finalize \
   --manifest "$RUN_MANIFEST" --repo-root "$REPO_DIR"
 
 echo "=== PIN-FTHETA matched seven-camera smoke complete $(date '+%F %T') manifest=$RUN_MANIFEST ==="

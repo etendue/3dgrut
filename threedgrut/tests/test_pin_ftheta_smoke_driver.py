@@ -6,7 +6,9 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,36 @@ def test_smoke_driver_is_valid_bash() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def _validator_subprocess_env(tmp_path: Path) -> dict[str, str]:
+    """Expose the real validator module without importing NCore on the Mac."""
+
+    datasets_path = ROOT / "threedgrut" / "datasets"
+    (tmp_path / "sitecustomize.py").write_text(
+        "import sys, types\n"
+        "package = types.ModuleType('threedgrut.datasets')\n"
+        f"package.__path__ = [{str(datasets_path)!r}]\n"
+        "package.__package__ = 'threedgrut.datasets'\n"
+        "sys.modules['threedgrut.datasets'] = package\n",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), str(ROOT), env.get("PYTHONPATH", "")])
+    return env
+
+
+def test_validator_module_cli_imports_from_repo_root(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.pin_ftheta_smoke_validation", "--help"],
+        cwd=ROOT,
+        env=_validator_subprocess_env(tmp_path),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "manifest-create" in result.stdout
+
+
 def test_smoke_driver_freezes_matched_common_overrides() -> None:
     source = DRIVER.read_text(encoding="utf-8")
 
@@ -93,8 +125,18 @@ def test_smoke_driver_freezes_matched_common_overrides() -> None:
     assert 'dataset.ftheta_params_path="$ftheta_params_path"' in source
     assert "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" in source
     assert "CUDA_VISIBLE_DEVICES=0" in source
-    for command in ("log", "checkpoint", "metrics", "manifest-create", "record-arm", "finalize"):
-        assert f'"$VALIDATOR_FILE" {command}' in source
+    assert 'VALIDATOR_MODULE="scripts.pin_ftheta_smoke_validation"' in source
+    assert 'python "$VALIDATOR_FILE"' not in source
+    for command in (
+        "log",
+        "checkpoint",
+        "metrics",
+        "manifest-create",
+        "manifest-verify",
+        "record-arm",
+        "finalize",
+    ):
+        assert f'-m "$VALIDATOR_MODULE" {command}' in source
     assert "date +%s%N" in source
     assert 'mkdir "$RUN_ROOT"' in source
     assert "tee -a" not in source
@@ -176,6 +218,39 @@ def _successful_log(*, arm: str = "P") -> str:
     )
 
 
+def _real_rich_probe_log() -> str:
+    counts = {
+        "camera_front_wide_120fov": 38,
+        "camera_cross_left_120fov": 42,
+        "camera_cross_right_120fov": 37,
+        "camera_left_wide_90fov": 39,
+        "camera_right_wide_90fov": 43,
+        "camera_back_rear_wide_90fov": 42,
+        "camera_rear_left_70fov": 43,
+    }
+    lines = [
+        "[13:17:45] [WARNING] [A1] camera_left_wide_90fov: repaired 6        logger.py:71",
+        "           non-finite camera ray(s) (+6 in val subsample) and",
+        "           masked the pixel(s) invalid — rational-distortion pole,",
+        "           see repair_nonfinite_rays",
+        "           [INFO] NCoreDataset  frame counts (after temporal        logger.py:68",
+        "           filtering):",
+    ]
+    lines.extend(
+        f"           [INFO]   {camera_id}: {count} frames             logger.py:68"
+        for camera_id, count in counts.items()
+    )
+    lines.extend(
+        [
+            "           [INFO]   Total: 284 frames                    logger.py:68",
+            '💾 Saved checkpoint to: "/run/ckpt_last.pt"',
+            "Training Statistics",
+            "Test Metrics",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def test_log_validation_allows_known_containment_messages(tmp_path: Path) -> None:
     log = tmp_path / "train.log"
     log.write_text(
@@ -202,6 +277,46 @@ def test_log_validation_allows_known_containment_messages(tmp_path: Path) -> Non
     validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
 
 
+def test_log_validation_allows_real_rich_wrapped_repair_warning(tmp_path: Path) -> None:
+    log = tmp_path / "train.log"
+    log.write_text(_real_rich_probe_log(), encoding="utf-8")
+
+    assert validate_training_log(log, "P", FTHETA_ARTIFACT_PATH) == {
+        "camera_front_wide_120fov": 38,
+        "camera_cross_left_120fov": 42,
+        "camera_cross_right_120fov": 37,
+        "camera_left_wide_90fov": 39,
+        "camera_right_wide_90fov": 43,
+        "camera_back_rear_wide_90fov": 42,
+        "camera_rear_left_70fov": 43,
+    }
+
+
+def test_real_rich_probe_log_passes_validator_module_cli(tmp_path: Path) -> None:
+    log = tmp_path / "armP.log"
+    log.write_text(_real_rich_probe_log(), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.pin_ftheta_smoke_validation",
+            "log",
+            "--path",
+            str(log),
+            "--arm",
+            "P",
+            "--artifact",
+            str(FTHETA_ARTIFACT_PATH),
+        ],
+        cwd=ROOT,
+        env=_validator_subprocess_env(tmp_path),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_log_validation_requires_ftheta_override_only_for_arm_f(tmp_path: Path) -> None:
     log = tmp_path / "train.log"
     log.write_text(_successful_log(arm="F"), encoding="utf-8")
@@ -221,6 +336,11 @@ def test_log_validation_requires_ftheta_override_only_for_arm_f(tmp_path: Path) 
         "Non-finite total_loss at step 12: camera_id=cam",
         "Traceback (most recent call last):",
         "camera_x has non-finite camera ray(s) after initialization",
+        "[A1] camera_x: repaired six\nnon-finite camera ray(s) "
+        "(+0 in val subsample) and masked the pixel(s) invalid",
+        "[A1] camera_x: repaired 6\nnon-finite camera ray(s) "
+        "(+not-a-number in val subsample) and masked the pixel(s) invalid",
+        "[A1] camera_x: repaired 6\nnon-finite camera ray(s) " "(+0 in val subsample) but left the pixel(s) valid",
     ],
 )
 def test_log_validation_rejects_only_fatal_sentinels_and_unrepaired_rays(tmp_path: Path, bad_line: str) -> None:

@@ -41,15 +41,26 @@ RENDER_METRIC_KEYS = (
 )
 
 _REPAIRED_CAMERA_RAY = re.compile(
-    r"\[A1\].*: repaired \d+ non-finite camera ray\(s\) "
-    r"\(\+\d+ in val subsample\) and masked the pixel\(s\) invalid"
+    r"\[A1\]\s+camera_[A-Za-z0-9_]+:\s+repaired\s+\d+\s+"
+    r"non-finite\s+camera\s+ray\(s\)\s+\(\+\d+\s+in\s+val\s+subsample\)\s+"
+    r"and\s+masked\s+the\s+pixel\(s\)\s+invalid",
+    flags=re.IGNORECASE,
 )
-_TRAIN_FRAME_HEADER = re.compile(r"NCoreDataset\s+\[train\]\s+frame counts\s+\(after temporal\s+filtering\):")
+_NONFINITE_CAMERA_RAY = re.compile(r"non-finite\s+camera\s+ray", flags=re.IGNORECASE)
+_RICH_SOURCE_COLUMN = re.compile(r"\s+[A-Za-z0-9_./-]+\.py:\d+\s*$")
+_TRAIN_FRAME_HEADER = re.compile(r"NCoreDataset\s+(?:\[train\]\s+)?frame counts\s+\(after\s+temporal\s+filtering\):")
 _TRAIN_FRAME_LINE = re.compile(r"\b(camera_[A-Za-z0-9_]+):\s+(\d+)\s+frames\b")
 _FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"[^"]*ckpt_last\.pt"')
 _REQUIRED_SOURCE_NAMES = frozenset({"dataset_manifest", "config", "artifact", "driver", "validator"})
 _REQUIRED_OUTPUT_NAMES = frozenset({"parsed_yaml", "checkpoint", "metrics", "train_log", "eval_log"})
 _EXPECTED_LAYERS = ["background", "road", "dynamic_rigids", "sky_envmap"]
+
+
+def _normalize_rich_log(text: str) -> str:
+    """Strip Rich source columns and fold display-wrapped logical messages."""
+
+    without_source_columns = "\n".join(_RICH_SOURCE_COLUMN.sub("", line).rstrip() for line in text.splitlines())
+    return re.sub(r"\s+", " ", without_source_columns).strip()
 
 
 def _arm(value: str) -> str:
@@ -76,6 +87,7 @@ def _artifact_contract(path: str | Path) -> tuple[list[str], dict[str, dict], di
 
 
 def _train_frame_counts(text: str, expected_camera_ids: list[str]) -> dict[str, int]:
+    text = _normalize_rich_log(text)
     candidates: list[dict[str, int]] = []
     for header in _TRAIN_FRAME_HEADER.finditer(text):
         remainder = text[header.end() :]
@@ -116,9 +128,16 @@ def validate_training_log(path: str | Path, arm: str, artifact_path: str | Path)
         raise ValueError(f"{arm} training log contains a Python traceback")
     if re.search(r"Non-finite total_loss at step", text, flags=re.IGNORECASE):
         raise ValueError(f"{arm} training log contains the trainer total-loss sentinel")
-    for line in text.splitlines():
-        if "non-finite camera ray" in line.lower() and _REPAIRED_CAMERA_RAY.search(line) is None:
-            raise ValueError(f"{arm} training log contains an unrepaired camera-ray invariant: {line}")
+    normalized = _normalize_rich_log(text)
+    repaired_spans = [match.span() for match in _REPAIRED_CAMERA_RAY.finditer(normalized)]
+    for occurrence in _NONFINITE_CAMERA_RAY.finditer(normalized):
+        if not any(start <= occurrence.start() < end for start, end in repaired_spans):
+            context_start = max(0, occurrence.start() - 80)
+            context_end = min(len(normalized), occurrence.end() + 120)
+            raise ValueError(
+                f"{arm} training log contains an unrepaired camera-ray invariant: "
+                f"{normalized[context_start:context_end]}"
+            )
     for summary in ("Training Statistics", "Test Metrics"):
         if summary not in text:
             raise ValueError(f"{arm} training log missing {summary!r}")
