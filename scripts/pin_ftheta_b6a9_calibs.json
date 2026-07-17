@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "clip_id": "inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9",
+    "manifest_path": "/home/inceptio/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9.json",
+    "manifest_sha256": "df2021203cfe318cfa8da3462e38c5b7fbf6bf3963d3a8149d145f98f6036e31",
+    "source_host": "inceptio",
+    "extracted_at": "2026-07-17",
+    "method": "NCore SequenceLoaderV4 sensor.model_parameters, converted to float64 JSON"
+  },
+  "camera_order": [
+    "camera_front_wide_120fov",
+    "camera_cross_left_120fov",
+    "camera_cross_right_120fov",
+    "camera_left_wide_90fov",
+    "camera_right_wide_90fov",
+    "camera_back_rear_wide_90fov",
+    "camera_rear_left_70fov",
+    "camera_front_standard_55fov",
+    "camera_front_tele_30fov"
+  ],
+  "cameras": {
+    "camera_front_wide_120fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [960.8599853515625, 540.1849975585938],
+      "focal_length": [952.8250122070312, 952.9000244140625],
+      "radial_coeffs": [3.7687599658966064, 1.61149001121521, 0.0664215013384819, 4.13346004486084, 2.880429983139038, 0.36570900678634644],
+      "tangential_coeffs": [4.691869980888441e-05, 8.77050024428172e-06],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_cross_left_120fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [959.9949951171875, 539.344970703125],
+      "focal_length": [955.3499755859375, 955.375],
+      "radial_coeffs": [5.129960060119629, 2.1763200759887695, 0.08356419950723648, 5.499470233917236, 3.933199882507324, 0.4785040020942688],
+      "tangential_coeffs": [0.0001706970069790259, -2.189289989473764e-05],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_cross_right_120fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [959.75, 539.2650146484375],
+      "focal_length": [950.989990234375, 951.0399780273438],
+      "radial_coeffs": [10.851900100708008, 5.168560028076172, 0.22435399889945984, 11.223699569702148, 8.993599891662598, 1.2107499837875366],
+      "tangential_coeffs": [5.826499909744598e-05, 1.8823200662154704e-05],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_left_wide_90fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [959.9320068359375, 541.343017578125],
+      "focal_length": [1017.0, 1017.1699829101562],
+      "radial_coeffs": [0.519336998462677, -0.11088299751281738, -0.011619700118899345, 0.9131590127944946, -0.006205160170793533, -0.053741201758384705],
+      "tangential_coeffs": [-1.8097900465363637e-05, 6.179449701448902e-05],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_right_wide_90fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [959.7670288085938, 538.9010009765625],
+      "focal_length": [1015.0499877929688, 1015.3099975585938],
+      "radial_coeffs": [0.45941001176834106, -0.128370001912117, -0.012101300060749054, 0.8537179827690125, -0.04631530120968819, -0.05690310150384903],
+      "tangential_coeffs": [6.033480167388916e-05, 3.319049937999807e-05],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_back_rear_wide_90fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [959.8250122070312, 539.8049926757812],
+      "focal_length": [953.094970703125, 953.1599731445312],
+      "radial_coeffs": [4.853390216827393, 2.032140016555786, 0.07534299790859222, 5.2193498611450195, 3.692349910736084, 0.4388270080089569],
+      "tangential_coeffs": [-1.1109100341855083e-05, -4.176660149823874e-05],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_rear_left_70fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [960.3049926757812, 539.260009765625],
+      "focal_length": [954.6699829101562, 954.7100219726562],
+      "radial_coeffs": [7.657649993896484, 3.507499933242798, 0.14279699325561523, 8.025190353393555, 6.175570011138916, 0.7963129878044128],
+      "tangential_coeffs": [7.308909698622301e-05, -2.4122300601447932e-05],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_front_standard_55fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [961.0650024414062, 551.0250244140625],
+      "focal_length": [1892.5400390625, 1893.1650390625],
+      "radial_coeffs": [-0.95073401927948, 15.602899551391602, 1.7841800451278687, -0.6089980006217957, 15.489800453186035, 8.21930980682373],
+      "tangential_coeffs": [-0.0015800499822944403, -0.00015014399832580239],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    },
+    "camera_front_tele_30fov": {
+      "model_type": "OpenCVPinholeCameraModel",
+      "parameters_type": "OpenCVPinholeCameraModelParameters",
+      "resolution": [1920, 1080],
+      "shutter_type": "ROLLING_TOP_TO_BOTTOM",
+      "principal_point": [967.3250122070312, 542.3599853515625],
+      "focal_length": [3668.405029296875, 3668.679931640625],
+      "radial_coeffs": [-4.317150115966797, -77.83409881591797, 128.95899963378906, -4.087619781494141, -77.7771987915039, 102.40799713134766],
+      "tangential_coeffs": [7.564770203316584e-05, 0.00048473800416104496],
+      "thin_prism_coeffs": [0.0, 0.0, 0.0, 0.0]
+    }
+  }
+}
