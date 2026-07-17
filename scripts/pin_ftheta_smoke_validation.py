@@ -339,6 +339,18 @@ def validate_checkpoint(
     if isinstance(global_step, bool) or not isinstance(global_step, int) or global_step != 5000:
         raise ValueError(f"{arm} checkpoint global_step {global_step!r} != 5000")
     validate_scientific_config(checkpoint.get("config"), arm, artifact_path, input_manifest_path)
+    validate_checkpoint_camera_models(checkpoint, arm, artifact_path)
+
+
+def validate_checkpoint_camera_models(
+    checkpoint: dict,
+    arm: str,
+    artifact_path: str | Path,
+) -> None:
+    """Validate the camera-model portion shared by smoke and full checkpoints."""
+
+    arm = _arm(arm)
+    camera_ids, parameters, fingerprints = _artifact_contract(artifact_path)
     viz_4d = checkpoint.get("viz_4d")
     if not isinstance(viz_4d, dict):
         raise ValueError(f"{arm} checkpoint has no viz_4d mapping")
