@@ -2,10 +2,11 @@
 
 > **Status:** Phases 1-2 are verified. The real `inceptio_2` train/val/test
 > NCore integration probe passed without CUDA/JIT. Phase 3 now has a verified
-> isolated worktree, restored submodule contents, complete canonical dataset,
-> and reusable smoke/full v4 data-readiness gates committed and pushed as
+> isolated worktree, complete canonical dataset, and reusable smoke/full v4
+> data-readiness gates committed and pushed as
 > `59bb0ae506e10f4d74eaab27703071f611ee950f`. The launch-time GPU-idle gate
-> plus new output-root launch remain open, so Phase 3 is not complete.
+> plus release-grade initialization of both submodules at their exact gitlink
+> commits and the new output-root launch remain open, so Phase 3 is not complete.
 >
 > **Supersedes:** The hard-STOP calibration policy and GPU execution sections of
 > [`2026-07-17-ftheta-9cam-retrain.md`](2026-07-17-ftheta-9cam-retrain.md).
@@ -484,7 +485,9 @@ trainer or JIT path was entered.
   branch without including unrelated dirty files.
 - [x] Push that exact commit to `inceptio_2` and create the isolated worktree;
   never train from its dirty main checkout.
-- [x] Copy/restore all submodules into the worktree and verify the commit hash.
+- [ ] Initialize both submodules in the isolated worktree and verify each HEAD
+  exactly equals its superproject gitlink commit. Restored header trees without
+  initialized submodule metadata are not release-ready.
 - [x] Sync or materialize the complete canonical dataset from `inceptio` into
   the exact target path on `inceptio_2`. Select a transfer route only after a
   read-only source/destination size and disk check.
@@ -602,6 +605,14 @@ did not modify the remote worktree or dataset:
 
 ## Phase 4: Mac tests, provenance freeze, and no-GPU preflight
 
+> **Implementation status (2026-07-18):** The dedicated v4 smoke/full drivers,
+> dependency-light CPU preflight gate, validator parameterization, and driver
+> tests are implemented in the local dirty worktree. Focused Mac verification
+> passes, but these files are intentionally not committed yet. Therefore the
+> final commit/hash freeze, full Mac suite, canonical-data remote preflight, and
+> launch remain open. No GPU, CUDA initialization, JIT, trainer, renderer, or
+> training-output path was entered.
+
 **Files:**
 
 - Create: `scripts/pin_ftheta_7cam_v4_smoke.sh`
@@ -617,24 +628,68 @@ v4 artifact and new output roots.
 
 **Verification checklist:**
 
-- [ ] Driver preflight rejects the old artifact SHA and `0.730310 rad` sentinel.
+- [x] Driver preflight rejects the old artifact SHA and `0.730310 rad` sentinel.
 - [ ] Preflight verifies final commit SHA, source/artifact hashes, exact seven
   cameras, exact eight keys, and per-camera fingerprints.
-- [ ] The provenance sidecar is a mandatory preflight input: before any GPU/JIT
+- [x] The provenance sidecar is a mandatory preflight input: before any GPU/JIT
   work, verify its generation command, runtime/survey artifact hashes, all
   hashed source files, frozen timestamp, seven-camera order, and fingerprints.
   A missing, stale, or mismatched sidecar is a hard failure.
 - [ ] Preflight checks complete dataset stores and seven-camera aux coverage.
-- [ ] Config explicitly freezes `camera_max_fov_deg=190.0`, depth-off,
+- [x] Config explicitly freezes `camera_max_fov_deg=190.0`, depth-off,
   `num_workers=10`, seed, durations, and camera order.
-- [ ] P/F normalized scientific config diff contains only the artifact/camera
+- [x] P/F normalized scientific config diff contains only the artifact/camera
   representation and output bookkeeping.
-- [ ] Old and v4 checkpoint paths/artifact paths cannot be confused.
+- [x] Old and v4 checkpoint paths/artifact paths cannot be confused.
 - [ ] Run focused tests, then full `pytest -q threedgrut/tests` on Mac. If the
   sandbox blocks a local socket test, rerun outside the sandbox and record it.
 - [ ] Recompute hashes after the final commit; never freeze dirty-worktree hashes
   as release evidence.
 - [ ] Run the remote `--preflight` successfully before allocating the GPU.
+
+**Current Phase 4 evidence (Mac, 2026-07-18):**
+
+- New drivers are `scripts/pin_ftheta_7cam_v4_smoke.sh` and
+  `scripts/pin_ftheta_7cam_v4_full_ab.sh`; both run the CPU-only preflight before
+  exporting `CUDA_VISIBLE_DEVICES`, creating output directories, or referencing
+  `train.py`/`render.py`.
+- The shared `scripts/pin_ftheta_v4_driver_validation.py` imports neither torch
+  nor trainer/renderer code. Its order is committed-source branch/SHA gate,
+  v4-only path/output isolation, runtime/survey/sidecar/source hash validation,
+  exact seven-camera/eight-key/fingerprint and legacy-sentinel rejection,
+  canonical manifest/readiness, then resolved P/F parity.
+- The release SHA is no longer self-derived: both drivers require the external
+  `PIN_FTHETA_EXPECTED_COMMIT`, pass it through preflight and manifest creation,
+  and reject an empty or mismatched value. The v4 release gate rejects tracked
+  and untracked files (including `sitecustomize.py`/shadow modules) and verifies
+  required tiny-cuda-nn/OptiX headers. Both submodules must be initialized,
+  recursively clean, and checked out at the exact superproject gitlink commit;
+  each nested descendant is checked against the gitlink in its immediate owning
+  parent submodule HEAD. A restored header tree, wrong commit, or dirty outer or
+  nested submodule is a hard failure.
+- V4-only log/metrics gates require train/val/test x exact-seven camera-domain
+  telemetry, frozen model/fingerprint/total/excluded/nonfinite oracles, explicit
+  or renderer-schema-equivalent `nonfinite_pred_px=0`, and no
+  prediction/render drop sentinel. The smoke
+  evidence chain now hashes and revalidates native render/GT PNG inventories;
+  its failure trap records stage and exit code. Legacy v3 paths retain their
+  prior validation behavior.
+- `py_compile`, `bash -n` for both drivers, and `git diff --check` pass. Focused
+  readiness/FTheta/driver regression reports `204 passed in 18.45s` after the
+  quality-gate fixes.
+- Static Mac provenance/config preflight passed for all seven cameras. Do not
+  record normalized config hashes from the intentionally uncommitted Mac
+  worktree. Recompute and record them only after the final commit is checked out
+  at `/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam` and preflight succeeds with
+  the canonical dataset at
+  `/home/inceptio/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/`.
+- Shell tests prove empty expected-commit and wrong-SHA rejection; the correct
+  current SHA advances to the next gate and creates no output. In the
+  intentionally uncommitted local worktree it then stops at the complete-clean
+  source gate. This is the required pre-commit behavior, not a readiness bypass.
+  The complete canonical stores are not on the Mac; after selective commit/sync,
+  the same command must pass against canonical `inceptio_2` data before any GPU
+  allocation. Final normalized hashes must be recomputed from that commit.
 
 **Anti-pattern guards:**
 

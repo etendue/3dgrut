@@ -36,6 +36,7 @@ from threedgrut.datasets.ftheta_override import load_ftheta_override_parameters
 
 ROOT = Path(__file__).resolve().parents[2]
 DRIVER = ROOT / "scripts" / "pin_ftheta_9cam_smoke.sh"
+V4_DRIVER = ROOT / "scripts" / "pin_ftheta_7cam_v4_smoke.sh"
 CONFIG_DIR = str(ROOT / "configs")
 BASE_CONFIG = "apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam"
 FTHETA_ARTIFACT = "scripts/pin_ftheta_b6a9_7cam_params.json"
@@ -117,12 +118,19 @@ def _smoke_manifest_create_argv(tmp_path: Path, *, readiness: bool = True) -> li
         "--artifact",
         str(artifact_path),
         "--driver",
-        str(DRIVER),
+        str(V4_DRIVER if readiness else DRIVER),
         "--validator",
         str(ROOT / "scripts/pin_ftheta_smoke_validation.py"),
     ]
     if readiness:
-        argv.extend(["--ncore-readiness-profile", smoke_validation.V4_MULTILAYER_READINESS_PROFILE])
+        argv.extend(
+            [
+                "--ncore-readiness-profile",
+                smoke_validation.V4_MULTILAYER_READINESS_PROFILE,
+                "--expected-commit",
+                "abc123",
+            ]
+        )
     return argv
 
 
@@ -865,6 +873,7 @@ def test_v4_readiness_profile_records_and_hash_gates_validator_source(
     sources = _source_files(tmp_path)
     sources["config"] = V4_CONFIG_PATH
     sources["artifact"] = V4_FTHETA_ARTIFACT_PATH
+    sources["driver"] = V4_DRIVER
     create_run_manifest(
         manifest_path,
         "v4-run",
@@ -876,6 +885,7 @@ def test_v4_readiness_profile_records_and_hash_gates_validator_source(
     value = verify_run_manifest(manifest_path, "abc123")
     assert value["ncore_readiness_profile"] == smoke_validation.V4_MULTILAYER_READINESS_PROFILE
     assert "data_readiness_validator" in value["sources"]
+    assert "v4_driver_validator" in value["sources"]
     assert "v4_provenance_sidecar" in value["sources"]
     assert value["sources"]["data_readiness_validator"]["sha256"] == smoke_validation.sha256_file(
         readiness_source

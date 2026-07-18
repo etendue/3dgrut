@@ -48,6 +48,7 @@ from scripts.pin_ftheta_smoke_validation import (
 
 FULL_RUN_PROFILE = "pin_ftheta_7cam_full_20s_30k_v1"
 FULL_ITERATIONS = 30000
+V4_FULL_DURATION_SEC = 20.0
 NATIVE_RESOLUTION = (1920, 1080)
 FROZEN_B6A9_CLIP_ID = "inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9"
 FROZEN_B6A9_MANIFEST_SHA256 = "df2021203cfe318cfa8da3462e38c5b7fbf6bf3963d3a8149d145f98f6036e31"
@@ -90,6 +91,14 @@ _FULL_STATIC_SOURCES = {
     "config_strategy_mcmc": "configs/strategy/mcmc.yaml",
     "config_strategy_gs": "configs/strategy/gs.yaml",
 }
+_V4_FULL_DRIVER_RELATIVE_PATH = "scripts/pin_ftheta_7cam_v4_full_ab.sh"
+_V4_DRIVER_VALIDATOR_RELATIVE_PATH = "scripts/pin_ftheta_v4_driver_validation.py"
+
+
+def _is_v4_runtime_artifact(path: str | Path) -> bool:
+    return Path(path).expanduser().resolve() == (
+        _REPO_ROOT / V4_MULTILAYER_PROFILE_CONTRACT["runtime_artifact"]["path"]
+    ).resolve()
 
 
 def _full_artifact_contract(path: str | Path) -> tuple[list[str], dict[str, dict], dict[str, str]]:
@@ -174,6 +183,8 @@ def _expanded_full_sources(
     if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
         static_sources["config"] = V4_MULTILAYER_PROFILE_CONTRACT["config"]["path"]
         static_sources["artifact"] = V4_MULTILAYER_PROFILE_CONTRACT["runtime_artifact"]["path"]
+        static_sources["driver"] = _V4_FULL_DRIVER_RELATIVE_PATH
+        static_sources["v4_driver_validator"] = _V4_DRIVER_VALIDATOR_RELATIVE_PATH
         profile_paths = validate_v4_multilayer_profile_contract(
             _REPO_ROOT,
             sources["config"],
@@ -207,15 +218,17 @@ def validate_full_scientific_config(
     arm = _arm(arm)
     camera_ids, _, _ = _full_artifact_contract(artifact_path)
     config = _config(config_value)
+    v4_profile = _is_v4_runtime_artifact(artifact_path)
+    duration_sec = V4_FULL_DURATION_SEC if v4_profile else -1
     scalar_contract = {
         "n_iterations": FULL_ITERATIONS,
         "seed_initialization": 42,
         "test_last": True,
         "num_workers": 10,
         "dataset.train.seek_offset_sec": 0.0,
-        "dataset.train.duration_sec": -1,
+        "dataset.train.duration_sec": duration_sec,
         "dataset.val.seek_offset_sec": 0.0,
-        "dataset.val.duration_sec": -1,
+        "dataset.val.duration_sec": duration_sec,
         "dataset.downsample": 1.0,
         "dataset.n_val_image_subsample": 1,
         "dataset.mask_forward_invalid_pixels": True,
@@ -230,6 +243,8 @@ def validate_full_scientific_config(
     }
     for dotted_key, expected in scalar_contract.items():
         _require_config_value(config, dotted_key, expected)
+    if v4_profile:
+        _require_config_value(config, "dataset.camera_max_fov_deg", 190.0)
     _require_config_value(config, "dataset.camera_ids", camera_ids)
     _require_config_value(config, "loss.camera_loss_weights", {})
     _require_config_value(config, "layers.enabled", _EXPECTED_LAYERS)
@@ -373,12 +388,14 @@ def validate_native_render_tree(
 def _require_full_manifest(value: dict) -> None:
     if value.get("profile") != FULL_RUN_PROFILE:
         raise ValueError(f"run manifest profile {value.get('profile')!r} != {FULL_RUN_PROFILE!r}")
+    v4_profile = value.get("ncore_readiness_profile") == V4_MULTILAYER_READINESS_PROFILE
+    duration_sec = V4_FULL_DURATION_SEC if v4_profile else -1
     expected_contract = {
         "iterations": FULL_ITERATIONS,
         "train_seek_offset_sec": 0.0,
-        "train_duration_sec": -1,
+        "train_duration_sec": duration_sec,
         "val_seek_offset_sec": 0.0,
-        "val_duration_sec": -1,
+        "val_duration_sec": duration_sec,
         "native_resolution": list(NATIVE_RESOLUTION),
         "arm_order": ["P", "F"],
     }
@@ -404,6 +421,11 @@ def _prepare_full_run_manifest(
         ncore_readiness_profile=ncore_readiness_profile,
     )
     _full_artifact_contract(expanded_sources["artifact"])
+    duration_sec = (
+        V4_FULL_DURATION_SEC
+        if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE
+        else -1
+    )
     value = {
         "schema_version": 3,
         "run_id": run_id,
@@ -414,9 +436,9 @@ def _prepare_full_run_manifest(
         "contract": {
             "iterations": FULL_ITERATIONS,
             "train_seek_offset_sec": 0.0,
-            "train_duration_sec": -1,
+            "train_duration_sec": duration_sec,
             "val_seek_offset_sec": 0.0,
-            "val_duration_sec": -1,
+            "val_duration_sec": duration_sec,
             "native_resolution": list(NATIVE_RESOLUTION),
             "arm_order": ["P", "F"],
         },
@@ -466,7 +488,12 @@ def verify_full_run_manifest(path: str | Path, current_git_commit: str) -> dict:
     expected_source_names = {"dataset_manifest", *_FULL_STATIC_SOURCES}
     if profile is not None:
         expected_source_names.update(
-            {"data_readiness_validator", "v4_provenance_sidecar", "v4_survey_artifact"}
+            {
+                "data_readiness_validator",
+                "v4_driver_validator",
+                "v4_provenance_sidecar",
+                "v4_survey_artifact",
+            }
         )
     if not isinstance(sources, dict) or set(sources) != expected_source_names:
         raise ValueError("full run manifest source set is invalid")
@@ -671,6 +698,11 @@ def run_preflight(
     else:
         _full_artifact_contract(artifact_path)
 
+    duration_sec = (
+        V4_FULL_DURATION_SEC
+        if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE
+        else -1
+    )
     with initialize_config_dir(config_dir=str(repo_root / "configs"), version_base=None):
         base = compose(config_name=config_name)
     for arm in ("P", "F"):
@@ -684,11 +716,12 @@ def run_preflight(
             "out_dir": "/preflight/no-output",
             "experiment_name": f"preflight_arm{arm}",
             "dataset.train.seek_offset_sec": 0.0,
-            "dataset.train.duration_sec": -1,
+            "dataset.train.duration_sec": duration_sec,
             "dataset.val.seek_offset_sec": 0.0,
-            "dataset.val.duration_sec": -1,
+            "dataset.val.duration_sec": duration_sec,
             "dataset.downsample": 1.0,
             "dataset.n_val_image_subsample": 1,
+            "dataset.camera_max_fov_deg": 190.0,
             "dataset.mask_forward_invalid_pixels": True,
             "dataset.opencv_pinhole_use_validity_domain": False,
             "dataset.load_lidar_depth_map": False,
@@ -752,6 +785,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(V4_MULTILAYER_READINESS_PROFILE,),
         default=None,
     )
+    create.add_argument("--expected-commit")
 
     verify = commands.add_parser("manifest-verify")
     verify.add_argument("--path", required=True)
@@ -809,6 +843,13 @@ def main() -> None:
         # source hashing checks ahead of the expensive NCore opens. Readiness
         # is deliberately the final operation before the exclusive write.
         git_commit = _current_clean_commit(args.repo_root)
+        if args.ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
+            if not args.expected_commit:
+                raise ValueError("v4 manifest-create requires --expected-commit")
+            if args.expected_commit != git_commit:
+                raise ValueError(
+                    f"v4 expected commit mismatch: expected={args.expected_commit} current={git_commit}"
+                )
         create_full_run_manifest(
             args.path,
             args.run_id,

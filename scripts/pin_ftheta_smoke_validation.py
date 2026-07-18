@@ -19,8 +19,10 @@ from typing import Any
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from PIL import Image, UnidentifiedImageError
 
 from scripts.ncore_data_readiness import (
+    V4_MULTILAYER_PROFILE_CONTRACT,
     V4_MULTILAYER_READINESS_PROFILE,
     V4_REQUIRED_AUX_TYPES,
     validate_ncore_data_readiness,
@@ -60,6 +62,17 @@ _LOGICAL_MESSAGE_START = re.compile(
 )
 _TRAIN_FRAME_HEADER = re.compile(r"NCoreDataset\s+(?:\[train\]\s+)?frame counts\s+\(after\s+temporal\s+filtering\):")
 _TRAIN_FRAME_LINE = re.compile(r"\b(camera_[A-Za-z0-9_]+):\s+(\d+)\s+frames\b")
+_CAMERA_RAY_DOMAIN = re.compile(
+    r"\[CAMERA-RAY-DOMAIN\]\s+split=(train|val|test)\s+"
+    r"camera=(camera_[A-Za-z0-9_]+)\s+model_type=([A-Za-z0-9_]+)\s+"
+    r"artifact_fingerprint=([A-Za-z0-9]+)\s+total=(\d+)\s+"
+    r"excluded_by_max_angle=(\d+)\s+nonfinite=(\d+)"
+)
+_V4_NONFINITE_PRED_OR_RENDER_DROP = re.compile(
+    r"(?:non[- ]finite|nonfinite).{0,120}(?:pred(?:_rgb)?|render|drop(?:ped|ping)?)|"
+    r"(?:drop(?:ped|ping)?).{0,120}(?:batch|render).{0,120}(?:non[- ]finite|nonfinite)",
+    flags=re.IGNORECASE,
+)
 # Rich may hard-wrap the quoted basename after ``ckpt_`` in redirected logs.
 _FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_\s*last\.pt"')
 _FTHETA_OVERRIDE_ENABLED = re.compile(
@@ -75,8 +88,22 @@ _FTHETA_FALLBACK = re.compile(
 _REQUIRED_SOURCE_NAMES = frozenset({"dataset_manifest", "config", "artifact", "driver", "validator"})
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DATA_READINESS_SOURCE = Path(__file__).resolve().parent / "ncore_data_readiness.py"
+_V4_DRIVER_VALIDATOR_SOURCE = Path(__file__).resolve().parent / "pin_ftheta_v4_driver_validation.py"
 _REQUIRED_OUTPUT_NAMES = frozenset({"parsed_yaml", "checkpoint", "metrics", "train_log", "eval_log"})
 _EXPECTED_LAYERS = ["background", "road", "dynamic_rigids", "sky_envmap"]
+_V4_NATIVE_RENDER_OUTPUT = "native_render_inventory"
+_V4_SMOKE_RUN_PROFILE = "pin_ftheta_v4_7cam_smoke_5s_5k_v1"
+_V4_NATIVE_RESOLUTION = (1920, 1080)
+_V4_TOTAL_PIXELS = 2_073_600
+_V4_EXCLUDED_BY_MAX_ANGLE = {
+    "camera_front_wide_120fov": 148,
+    "camera_cross_left_120fov": 138,
+    "camera_cross_right_120fov": 133,
+    "camera_left_wide_90fov": 26_355,
+    "camera_right_wide_90fov": 44_292,
+    "camera_back_rear_wide_90fov": 120,
+    "camera_rear_left_70fov": 101,
+}
 
 
 def _normalize_rich_log(text: str) -> str:
@@ -127,6 +154,61 @@ def _artifact_contract(path: str | Path) -> tuple[list[str], dict[str, dict], di
     return camera_ids, parameters, fingerprints
 
 
+def _is_v4_runtime_artifact(path: str | Path) -> bool:
+    return Path(path).expanduser().resolve() == (
+        _REPO_ROOT / V4_MULTILAYER_PROFILE_CONTRACT["runtime_artifact"]["path"]
+    ).resolve()
+
+
+def _validate_v4_camera_ray_domain_telemetry(
+    text: str,
+    arm: str,
+    artifact_path: str | Path,
+) -> None:
+    """Require one exact camera-domain record for every split/camera pair."""
+
+    arm = _arm(arm)
+    camera_ids, _, fingerprints = _artifact_contract(artifact_path)
+    if tuple(camera_ids) != tuple(_V4_EXCLUDED_BY_MAX_ANGLE):
+        raise ValueError("v4 telemetry oracle camera order does not match the runtime artifact")
+    normalized = _normalize_rich_log(text)
+    records: dict[tuple[str, str], tuple[str, str, int, int, int]] = {}
+    for match in _CAMERA_RAY_DOMAIN.finditer(normalized):
+        split, camera_id, model_type, fingerprint, total, excluded, nonfinite = match.groups()
+        key = (split, camera_id)
+        if key in records:
+            raise ValueError(f"duplicate v4 camera-ray-domain telemetry record: split={split} camera={camera_id}")
+        records[key] = (model_type, fingerprint, int(total), int(excluded), int(nonfinite))
+
+    expected_keys = {(split, camera_id) for split in ("train", "val", "test") for camera_id in camera_ids}
+    if set(records) != expected_keys:
+        missing = sorted(expected_keys - set(records))
+        unexpected = sorted(set(records) - expected_keys)
+        raise ValueError(
+            "v4 camera-ray-domain telemetry split/camera coverage mismatch: "
+            f"missing={missing} unexpected={unexpected}"
+        )
+    expected_model = "FThetaCameraModel" if arm == "F" else "OpenCVPinholeCameraModel"
+    for (split, camera_id), (model_type, fingerprint, total, excluded, nonfinite) in records.items():
+        expected_fingerprint = fingerprints[camera_id] if arm == "F" else "none"
+        expected_excluded = _V4_EXCLUDED_BY_MAX_ANGLE[camera_id] if arm == "F" else 0
+        if model_type != expected_model:
+            raise ValueError(
+                f"v4 {arm} telemetry model mismatch for {split}/{camera_id}: "
+                f"expected={expected_model} actual={model_type}"
+            )
+        if fingerprint != expected_fingerprint:
+            raise ValueError(
+                f"v4 {arm} telemetry fingerprint mismatch for {split}/{camera_id}: "
+                f"expected={expected_fingerprint} actual={fingerprint}"
+            )
+        if total != _V4_TOTAL_PIXELS or excluded != expected_excluded or nonfinite != 0:
+            raise ValueError(
+                f"v4 {arm} telemetry oracle mismatch for {split}/{camera_id}: "
+                f"total={total} excluded_by_max_angle={excluded} nonfinite={nonfinite}"
+            )
+
+
 def _train_frame_counts(text: str, expected_camera_ids: list[str]) -> dict[str, int]:
     text = _normalize_rich_log(text)
     candidates: list[dict[str, int]] = []
@@ -169,6 +251,8 @@ def validate_training_log(path: str | Path, arm: str, artifact_path: str | Path)
         raise ValueError(f"{arm} training log contains a Python traceback")
     if re.search(r"Non-finite total_loss at step", text, flags=re.IGNORECASE):
         raise ValueError(f"{arm} training log contains the trainer total-loss sentinel")
+    if _is_v4_runtime_artifact(artifact_path) and _V4_NONFINITE_PRED_OR_RENDER_DROP.search(text):
+        raise ValueError(f"{arm} v4 training log contains a non-finite prediction/render drop sentinel")
     normalized = _normalize_rich_log(text)
     repaired_spans = [match.span() for match in _REPAIRED_CAMERA_RAY.finditer(normalized)]
     for occurrence in _NONFINITE_CAMERA_RAY.finditer(normalized):
@@ -194,6 +278,8 @@ def validate_training_log(path: str | Path, arm: str, artifact_path: str | Path)
     if arm == "P" and (override_attempted or fallback_logged):
         raise ValueError("Arm P unexpectedly enabled the FTheta dataset override")
     camera_ids, _, _ = _artifact_contract(artifact_path)
+    if _is_v4_runtime_artifact(artifact_path):
+        _validate_v4_camera_ray_domain_telemetry(text, arm, artifact_path)
     return _train_frame_counts(text, camera_ids)
 
 
@@ -248,6 +334,11 @@ def validate_scientific_config(
     }
     for dotted_key, expected in scalar_contract.items():
         _require_config_value(config, dotted_key, expected)
+    if Path(artifact_path).expanduser().resolve() == (
+        _REPO_ROOT / V4_MULTILAYER_PROFILE_CONTRACT["runtime_artifact"]["path"]
+    ).resolve():
+        _require_config_value(config, "dataset.camera_max_fov_deg", 190.0)
+        _require_config_value(config, "dataset.n_val_image_subsample", 1)
     _require_config_value(config, "dataset.camera_ids", camera_ids)
     _require_config_value(config, "loss.camera_loss_weights", {})
     _require_config_value(config, "layers.enabled", _EXPECTED_LAYERS)
@@ -422,6 +513,20 @@ def validate_metrics(path: str | Path, artifact_path: str | Path) -> None:
         raise ValueError(f"cannot read metrics {metrics_path}: {exc}") from exc
     if not isinstance(metrics, dict):
         raise ValueError("metrics.json root must be a mapping")
+    if _is_v4_runtime_artifact(artifact_path):
+        # render.py deliberately preserves the legacy sparse schema: this key
+        # is emitted only when the count is non-zero. Absence therefore means
+        # the renderer-observed count is exactly zero, while any present value
+        # must also be the integer zero to pass a v4 evidence gate.
+        nonfinite_pred_px = metrics.get("nonfinite_pred_px", 0)
+        if (
+            isinstance(nonfinite_pred_px, bool)
+            or not isinstance(nonfinite_pred_px, int)
+            or nonfinite_pred_px != 0
+        ):
+            raise ValueError(
+                f"v4 metrics nonfinite_pred_px must be the explicit integer 0, got {nonfinite_pred_px!r}"
+            )
     for key in RENDER_METRIC_KEYS:
         _finite_metric(metrics, key, context="top-level metrics")
 
@@ -470,6 +575,98 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def _tree_sha256(paths: list[Path], root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(bytes.fromhex(sha256_file(path)))
+    return digest.hexdigest()
+
+
+def _write_json_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+    ) as stream:
+        stream.write(payload)
+        temporary = Path(stream.name)
+    os.replace(temporary, path)
+
+
+def _validate_native_png(path: Path, kind: str) -> None:
+    try:
+        with Image.open(path) as image:
+            if image.format != "PNG":
+                raise ValueError(f"native {kind} file is not PNG: {path}")
+            if image.size != _V4_NATIVE_RESOLUTION:
+                raise ValueError(
+                    f"native {kind} PNG must be {_V4_NATIVE_RESOLUTION[0]}x{_V4_NATIVE_RESOLUTION[1]}, "
+                    f"got {image.size[0]}x{image.size[1]}: {path}"
+                )
+            image.verify()
+    except (OSError, SyntaxError, UnidentifiedImageError) as exc:
+        raise ValueError(f"native {kind} file is not a readable PNG: {path}: {exc}") from exc
+
+
+def validate_smoke_native_render_tree(
+    metrics_path: str | Path,
+    artifact_path: str | Path,
+    inventory_path: str | Path | None = None,
+) -> dict:
+    """Hash every native smoke render/GT PNG and bind it to metrics counts."""
+
+    metrics_path = Path(metrics_path).expanduser().resolve()
+    if not _is_v4_runtime_artifact(artifact_path):
+        raise ValueError("native smoke render inventory is only defined for the v4 artifact")
+    validate_metrics(metrics_path, artifact_path)
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    camera_ids, _, _ = _artifact_contract(artifact_path)
+    per_camera_counts = {
+        camera_id: int(metrics["per_camera"][camera_id]["n_frames"])
+        for camera_id in camera_ids
+    }
+    expected_count = sum(per_camera_counts.values())
+    step_root = metrics_path.parent / "ours_5000"
+    render_dir = step_root / "renders"
+    gt_dir = step_root / "gt"
+    render_paths = sorted(render_dir.glob("*.png")) if render_dir.is_dir() else []
+    gt_paths = sorted(gt_dir.glob("*.png")) if gt_dir.is_dir() else []
+    if len(render_paths) != expected_count:
+        raise ValueError(f"native smoke render PNG count {len(render_paths)} != evaluated frames {expected_count}")
+    if len(gt_paths) != expected_count:
+        raise ValueError(f"native smoke GT PNG count {len(gt_paths)} != evaluated frames {expected_count}")
+    render_names = [path.name for path in render_paths]
+    gt_names = [path.name for path in gt_paths]
+    if render_names != gt_names:
+        raise ValueError("native smoke render and GT PNG filenames do not match")
+    for path in render_paths:
+        _validate_native_png(path, "render")
+    for path in gt_paths:
+        _validate_native_png(path, "GT")
+    inventory = {
+        "schema_version": 1,
+        "profile": _V4_SMOKE_RUN_PROFILE,
+        "global_step": 5000,
+        "native_resolution": list(_V4_NATIVE_RESOLUTION),
+        "metrics_path": str(metrics_path),
+        "metrics_sha256": sha256_file(metrics_path),
+        "render_dir": str(render_dir.resolve()),
+        "gt_dir": str(gt_dir.resolve()),
+        "render_png_count": len(render_paths),
+        "gt_png_count": len(gt_paths),
+        "gt_png_names": gt_names,
+        "per_camera_n_frames": per_camera_counts,
+        "render_tree_sha256": _tree_sha256(render_paths, render_dir),
+        "gt_tree_sha256": _tree_sha256(gt_paths, gt_dir),
+    }
+    if inventory_path is not None:
+        _write_json_atomic(Path(inventory_path), inventory)
+    return inventory
+
+
 def _file_record(path: str | Path) -> dict[str, Any]:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
@@ -499,13 +696,16 @@ def _verify_arm_output_records(value: dict, *, require_both: bool) -> None:
         raise ValueError("run manifest arms must be a mapping")
     if require_both and set(arms) != {"P", "F"}:
         raise ValueError("run manifest must contain both Arm P and Arm F evidence")
+    required_outputs = set(_REQUIRED_OUTPUT_NAMES)
+    if value.get("ncore_readiness_profile") == V4_MULTILAYER_READINESS_PROFILE:
+        required_outputs.add(_V4_NATIVE_RENDER_OUTPUT)
     for arm, evidence in arms.items():
         if arm not in {"P", "F"} or not isinstance(evidence, dict):
             raise ValueError(f"run manifest Arm {arm!r} evidence is invalid")
-        missing = _REQUIRED_OUTPUT_NAMES - set(evidence)
+        missing = required_outputs - set(evidence)
         if missing:
             raise ValueError(f"run manifest Arm {arm} outputs missing {sorted(missing)}")
-        for output_name in sorted(_REQUIRED_OUTPUT_NAMES):
+        for output_name in sorted(required_outputs):
             _verify_file_record(
                 evidence[output_name],
                 context=f"Arm {arm} output {output_name}",
@@ -556,6 +756,12 @@ def _prepare_run_manifest(
     source_records = {name: _file_record(source) for name, source in sorted(sources.items())}
     if ncore_readiness_profile is not None:
         profile_root = _REPO_ROOT if repo_root is None else Path(repo_root).expanduser().resolve()
+        supplied_driver = Path(sources["driver"]).expanduser().resolve()
+        expected_driver = (profile_root / "scripts/pin_ftheta_7cam_v4_smoke.sh").resolve()
+        if supplied_driver != expected_driver:
+            raise ValueError(
+                f"v4 smoke driver path mismatch: expected={expected_driver} actual={supplied_driver}"
+            )
         profile_paths = validate_v4_multilayer_profile_contract(
             profile_root,
             sources["config"],
@@ -563,6 +769,7 @@ def _prepare_run_manifest(
         )
         validate_v4_multilayer_dataset_contract(sources["dataset_manifest"])
         source_records["data_readiness_validator"] = _file_record(_DATA_READINESS_SOURCE)
+        source_records["v4_driver_validator"] = _file_record(_V4_DRIVER_VALIDATOR_SOURCE)
         source_records["v4_provenance_sidecar"] = _file_record(profile_paths["provenance_sidecar"])
         source_records["v4_survey_artifact"] = _file_record(profile_paths["survey_artifact"])
     value = {
@@ -616,10 +823,17 @@ def verify_run_manifest(path: str | Path, current_git_commit: str) -> dict:
     profile = value.get("ncore_readiness_profile")
     if profile not in (None, V4_MULTILAYER_READINESS_PROFILE):
         raise ValueError(f"unsupported NCore readiness profile: {profile!r}")
+    if value.get("status") not in {"started", "failed", "complete"}:
+        raise ValueError(f"run manifest status is invalid: {value.get('status')!r}")
     expected_sources = set(_REQUIRED_SOURCE_NAMES)
     if profile is not None:
         expected_sources.update(
-            {"data_readiness_validator", "v4_provenance_sidecar", "v4_survey_artifact"}
+            {
+                "data_readiness_validator",
+                "v4_driver_validator",
+                "v4_provenance_sidecar",
+                "v4_survey_artifact",
+            }
         )
     if not isinstance(sources, dict) or set(sources) != expected_sources:
         raise ValueError("run manifest source set is invalid")
@@ -627,6 +841,17 @@ def verify_run_manifest(path: str | Path, current_git_commit: str) -> dict:
         _verify_file_record(record, context=name, drift_kind="source")
     if value.get("status") == "complete":
         _verify_arm_output_records(value, require_both=True)
+        if profile == V4_MULTILAYER_READINESS_PROFILE:
+            for arm in ("P", "F"):
+                evidence = value["arms"][arm]
+                current_inventory = validate_smoke_native_render_tree(
+                    evidence["metrics"]["path"], value["sources"]["artifact"]["path"]
+                )
+                recorded_inventory = json.loads(
+                    Path(evidence[_V4_NATIVE_RENDER_OUTPUT]["path"]).read_text(encoding="utf-8")
+                )
+                if current_inventory != recorded_inventory or current_inventory != evidence.get("native_render"):
+                    raise ValueError(f"Arm {arm} v4 smoke native render tree drifted after completion")
     return value
 
 
@@ -640,18 +865,20 @@ def record_arm_outputs(
     eval_log: str | Path,
     artifact_path: str | Path,
     input_manifest_path: str | Path,
+    native_render_inventory: str | Path | None = None,
 ) -> dict:
     arm = _arm(arm)
+    value = _load_run_manifest(manifest_path)
+    v4_profile = value.get("ncore_readiness_profile") == V4_MULTILAYER_READINESS_PROFILE
     validate_parsed_config(parsed_yaml, arm, artifact_path, input_manifest_path)
     validate_checkpoint(checkpoint_path, arm, artifact_path, input_manifest_path)
     train_counts = validate_training_log(train_log, arm, artifact_path)
     validate_metrics(metrics_path, artifact_path)
 
-    value = _load_run_manifest(manifest_path)
     arms = value.setdefault("arms", {})
     if arm in arms:
         raise ValueError(f"Arm {arm} evidence already recorded")
-    arms[arm] = {
+    evidence = {
         "parsed_yaml": _file_record(parsed_yaml),
         "checkpoint": {
             **_file_record(checkpoint_path),
@@ -662,6 +889,19 @@ def record_arm_outputs(
         "eval_log": _file_record(eval_log),
         "train_frames_per_camera": train_counts,
     }
+    if v4_profile:
+        if native_render_inventory is None:
+            raise ValueError("v4 smoke record-arm requires native render inventory")
+        actual_inventory = validate_smoke_native_render_tree(metrics_path, artifact_path)
+        try:
+            recorded_inventory = json.loads(Path(native_render_inventory).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot read v4 smoke native render inventory: {exc}") from exc
+        if recorded_inventory != actual_inventory:
+            raise ValueError("v4 smoke native render inventory does not match the current render tree")
+        evidence[_V4_NATIVE_RENDER_OUTPUT] = _file_record(native_render_inventory)
+        evidence["native_render"] = actual_inventory
+    arms[arm] = evidence
     _write_run_manifest(manifest_path, value)
     return value
 
@@ -687,14 +927,50 @@ def finalize_run_manifest(
         f_outputs["metrics"]["path"],
         value["sources"]["artifact"]["path"],
     )
+    comparison_extra: dict[str, Any] = {}
+    if value.get("ncore_readiness_profile") == V4_MULTILAYER_READINESS_PROFILE:
+        for arm in ("P", "F"):
+            evidence = value["arms"][arm]
+            current_inventory = validate_smoke_native_render_tree(
+                evidence["metrics"]["path"], value["sources"]["artifact"]["path"]
+            )
+            recorded_inventory = json.loads(
+                Path(evidence[_V4_NATIVE_RENDER_OUTPUT]["path"]).read_text(encoding="utf-8")
+            )
+            if current_inventory != recorded_inventory or current_inventory != evidence.get("native_render"):
+                raise ValueError(f"Arm {arm} v4 smoke native render tree drifted after evidence recording")
+        p_native = value["arms"]["P"]["native_render"]
+        f_native = value["arms"]["F"]["native_render"]
+        for key in ("gt_png_count", "gt_png_names", "gt_tree_sha256", "native_resolution"):
+            if p_native[key] != f_native[key]:
+                raise ValueError(f"P/F v4 smoke native render parity mismatch for {key}")
+        if p_native["per_camera_n_frames"] != f_native["per_camera_n_frames"]:
+            raise ValueError("P/F v4 smoke native per-camera frame inventory mismatch")
+        comparison_extra = {
+            "gt_png_count": p_native["gt_png_count"],
+            "gt_tree_sha256": p_native["gt_tree_sha256"],
+            "native_resolution": p_native["native_resolution"],
+        }
     value["comparison"] = {
         "normalized_scientific_config_sha256": scientific_hash,
         "only_representation_path_differs": True,
         "train_frames_per_camera": p_train_counts,
         "per_camera_n_frames": frame_counts,
+        **comparison_extra,
     }
     value["status"] = "complete"
     value["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
+    _write_run_manifest(manifest_path, value)
+    return value
+
+
+def mark_run_failed(manifest_path: str | Path, stage: str, exit_code: int) -> dict:
+    value = _load_run_manifest(manifest_path)
+    if value.get("status") == "complete":
+        raise ValueError("cannot mark a completed smoke run failed")
+    value["status"] = "failed"
+    value["failed_at_utc"] = datetime.now(timezone.utc).isoformat()
+    value["failure"] = {"stage": stage, "exit_code": int(exit_code)}
     _write_run_manifest(manifest_path, value)
     return value
 
@@ -745,6 +1021,11 @@ def _build_parser() -> argparse.ArgumentParser:
     metrics.add_argument("--path", required=True)
     metrics.add_argument("--artifact", required=True)
 
+    render_tree = commands.add_parser("render-tree", help="freeze the v4 native smoke render inventory")
+    render_tree.add_argument("--metrics", required=True)
+    render_tree.add_argument("--artifact", required=True)
+    render_tree.add_argument("--inventory", required=True)
+
     create = commands.add_parser("manifest-create", help="freeze source hashes before launch")
     create.add_argument("--path", required=True)
     create.add_argument("--run-id", required=True)
@@ -759,6 +1040,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(V4_MULTILAYER_READINESS_PROFILE,),
         default=None,
     )
+    create.add_argument("--expected-commit")
 
     verify = commands.add_parser("manifest-verify", help="reject source or commit drift")
     verify.add_argument("--path", required=True)
@@ -772,6 +1054,7 @@ def _build_parser() -> argparse.ArgumentParser:
     record.add_argument("--metrics", required=True)
     record.add_argument("--train-log", required=True)
     record.add_argument("--eval-log", required=True)
+    record.add_argument("--native-render-inventory")
     record.add_argument("--artifact", required=True)
     record.add_argument("--input-manifest", required=True)
     record.add_argument("--repo-root", required=True)
@@ -779,6 +1062,10 @@ def _build_parser() -> argparse.ArgumentParser:
     finalize = commands.add_parser("finalize", help="compare arms and close the run manifest")
     finalize.add_argument("--manifest", required=True)
     finalize.add_argument("--repo-root", required=True)
+    fail = commands.add_parser("manifest-fail", help="record a failed v4 smoke stage")
+    fail.add_argument("--manifest", required=True)
+    fail.add_argument("--stage", required=True)
+    fail.add_argument("--exit-code", required=True, type=int)
     return parser
 
 
@@ -790,9 +1077,18 @@ def main() -> None:
         validate_checkpoint(args.path, args.arm, args.artifact, args.input_manifest)
     elif args.command == "metrics":
         validate_metrics(args.path, args.artifact)
+    elif args.command == "render-tree":
+        validate_smoke_native_render_tree(args.metrics, args.artifact, args.inventory)
     elif args.command == "manifest-create":
         ensure_tracked_worktree_clean(args.repo_root)
         git_commit = _git_commit(args.repo_root)
+        if args.ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
+            if not args.expected_commit:
+                raise ValueError("v4 manifest-create requires --expected-commit")
+            if args.expected_commit != git_commit:
+                raise ValueError(
+                    f"v4 expected commit mismatch: expected={args.expected_commit} current={git_commit}"
+                )
         create_run_manifest(
             args.path,
             args.run_id,
@@ -821,12 +1117,15 @@ def main() -> None:
             args.eval_log,
             args.artifact,
             args.input_manifest,
+            args.native_render_inventory,
         )
-    else:
+    elif args.command == "finalize":
         finalize_run_manifest(
             args.manifest,
             _git_commit(args.repo_root),
         )
+    else:
+        mark_run_failed(args.manifest, args.stage, args.exit_code)
 
 
 if __name__ == "__main__":

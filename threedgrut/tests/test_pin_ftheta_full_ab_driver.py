@@ -34,6 +34,7 @@ from threedgrut.datasets.ftheta_override import load_ftheta_override_parameters
 
 ROOT = Path(__file__).resolve().parents[2]
 DRIVER = ROOT / "scripts" / "pin_ftheta_7cam_full_ab.sh"
+V4_DRIVER = ROOT / "scripts" / "pin_ftheta_7cam_v4_full_ab.sh"
 CONFIG_DIR = str(ROOT / "configs")
 BASE_CONFIG = "apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam"
 FTHETA_ARTIFACT = "scripts/pin_ftheta_b6a9_7cam_params.json"
@@ -347,12 +348,19 @@ def _manifest_create_argv(tmp_path: Path, *, readiness: bool = True) -> list[str
         "--artifact",
         str(artifact_path),
         "--driver",
-        str(DRIVER),
+        str(V4_DRIVER if readiness else DRIVER),
         "--validator",
         str(ROOT / "scripts/pin_ftheta_full_ab_validation.py"),
     ]
     if readiness:
-        argv.extend(["--ncore-readiness-profile", full_validation.V4_MULTILAYER_READINESS_PROFILE])
+        argv.extend(
+            [
+                "--ncore-readiness-profile",
+                full_validation.V4_MULTILAYER_READINESS_PROFILE,
+                "--expected-commit",
+                "abc123",
+            ]
+        )
     return argv
 
 
@@ -488,6 +496,7 @@ def test_full_v4_profile_records_hashed_readiness_validator_source(
     sources = _source_files(tmp_path, dataset)
     sources["config"] = V4_CONFIG_PATH
     sources["artifact"] = V4_FTHETA_ARTIFACT_PATH
+    sources["driver"] = V4_DRIVER
     value = full_validation._prepare_full_run_manifest(
         "v4-full",
         "abc123",
@@ -498,6 +507,9 @@ def test_full_v4_profile_records_hashed_readiness_validator_source(
     assert value["ncore_readiness_profile"] == full_validation.V4_MULTILAYER_READINESS_PROFILE
     assert record["sha256"] == sha256_file(ROOT / "scripts/ncore_data_readiness.py")
     assert "v4_provenance_sidecar" in value["sources"]
+    assert "v4_driver_validator" in value["sources"]
+    assert value["contract"]["train_duration_sec"] == 20.0
+    assert value["contract"]["val_duration_sec"] == 20.0
 
 
 def test_manifest_create_rejects_wrong_hash_and_wrong_b6a9_identity(
