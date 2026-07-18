@@ -16,6 +16,7 @@ import torch
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+import scripts.pin_ftheta_smoke_validation as smoke_validation
 from scripts.pin_ftheta_smoke_validation import (
     RENDER_METRIC_KEYS,
     _build_parser,
@@ -39,6 +40,8 @@ CONFIG_DIR = str(ROOT / "configs")
 BASE_CONFIG = "apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam"
 FTHETA_ARTIFACT = "scripts/pin_ftheta_b6a9_7cam_params.json"
 FTHETA_ARTIFACT_PATH = ROOT / FTHETA_ARTIFACT
+V4_CONFIG_PATH = ROOT / "configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam_v4.yaml"
+V4_FTHETA_ARTIFACT_PATH = ROOT / "scripts/pin_ftheta_b6a9_7cam_params_v4_full_domain.json"
 SEVEN_CAMERAS = [
     "camera_front_wide_120fov",
     "camera_cross_left_120fov",
@@ -93,6 +96,133 @@ def test_validator_module_cli_imports_from_repo_root(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "manifest-create" in result.stdout
+
+
+def _smoke_manifest_create_argv(tmp_path: Path, *, readiness: bool = True) -> list[str]:
+    config_path = V4_CONFIG_PATH if readiness else ROOT / "configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam.yaml"
+    artifact_path = V4_FTHETA_ARTIFACT_PATH if readiness else FTHETA_ARTIFACT_PATH
+    argv = [
+        "pin_ftheta_smoke_validation.py",
+        "manifest-create",
+        "--path",
+        str(tmp_path / "run_manifest.json"),
+        "--run-id",
+        "smoke-test",
+        "--repo-root",
+        str(ROOT),
+        "--dataset-manifest",
+        str(tmp_path / "dataset.json"),
+        "--config",
+        str(config_path),
+        "--artifact",
+        str(artifact_path),
+        "--driver",
+        str(DRIVER),
+        "--validator",
+        str(ROOT / "scripts/pin_ftheta_smoke_validation.py"),
+    ]
+    if readiness:
+        argv.extend(["--ncore-readiness-profile", smoke_validation.V4_MULTILAYER_READINESS_PROFILE])
+    return argv
+
+
+def test_smoke_manifest_create_readiness_failure_prevents_manifest_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _smoke_manifest_create_argv(tmp_path))
+    monkeypatch.setattr(smoke_validation, "ensure_tracked_worktree_clean", lambda _repo: None)
+    monkeypatch.setattr(smoke_validation, "_git_commit", lambda _repo: "abc123")
+    monkeypatch.setattr(smoke_validation, "_artifact_contract", lambda _path: (SEVEN_CAMERAS, {}, {}))
+    monkeypatch.setattr(smoke_validation, "_prepare_run_manifest", lambda *_args, **_kwargs: {"prepared": True})
+
+    def reject(_manifest, _camera_ids, *, required_aux):
+        assert tuple(required_aux) == smoke_validation.V4_REQUIRED_AUX_TYPES
+        raise ValueError("smoke canonical store is corrupt")
+
+    monkeypatch.setattr(smoke_validation, "validate_ncore_data_readiness", reject)
+    with pytest.raises(ValueError, match="smoke canonical store is corrupt"):
+        smoke_validation.main()
+    assert not (tmp_path / "run_manifest.json").exists()
+
+
+def test_public_smoke_create_with_v4_profile_cannot_bypass_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "public.json"
+    monkeypatch.setattr(smoke_validation, "_prepare_run_manifest", lambda *_args, **_kwargs: {"prepared": True})
+    monkeypatch.setattr(smoke_validation, "_artifact_contract", lambda _path: (SEVEN_CAMERAS, {}, {}))
+    monkeypatch.setattr(
+        smoke_validation,
+        "validate_ncore_data_readiness",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("public readiness gate")),
+    )
+    with pytest.raises(ValueError, match="public readiness gate"):
+        create_run_manifest(
+            output,
+            "public-v4",
+            "abc123",
+            _source_files(tmp_path),
+            ncore_readiness_profile=smoke_validation.V4_MULTILAYER_READINESS_PROFILE,
+        )
+    assert not output.exists()
+
+
+def test_smoke_manifest_create_runs_readiness_before_manifest_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _smoke_manifest_create_argv(tmp_path))
+    monkeypatch.setattr(smoke_validation, "ensure_tracked_worktree_clean", lambda _repo: None)
+    monkeypatch.setattr(smoke_validation, "_git_commit", lambda _repo: "abc123")
+    events = []
+
+    def readiness(manifest, camera_ids, *, required_aux):
+        events.append(("readiness", Path(manifest), tuple(camera_ids), tuple(required_aux)))
+
+    def prepare(run_id, commit, sources, **kwargs):
+        events.append(("prepare", run_id, commit, sources, kwargs))
+        return {"prepared": True}
+
+    def write(path, value, *, exclusive):
+        events.append(("write", Path(path), value, exclusive))
+
+    monkeypatch.setattr(smoke_validation, "_artifact_contract", lambda _path: (SEVEN_CAMERAS, {}, {}))
+    monkeypatch.setattr(smoke_validation, "_prepare_run_manifest", prepare)
+    monkeypatch.setattr(smoke_validation, "validate_ncore_data_readiness", readiness)
+    monkeypatch.setattr(smoke_validation, "_write_run_manifest", write)
+    smoke_validation.main()
+
+    assert [event[0] for event in events] == ["prepare", "readiness", "write"]
+    assert events[1] == (
+        "readiness",
+        dataset,
+        tuple(SEVEN_CAMERAS),
+        smoke_validation.V4_REQUIRED_AUX_TYPES,
+    )
+    assert events[2] == ("write", tmp_path / "run_manifest.json", {"prepared": True}, True)
+
+
+def test_smoke_manifest_create_without_profile_preserves_legacy_no_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _smoke_manifest_create_argv(tmp_path, readiness=False))
+    monkeypatch.setattr(smoke_validation, "ensure_tracked_worktree_clean", lambda _repo: None)
+    monkeypatch.setattr(smoke_validation, "_git_commit", lambda _repo: "abc123")
+    monkeypatch.setattr(smoke_validation, "validate_ncore_data_readiness", lambda *_a, **_k: pytest.fail("called"))
+    written = []
+    monkeypatch.setattr(
+        smoke_validation,
+        "_write_run_manifest",
+        lambda path, value, *, exclusive: written.append((Path(path), value, exclusive)),
+    )
+    smoke_validation.main()
+    assert written and "ncore_readiness_profile" not in written[0][1]
+    assert set(written[0][1]["sources"]) == smoke_validation._REQUIRED_SOURCE_NAMES
 
 
 def test_smoke_driver_freezes_matched_common_overrides() -> None:
@@ -720,6 +850,38 @@ def test_run_manifest_is_exclusive_and_detects_source_or_commit_drift(tmp_path: 
 
     sources["artifact"].write_text("mutated", encoding="utf-8")
     with pytest.raises(ValueError, match="source hash drift"):
+        verify_run_manifest(manifest_path, "abc123")
+
+
+def test_v4_readiness_profile_records_and_hash_gates_validator_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    readiness_source = tmp_path / "ncore_data_readiness.py"
+    readiness_source.write_text("version one", encoding="utf-8")
+    monkeypatch.setattr(smoke_validation, "_DATA_READINESS_SOURCE", readiness_source)
+    monkeypatch.setattr(smoke_validation, "validate_v4_multilayer_dataset_contract", lambda _path: {})
+    monkeypatch.setattr(smoke_validation, "validate_ncore_data_readiness", lambda *_args, **_kwargs: {})
+    manifest_path = tmp_path / "v4_manifest.json"
+    sources = _source_files(tmp_path)
+    sources["config"] = V4_CONFIG_PATH
+    sources["artifact"] = V4_FTHETA_ARTIFACT_PATH
+    create_run_manifest(
+        manifest_path,
+        "v4-run",
+        "abc123",
+        sources,
+        ncore_readiness_profile=smoke_validation.V4_MULTILAYER_READINESS_PROFILE,
+        repo_root=ROOT,
+    )
+    value = verify_run_manifest(manifest_path, "abc123")
+    assert value["ncore_readiness_profile"] == smoke_validation.V4_MULTILAYER_READINESS_PROFILE
+    assert "data_readiness_validator" in value["sources"]
+    assert "v4_provenance_sidecar" in value["sources"]
+    assert value["sources"]["data_readiness_validator"]["sha256"] == smoke_validation.sha256_file(
+        readiness_source
+    )
+    readiness_source.write_text("version two", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"source hash drift for data_readiness_validator"):
         verify_run_manifest(manifest_path, "abc123")
 
 

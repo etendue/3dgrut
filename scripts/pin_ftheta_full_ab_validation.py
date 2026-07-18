@@ -17,6 +17,14 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 from PIL import Image, UnidentifiedImageError
 
+from scripts.ncore_data_readiness import (
+    V4_MULTILAYER_PROFILE_CONTRACT,
+    V4_MULTILAYER_READINESS_PROFILE,
+    V4_REQUIRED_AUX_TYPES,
+    validate_ncore_data_readiness,
+    validate_v4_multilayer_dataset_contract,
+    validate_v4_multilayer_profile_contract,
+)
 from scripts.pin_ftheta_smoke_validation import (
     _EXPECTED_LAYERS,
     _artifact_contract,
@@ -153,18 +161,38 @@ def validate_frozen_b6a9_manifest(path: str | Path) -> dict:
     return value
 
 
-def _expanded_full_sources(sources: dict[str, str | Path]) -> dict[str, str | Path]:
+def _expanded_full_sources(
+    sources: dict[str, str | Path],
+    *,
+    ncore_readiness_profile: str | None = None,
+) -> dict[str, str | Path]:
     required_dynamic = {"dataset_manifest", "config", "artifact", "driver", "validator"}
     if set(sources) != required_dynamic:
         raise ValueError(f"full run manifest launch sources must be {sorted(required_dynamic)}, got {sorted(sources)}")
+    static_sources = dict(_FULL_STATIC_SOURCES)
+    profile_paths: dict[str, Path] | None = None
+    if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
+        static_sources["config"] = V4_MULTILAYER_PROFILE_CONTRACT["config"]["path"]
+        static_sources["artifact"] = V4_MULTILAYER_PROFILE_CONTRACT["runtime_artifact"]["path"]
+        profile_paths = validate_v4_multilayer_profile_contract(
+            _REPO_ROOT,
+            sources["config"],
+            sources["artifact"],
+        )
+        validate_v4_multilayer_dataset_contract(sources["dataset_manifest"])
     for name in ("config", "artifact", "driver", "validator"):
-        expected = (_REPO_ROOT / _FULL_STATIC_SOURCES[name]).resolve()
+        expected = (_REPO_ROOT / static_sources[name]).resolve()
         actual = Path(sources[name]).expanduser().resolve()
         if actual != expected:
             raise ValueError(f"full run source {name} path {actual} != frozen path {expected}")
     validate_frozen_b6a9_manifest(sources["dataset_manifest"])
     expanded: dict[str, str | Path] = {"dataset_manifest": sources["dataset_manifest"]}
-    expanded.update({name: _REPO_ROOT / relative for name, relative in _FULL_STATIC_SOURCES.items()})
+    expanded.update({name: _REPO_ROOT / relative for name, relative in static_sources.items()})
+    if ncore_readiness_profile is not None:
+        expanded["data_readiness_validator"] = _REPO_ROOT / "scripts/ncore_data_readiness.py"
+        assert profile_paths is not None
+        expanded["v4_provenance_sidecar"] = profile_paths["provenance_sidecar"]
+        expanded["v4_survey_artifact"] = profile_paths["survey_artifact"]
     return expanded
 
 
@@ -360,15 +388,22 @@ def _require_full_manifest(value: dict) -> None:
         raise ValueError(f"run manifest status is invalid: {value.get('status')!r}")
 
 
-def create_full_run_manifest(
-    path: str | Path,
+def _prepare_full_run_manifest(
     run_id: str,
     git_commit: str,
     sources: dict[str, str | Path],
+    *,
+    ncore_readiness_profile: str | None = None,
 ) -> dict:
     if not run_id or not git_commit:
         raise ValueError("run_id and git_commit must be non-empty")
-    expanded_sources = _expanded_full_sources(sources)
+    if ncore_readiness_profile not in (None, V4_MULTILAYER_READINESS_PROFILE):
+        raise ValueError(f"unsupported NCore readiness profile: {ncore_readiness_profile!r}")
+    expanded_sources = _expanded_full_sources(
+        sources,
+        ncore_readiness_profile=ncore_readiness_profile,
+    )
+    _full_artifact_contract(expanded_sources["artifact"])
     value = {
         "schema_version": 3,
         "run_id": run_id,
@@ -388,6 +423,31 @@ def create_full_run_manifest(
         "sources": {name: _file_record(source) for name, source in sorted(expanded_sources.items())},
         "arms": {},
     }
+    if ncore_readiness_profile is not None:
+        value["ncore_readiness_profile"] = ncore_readiness_profile
+    return value
+
+
+def create_full_run_manifest(
+    path: str | Path,
+    run_id: str,
+    git_commit: str,
+    sources: dict[str, str | Path],
+    *,
+    ncore_readiness_profile: str | None = None,
+) -> dict:
+    value = _prepare_full_run_manifest(
+        run_id,
+        git_commit,
+        sources,
+        ncore_readiness_profile=ncore_readiness_profile,
+    )
+    if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
+        validate_ncore_data_readiness(
+            sources["dataset_manifest"],
+            EXPECTED_CAMERA_IDS,
+            required_aux=V4_REQUIRED_AUX_TYPES,
+        )
     _write_run_manifest(path, value, exclusive=True)
     return value
 
@@ -400,7 +460,14 @@ def verify_full_run_manifest(path: str | Path, current_git_commit: str) -> dict:
         raise ValueError(f"git commit drift: recorded={value.get('git_commit')!r} current={current_git_commit!r}")
     _require_full_manifest(value)
     sources = value.get("sources")
+    profile = value.get("ncore_readiness_profile")
+    if profile not in (None, V4_MULTILAYER_READINESS_PROFILE):
+        raise ValueError(f"unsupported NCore readiness profile: {profile!r}")
     expected_source_names = {"dataset_manifest", *_FULL_STATIC_SOURCES}
+    if profile is not None:
+        expected_source_names.update(
+            {"data_readiness_validator", "v4_provenance_sidecar", "v4_survey_artifact"}
+        )
     if not isinstance(sources, dict) or set(sources) != expected_source_names:
         raise ValueError("full run manifest source set is invalid")
     for name, record in sources.items():
@@ -571,6 +638,7 @@ def run_preflight(
     config_name: str,
     artifact_path: str | Path,
     input_manifest_path: str | Path,
+    ncore_readiness_profile: str | None = None,
 ) -> None:
     repo_root = Path(repo_root).expanduser().resolve()
     artifact_path = Path(artifact_path).expanduser().resolve()
@@ -580,7 +648,28 @@ def run_preflight(
     if not artifact_path.is_file():
         raise ValueError(f"FTheta artifact missing: {artifact_path}")
     validate_frozen_b6a9_manifest(input_manifest_path)
-    _full_artifact_contract(artifact_path)
+    if ncore_readiness_profile not in (None, V4_MULTILAYER_READINESS_PROFILE):
+        raise ValueError(f"unsupported NCore readiness profile: {ncore_readiness_profile!r}")
+    if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
+        expected_config_name = str(Path(V4_MULTILAYER_PROFILE_CONTRACT["config"]["path"]).relative_to("configs").with_suffix(""))
+        if config_name != expected_config_name:
+            raise ValueError(
+                f"v4-multilayer config name mismatch: expected={expected_config_name!r} actual={config_name!r}"
+            )
+        validate_v4_multilayer_profile_contract(
+            repo_root,
+            repo_root / V4_MULTILAYER_PROFILE_CONTRACT["config"]["path"],
+            artifact_path,
+        )
+        validate_v4_multilayer_dataset_contract(input_manifest_path)
+        _full_artifact_contract(artifact_path)
+        validate_ncore_data_readiness(
+            input_manifest_path,
+            EXPECTED_CAMERA_IDS,
+            required_aux=V4_REQUIRED_AUX_TYPES,
+        )
+    else:
+        _full_artifact_contract(artifact_path)
 
     with initialize_config_dir(config_dir=str(repo_root / "configs"), version_base=None):
         base = compose(config_name=config_name)
@@ -623,6 +712,11 @@ def _build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--config-name", required=True)
     preflight.add_argument("--artifact", required=True)
     preflight.add_argument("--input-manifest", required=True)
+    preflight.add_argument(
+        "--ncore-readiness-profile",
+        choices=(V4_MULTILAYER_READINESS_PROFILE,),
+        default=None,
+    )
 
     log = commands.add_parser("log")
     log.add_argument("--path", required=True)
@@ -653,6 +747,11 @@ def _build_parser() -> argparse.ArgumentParser:
     create.add_argument("--artifact", required=True)
     create.add_argument("--driver", required=True)
     create.add_argument("--validator", required=True)
+    create.add_argument(
+        "--ncore-readiness-profile",
+        choices=(V4_MULTILAYER_READINESS_PROFILE,),
+        default=None,
+    )
 
     verify = commands.add_parser("manifest-verify")
     verify.add_argument("--path", required=True)
@@ -690,7 +789,13 @@ def _current_clean_commit(repo_root: str | Path) -> str:
 def main() -> None:
     args = _build_parser().parse_args()
     if args.command == "preflight":
-        run_preflight(args.repo_root, args.config_name, args.artifact, args.input_manifest)
+        run_preflight(
+            args.repo_root,
+            args.config_name,
+            args.artifact,
+            args.input_manifest,
+            args.ncore_readiness_profile,
+        )
     elif args.command == "log":
         validate_training_log(args.path, args.arm, args.artifact)
     elif args.command == "checkpoint":
@@ -700,10 +805,14 @@ def main() -> None:
     elif args.command == "render-tree":
         validate_native_render_tree(args.metrics, args.artifact, args.inventory)
     elif args.command == "manifest-create":
+        # Keep cheap cleanliness, frozen-provenance, artifact-contract, and
+        # source hashing checks ahead of the expensive NCore opens. Readiness
+        # is deliberately the final operation before the exclusive write.
+        git_commit = _current_clean_commit(args.repo_root)
         create_full_run_manifest(
             args.path,
             args.run_id,
-            _current_clean_commit(args.repo_root),
+            git_commit,
             {
                 "dataset_manifest": args.dataset_manifest,
                 "config": args.config,
@@ -711,6 +820,7 @@ def main() -> None:
                 "driver": args.driver,
                 "validator": args.validator,
             },
+            ncore_readiness_profile=args.ncore_readiness_profile,
         )
     elif args.command == "manifest-verify":
         verify_full_run_manifest(args.path, _current_clean_commit(args.repo_root))

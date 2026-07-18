@@ -38,6 +38,8 @@ CONFIG_DIR = str(ROOT / "configs")
 BASE_CONFIG = "apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam"
 FTHETA_ARTIFACT = "scripts/pin_ftheta_b6a9_7cam_params.json"
 FTHETA_ARTIFACT_PATH = ROOT / FTHETA_ARTIFACT
+V4_CONFIG_PATH = ROOT / "configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam_v4.yaml"
+V4_FTHETA_ARTIFACT_PATH = ROOT / "scripts/pin_ftheta_b6a9_7cam_params_v4_full_domain.json"
 SEVEN_CAMERAS = [
     "camera_front_wide_120fov",
     "camera_cross_left_120fov",
@@ -324,6 +326,178 @@ def test_full_driver_preflight_rejects_unfrozen_manifest_without_output_tree(tmp
     assert result.returncode != 0
     assert "frozen b6a9" in result.stderr
     assert not run_base.exists()
+
+
+def _manifest_create_argv(tmp_path: Path, *, readiness: bool = True) -> list[str]:
+    config_path = V4_CONFIG_PATH if readiness else ROOT / "configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam.yaml"
+    artifact_path = V4_FTHETA_ARTIFACT_PATH if readiness else FTHETA_ARTIFACT_PATH
+    argv = [
+        "pin_ftheta_full_ab_validation.py",
+        "manifest-create",
+        "--path",
+        str(tmp_path / "run_manifest.json"),
+        "--run-id",
+        "test-run",
+        "--repo-root",
+        str(ROOT),
+        "--dataset-manifest",
+        str(tmp_path / "dataset.json"),
+        "--config",
+        str(config_path),
+        "--artifact",
+        str(artifact_path),
+        "--driver",
+        str(DRIVER),
+        "--validator",
+        str(ROOT / "scripts/pin_ftheta_full_ab_validation.py"),
+    ]
+    if readiness:
+        argv.extend(["--ncore-readiness-profile", full_validation.V4_MULTILAYER_READINESS_PROFILE])
+    return argv
+
+
+def test_full_manifest_create_readiness_failure_prevents_manifest_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _manifest_create_argv(tmp_path))
+    monkeypatch.setattr(full_validation, "_current_clean_commit", lambda _repo: "abc123")
+    monkeypatch.setattr(full_validation, "_prepare_full_run_manifest", lambda *_args, **_kwargs: {"prepared": True})
+
+    def reject(_manifest, _camera_ids, *, required_aux):
+        assert tuple(required_aux) == full_validation.V4_REQUIRED_AUX_TYPES
+        raise ValueError("canonical store is corrupt")
+
+    monkeypatch.setattr(full_validation, "validate_ncore_data_readiness", reject)
+    with pytest.raises(ValueError, match="canonical store is corrupt"):
+        full_validation.main()
+    assert not (tmp_path / "run_manifest.json").exists()
+
+
+def test_public_full_create_with_v4_profile_cannot_bypass_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "public.json"
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    sources = _source_files(tmp_path, dataset)
+    monkeypatch.setattr(full_validation, "_prepare_full_run_manifest", lambda *_args, **_kwargs: {"prepared": True})
+    monkeypatch.setattr(
+        full_validation,
+        "validate_ncore_data_readiness",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("public full readiness gate")),
+    )
+    with pytest.raises(ValueError, match="public full readiness gate"):
+        create_full_run_manifest(
+            output,
+            "public-v4",
+            "abc123",
+            sources,
+            ncore_readiness_profile=full_validation.V4_MULTILAYER_READINESS_PROFILE,
+        )
+    assert not output.exists()
+
+
+def test_full_manifest_create_rejects_frozen_provenance_before_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _manifest_create_argv(tmp_path))
+    monkeypatch.setattr(full_validation, "_current_clean_commit", lambda _repo: "abc123")
+    readiness_called = False
+
+    def readiness(*_args, **_kwargs):
+        nonlocal readiness_called
+        readiness_called = True
+
+    monkeypatch.setattr(full_validation, "validate_ncore_data_readiness", readiness)
+    with pytest.raises(ValueError, match=r"canonical manifest SHA-256"):
+        full_validation.main()
+    assert not readiness_called
+    assert not (tmp_path / "run_manifest.json").exists()
+
+
+def test_full_manifest_create_runs_readiness_before_manifest_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _manifest_create_argv(tmp_path))
+    events = []
+
+    def clean(repo_root):
+        events.append(("clean", Path(repo_root)))
+        return "abc123"
+
+    def prepare(run_id, commit, sources, **kwargs):
+        events.append(("prepare", run_id, commit, sources, kwargs))
+        return {"prepared": True}
+
+    def readiness(manifest, camera_ids, *, required_aux):
+        events.append(("readiness", Path(manifest), tuple(camera_ids), tuple(required_aux)))
+
+    def write(path, value, *, exclusive):
+        events.append(("write", Path(path), value, exclusive))
+
+    monkeypatch.setattr(full_validation, "_current_clean_commit", clean)
+    monkeypatch.setattr(full_validation, "_prepare_full_run_manifest", prepare)
+    monkeypatch.setattr(full_validation, "validate_ncore_data_readiness", readiness)
+    monkeypatch.setattr(full_validation, "_write_run_manifest", write)
+    full_validation.main()
+
+    assert [event[0] for event in events] == ["clean", "prepare", "readiness", "write"]
+    assert events[1][1:3] == ("test-run", "abc123")
+    assert events[2] == (
+        "readiness",
+        dataset,
+        EXPECTED_CAMERA_IDS,
+        full_validation.V4_REQUIRED_AUX_TYPES,
+    )
+    assert events[3] == ("write", tmp_path / "run_manifest.json", {"prepared": True}, True)
+
+
+def test_full_manifest_create_without_profile_preserves_legacy_no_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", _manifest_create_argv(tmp_path, readiness=False))
+    monkeypatch.setattr(full_validation, "_current_clean_commit", lambda _repo: "abc123")
+    monkeypatch.setattr(full_validation, "validate_ncore_data_readiness", lambda *_a, **_k: pytest.fail("called"))
+    monkeypatch.setattr(full_validation, "validate_frozen_b6a9_manifest", lambda _path: {})
+    written = []
+    monkeypatch.setattr(
+        full_validation,
+        "_write_run_manifest",
+        lambda path, value, *, exclusive: written.append((Path(path), value, exclusive)),
+    )
+    full_validation.main()
+    assert written and "ncore_readiness_profile" not in written[0][1]
+    assert set(written[0][1]["sources"]) == {"dataset_manifest", *full_validation._FULL_STATIC_SOURCES}
+
+
+def test_full_v4_profile_records_hashed_readiness_validator_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(full_validation, "validate_frozen_b6a9_manifest", lambda _path: {})
+    monkeypatch.setattr(full_validation, "validate_v4_multilayer_dataset_contract", lambda _path: {})
+    sources = _source_files(tmp_path, dataset)
+    sources["config"] = V4_CONFIG_PATH
+    sources["artifact"] = V4_FTHETA_ARTIFACT_PATH
+    value = full_validation._prepare_full_run_manifest(
+        "v4-full",
+        "abc123",
+        sources,
+        ncore_readiness_profile=full_validation.V4_MULTILAYER_READINESS_PROFILE,
+    )
+    record = value["sources"]["data_readiness_validator"]
+    assert value["ncore_readiness_profile"] == full_validation.V4_MULTILAYER_READINESS_PROFILE
+    assert record["sha256"] == sha256_file(ROOT / "scripts/ncore_data_readiness.py")
+    assert "v4_provenance_sidecar" in value["sources"]
 
 
 def test_manifest_create_rejects_wrong_hash_and_wrong_b6a9_identity(

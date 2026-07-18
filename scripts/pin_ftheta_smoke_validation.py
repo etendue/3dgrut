@@ -20,6 +20,13 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 
+from scripts.ncore_data_readiness import (
+    V4_MULTILAYER_READINESS_PROFILE,
+    V4_REQUIRED_AUX_TYPES,
+    validate_ncore_data_readiness,
+    validate_v4_multilayer_dataset_contract,
+    validate_v4_multilayer_profile_contract,
+)
 from threedgrut.datasets.ftheta_override import (
     FTHETA_PARAMETER_KEYS,
     load_ftheta_override_parameters,
@@ -66,6 +73,8 @@ _FTHETA_FALLBACK = re.compile(
     flags=re.IGNORECASE,
 )
 _REQUIRED_SOURCE_NAMES = frozenset({"dataset_manifest", "config", "artifact", "driver", "validator"})
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_DATA_READINESS_SOURCE = Path(__file__).resolve().parent / "ncore_data_readiness.py"
 _REQUIRED_OUTPUT_NAMES = frozenset({"parsed_yaml", "checkpoint", "metrics", "train_log", "eval_log"})
 _EXPECTED_LAYERS = ["background", "road", "dynamic_rigids", "sky_envmap"]
 
@@ -530,25 +539,69 @@ def _write_run_manifest(path: str | Path, value: dict, *, exclusive: bool = Fals
     os.replace(temporary, manifest_path)
 
 
-def create_run_manifest(
-    path: str | Path,
+def _prepare_run_manifest(
     run_id: str,
     git_commit: str,
     sources: dict[str, str | Path],
+    *,
+    ncore_readiness_profile: str | None = None,
+    repo_root: str | Path | None = None,
 ) -> dict:
     if not run_id or not git_commit:
         raise ValueError("run_id and git_commit must be non-empty")
     if set(sources) != _REQUIRED_SOURCE_NAMES:
         raise ValueError(f"run manifest sources must be {sorted(_REQUIRED_SOURCE_NAMES)}, got {sorted(sources)}")
+    if ncore_readiness_profile not in (None, V4_MULTILAYER_READINESS_PROFILE):
+        raise ValueError(f"unsupported NCore readiness profile: {ncore_readiness_profile!r}")
+    source_records = {name: _file_record(source) for name, source in sorted(sources.items())}
+    if ncore_readiness_profile is not None:
+        profile_root = _REPO_ROOT if repo_root is None else Path(repo_root).expanduser().resolve()
+        profile_paths = validate_v4_multilayer_profile_contract(
+            profile_root,
+            sources["config"],
+            sources["artifact"],
+        )
+        validate_v4_multilayer_dataset_contract(sources["dataset_manifest"])
+        source_records["data_readiness_validator"] = _file_record(_DATA_READINESS_SOURCE)
+        source_records["v4_provenance_sidecar"] = _file_record(profile_paths["provenance_sidecar"])
+        source_records["v4_survey_artifact"] = _file_record(profile_paths["survey_artifact"])
     value = {
         "schema_version": 2,
         "run_id": run_id,
         "status": "started",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit,
-        "sources": {name: _file_record(source) for name, source in sorted(sources.items())},
+        "sources": source_records,
         "arms": {},
     }
+    if ncore_readiness_profile is not None:
+        value["ncore_readiness_profile"] = ncore_readiness_profile
+    return value
+
+
+def create_run_manifest(
+    path: str | Path,
+    run_id: str,
+    git_commit: str,
+    sources: dict[str, str | Path],
+    *,
+    ncore_readiness_profile: str | None = None,
+    repo_root: str | Path | None = None,
+) -> dict:
+    value = _prepare_run_manifest(
+        run_id,
+        git_commit,
+        sources,
+        ncore_readiness_profile=ncore_readiness_profile,
+        repo_root=repo_root,
+    )
+    if ncore_readiness_profile == V4_MULTILAYER_READINESS_PROFILE:
+        camera_ids, _, _ = _artifact_contract(sources["artifact"])
+        validate_ncore_data_readiness(
+            sources["dataset_manifest"],
+            camera_ids,
+            required_aux=V4_REQUIRED_AUX_TYPES,
+        )
     _write_run_manifest(path, value, exclusive=True)
     return value
 
@@ -560,7 +613,15 @@ def verify_run_manifest(path: str | Path, current_git_commit: str) -> dict:
     if value.get("git_commit") != current_git_commit:
         raise ValueError(f"git commit drift: recorded={value.get('git_commit')!r} current={current_git_commit!r}")
     sources = value.get("sources")
-    if not isinstance(sources, dict) or set(sources) != _REQUIRED_SOURCE_NAMES:
+    profile = value.get("ncore_readiness_profile")
+    if profile not in (None, V4_MULTILAYER_READINESS_PROFILE):
+        raise ValueError(f"unsupported NCore readiness profile: {profile!r}")
+    expected_sources = set(_REQUIRED_SOURCE_NAMES)
+    if profile is not None:
+        expected_sources.update(
+            {"data_readiness_validator", "v4_provenance_sidecar", "v4_survey_artifact"}
+        )
+    if not isinstance(sources, dict) or set(sources) != expected_sources:
         raise ValueError("run manifest source set is invalid")
     for name, record in sources.items():
         _verify_file_record(record, context=name, drift_kind="source")
@@ -693,6 +754,11 @@ def _build_parser() -> argparse.ArgumentParser:
     create.add_argument("--artifact", required=True)
     create.add_argument("--driver", required=True)
     create.add_argument("--validator", required=True)
+    create.add_argument(
+        "--ncore-readiness-profile",
+        choices=(V4_MULTILAYER_READINESS_PROFILE,),
+        default=None,
+    )
 
     verify = commands.add_parser("manifest-verify", help="reject source or commit drift")
     verify.add_argument("--path", required=True)
@@ -726,10 +792,11 @@ def main() -> None:
         validate_metrics(args.path, args.artifact)
     elif args.command == "manifest-create":
         ensure_tracked_worktree_clean(args.repo_root)
+        git_commit = _git_commit(args.repo_root)
         create_run_manifest(
             args.path,
             args.run_id,
-            _git_commit(args.repo_root),
+            git_commit,
             {
                 "dataset_manifest": args.dataset_manifest,
                 "config": args.config,
@@ -737,6 +804,8 @@ def main() -> None:
                 "driver": args.driver,
                 "validator": args.validator,
             },
+            ncore_readiness_profile=args.ncore_readiness_profile,
+            repo_root=args.repo_root,
         )
     elif args.command == "manifest-verify":
         verify_run_manifest(args.path, _git_commit(args.repo_root))
