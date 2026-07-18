@@ -34,15 +34,18 @@ denominator.  The "rational" name comes from this numerator/denominator form.
 
 A point is visible (visible=True) only when **all** of:
   - camera-frame z > 0
-  - icD is finite and in the trust interval (0.8, 1.2)
+  - radial projection is finite and valid under either the supplied calibrated
+    ``max_valid_r2`` prefix or, when absent, legacy icD interval (0.8, 1.2)
   - projected pixel is within the image rectangle
   - uv coordinates are finite
 
-This 0.8 < icD < 1.2 trust gate matches NCore SDK's
+The legacy 0.8 < icD < 1.2 trust gate matches NCore SDK's
 ``OpenCVPinholeCameraModel.__compute_distortion()`` and 3DGUT's
 ``cameraProjections.cuh:72-118``.  Outside this interval the radial model
 is unreliable (e.g. fringe artifacts on wide cameras) and the point is
-treated as invalid for overlay drawing.
+treated as invalid for overlay drawing.  PIN-CAM-1c camera dictionaries carry
+``max_valid_r2`` instead; that calibrated ideal-radius certificate matches the
+CUDA renderer and replaces the coarse legacy icD heuristic.
 
 NCore stores ``radial_coeffs`` as (k1,k2,k3,k4,k5,k6),
 ``tangential_coeffs`` as (p1,p2), and ``thin_prism_coeffs`` as (s1,s2,s3,s4).
@@ -151,6 +154,13 @@ class PinholeForwardProjector:
         self.thin_prism_coeffs = _pad_coefficients(
             pinhole_dict.get("thin_prism_coeffs"), _MAX_THIN_PRISM, "thin_prism_coeffs"
         )
+        max_valid_r2 = pinhole_dict.get("max_valid_r2")
+        if max_valid_r2 is None:
+            self.max_valid_r2 = None
+        else:
+            self.max_valid_r2 = float(np.asarray(max_valid_r2).reshape(()))
+            if not np.isfinite(self.max_valid_r2) or self.max_valid_r2 < 0.0:
+                raise ValueError("max_valid_r2 must be finite and non-negative")
 
         if world_to_camera_flip is None:
             world_to_camera_flip = np.eye(4)
@@ -168,7 +178,8 @@ class PinholeForwardProjector:
 
         ``visible[i]`` is True iff:
           - camera-frame z > 0 (in front of the camera)
-          - icD is finite and in the NCore trust interval (0.8, 1.2)
+          - radial projection is finite and inside ``max_valid_r2`` when
+            supplied, otherwise icD is in the NCore trust interval (0.8, 1.2)
           - projected pixel is inside the image rectangle
           - uv coordinates are finite
         """
@@ -247,7 +258,14 @@ class PinholeForwardProjector:
 
         # ---- Visibility mask ----------------------------------------------
         z_pos = z > 0
-        valid_radial = np.isfinite(icD) & (icD > _RADIAL_TRUST_LOWER) & (icD < _RADIAL_TRUST_UPPER)
+        if self.max_valid_r2 is not None:
+            # PIN-CAM-1c: use the same calibrated ideal-radius prefix supplied
+            # to the CUDA renderer.  This intentionally replaces (rather than
+            # intersects) the coarse 0.8..1.2 icD heuristic, which rejects
+            # valid wide-camera edge rays.
+            valid_radial = np.isfinite(icD) & np.isfinite(r2) & (r2 <= self.max_valid_r2)
+        else:
+            valid_radial = np.isfinite(icD) & (icD > _RADIAL_TRUST_LOWER) & (icD < _RADIAL_TRUST_UPPER)
         in_bound = (u >= 0) & (u < self.width) & (v >= 0) & (v < self.height)
         uv_finite = np.isfinite(uv).all(axis=1)
         visible = z_pos & valid_radial & in_bound & uv_finite

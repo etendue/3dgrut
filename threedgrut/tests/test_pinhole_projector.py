@@ -290,6 +290,31 @@ def test_radial_scale_below_ncore_trust_interval_is_invalid():
     assert not visible[0], "icD < 0.8 should be invalid"
 
 
+def test_certified_max_valid_r2_replaces_legacy_icd_trust_gate():
+    """PIN-CAM-1c supplies a calibrated ideal-radius certificate to the CUDA
+    renderer.  CPU projection users (A3/overlays) must use the same domain,
+    otherwise they silently drop valid wide-camera edge projections merely
+    because icD exceeds the legacy 0.8..1.2 heuristic.
+    """
+    cfg = _identity_pinhole_dict()
+    cfg["resolution"] = np.array([4000, 3000])
+    cfg["principal_point"] = np.array([2000.0, 1500.0])
+    cfg["radial_coeffs"] = np.array([0.3, 0, 0, 0, 0, 0])
+    cfg["max_valid_r2"] = 1.1
+    proj = PinholeForwardProjector(cfg)
+
+    _, visible = proj.project_points(
+        np.array(
+            [
+                [1.0, 0.0, 1.0],  # r2=1.00, icD=1.30: certified valid
+                [1.1, 0.0, 1.0],  # r2=1.21: outside certificate
+            ]
+        ),
+        np.eye(4),
+    )
+    assert visible.tolist() == [True, False]
+
+
 # ---- Test 16: short array compatibility -----------------------------------
 def test_missing_radial_coeffs_ideal_pinhole():
     """Zero radial coefficients -> ideal pinhole."""
