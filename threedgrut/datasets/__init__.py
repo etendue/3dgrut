@@ -124,6 +124,7 @@ def make(name: str, config, ray_jitter):
                 camera_ids=config.dataset.get("camera_ids", None),  # Null = auto-select single camera sensor
                 lidar_ids=config.dataset.get("lidar_ids", None),  # Null = auto-select single lidar sensor
                 ftheta_params_path=config.dataset.get("ftheta_params_path", None),  # PIN-FTHETA explicit override
+                camera_max_fov_deg=config.dataset.get("camera_max_fov_deg", 190.0),  # PIN-FTHETA domain contract
                 downsample=config.dataset.get("downsample", 1.0),  # Training downsample factor
                 sample_full_image=config.dataset.train.get("sample_full_image", True),
                 window_size=config.dataset.train.get("window_size", 256),
@@ -173,6 +174,7 @@ def make(name: str, config, ray_jitter):
                 camera_ids=config.dataset.get("camera_ids", None),  # Null = auto-select single camera sensor
                 lidar_ids=config.dataset.get("lidar_ids", None),  # Null = auto-select single lidar sensor
                 ftheta_params_path=config.dataset.get("ftheta_params_path", None),  # PIN-FTHETA explicit override
+                camera_max_fov_deg=config.dataset.get("camera_max_fov_deg", 190.0),  # PIN-FTHETA domain contract
                 downsample=config.dataset.get("downsample", 1.0),
                 sample_full_image=True,
                 window_size=config.dataset.get("window_size", 256),
@@ -260,6 +262,7 @@ def make_test(name: str, config):
                 camera_ids=config.dataset.get("camera_ids", None),  # Null = auto-select single camera sensor
                 lidar_ids=config.dataset.get("lidar_ids", None),  # Null = auto-select single lidar sensor
                 ftheta_params_path=config.dataset.get("ftheta_params_path", None),  # PIN-FTHETA explicit override
+                camera_max_fov_deg=config.dataset.get("camera_max_fov_deg", 190.0),  # PIN-FTHETA domain contract
                 downsample=config.dataset.get("downsample", 1.0),
                 sample_full_image=True,
                 window_size=config.dataset.get("window_size", 256),

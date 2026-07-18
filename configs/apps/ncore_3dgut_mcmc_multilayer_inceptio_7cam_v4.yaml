@@ -1,0 +1,25 @@
+# @package _global_
+# FTheta v4 matched seven-camera P/F base configuration.
+#
+# Both arms must compose this same file. Arm P keeps the explicit override
+# null; Arm F changes only ftheta_params_path to the immutable v4 runtime map.
+# Historical seven-camera configs remain unchanged.
+
+defaults:
+  - /apps/ncore_3dgut_mcmc_multilayer_inceptio
+  - _self_
+
+dataset:
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_left_wide_90fov
+    - camera_right_wide_90fov
+    - camera_back_rear_wide_90fov
+    - camera_rear_left_70fov
+  ftheta_params_path: null
+  camera_max_fov_deg: 190.0
+  # Shared P/F setting: active for Arm P and an explicit no-op for FTheta.
+  mask_forward_invalid_pixels: true
+  opencv_pinhole_use_validity_domain: false

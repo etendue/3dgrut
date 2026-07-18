@@ -675,6 +675,98 @@ def repair_nonfinite_rays(rays: np.ndarray, valid_mask: np.ndarray | None) -> in
     return n_bad
 
 
+@dataclass(frozen=True)
+class CameraRayDomainStats:
+    """One-time per-camera ray-domain telemetry counters."""
+
+    total_pixels: int
+    excluded_by_max_angle: int
+    nonfinite: int
+
+
+def compute_ftheta_own_domain_mask(
+    rays: np.ndarray,
+    max_angle: float,
+) -> np.ndarray:
+    """Return the strict FTheta forward-projectable domain for camera rays.
+
+    CUDA projection requires a finite, non-zero direction before applying the
+    strict angular boundary. Positive optical-axis rays therefore remain valid
+    (theta is zero), while the zero vector has no direction and is rejected.
+    Per-ray scaling keeps the angle calculation stable for both very large and
+    subnormal finite components.
+    """
+    rays_array = np.asarray(rays)
+    if rays_array.ndim < 2 or rays_array.shape[-1] != 3:
+        raise ValueError(
+            f"rays must have shape [..., 3] with at least one ray, got {rays_array.shape}"
+        )
+    if rays_array.size == 0:
+        raise ValueError("rays must contain at least one camera ray")
+    if not np.isfinite(max_angle) or max_angle <= 0.0:
+        raise ValueError("max_angle must be finite and positive")
+
+    finite = np.isfinite(rays_array).all(axis=-1)
+    scale = np.zeros(rays_array.shape[:-1], dtype=np.float64)
+    finite_rays = rays_array[finite].astype(np.float64, copy=False)
+    if finite_rays.size:
+        scale[finite] = np.max(np.abs(finite_rays), axis=-1)
+    nonzero = finite & (scale > 0.0)
+    theta = np.full(rays_array.shape[:-1], np.inf, dtype=np.float64)
+    nonzero_rays = rays_array[nonzero].astype(np.float64, copy=False)
+    if nonzero_rays.size:
+        scaled_rays = nonzero_rays / scale[nonzero, None]
+        theta[nonzero] = np.arctan2(
+            np.hypot(scaled_rays[:, 0], scaled_rays[:, 1]),
+            scaled_rays[:, 2],
+        )
+    return nonzero & (theta < float(max_angle))
+
+
+def apply_ftheta_own_domain_mask(
+    rays: np.ndarray,
+    valid_mask: np.ndarray,
+    max_angle: float,
+) -> CameraRayDomainStats:
+    """AND the FTheta-own domain into a mutable RGB supervision mask."""
+    rays_array = np.asarray(rays)
+    valid_mask_array = np.asarray(valid_mask)
+    domain_mask = compute_ftheta_own_domain_mask(rays_array, max_angle)
+    if valid_mask_array.shape != domain_mask.shape or valid_mask_array.dtype != np.bool_:
+        raise ValueError(
+            "valid_mask must be a bool array matching the rays' leading dimensions"
+        )
+
+    finite = np.isfinite(rays_array).all(axis=-1)
+    nonfinite = int(np.count_nonzero(~finite))
+    excluded_by_max_angle = int(np.count_nonzero(finite & ~domain_mask))
+    valid_mask_array &= domain_mask
+    return CameraRayDomainStats(
+        total_pixels=int(domain_mask.size),
+        excluded_by_max_angle=excluded_by_max_angle,
+        nonfinite=nonfinite,
+    )
+
+
+def format_camera_ray_domain_telemetry(
+    *,
+    split: str,
+    camera_id: str,
+    model_type: str,
+    artifact_fingerprint: str | None,
+    stats: CameraRayDomainStats,
+) -> str:
+    """Format one stable, grep-friendly per-camera/split telemetry record."""
+    fingerprint = artifact_fingerprint or "none"
+    return (
+        f"[CAMERA-RAY-DOMAIN] split={split} camera={camera_id} "
+        f"model_type={model_type} artifact_fingerprint={fingerprint} "
+        f"total={stats.total_pixels} "
+        f"excluded_by_max_angle={stats.excluded_by_max_angle} "
+        f"nonfinite={stats.nonfinite}"
+    )
+
+
 def apply_opencv_validity_domain_mask(
     rays: np.ndarray,
     valid_mask: np.ndarray,

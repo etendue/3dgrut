@@ -1,9 +1,9 @@
 # FTheta v4 Full-Domain 7-Camera Retraining Fix Plan
 
-> **Status:** Phase 1 verified. The v4 fitter, three-domain survey contract,
-> immutable three-file artifact set, structural hard gates, and rollback/path
-> safety tests are frozen. Phase 2 is next; no Phase 2 checklist item is yet
-> complete.
+> **Status:** Phase 1 verified. Phase 2 implementation is complete on Mac and
+> focused tests pass, but NCore integration verification on `inceptio_2` is
+> still pending. Keep every Phase 2 verification checkbox open until that
+> integration evidence is recorded.
 >
 > **Supersedes:** The hard-STOP calibration policy and GPU execution sections of
 > [`2026-07-17-ftheta-9cam-retrain.md`](2026-07-17-ftheta-9cam-retrain.md).
@@ -348,6 +348,13 @@ documented float32 boundary tolerance; unexplained differences are a hard stop.
 - Do not overwrite an artifact used by a historical checkpoint.
 
 ## Phase 2: Add the FTheta-own-domain supervision mask
+
+> **Implementation status (2026-07-18):** Mac implementation complete;
+> integration verification pending. The focused dataset/camera-domain suites
+> currently report `100 passed`, including the pure-contract seven-camera
+> native-resolution exclusion oracle and unchanged Pinhole regression suites.
+> Do not mark the checklist below complete before the `inceptio_2` NCore
+> integration check confirms the same counts and telemetry.
 
 **Files:**
 
