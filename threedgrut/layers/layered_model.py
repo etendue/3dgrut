@@ -79,6 +79,18 @@ def _build_sky_module(spec: LayerSpec, conf) -> nn.Module:
     raise ValueError(f"unknown sky backend '{backend}', expected 'cubemap' or 'mlp'")
 
 
+def _sky_horizon_visibility(world_rays: torch.Tensor, transition: float = 0.02) -> torch.Tensor:
+    """Return a soft sky visibility mask from world-space ray elevation.
+
+    NCore uses world +Z as up.  An environment sky is therefore visible only
+    for rays above the geometric horizon.  The short positive-side ramp avoids
+    a hard one-pixel seam without ever leaking sky into downward rays.
+    ``transition=0.02`` corresponds to roughly 1.15 degrees for unit rays.
+    """
+    z = torch.nn.functional.normalize(world_rays, dim=-1, eps=1e-8)[..., 2:3]
+    return (z / transition).clamp(min=0.0, max=1.0)
+
+
 # Degree-0 SH coefficient: 1 / (2 * sqrt(pi)). Used to convert RGB in [0, 1]
 # to the DC term of the SH expansion in init_layer_from_points.
 _SH_C0 = 0.28209479177387814
@@ -941,8 +953,16 @@ class LayeredGaussians(nn.Module):
     def _blend_sky(self, outputs: dict, batch) -> dict:
         """Composite per-pixel sky RGB onto the Gaussian render using alpha.
 
-        ``rgb_final = rgb_gauss + rgb_sky * (1 - alpha)`` where ``alpha`` is
-        the tracer's accumulated opacity (``outputs["pred_opacity"]``).
+        ``rgb_final = rgb_gauss + visibility * rgb_sky * (1 - alpha)`` where
+        ``alpha`` is the tracer's accumulated opacity and ``visibility`` is a
+        world-space +Z horizon gate.  This prevents a learned sky texture from
+        filling transparent road/ground rays in side and rear cameras.
+
+        When a training batch carries ``image_infos["sky_mask"]``, non-sky
+        pixels use a detached copy of ``rgb_sky`` for compositing.  Their RGB,
+        SSIM, and L2 losses can still push Gaussian colour/opacity, but cannot
+        teach the envmap road/building colours.  The dedicated sky loss keeps
+        receiving the raw, differentiable ``rgb_sky`` output.
 
         No-op when the sky layer is not in ``self.layers``. Always preserves
         the original Gaussian RGB under the ``rgb_gaussians`` key so
@@ -959,13 +979,36 @@ class LayeredGaussians(nn.Module):
             # Broadcast [B, 1, 1, 3, 3] @ [B, H, W, 3, 1] → [B, H, W, 3, 1]
             rays = (R[:, None, None, :, :] @ rays.unsqueeze(-1)).squeeze(-1)
         rgb_sky = sky_module(rays)  # [B, H, W, 3]
+        sky_visibility = _sky_horizon_visibility(rays)  # [B, H, W, 1]
+
+        # Forward values stay identical; only the gradient route changes.
+        # This also behaves safely during evaluation, where gradients are off.
+        rgb_sky_for_blend = rgb_sky
+        image_infos = getattr(batch, "image_infos", None)
+        if image_infos is not None:
+            sky_mask = (
+                image_infos.get("sky_mask")
+                if hasattr(image_infos, "get")
+                else getattr(image_infos, "sky_mask", None)
+            )
+            if sky_mask is not None:
+                sky_mask = sky_mask.to(device=rgb_sky.device, dtype=rgb_sky.dtype)
+                if sky_mask.dim() == rgb_sky.dim() - 1:
+                    sky_mask = sky_mask.unsqueeze(-1)
+                sky_mask = sky_mask.clamp(min=0.0, max=1.0)
+                rgb_sky_for_blend = (
+                    rgb_sky * sky_mask
+                    + rgb_sky.detach() * (1.0 - sky_mask)
+                )
+
         rgb_gauss = outputs["pred_rgb"]
         alpha = outputs["pred_opacity"]  # [B, H, W, 1]
-        rgb_final = rgb_gauss + rgb_sky * (1.0 - alpha)
+        rgb_final = rgb_gauss + rgb_sky_for_blend * sky_visibility * (1.0 - alpha)
         # Shallow copy so we don't mutate the renderer's returned dict.
         out = dict(outputs)
         out["rgb_gaussians"] = rgb_gauss
         out["rgb_sky"] = rgb_sky
+        out["sky_visibility"] = sky_visibility
         out["pred_rgb"] = rgb_final
         return out
 

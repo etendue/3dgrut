@@ -803,9 +803,13 @@ def _make_fake_batch(H: int = 4, W: int = 4):
     # Camera-frame rays roughly forward; world-frame conversion goes through
     # T_to_world's rotation.
     b.rays_dir = torch.randn(1, H, W, 3)
+    # Keep the default fixture above the world horizon.  Individual tests set
+    # negative-z rays explicitly when exercising the horizon gate.
+    b.rays_dir[..., 2] = b.rays_dir[..., 2].abs() + 0.1
     b.T_to_world = torch.eye(4).unsqueeze(0)  # identity → rays unchanged
     b.rays_in_world_space = False
     b.timestamp_us = -1
+    b.image_infos = None
     return b
 
 
@@ -877,6 +881,100 @@ def test_blend_sky_alpha_zero_returns_sky_only(real_conf):
     assert "rgb_sky" in out and "rgb_gaussians" in out
     # Gauss is 0, alpha is 0 → pred_rgb == rgb_sky.
     assert torch.allclose(out["pred_rgb"], out["rgb_sky"])
+
+
+def test_blend_sky_blocks_envmap_below_world_horizon(real_conf):
+    """Transparent downward rays must not reveal sky/road-coloured envmap."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    batch = _make_fake_batch(H=1, W=2)
+    batch.rays_dir = torch.tensor([[[[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]]]])
+    outputs = {
+        "pred_rgb": torch.zeros(1, 1, 2, 3),
+        "pred_opacity": torch.zeros(1, 1, 2, 1),
+    }
+
+    out = model._blend_sky(outputs, batch)
+
+    assert torch.all(out["pred_rgb"][0, 0, 0] == 0)
+    assert torch.all(out["sky_visibility"][0, 0, 0] == 0)
+    assert torch.all(out["sky_visibility"][0, 0, 1] == 1)
+    assert torch.allclose(out["pred_rgb"][0, 0, 1], out["rgb_sky"][0, 0, 1])
+
+
+def test_blend_sky_horizon_uses_world_space_ray(real_conf):
+    """Camera-up becomes world-down after rotation and must be rejected."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    batch = _make_fake_batch(H=1, W=1)
+    batch.rays_dir = torch.tensor([[[[0.0, 0.0, 1.0]]]])
+    batch.T_to_world[0, :3, :3] = torch.diag(torch.tensor([1.0, -1.0, -1.0]))
+    outputs = {
+        "pred_rgb": torch.zeros(1, 1, 1, 3),
+        "pred_opacity": torch.zeros(1, 1, 1, 1),
+    }
+
+    out = model._blend_sky(outputs, batch)
+
+    assert torch.all(out["sky_visibility"] == 0)
+    assert torch.all(out["pred_rgb"] == 0)
+
+
+def test_blend_sky_non_sky_reconstruction_does_not_train_envmap(real_conf):
+    """Main RGB loss may train opacity, but not tint envmap with ground pixels."""
+    from threedgrut.layers.layered_model import LayeredGaussians
+
+    specs = [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(
+            name="sky_envmap",
+            layer_id=4,
+            max_n_particles=0,
+            scale_prior=(0.0, 0.0, 0.0),
+            is_particle_layer=False,
+            extra={"backend": "mlp"},
+        ),
+    ]
+    model = LayeredGaussians(real_conf, specs=specs, scene_extent=10.0)
+    batch = _make_fake_batch(H=1, W=1)
+    batch.rays_dir = torch.tensor([[[[0.0, 0.0, 1.0]]]])
+    batch.image_infos = {"sky_mask": torch.zeros(1, 1, 1)}
+    rgb_gauss = torch.zeros(1, 1, 1, 3, requires_grad=True)
+    outputs = {
+        "pred_rgb": rgb_gauss,
+        "pred_opacity": torch.zeros(1, 1, 1, 1),
+    }
+
+    out = model._blend_sky(outputs, batch)
+    out["pred_rgb"].sum().backward()
+
+    assert rgb_gauss.grad is not None and rgb_gauss.grad.abs().sum() > 0
+    sky_grads = [p.grad for p in model.layers["sky_envmap"].parameters()]
+    assert all(g is None or torch.count_nonzero(g) == 0 for g in sky_grads)
 
 
 def test_blend_sky_alpha_one_returns_gauss_only(real_conf):
@@ -1017,8 +1115,8 @@ def test_sky_envmap_state_roundtrip_in_checkpoint(real_conf):
     model2.init_from_checkpoint(ckpt, setup_optimizer=False)
 
     # Sky weights restored bit-for-bit.
-    assert torch.equal(model2.layers["sky_envmap"].layer0.weight, saved_weight)
-    assert torch.equal(model2.layers["sky_envmap"].layer0.bias, saved_bias)
+    assert torch.equal(model2.layers["sky_envmap"].layer0.weight.detach().cpu(), saved_weight.cpu())
+    assert torch.equal(model2.layers["sky_envmap"].layer0.bias.detach().cpu(), saved_bias.cpu())
 
 
 def test_get_model_parameters_skips_non_particle_layers(real_conf):
