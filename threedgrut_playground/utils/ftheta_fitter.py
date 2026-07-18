@@ -44,6 +44,32 @@ _N_ANGLE_SAMPLES: int = 200
 # can't reliably hit them.
 _EDGE_MARGIN_PX: int = 3
 
+# Hard-gate density used after either the primary polynomial fit or the
+# deterministic least-squares fallback.  Checking only the original 200 fit
+# samples can miss a negative derivative between samples.
+_DENSE_MONOTONIC_SAMPLES: int = 20_001
+
+
+def _minimum_polynomial_derivative(
+    coeffs: np.ndarray,
+    domain_max: float,
+    *,
+    n_samples: int = _DENSE_MONOTONIC_SAMPLES,
+) -> float:
+    """Return the dense minimum derivative on ``[0, domain_max]``."""
+    coefficients = np.asarray(coeffs, dtype=np.float64)
+    if coefficients.ndim != 1 or len(coefficients) < 2:
+        raise ValueError("coeffs must contain at least constant and linear terms")
+    if not np.isfinite(coefficients).all():
+        return float("nan")
+    maximum = float(domain_max)
+    if not np.isfinite(maximum) or maximum <= 0.0:
+        return float("nan")
+    derivative = np.arange(1, len(coefficients), dtype=np.float64) * coefficients[1:]
+    samples = np.linspace(0.0, maximum, n_samples, dtype=np.float64)
+    values = horner_ascending(derivative, samples)
+    return float(np.min(values)) if np.isfinite(values).all() else float("nan")
+
 
 def _rational_project_ray(
     proj: PinholeForwardProjector,
@@ -58,7 +84,7 @@ def _rational_project_ray(
     Returns (uv, r_pix) where uv is (N, 2) and r_pix is pixel distance from
     principal point.
     """
-    from .opencv_inverse import _distort_normalized, opencv_forward_domain_mask
+    from .opencv_inverse import _distort_normalized
 
     angles = np.asarray(angle_rad, dtype=np.float64)
     x = np.tan(angles)
@@ -66,21 +92,27 @@ def _rational_project_ray(
     xd, yd = _distort_normalized(proj, x, y)
     uv = np.stack([proj.fx * xd + proj.cx, proj.fy * yd + proj.cy], axis=-1)
 
-    # Compute pixel distance from principal point.  For rays with z ≤ 0
-    # (behind camera) or outside the valid radial trust interval, the
-    # projector marks them invisible — we still compute r so the fitter
-    # can see where the rational model breaks down.
+    # Compute pixel distance from principal point.  This calibration path
+    # deliberately evaluates the raw rational curve beyond the production
+    # OpenCV projector's 0.8 < icD < 1.2 visibility guard.  That guard is a
+    # runtime safety policy for the pinhole renderer, not part of the lens
+    # calibration, and inheriting it here would truncate the fitted FTheta
+    # field of view at exactly the limitation this conversion is meant to
+    # remove.
     du = uv[:, 0] - proj.cx
     dv = uv[:, 1] - proj.cy
     r_pix = np.sqrt(du * du + dv * dv)
 
-    # Do not let a later folded rational branch enter a fit merely because it
-    # has a finite pixel radius.  Image bounds are intentionally not part of
-    # this mask: a circular FTheta fit must reach the image corners even though
-    # its +X calibration ray lies to the right of the rectangular canvas.
-    physical = (np.cos(angles) > 0.0) & opencv_forward_domain_mask(proj, x, y)
-    uv[~physical] = np.nan
-    r_pix[~physical] = np.nan
+    # Keep only forward, finite rays here.  Fold rejection is handled from the
+    # raw r(theta) monotonic prefix in fit_ftheta_from_opencv_rational(),
+    # independently of the pinhole runtime trust interval.
+    usable = (
+        (np.cos(angles) > 0.0)
+        & np.isfinite(uv).all(axis=-1)
+        & np.isfinite(r_pix)
+    )
+    uv[~usable] = np.nan
+    r_pix[~usable] = np.nan
 
     return uv, r_pix
 
@@ -127,11 +159,11 @@ def _fit_monotonic_polynomial(
     powers = np.arange(degree + 1, dtype=np.float64)
     coeffs = coeffs_normalized * y_scale / np.power(x_scale, powers)
 
-    # Quick monotonicity check: evaluate the derivative poly'
-    # (which has degree-1 coefficients c1, 2*c2, 3*c3, ...)
-    deriv_coeffs = np.array([(k + 1) * coeffs[k + 1] for k in range(degree)], dtype=np.float64)
-    deriv_vals = horner_ascending(deriv_coeffs, x)
-    if np.all(deriv_vals >= -monotonic_tol):
+    # The hard camera contract requires a strictly positive derivative over
+    # the complete used domain.  Evaluate densely rather than only at the fit
+    # samples, which can miss a between-sample fold.
+    minimum_derivative = _minimum_polynomial_derivative(coeffs, x_scale)
+    if np.isfinite(minimum_derivative) and minimum_derivative > monotonic_tol:
         return coeffs
 
     # ---- Fallback: force monotonic via pinning (0,0) + positive slope ----
@@ -177,6 +209,18 @@ def _fit_monotonic_polynomial(
     coeffs_fallback = (
         coeffs_fallback_normalized * y_scale / np.power(x_scale, powers)
     )
+    fallback_minimum_derivative = _minimum_polynomial_derivative(
+        coeffs_fallback,
+        x_scale,
+    )
+    if (
+        not np.isfinite(fallback_minimum_derivative)
+        or fallback_minimum_derivative <= monotonic_tol
+    ):
+        raise RuntimeError(
+            "deterministic polynomial fallback is not strictly monotonic over "
+            f"the used domain: min_derivative={fallback_minimum_derivative!r}"
+        )
     return coeffs_fallback
 
 
@@ -475,6 +519,21 @@ def _ftheta_pixels_to_camera_rays_float64(ftheta_dict: dict) -> np.ndarray:
     return rays
 
 
+def _ftheta_own_domain_mask(rays: np.ndarray, max_angle: float) -> np.ndarray:
+    """Return the strict FTheta domain used by the CUDA forward projector."""
+    directions = np.asarray(rays, dtype=np.float64)
+    theta = np.arctan2(
+        np.linalg.norm(directions[..., :2], axis=-1),
+        directions[..., 2],
+    )
+    return (
+        np.isfinite(directions).all(axis=-1)
+        & np.isfinite(theta)
+        & (theta >= 0.0)
+        & (theta < float(max_angle))
+    )
+
+
 def _percentiles(values: np.ndarray, prefix: str) -> dict[str, float]:
     finite = np.asarray(values, dtype=np.float64)
     finite = finite[np.isfinite(finite)]
@@ -508,24 +567,27 @@ def compute_fullimage_angular_error(
     """
     from .opencv_inverse import (
         _distort_normalized,
-        opencv_forward_domain_mask,
+        opencv_calibration_domain_mask,
         opencv_pixels_to_camera_rays,
     )
 
-    true_rays = opencv_pixels_to_camera_rays(pinhole_dict)
+    # Compare against the complete first invertible calibration branch.  The
+    # production pinhole renderer's icD trust gate is intentionally excluded:
+    # carrying it into this oracle would approve the same truncated FOV that
+    # the FTheta conversion exists to remove.
+    true_rays = opencv_pixels_to_camera_rays(
+        pinhole_dict,
+        enforce_runtime_trust=False,
+    )
     fitted_rays = _ftheta_pixels_to_camera_rays_float64(ftheta_dict)
     if fitted_rays.shape != true_rays.shape:
         raise ValueError(
             f"pinhole/FTheta resolution mismatch: {true_rays.shape} vs {fitted_rays.shape}"
         )
 
-    fitted_theta = np.arctan2(
-        np.linalg.norm(fitted_rays[..., :2], axis=-1), fitted_rays[..., 2]
-    )
-    ftheta_in_domain = (
-        np.isfinite(fitted_theta)
-        & (fitted_theta >= 0.0)
-        & (fitted_theta <= float(ftheta_dict["max_angle"]))
+    ftheta_in_domain = _ftheta_own_domain_mask(
+        fitted_rays,
+        float(ftheta_dict["max_angle"]),
     )
     projector = PinholeForwardProjector(pinhole_dict)
     safe_fitted_z = np.where(
@@ -533,7 +595,7 @@ def compute_fullimage_angular_error(
     )
     fitted_x = fitted_rays[..., 0] / safe_fitted_z
     fitted_y = fitted_rays[..., 1] / safe_fitted_z
-    fitted_forward_valid = opencv_forward_domain_mask(
+    fitted_forward_valid = opencv_calibration_domain_mask(
         projector, fitted_x, fitted_y
     )
     comparison_valid = (
@@ -595,7 +657,10 @@ def compute_fullimage_angular_error(
     radial_only["focal_length"] = np.array([fx, fx], dtype=np.float64)
     radial_only["tangential_coeffs"] = np.zeros(2, dtype=np.float64)
     radial_only["thin_prism_coeffs"] = np.zeros(4, dtype=np.float64)
-    radial_rays = opencv_pixels_to_camera_rays(radial_only)
+    radial_rays = opencv_pixels_to_camera_rays(
+        radial_only,
+        enforce_runtime_trust=False,
+    )
     floor_deg = np.rad2deg(
         np.arccos(np.clip(np.sum(true_rays * radial_rays, axis=-1), -1.0, 1.0))
     )
@@ -613,25 +678,41 @@ def compute_fullimage_angular_error(
     forward_stats = _percentiles(forward_error, "forward_poly_")
     metrics.update({f"{key}_px": value for key, value in forward_stats.items()})
 
-    metrics["opencv_inverse_coverage"] = float(
-        np.mean(np.isfinite(true_rays).all(axis=-1))
+    # Keep the three domains separate.  Generic valid/invalid names previously
+    # conflated FTheta's own max-angle cone, the OpenCV calibration branch, and
+    # their comparison intersection.
+    opencv_calibration_domain = np.isfinite(true_rays).all(axis=-1)
+    total_pixel_count = int(true_rays.shape[0] * true_rays.shape[1])
+    ftheta_own_domain_count = int(np.count_nonzero(ftheta_in_domain))
+    opencv_calibration_domain_count = int(
+        np.count_nonzero(opencv_calibration_domain)
     )
-    metrics["ftheta_domain_coverage"] = float(np.mean(ftheta_in_domain))
-    metrics["opencv_forward_coverage"] = float(np.mean(fitted_forward_valid))
-    metrics["valid_coverage"] = float(np.mean(comparison_valid))
-    inverse_valid = np.isfinite(true_rays).all(axis=-1)
-    inverse_valid_count = int(np.count_nonzero(inverse_valid))
-    valid_count = int(np.count_nonzero(comparison_valid))
-    metrics["total_pixel_count"] = int(true_rays.shape[0] * true_rays.shape[1])
-    metrics["opencv_inverse_valid_count"] = inverse_valid_count
-    metrics["opencv_inverse_invalid_count"] = int(
-        metrics["total_pixel_count"] - inverse_valid_count
+    comparison_intersection_count = int(np.count_nonzero(comparison_valid))
+    metrics["total_pixel_count"] = total_pixel_count
+    metrics["ftheta_own_domain_count"] = ftheta_own_domain_count
+    metrics["ftheta_own_domain_excluded_count"] = (
+        total_pixel_count - ftheta_own_domain_count
     )
-    metrics["valid_pixel_count"] = valid_count
-    metrics["invalid_pixel_count"] = int(metrics["total_pixel_count"] - valid_count)
-    metrics["physical_domain_retention"] = (
-        float(valid_count / inverse_valid_count)
-        if inverse_valid_count
+    metrics["ftheta_own_domain_coverage"] = float(
+        ftheta_own_domain_count / total_pixel_count
+    )
+    metrics["opencv_calibration_domain_count"] = opencv_calibration_domain_count
+    metrics["opencv_calibration_domain_excluded_count"] = (
+        total_pixel_count - opencv_calibration_domain_count
+    )
+    metrics["opencv_calibration_domain_coverage"] = float(
+        opencv_calibration_domain_count / total_pixel_count
+    )
+    metrics["comparison_intersection_count"] = comparison_intersection_count
+    metrics["comparison_intersection_excluded_count"] = (
+        total_pixel_count - comparison_intersection_count
+    )
+    metrics["comparison_intersection_coverage"] = float(
+        comparison_intersection_count / total_pixel_count
+    )
+    metrics["comparison_intersection_retention_of_opencv_calibration_domain"] = (
+        float(comparison_intersection_count / opencv_calibration_domain_count)
+        if opencv_calibration_domain_count
         else float("nan")
     )
 
@@ -647,7 +728,7 @@ def compute_fullimage_angular_error(
         projector.fx * true_xd + projector.cx - xs,
         projector.fy * true_yd + projector.cy - ys,
     )
-    roundtrip_error[~inverse_valid] = np.nan
+    roundtrip_error[~opencv_calibration_domain] = np.nan
     roundtrip_stats = _percentiles(roundtrip_error, "opencv_roundtrip_")
     metrics.update({f"{key}_px": value for key, value in roundtrip_stats.items()})
     metrics["outer_sample_count"] = int(np.count_nonzero(outer_mask & comparison_valid))

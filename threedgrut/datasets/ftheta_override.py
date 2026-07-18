@@ -11,87 +11,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import numpy as np
 import torch
 
-FTHETA_PARAMETER_KEYS = frozenset(
-    {
-        "resolution",
-        "shutter_type",
-        "principal_point",
-        "reference_poly",
-        "pixeldist_to_angle_poly",
-        "angle_to_pixeldist_poly",
-        "max_angle",
-        "linear_cde",
-    }
+from threedgrut.ftheta_override_contract import (
+    FTHETA_PARAMETER_KEYS,
+    _validate_ftheta_parameters,
 )
-_SHUTTER_TYPES = frozenset(
-    {
-        "ROLLING_TOP_TO_BOTTOM",
-        "ROLLING_LEFT_TO_RIGHT",
-        "ROLLING_BOTTOM_TO_TOP",
-        "ROLLING_RIGHT_TO_LEFT",
-        "GLOBAL",
-    }
-)
-_REFERENCE_POLYNOMIAL_TYPES = frozenset({"PIXELDIST_TO_ANGLE", "ANGLE_TO_PIXELDIST"})
-
-
-def _finite_number(value: Any, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{field} must be a finite number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"{field} must be finite")
-    return result
-
-
-def _finite_vector(value: Any, field: str, length: int) -> list[float]:
-    if not isinstance(value, list) or len(value) != length:
-        raise TypeError(f"{field} must be a JSON array with exactly {length} entries")
-    return [_finite_number(item, f"{field}[{index}]") for index, item in enumerate(value)]
-
-
-def _validate_ftheta_parameters(camera_id: str, value: Any) -> dict[str, Any]:
-    """Normalize the exact offline native-FTheta JSON representation."""
-
-    if not isinstance(value, dict):
-        raise TypeError(f"camera '{camera_id}' parameters must be a JSON object")
-    missing = sorted(FTHETA_PARAMETER_KEYS - set(value))
-    unexpected = sorted(set(value) - FTHETA_PARAMETER_KEYS)
-    if missing or unexpected:
-        raise ValueError(f"camera '{camera_id}' FTheta keys invalid: missing={missing}, unexpected={unexpected}")
-    resolution = value["resolution"]
-    if (
-        not isinstance(resolution, list)
-        or len(resolution) != 2
-        or any(isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in resolution)
-    ):
-        raise TypeError("resolution must be a JSON array of two positive integers")
-    shutter_type = value["shutter_type"]
-    if not isinstance(shutter_type, str) or shutter_type not in _SHUTTER_TYPES:
-        raise ValueError(f"shutter_type must be one of {sorted(_SHUTTER_TYPES)}")
-    reference_poly = value["reference_poly"]
-    if not isinstance(reference_poly, str) or reference_poly not in _REFERENCE_POLYNOMIAL_TYPES:
-        raise ValueError("reference_poly must be one of " f"{sorted(_REFERENCE_POLYNOMIAL_TYPES)}")
-    max_angle = _finite_number(value["max_angle"], "max_angle")
-    if max_angle <= 0.0:
-        raise ValueError("max_angle must be positive")
-    return {
-        "resolution": [int(resolution[0]), int(resolution[1])],
-        "shutter_type": shutter_type,
-        "principal_point": _finite_vector(value["principal_point"], "principal_point", 2),
-        "reference_poly": reference_poly,
-        "pixeldist_to_angle_poly": _finite_vector(value["pixeldist_to_angle_poly"], "pixeldist_to_angle_poly", 6),
-        "angle_to_pixeldist_poly": _finite_vector(value["angle_to_pixeldist_poly"], "angle_to_pixeldist_poly", 6),
-        "max_angle": max_angle,
-        "linear_cde": _finite_vector(value["linear_cde"], "linear_cde", 3),
-    }
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

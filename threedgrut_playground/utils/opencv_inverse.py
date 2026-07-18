@@ -97,6 +97,33 @@ def _first_physical_branch_limit(projector: PinholeForwardProjector) -> float:
     return float(radius[int(invalid[0])])
 
 
+def _first_monotonic_branch_limit(projector: PinholeForwardProjector) -> float:
+    """Return the first raw rational branch limit without the icD trust gate.
+
+    The production OpenCV projector uses ``0.8 < icD < 1.2`` as a runtime
+    visibility guard.  OpenCV-to-FTheta calibration must not inherit that
+    renderer policy: it needs the complete invertible calibration curve.
+    This limit therefore stops only when the raw radial mapping becomes
+    non-finite or non-increasing.
+    """
+    radius = np.linspace(
+        0.0,
+        _RADIAL_BRANCH_SCAN_MAX,
+        _RADIAL_BRANCH_SAMPLES,
+        dtype=np.float64,
+    )
+    scale = _radial_scale(projector, radius)
+    distorted_radius = radius * scale
+    increasing = np.concatenate(
+        [np.array([True]), np.diff(distorted_radius) > 0.0]
+    )
+    usable = np.isfinite(scale) & np.isfinite(distorted_radius) & increasing
+    invalid = np.flatnonzero(~np.logical_and.accumulate(usable))
+    if invalid.size == 0:
+        return float(radius[-1])
+    return float(radius[int(invalid[0])])
+
+
 def _distortion_jacobian_determinant(
     projector: PinholeForwardProjector,
     x: np.ndarray,
@@ -140,10 +167,39 @@ def opencv_forward_domain_mask(
     )
 
 
+def opencv_calibration_domain_mask(
+    projector: PinholeForwardProjector,
+    x: np.ndarray,
+    y: np.ndarray,
+) -> np.ndarray:
+    """Identify points on the raw first invertible calibration branch.
+
+    Unlike :func:`opencv_forward_domain_mask`, this deliberately does not
+    apply the production pinhole renderer's ``0.8 < icD < 1.2`` visibility
+    guard.  It is intended only for calibration conversion and validation.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    radius = np.hypot(x, y)
+    scale = _radial_scale(projector, radius)
+    determinant = _distortion_jacobian_determinant(projector, x, y)
+    branch_limit = _first_monotonic_branch_limit(projector)
+    return (
+        np.isfinite(x)
+        & np.isfinite(y)
+        & np.isfinite(scale)
+        & (radius < branch_limit)
+        & np.isfinite(determinant)
+        & (determinant > 0.0)
+    )
+
+
 def _radial_lut_initial_guess(
     projector: PinholeForwardProjector,
     xd: np.ndarray,
     yd: np.ndarray,
+    *,
+    enforce_runtime_trust: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Invert the radial component on its first monotonic branch."""
     rd = np.hypot(xd, yd)
@@ -151,7 +207,11 @@ def _radial_lut_initial_guess(
         0.0, _RADIAL_BRANCH_SCAN_MAX, _RADIAL_BRANCH_SAMPLES, dtype=np.float64
     )
     radial_x = ru_grid * _radial_scale(projector, ru_grid)
-    branch_limit = _first_physical_branch_limit(projector)
+    branch_limit = (
+        _first_physical_branch_limit(projector)
+        if enforce_runtime_trust
+        else _first_monotonic_branch_limit(projector)
+    )
     stop = int(np.searchsorted(ru_grid, branch_limit, side="left"))
     stop = max(stop, 2)
     ru = np.interp(rd, radial_x[:stop], ru_grid[:stop])
@@ -164,8 +224,15 @@ def _invert_chunk(
     projector: PinholeForwardProjector,
     xd: np.ndarray,
     yd: np.ndarray,
+    *,
+    enforce_runtime_trust: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    x, y = _radial_lut_initial_guess(projector, xd, yd)
+    x, y = _radial_lut_initial_guess(
+        projector,
+        xd,
+        yd,
+        enforce_runtime_trust=enforce_runtime_trust,
+    )
 
     for _ in range(_NEWTON_ITERATIONS):
         fx, fy = _distort_normalized(projector, x, y)
@@ -199,10 +266,15 @@ def _invert_chunk(
 
     final_x, final_y = _distort_normalized(projector, x, y)
     residual = np.hypot(final_x - xd, final_y - yd)
+    domain_mask = (
+        opencv_forward_domain_mask(projector, x, y)
+        if enforce_runtime_trust
+        else opencv_calibration_domain_mask(projector, x, y)
+    )
     physical = (
         np.isfinite(residual)
         & (residual < _RESIDUAL_TOLERANCE)
-        & opencv_forward_domain_mask(projector, x, y)
+        & domain_mask
     )
     x[~physical] = np.nan
     y[~physical] = np.nan
@@ -213,6 +285,8 @@ def _invert_chunk(
 def invert_opencv_full_model(
     pinhole_dict: dict,
     uv: np.ndarray,
+    *,
+    enforce_runtime_trust: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Invert distorted pixels into undistorted normalized coordinates.
 
@@ -223,6 +297,11 @@ def invert_opencv_full_model(
         :class:`PinholeForwardProjector`.
     uv:
         Float pixel coordinates with shape ``(N, 2)``.
+    enforce_runtime_trust:
+        Preserve the production pinhole projector's ``0.8 < icD < 1.2``
+        visibility policy when true.  Set false only for calibration
+        conversion/validation, where the complete first invertible rational
+        branch is required.
 
     Returns
     -------
@@ -248,7 +327,10 @@ def invert_opencv_full_model(
     for start in range(0, len(pixels), _INVERSE_CHUNK_SIZE):
         stop = min(start + _INVERSE_CHUNK_SIZE, len(pixels))
         x, y, chunk_residual = _invert_chunk(
-            projector, xd_all[start:stop], yd_all[start:stop]
+            projector,
+            xd_all[start:stop],
+            yd_all[start:stop],
+            enforce_runtime_trust=enforce_runtime_trust,
         )
         xy[start:stop, 0] = x
         xy[start:stop, 1] = y
@@ -256,19 +338,26 @@ def invert_opencv_full_model(
     return xy, residual
 
 
-def opencv_pixels_to_camera_rays(pinhole_dict: dict) -> np.ndarray:
+def opencv_pixels_to_camera_rays(
+    pinhole_dict: dict,
+    *,
+    enforce_runtime_trust: bool = True,
+) -> np.ndarray:
     """Return exact float64 unit rays for the invertible integer pixels.
 
-    Pixels outside a rational model's physical/invertible branch are returned
-    as ``NaN`` rays.  This is intentional: some b6a9 wide calibrations contain
-    a denominator pole outside their forward-valid domain.  Downstream survey
-    code must report the resulting coverage instead of inventing a ray on an
-    arbitrary rational branch.
+    Pixels outside the selected rational domain are returned as ``NaN`` rays.
+    The default preserves the production pinhole runtime trust gate.  FTheta
+    calibration callers pass ``enforce_runtime_trust=False`` to use the full
+    first invertible branch without accepting later folded roots.
     """
     projector = PinholeForwardProjector(pinhole_dict)
     ys, xs = np.mgrid[0:projector.height, 0:projector.width]
     uv = np.stack([xs.ravel(), ys.ravel()], axis=-1)
-    xy, residual = invert_opencv_full_model(pinhole_dict, uv)
+    xy, residual = invert_opencv_full_model(
+        pinhole_dict,
+        uv,
+        enforce_runtime_trust=enforce_runtime_trust,
+    )
     rays = np.column_stack([xy, np.ones(len(xy), dtype=np.float64)])
     valid = (
         np.isfinite(residual)

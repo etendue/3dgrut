@@ -1,0 +1,36 @@
+{
+  "artifacts": {
+    "scripts/pin_ftheta_b6a9_7cam_params_v4_full_domain.json": "e637b5845302edaa940b10671b31d4b7d29a727eeb358f98249ac5334d459fbd",
+    "scripts/pin_ftheta_b6a9_9cam_survey_v4_full_domain.json": "08087b1fee6f1bb5a9935c509d493bebfb57be53560891f526a087f1552ac00c"
+  },
+  "camera_order": [
+    "camera_front_wide_120fov",
+    "camera_cross_left_120fov",
+    "camera_cross_right_120fov",
+    "camera_left_wide_90fov",
+    "camera_right_wide_90fov",
+    "camera_back_rear_wide_90fov",
+    "camera_rear_left_70fov"
+  ],
+  "clip_id": "inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9",
+  "fitter_version": "pin-ftheta-numpy-v4-full-calibration-domain-2026-07-18",
+  "generated_at": "2026-07-18T12:29:38+08:00",
+  "generation_command": ".venv/bin/python scripts/export_9cam_ftheta_params.py --calibrations scripts/pin_ftheta_b6a9_calibs.json --survey-output scripts/pin_ftheta_b6a9_9cam_survey_v4_full_domain.json --runtime-output scripts/pin_ftheta_b6a9_7cam_params_v4_full_domain.json --provenance-output scripts/pin_ftheta_b6a9_7cam_params_v4_full_domain.provenance.json --generated-at 2026-07-18T12:29:38+08:00",
+  "manifest_sha256": "df2021203cfe318cfa8da3462e38c5b7fbf6bf3963d3a8149d145f98f6036e31",
+  "schema_version": 1,
+  "serialization": {
+    "encoding": "UTF-8",
+    "indent": 2,
+    "runtime_sort_keys": false,
+    "survey_sort_keys": true,
+    "trailing_newline": true
+  },
+  "sources": {
+    "scripts/export_9cam_ftheta_params.py": "ae955ad754de1630fd6d53a035c5a0cfbe0c6d4ed80d9bc972c3c18d76c4b19d",
+    "scripts/pin_ftheta_b6a9_calibs.json": "80be88487dc34253dd14ffeaffb2aa9a0962469faf4087b56fd0a4af1f78d62d",
+    "scripts/pin_ftheta_camera_survey.py": "ef11796801c3b0db18ca2859f9d65a0fefee2d71a5c347c145335ca5b9c09a37",
+    "threedgrut/ftheta_override_contract.py": "48b23146d8aa53f9e9af2efa88ed33d5d186400f56a7a911703ea8cc5b162f6d",
+    "threedgrut_playground/utils/ftheta_fitter.py": "558a9e55be082b63045f22e35479daeb11360ff70b279676ff8664deca8b2aba",
+    "threedgrut_playground/utils/opencv_inverse.py": "56a74a975447ca0e4178adfde88b21411a0f18c1342219c82927bf450acba8e9"
+  }
+}

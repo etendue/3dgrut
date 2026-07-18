@@ -1,7 +1,9 @@
 # FTheta v4 Full-Domain 7-Camera Retraining Fix Plan
 
-> **Status:** Phase 0 verified. The contract, immutable v3 survey snapshot, and
-> exact invalidated-v3 evidence inventory are frozen. Phase 1 is next.
+> **Status:** Phase 1 verified. The v4 fitter, three-domain survey contract,
+> immutable three-file artifact set, structural hard gates, and rollback/path
+> safety tests are frozen. Phase 2 is next; no Phase 2 checklist item is yet
+> complete.
 >
 > **Supersedes:** The hard-STOP calibration policy and GPU execution sections of
 > [`2026-07-17-ftheta-9cam-retrain.md`](2026-07-17-ftheta-9cam-retrain.md).
@@ -306,13 +308,37 @@ documented float32 boundary tolerance; unexplained differences are a hard stop.
 
 **Verification checklist:**
 
-- [ ] Tests cover domain separation for all seven cameras, not only front-wide.
-- [ ] Front-wide sentinel is `max_angle≈1.208789 rad`, never `0.730310 rad`.
-- [ ] All eight fields are finite and both polynomial derivatives are positive.
-- [ ] Artifact generation is deterministic byte-for-byte.
-- [ ] Coverage meets the accepted per-camera baselines within frozen tolerance.
-- [ ] Quality threshold violations appear as warnings and do not cause exit 2.
-- [ ] A hard invariant failure still causes non-zero exit.
+- [x] Tests cover domain separation for all seven cameras, not only front-wide.
+- [x] Front-wide sentinel is `max_angle≈1.208789 rad`, never `0.730310 rad`.
+- [x] All eight fields are finite and both polynomial derivatives are positive.
+- [x] Artifact generation is deterministic byte-for-byte.
+- [x] Coverage meets the accepted per-camera baselines within frozen tolerance.
+- [x] Quality threshold violations appear as warnings and do not cause exit 2.
+- [x] A hard invariant failure still causes non-zero exit.
+
+**Verified Phase 1 evidence (Mac, 2026-07-18):**
+
+- Focused results: transaction/structural/path-collision tests `20 passed`;
+  fitter plus inverse suites `72 passed`; loader regression suite `21 passed`.
+- Two consecutive real exporter CLI runs produced byte-identical survey,
+  runtime, and provenance files.
+- Final SHA-256 prefixes: runtime `e637b584`, survey `08087b1f`, provenance
+  sidecar `df3d51f3`.
+- Legacy artifacts remain byte-for-byte unchanged: seven-camera SHA-256
+  `73965c6d10693b7742c7afb538169990a94d2457890738a7a4f66d13fcd0a450`;
+  nine-camera SHA-256
+  `2f914d17f69d7f235ddd90abe1d52c3e9e25e383b29491b2e9d7dbef2f162cfa`.
+- Frozen native-resolution three-domain counts (`kept / excluded`):
+
+| Camera | FTheta own domain | OpenCV calibration domain | Comparison intersection |
+|---|---:|---:|---:|
+| `camera_front_wide_120fov` | 2,073,452 / 148 | 2,073,600 / 0 | 2,073,452 / 148 |
+| `camera_cross_left_120fov` | 2,073,462 / 138 | 2,073,600 / 0 | 2,073,462 / 138 |
+| `camera_cross_right_120fov` | 2,073,467 / 133 | 2,073,600 / 0 | 2,073,467 / 133 |
+| `camera_left_wide_90fov` | 2,047,245 / 26,355 | 2,041,919 / 31,681 | 2,041,919 / 31,681 |
+| `camera_right_wide_90fov` | 2,029,308 / 44,292 | 2,022,096 / 51,504 | 2,022,096 / 51,504 |
+| `camera_back_rear_wide_90fov` | 2,073,480 / 120 | 2,073,600 / 0 | 2,073,480 / 120 |
+| `camera_rear_left_70fov` | 2,073,499 / 101 | 2,073,600 / 0 | 2,073,499 / 101 |
 
 **Anti-pattern guards:**
 
@@ -453,6 +479,10 @@ v4 artifact and new output roots.
 - [ ] Driver preflight rejects the old artifact SHA and `0.730310 rad` sentinel.
 - [ ] Preflight verifies final commit SHA, source/artifact hashes, exact seven
   cameras, exact eight keys, and per-camera fingerprints.
+- [ ] The provenance sidecar is a mandatory preflight input: before any GPU/JIT
+  work, verify its generation command, runtime/survey artifact hashes, all
+  hashed source files, frozen timestamp, seven-camera order, and fingerprints.
+  A missing, stale, or mismatched sidecar is a hard failure.
 - [ ] Preflight checks complete dataset stores and seven-camera aux coverage.
 - [ ] Config explicitly freezes `camera_max_fov_deg=190.0`, depth-off,
   `num_workers=10`, seed, durations, and camera order.

@@ -107,6 +107,68 @@ def test_camera_ray_grid_shape_and_unit_norm():
     assert np.isnan(rays[~valid]).all()
 
 
+def test_calibration_inverse_is_not_truncated_by_runtime_icd_gate():
+    """FTheta conversion uses the full first branch, not pinhole visibility."""
+    rays = opencv_pixels_to_camera_rays(
+        _B6A9_FRONT_WIDE_PINHOLE,
+        enforce_runtime_trust=False,
+    )
+    valid = np.isfinite(rays).all(axis=-1)
+    assert float(np.mean(valid)) == pytest.approx(1.0)
+    np.testing.assert_allclose(
+        np.linalg.norm(rays[valid], axis=-1),
+        1.0,
+        atol=1e-12,
+    )
+    assert np.isfinite(rays[0, 0]).all()
+    assert np.isfinite(rays[-1, -1]).all()
+
+
+@pytest.mark.parametrize(
+    "camera_id",
+    [
+        "camera_front_wide_120fov",
+        "camera_cross_left_120fov",
+        "camera_cross_right_120fov",
+        "camera_left_wide_90fov",
+        "camera_right_wide_90fov",
+        "camera_back_rear_wide_90fov",
+        "camera_rear_left_70fov",
+    ],
+)
+def test_all_seven_calibration_domains_explicitly_exclude_runtime_trust(camera_id):
+    """Every active FTheta calibration call must opt out of the icD gate."""
+    camera = _frozen_camera(camera_id)
+    width, height = camera["resolution"]
+    ys, xs = np.mgrid[0:int(height):8, 0:int(width):8]
+    uv = np.stack([xs.ravel(), ys.ravel()], axis=-1)
+    runtime_xy, runtime_residual = invert_opencv_full_model(camera, uv)
+    calibration_xy, calibration_residual = invert_opencv_full_model(
+        camera,
+        uv,
+        enforce_runtime_trust=False,
+    )
+    runtime_valid = np.isfinite(runtime_residual)
+    calibration_valid = np.isfinite(calibration_residual)
+    runtime_coverage = float(np.mean(runtime_valid))
+    calibration_coverage = float(np.mean(calibration_valid))
+
+    assert runtime_coverage < 0.70, camera_id
+    assert calibration_coverage > 0.97, camera_id
+    assert calibration_coverage > runtime_coverage + 0.30, camera_id
+    assert np.isnan(runtime_xy[~runtime_valid]).all()
+    assert np.isnan(calibration_xy[~calibration_valid]).all()
+    assert float(calibration_residual[calibration_valid].max()) < 1e-10
+
+    # Side-wide calibration branches still exclude folded/non-positive-
+    # Jacobian corners; opting out of icD never means accepting later roots.
+    if camera_id in {
+        "camera_left_wide_90fov",
+        "camera_right_wide_90fov",
+    }:
+        assert calibration_coverage < 0.995
+
+
 def test_zero_nonradial_terms_match_radial_reference():
     radial_only = dict(_B6A9_FRONT_WIDE_PINHOLE)
     radial_only["tangential_coeffs"] = np.zeros(2)
