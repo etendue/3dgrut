@@ -209,6 +209,40 @@ ssh inceptio 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
     experiment_name=smoke_test'
 ```
 
+## inceptio_2 GPU 执行环境（FTheta v4 7-camera）
+
+`inceptio_2` 与 `inceptio` 基本同配置，但必须按以下已核验差异执行：
+
+- SSH 别名/主机/用户：`inceptio_2` / `inceptio-4090-2` / `inceptio`
+- GPU：RTX 4090 24,564 MiB；RAM 62 GiB；swap 8 GiB
+- Python：`/home/inceptio/miniforge3/envs/3dgrut2/bin/python`（3.11.15）
+- Torch / NCore：`2.11.0+cu128` / `19.2.1`
+- 仓库：`/home/inceptio/repo/3dgrut2`（当前旧且 dirty，不得直接训练）
+- 输出根：`/home/inceptio/work/output`
+- canonical 数据目标：`/home/inceptio/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/`
+
+该机没有 `~/miniforge3/etc/profile.d/conda.sh`，每条命令显式导 PATH：
+
+```bash
+ssh inceptio_2 'export PATH=/home/inceptio/miniforge3/envs/3dgrut2/bin:$PATH \
+  && cd /home/inceptio/repo/3dgrut2-wt/<task> && python train.py ...'
+```
+
+训练 P/F 两臂一律 depth-off，显式设置 `use_lidar_depth=false`、
+`use_depth_prior=false`、`load_lidar_depth_map=false` 和 `num_workers=10`。
+只允许从同一 commit 的隔离 worktree 启动；FTheta v4 推荐路径为
+`/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam`。嵌套 driver 沿用
+`ssh -n` + `setsid` + stdin/stdout/stderr 全切断的启动方式。
+
+**数据当前未就绪（2026-07-18）：** 一个副本虽有正确 manifest 但只有
+1/14 raw stores；另一个有 14/14 raw stores，但 aux 只覆盖六个相机并缺
+`camera_rear_left_70fov`。启动前必须从 `inceptio` 同步完整 canonical
+数据到上述目标，并验证 manifest SHA-256
+`df2021203cfe318cfa8da3462e38c5b7fbf6bf3963d3a8149d145f98f6036e31`、
+14/14 raw stores 可打开、aux 覆盖七个 active cameras 及所需 LiDAR
+components、代表 key/帧数/分辨率正确。manifest hash 正确但 store 缺失
+仍是硬失败；commit、submodule、数据和 GPU-idle preflight 全过前不得 JIT/训练。
+
 ### inceptio 无-aux NCore 数据：nre-tools 容器生成 aux（runbook + 坑，2026-07-01 实测）
 
 新 inceptio ncore clip（只有 `*.ncore4-*.zarr.itar` + manifest、**无 aux/**）直接跑 4 层 multilayer 会崩在 road/dynamic 层 init（`trainer.py` → `get_road_lidar_points`/`get_dynamic_lidar_points` → `datasetNcore._get_semantic_lidar_points` 需 `aux.sseg`/`aux.lidar-sseg`）。**background 单层不需 aux 可直接跑**（基础 config `apps/ncore_3dgut_mcmc`，验证 camera/pose/pipeline）；4 层 multilayer 必须先生成 aux。

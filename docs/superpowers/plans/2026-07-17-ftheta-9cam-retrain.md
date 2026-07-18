@@ -1,10 +1,40 @@
 # 9-Camera FTheta Retraining and Peripheral-Blur Verification Plan
 
+> **SUPERSEDED FOR EXECUTION (2026-07-18):**
+> [`2026-07-18-ftheta-v4-full-domain-retrain-fix.md`](2026-07-18-ftheta-v4-full-domain-retrain-fix.md)
+> replaces this plan's hard-STOP policy and GPU execution steps. Keep this plan
+> and old artifact/run paths as history; do not resume its unchecked tasks or
+> rewrite manifests. Results made with `pin-ftheta-numpy-v3-physical-domain`,
+> front-wide `max_angle=41.84°` (`0.730310... rad`), or artifact SHA-256 prefix
+> `73965c6d...` are invalid for the v4 decision. Selected seven-camera residual
+> exceedances are accepted warnings; the new plan's runtime-domain,
+> monotonicity, provenance, data, and matched-render invariants remain hard.
+> The immutable survey behind this historical plan is
+> [`PIN_FTHETA_9CAM_PARAMETER_SURVEY_V3_PHYSICAL_DOMAIN.md`](../../T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY_V3_PHYSICAL_DOMAIN.md);
+> the unversioned survey path now tracks the v4 full-domain work.
+> Exact paths and hashes for the invalidated v3 smoke/full checkpoints,
+> metrics, native renders, and manifests are preserved in
+> [`PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md`](../../T8_artifacts/PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md).
+>
 > **For agentic workers:** Execute this plan task-by-task with checkbox tracking. Do not treat a FTheta viewer rendering of a pinhole-trained checkpoint as evidence that FTheta training succeeds.
 >
 > **Dependency:** Complete or reuse the parameter-fitting and full-image validation work in [`2026-07-15-pinhole-ftheta-conversion-validation.md`](2026-07-15-pinhole-ftheta-conversion-validation.md), especially PIN-FTHETA-2/3/4, before starting GPU training.
 >
 > **2026-07-17 user-approved scope revision:** Keep the completed nine-camera survey as historical calibration evidence, but Tasks 2-7 now run a matched **seven-camera** Arm P/Arm F experiment. Both arms exclude `camera_front_standard_55fov` and `camera_front_tele_30fov`, and neither arm applies the tele-camera loss weight. This revision supersedes later references to nine-camera training/metadata/metrics; existing `9cam` plan and artifact filenames remain unchanged for traceability.
+>
+> **2026-07-18 calibration audit — previous Arm F evidence invalidated:** The
+> `pin-ftheta-numpy-v3-physical-domain` fitter incorrectly applied the Pinhole
+> renderer's `0.8 < icD < 1.2` runtime validity gate while generating FTheta
+> parameters.  For `camera_front_wide_120fov` this produced
+> `max_angle=41.84°` and only about 63% raster coverage, directly contradicting
+> this plan's requirement that FTheta validity come from its own polynomial
+> domain.  Every smoke/full-training/native-render/Viser result made with that
+> parameter artifact is therefore diagnostic history, not valid Arm F
+> evidence.  The v4 calibration path removes the Pinhole trust gate while
+> retaining first-monotonic-branch protection; front-wide becomes
+> `max_angle≈69.26°` with >99.99% FTheta-domain coverage.  The corrected
+> v4 hard runtime gates must pass before any GPU rerun; accepted residual
+> warnings do not block execution.
 
 ## Goal
 
@@ -103,7 +133,7 @@ The FTheta 8-key parameter contract is assembled in `NCoreDataset._get_camera_mo
 - `threedgrut/tests/test_ftheta_metadata_all_cameras.py` — checkpoint metadata coverage tests.
 - `scripts/pin_ftheta_9cam_smoke.sh` — reproducible 5-second FTheta smoke driver.
 - `scripts/pin_ftheta_9cam_ab.sh` — matched Arm P/Arm F training and native-render driver.
-- `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY.md` — per-camera fit metrics and gate decisions.
+- `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY_V3_PHYSICAL_DOMAIN.md` — immutable historical per-camera fit metrics and gate decisions.
 - `docs/T8_artifacts/PIN_FTHETA_9CAM_RETRAIN_VALIDATION.md` — training commands, hashes, metrics, and visual evidence.
 
 ### Modified files
@@ -136,7 +166,7 @@ The FTheta 8-key parameter contract is assembled in `NCoreDataset._get_camera_mo
 
 **Files:**
 - Reuse/modify: `scripts/export_9cam_ftheta_params.py`, `scripts/pin_ftheta_camera_survey.py`
-- Output: `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY.md`
+- Output: `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY_V3_PHYSICAL_DOMAIN.md`
 
 **Interfaces:**
 

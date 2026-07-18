@@ -1,0 +1,661 @@
+# FTheta v4 Full-Domain 7-Camera Retraining Fix Plan
+
+> **Status:** Phase 0 verified. The contract, immutable v3 survey snapshot, and
+> exact invalidated-v3 evidence inventory are frozen. Phase 1 is next.
+>
+> **Supersedes:** The hard-STOP calibration policy and GPU execution sections of
+> [`2026-07-17-ftheta-9cam-retrain.md`](2026-07-17-ftheta-9cam-retrain.md).
+> The earlier plan remains historical evidence. Results produced with
+> `pin-ftheta-numpy-v3-physical-domain`, `max_angle=41.84°` for front-wide, or
+> artifact SHA-256 `73965c6d...` are invalid for the new Arm F.
+> Exact historical paths and hashes are preserved in
+> [`PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md`](../../T8_artifacts/PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md).
+>
+> **User decision recorded on 2026-07-18:** Use the current seven-camera v4
+> approximation even though several calibration quality thresholds are
+> exceeded. Those residual thresholds remain visible warnings; they no longer
+> block GPU execution. Runtime-domain consistency, artifact provenance, and
+> matched native-render evidence remain hard requirements.
+>
+> **Training host:** `inceptio_2`. Read-only discovery confirmed an RTX 4090
+> 24 GB, 62 GiB RAM, 3.4 TiB free disk, and the `3dgrut2` Python environment.
+> Use depth-off and `num_workers=10`, matching the established `inceptio`
+> recipe. The host's current b6a9 dataset copies are not yet suitable for the
+> seven-camera run; Phase 3 must prepare the complete canonical dataset first.
+
+## Goal
+
+Correct the FTheta conversion and supervision-domain path, retrain a matched
+seven-camera Pinhole/FTheta A/B on `inceptio_2`, and determine with native
+center/periphery metrics whether full-domain FTheta training removes or reduces
+the visible clear-center/blurred-outer-ring defect.
+
+The seven active cameras are:
+
+1. `camera_front_wide_120fov`
+2. `camera_cross_left_120fov`
+3. `camera_cross_right_120fov`
+4. `camera_left_wide_90fov`
+5. `camera_right_wide_90fov`
+6. `camera_back_rear_wide_90fov`
+7. `camera_rear_left_70fov`
+
+Both arms exclude `camera_front_standard_55fov` and
+`camera_front_tele_30fov`, as already approved. The only scientific variable is
+the camera representation:
+
+```text
+Arm P: source OpenCV Pinhole rays + Pinhole 3DGUT projection
+Arm F: versioned v4 FTheta rays + FTheta 3DGUT projection
+```
+
+Everything else—clip, frame windows, seven cameras, poses, resolution, seed,
+losses, layers, depth policy, iterations, renderer, and evaluation frames—must
+match.
+
+## Why a new plan is required
+
+The previous FTheta artifact inherited the Pinhole renderer's
+`0.8 < icD < 1.2` trust gate. That truncated front-wide to `41.84°`, giving only
+about 63% raster coverage and defeating the purpose of converting a large-FOV
+camera to FTheta.
+
+The current v4 working tree correctly separates the domains:
+
+- OpenCV Pinhole runtime continues to use the `icD` trust gate.
+- OpenCV-to-FTheta calibration does **not** use the `icD` gate.
+- Calibration still rejects later folded rational branches and non-positive
+  Jacobian regions.
+- Front-wide becomes `max_angle=69.2585°` with 99.9929% FTheta-domain raster
+  coverage.
+
+A second mismatch was found during this plan's discovery: NCore returns finite
+FTheta inverse rays outside `max_angle`, while CUDA forward projection accepts
+only `theta < max_angle`. Therefore FTheta currently supervises some pixels
+that it cannot forward-project. Phase 2 adds a FTheta-own-domain supervision
+mask. This fix must not reuse any OpenCV `icD` condition.
+
+```mermaid
+flowchart LR
+    C["OpenCV calibration"] --> F["v4 FTheta fit: raw first monotonic branch"]
+    F --> A["Immutable v4 seven-camera artifact"]
+    A --> D["NCore FTheta inverse rays"]
+    D --> M["FTheta mask: theta < max_angle"]
+    M --> T["Matched P/F training"]
+    T --> N["Native render + radial KPI"]
+    N --> V["Deterministic Viser parity + visual check"]
+```
+
+## Non-goals
+
+- Do not reintroduce `0.8 < icD < 1.2` anywhere in the FTheta arm.
+- Do not keep refitting degree-5 polynomials merely to turn accepted residual
+  warnings green before the downstream experiment.
+- Do not reuse or metadata-swap a v3 FTheta checkpoint. It was optimized under
+  different rays and a different projection domain.
+- Do not overwrite a parameter file referenced by an old checkpoint. Doing so
+  creates a hybrid render: old-trained Gaussians, new dataset rays, and old
+  embedded camera metadata.
+- Do not add front-standard/front-tele back into either arm.
+- Do not use a Viser screenshot as proof of training correctness. Native render
+  and radial metrics come first.
+- Do not hide invalid/excluded corners by reporting only a masked common domain.
+
+## Frozen inputs and experiment identity
+
+- Clip: `inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9`
+- Manifest SHA-256:
+  `df2021203cfe318cfa8da3462e38c5b7fbf6bf3963d3a8149d145f98f6036e31`
+- Canonical target path on `inceptio_2`:
+  `/home/inceptio/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/`
+- Base config:
+  `configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam.yaml`
+- Environment policy: depth supervision off, `num_workers=10`, seed `42`
+- Mechanism smoke: 5-second window, 5k iterations
+- Full comparison: full 20-second window, 30k iterations
+- Proposed branch: `codex/ftheta-full-domain-v4`
+- Proposed remote worktree:
+  `/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam`
+- Proposed output roots:
+  - smoke: `/home/inceptio/work/output/pin_ftheta_v4_smoke_runs`
+  - full: `/home/inceptio/work/output/pin_ftheta_v4_full_ab_runs`
+
+## Policy: hard safety gates versus accepted quality warnings
+
+### Hard safety gates
+
+These conditions stop execution:
+
+1. The FTheta fitter/inverse calibration path applies the Pinhole `icD` gate.
+2. A later folded rational branch is used.
+3. Any of the exact eight FTheta fields is missing, non-finite, or structurally
+   invalid; source resolution or principal point changes unexpectedly.
+4. Forward or inverse polynomial derivative is non-positive anywhere in its
+   used domain under dense verification.
+5. Per-camera FTheta coverage regresses below the accepted v4 baseline beyond
+   a declared numerical tolerance.
+6. The artifact is mutable, lacks provenance/hashes, has a stale v3 fingerprint,
+   or front-wide has the old `0.730310... rad` sentinel.
+7. Dataset construction silently clips `max_angle`, falls back to Pinhole/ideal
+   Pinhole, or applies an OpenCV forward-valid mask to FTheta.
+8. Any FTheta pixel with `theta >= max_angle` reaches RGB supervision.
+9. Any selected camera/split has zero frames, non-finite rays/loss/render output,
+   missing checkpoint metadata, or a mismatched artifact fingerprint.
+10. P/F scientific configs differ in anything other than camera representation
+    and output bookkeeping.
+11. The canonical dataset is incomplete, or native render inventories/GT trees
+    do not match exactly.
+
+### Soft calibration warnings
+
+These remain reported per camera but do not stop smoke/full training after the
+user's explicit acceptance:
+
+| Metric | Historical warning threshold |
+|---|---:|
+| non-radial floor mean | `< 0.01°` |
+| forward polynomial max | `< 1.5 px` |
+| angular mean | `< 0.02°` |
+| angular p95 | `< 0.04°` |
+| angular p99 | `< 0.08°` |
+| angular max | `< 0.15°` |
+| outer angular p99 | `< 0.10°` |
+
+Accepted current warning inventory:
+
+| Camera | Exceeded warning metrics |
+|---|---|
+| front-wide | none |
+| cross-left | non-radial mean, p95, p99, max, outer p99 |
+| cross-right | none |
+| left-wide | forward max, p95, p99, max, outer p99 |
+| right-wide | forward max, mean, p95, p99, max, outer p99 |
+| back-rear-wide | p95, max |
+| rear-left | max |
+
+Accepted v4 coverage baselines:
+
+| Camera | FTheta domain | OpenCV calibration domain | Pixels outside FTheta `max_angle` |
+|---|---:|---:|---:|
+| front-wide | 99.9929% | 100.0000% | 148 |
+| cross-left | 99.9933% | 100.0000% | 138 |
+| cross-right | 99.9936% | 100.0000% | 133 |
+| left-wide | 98.7290% | 98.4722% | 26,355 |
+| right-wide | 97.8640% | 97.5162% | 44,292 |
+| back-rear-wide | 99.9942% | 100.0000% | 120 |
+| rear-left | 99.9951% | 100.0000% | 101 |
+
+The pixel counts are native-resolution v4 oracles. Tests may allow only a
+documented float32 boundary tolerance; unexplained differences are a hard stop.
+
+## Existing APIs and evidence sources
+
+- Fitter:
+  [`fit_ftheta_from_opencv_rational()`](../../../threedgrut_playground/utils/ftheta_fitter.py)
+- Full OpenCV inverse/calibration-domain switch:
+  [`invert_opencv_full_model()` and `opencv_pixels_to_camera_rays()`](../../../threedgrut_playground/utils/opencv_inverse.py)
+- Full-image angular/radial survey:
+  [`compute_fullimage_angular_error()`](../../../threedgrut_playground/utils/ftheta_fitter.py)
+- FTheta override validation and construction:
+  [`threedgrut/datasets/ftheta_override.py`](../../../threedgrut/datasets/ftheta_override.py)
+- Dataset rays, masks, and batch intrinsics:
+  [`threedgrut/datasets/datasetNcore.py`](../../../threedgrut/datasets/datasetNcore.py)
+- FTheta native tracer bridge:
+  [`threedgut_tracer/tracer.py`](../../../threedgut_tracer/tracer.py)
+- Current survey and strict thresholds:
+  [`scripts/pin_ftheta_camera_survey.py`](../../../scripts/pin_ftheta_camera_survey.py)
+- Reusable full A/B evidence contract:
+  [`scripts/pin_ftheta_full_ab_validation.py`](../../../scripts/pin_ftheta_full_ab_validation.py)
+- Regional native analysis:
+  [`scripts/drivers/pin_ab_radial_analysis.py`](../../../scripts/drivers/pin_ab_radial_analysis.py)
+- Checkpoint camera metadata:
+  [`threedgrut/viz/metadata.py`](../../../threedgrut/viz/metadata.py)
+- Viewer camera-state merge:
+  [`threedgrut_playground/utils/camera_render_state.py`](../../../threedgrut_playground/utils/camera_render_state.py)
+
+---
+
+## Phase 0: Documentation discovery and contract freeze
+
+**Files:**
+
+- Modify: `docs/T8_artifacts/PIN_FTHETA_9CAM_EXPERIMENT_SPEC.md`
+- Modify: `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY.md`
+- Create: `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY_V3_PHYSICAL_DOMAIN.md`
+- Create: `docs/T8_artifacts/PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md`
+- Modify: `docs/superpowers/plans/2026-07-17-ftheta-9cam-retrain.md`
+- Modify now: `docs/pinhole_camera_kanban.md` for Phase 0 status and historical
+  inventory linkage
+- Modify again after Phase 9 measured results: `docs/pinhole_camera_kanban.md`
+- Modify after host/data paths are finalized: `AGENTS.md`
+
+**Discovery already completed while authoring this plan:**
+
+- [x] Confirm the v3 `41.84°` root cause in fitter/inverse code.
+- [x] Confirm the current v4 front-wide `69.2585°` result and seven-camera
+  coverage/derivative baselines.
+- [x] Confirm the dataset → Batch → tracer → CUDA FTheta chain.
+- [x] Confirm the missing FTheta `max_angle` supervision mask.
+- [x] Confirm old checkpoint/artifact evidence cannot be reused.
+- [x] Confirm `inceptio_2` GPU/RAM/disk/Python environment.
+- [x] Confirm `inceptio_2` does not yet have a complete canonical seven-camera
+  b6a9 input.
+- [x] Confirm native radial analysis exists and deterministic Viser image
+  generation does not.
+
+**Implementation checklist:**
+
+- [x] Add a superseded banner to the July 17 plan; do not delete its history.
+- [x] Rewrite the experiment spec so calibration residuals are WARN and runtime
+  invariants are HARD.
+- [x] Record the accepted warning table and coverage baselines above verbatim.
+- [x] Declare all v3 smoke/full/native/Viser artifact and checkpoint categories
+  invalid for the v4 decision without rewriting historical evidence.
+- [x] Record the exact v3 run/checkpoint/artifact paths and hashes in
+  [`PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md`](../../T8_artifacts/PIN_FTHETA_V3_INVALIDATED_EVIDENCE.md),
+  including the precise limitation that no separately hashed or manifest-bound
+  Viser evidence was recovered.
+- [x] Freeze the center/periphery regions before running the new A/B:
+  center `r < 0.5`, periphery `r >= 0.9`.
+- [x] Add the verified `inceptio_2` runbook to `AGENTS.md`, including its PATH,
+  depth-off/worker policy, isolated-worktree rule, and canonical data path.
+
+**Anti-pattern guards:**
+
+- Do not rewrite old run manifests or make old evidence look current.
+- Do not mark Phase 0 complete until the exact v3 inventory is recorded.
+- Do not call `physical_domain_retention` a Pinhole runtime domain in v4; it now
+  refers to the calibration-domain comparison and should be renamed or clearly
+  documented.
+- Do not define adoption thresholds after seeing the full-run result.
+
+## Phase 1: Freeze the v4 fitter, survey policy, and immutable artifacts
+
+**Files:**
+
+- Modify: `threedgrut_playground/utils/ftheta_fitter.py`
+- Modify: `threedgrut_playground/utils/opencv_inverse.py`
+- Modify: `scripts/pin_ftheta_camera_survey.py`
+- Modify: `threedgrut/tests/test_ftheta_fitter.py`
+- Modify: `threedgrut/tests/test_opencv_inverse.py`
+- Create: `scripts/pin_ftheta_b6a9_7cam_params_v4_full_domain.json`
+- Create: `scripts/pin_ftheta_b6a9_9cam_survey_v4_full_domain.json`
+
+**Implementation:**
+
+1. Preserve `enforce_runtime_trust=True` as the safe default for ordinary
+   Pinhole runtime calls.
+2. Require every FTheta calibration caller to pass
+   `enforce_runtime_trust=False` explicitly.
+3. Preserve first-raw-monotonic-branch and positive-Jacobian checks.
+4. Split the survey result into:
+   - `hard_failures`: structural/domain/provenance/monotonicity failures;
+   - `quality_warnings`: the accepted residual thresholds.
+5. Return non-zero only for hard failures. Print and serialize every quality
+   warning without converting it to PASS.
+6. Densely evaluate forward and inverse polynomial derivatives across the used
+   domain for all seven cameras. Do not rely only on the fitter fallback.
+7. Generate new, versioned artifacts. The seven-camera runtime artifact must
+   either include its own provenance or reference and hash the richer survey
+   artifact.
+8. Record source calibration SHA, fitter source SHA, generation command,
+   generated-at time, exact camera order, and final artifact SHA.
+9. Before the Phase 1 implementation commit, restore every legacy mutable
+   artifact path to its exact pre-v4 bytes. Write v4 output only to the new
+   versioned paths, so an old checkpoint can never resolve to v4 content.
+
+**Verification checklist:**
+
+- [ ] Tests cover domain separation for all seven cameras, not only front-wide.
+- [ ] Front-wide sentinel is `max_angle≈1.208789 rad`, never `0.730310 rad`.
+- [ ] All eight fields are finite and both polynomial derivatives are positive.
+- [ ] Artifact generation is deterministic byte-for-byte.
+- [ ] Coverage meets the accepted per-camera baselines within frozen tolerance.
+- [ ] Quality threshold violations appear as warnings and do not cause exit 2.
+- [ ] A hard invariant failure still causes non-zero exit.
+
+**Anti-pattern guards:**
+
+- Do not remove fold/Jacobian safety to obtain 100% coverage.
+- Do not hide the accepted tangential/non-radial approximation. The current fit
+  uses a `+X` radial profile and identity `linear_cde`; document that limitation.
+- Do not overwrite an artifact used by a historical checkpoint.
+
+## Phase 2: Add the FTheta-own-domain supervision mask
+
+**Files:**
+
+- Modify: `threedgrut/datasets/__init__.py`
+- Modify: `threedgrut/datasets/utils.py`
+- Modify: `threedgrut/datasets/datasetNcore.py`
+- Modify: `configs/apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam.yaml` or add a
+  dedicated v4 config
+- Modify: `threedgrut/tests/test_ncore_ftheta_override.py`
+- Add a focused test file only if the existing test becomes unwieldy.
+
+**Required behavior:**
+
+For an FTheta camera ray `ray=(x,y,z)`, compute:
+
+```python
+theta = atan2(sqrt(x*x + y*y), z)
+valid = isfinite(ray).all() and theta < camera_model.max_angle
+```
+
+Use the same strict `<` boundary as the CUDA forward projection. AND this mask
+into the RGB supervision mask for FTheta train/val/test. Pinhole continues to
+use its own forward-valid logic. There must be no call to an OpenCV `icD` mask
+from the FTheta branch.
+
+Freeze `dataset.camera_max_fov_deg=190.0` explicitly. Every train, validation,
+and test `NCoreDataset` construction in `threedgrut/datasets/__init__.py` must
+pass `camera_max_fov_deg` through to `datasetNcore.py`; assert that constructed
+and resolution-transformed FTheta `max_angle` equals the artifact value and do
+not allow silent clipping.
+
+**Verification checklist:**
+
+- [ ] RED test proves finite NCore rays outside `max_angle` were previously
+  supervised.
+- [ ] GREEN test proves every `theta >= max_angle` FTheta pixel is excluded.
+- [ ] Exact native-resolution excluded counts match the seven v4 oracle values.
+- [ ] A boundary test distinguishes `< max_angle` from `<= max_angle`.
+- [ ] FTheta mask logic contains no `icD`, rational denominator, or Pinhole
+  trust-domain condition.
+- [ ] Pinhole behavior is unchanged.
+- [ ] Train, val, test, and render dataset construction use the same model and
+  domain contract.
+- [ ] Telemetry logs per-camera model type, artifact fingerprint, total pixels,
+  excluded-by-max-angle pixels, and non-finite pixels.
+
+**Anti-pattern guards:**
+
+- Do not mark all finite FTheta inverse rays valid.
+- Do not change `max_angle` just to reduce the excluded count.
+- Do not report only masked metrics; full-raster output remains part of Phase 6.
+
+## Phase 3: Prepare `inceptio_2` code and canonical data
+
+**Verified host facts:**
+
+- Host/user: `inceptio-4090-2` / `inceptio`
+- GPU: RTX 4090, 24,564 MiB
+- RAM: 62 GiB; swap 8 GiB
+- Python: `/home/inceptio/miniforge3/envs/3dgrut2/bin/python` (3.11.15)
+- Torch/NCore: torch `2.11.0+cu128`, NCore `19.2.1`
+- Repository: `/home/inceptio/repo/3dgrut2` (currently old and dirty)
+- Output: `/home/inceptio/work/output`
+
+`~/miniforge3/etc/profile.d/conda.sh` is absent. Drivers must export
+`/home/inceptio/miniforge3/envs/3dgrut2/bin` into PATH rather than assuming
+`conda activate` works.
+
+**Data blocker:**
+
+- The normal driver path is absent.
+- One local copy has the correct manifest but only 1/14 raw component stores.
+- Another copy has all 14 raw stores but aux metadata covers only six cameras
+  and omits `camera_rear_left_70fov`.
+- The original `inceptio` canonical dataset has all 14 raw stores and 11-camera
+  aux coverage, including all seven selected cameras.
+
+**Implementation checklist:**
+
+- [ ] Commit the relevant v4 implementation/artifacts/tests on the proposed
+  branch without including unrelated dirty files.
+- [ ] Push that exact commit to `inceptio_2` and create the isolated worktree;
+  never train from its dirty main checkout.
+- [ ] Copy/restore all submodules into the worktree and verify the commit hash.
+- [ ] Sync or materialize the complete canonical dataset from `inceptio` into
+  the exact target path on `inceptio_2`. Select a transfer route only after a
+  read-only source/destination size and disk check.
+- [ ] Verify the frozen manifest SHA and sequence ID.
+- [ ] Verify all 14 referenced raw component stores exist and can be opened.
+- [ ] Verify aux metadata covers all seven selected cameras and required LiDAR
+  components; open representative keys rather than checking filenames only.
+- [ ] Verify camera frame counts/resolutions and available disk after transfer.
+- [ ] Verify GPU is idle immediately before launch.
+- [ ] Use a new worktree/output name; stale prunable worktree metadata may be
+  pruned, but historical run directories must not be removed.
+
+**Required validator improvement:**
+
+Extend the full preflight beside
+`scripts/pin_ftheta_full_ab_validation.py::run_preflight()` so a correct
+manifest hash with missing component stores cannot pass. The same data-readiness
+check must run before smoke and full training.
+
+**Anti-pattern guards:**
+
+- Do not trust manifest hash alone as proof that its component stores exist.
+- Do not use the six-camera aux copy for a seven-camera run.
+- Do not rsync the local dirty worktree over the remote repository; use a
+  committed branch and isolated worktree.
+- Do not start JIT/training while data transfer or preflight is incomplete.
+
+## Phase 4: Mac tests, provenance freeze, and no-GPU preflight
+
+**Files:**
+
+- Create: `scripts/pin_ftheta_7cam_v4_smoke.sh`
+- Create: `scripts/pin_ftheta_7cam_v4_full_ab.sh`
+- Create or parameterize: v4 smoke/full validators without weakening the old
+  historical evidence contract
+- Modify/add driver tests under `threedgrut/tests/`
+
+Reuse the proven train → checkpoint metadata → native render → metrics → hashed
+run-manifest structure from `scripts/pin_ftheta_9cam_smoke.sh` and
+`scripts/pin_ftheta_7cam_full_ab.sh`, but point v4 drivers only at the immutable
+v4 artifact and new output roots.
+
+**Verification checklist:**
+
+- [ ] Driver preflight rejects the old artifact SHA and `0.730310 rad` sentinel.
+- [ ] Preflight verifies final commit SHA, source/artifact hashes, exact seven
+  cameras, exact eight keys, and per-camera fingerprints.
+- [ ] Preflight checks complete dataset stores and seven-camera aux coverage.
+- [ ] Config explicitly freezes `camera_max_fov_deg=190.0`, depth-off,
+  `num_workers=10`, seed, durations, and camera order.
+- [ ] P/F normalized scientific config diff contains only the artifact/camera
+  representation and output bookkeeping.
+- [ ] Old and v4 checkpoint paths/artifact paths cannot be confused.
+- [ ] Run focused tests, then full `pytest -q threedgrut/tests` on Mac. If the
+  sandbox blocks a local socket test, rerun outside the sandbox and record it.
+- [ ] Recompute hashes after the final commit; never freeze dirty-worktree hashes
+  as release evidence.
+- [ ] Run the remote `--preflight` successfully before allocating the GPU.
+
+**Anti-pattern guards:**
+
+- Do not reuse the filename behind an old checkpoint.
+- Do not include unrelated current modifications to
+  `scripts/drivers/pin_ab_radial_analysis.py`, its test, or kanban files in the
+  v4 implementation commit unless they are separately reviewed and tested.
+- Do not weaken validators to make stale evidence pass.
+
+## Phase 5: Matched 5-second / 5k Pinhole-FTheta smoke
+
+Run both arms from the same `inceptio_2` worktree and process environment. Use a
+detached `setsid` launch with stdin/stdout/stderr disconnected, because the
+driver nests train and evaluation processes.
+
+**Hard smoke gates:**
+
+- [ ] Both arms resolve the same seven cameras, 5-second window, seed, frame
+  inventory, losses, layers, resolution, depth-off policy, and 5k steps.
+- [ ] Arm P uses OpenCV Pinhole; Arm F uses FTheta in dataset rays, Batch
+  intrinsics, tracer, native render, and checkpoint schema-v3 metadata.
+- [ ] All seven cameras have positive sample/render/metric counts.
+- [ ] FTheta domain telemetry exactly matches the preflight contract.
+- [ ] Losses and rays are finite; no renderer batch/pixel is dropped for
+  non-finite output.
+- [ ] Both checkpoints reach global step 5000 and contain exact seven-camera
+  types, native resolutions, eight-key dictionaries, artifact SHA, and
+  fingerprints.
+- [ ] Native renders and complete per-camera `metrics.json` are written.
+- [ ] Run manifests hash logs, configs, artifact, checkpoints, render trees, and
+  metrics.
+
+**Stop conditions:**
+
+- Any fallback/model/fingerprint mismatch.
+- Any FTheta pixel outside its own `max_angle` reaches supervision.
+- Missing camera metrics, non-finite loss/render, incomplete checkpoint, or
+  mismatched frame/GT inventory.
+
+The smoke validates mechanism only. Its 5-second metrics must not be compared
+to historical 20-second KPI anchors.
+
+## Phase 6: Matched full-window / 30k Pinhole-FTheta training
+
+Start only after Phase 5 passes. Use new full-run directories and preserve the
+complete smoke evidence.
+
+**Verification checklist:**
+
+- [ ] Same committed code/worktree/Python/GPU process environment for both arms.
+- [ ] Full 20-second window, 30k iterations, seed 42, seven cameras, depth-off,
+  and `num_workers=10` in both arms.
+- [ ] P/F resolved-config parity passes before training and again from the run
+  evidence.
+- [ ] Both arms complete training and test evaluation; logs contain training
+  statistics and final test metrics.
+- [ ] Checkpoints reach step 30000 and satisfy the camera metadata contract.
+- [ ] Native render output count, names, resolution, GT bytes/tree hash, and
+  evaluated frames match exactly.
+- [ ] Per-camera PSNR/SSIM/LPIPS are finite; record iterations/sec, peak GPU
+  memory, wall time, and failure/restart history.
+- [ ] Final manifests contain commit, environment, config, artifact, checkpoint,
+  render-tree, metrics, and dataset fingerprints.
+
+**Anti-pattern guards:**
+
+- Do not resume one arm from a checkpoint unless both-arm resume semantics are
+  proven equivalent and recorded.
+- Do not change worker count, depth policy, or evaluation sampling to rescue one
+  arm.
+- Do not call checkpoint creation alone a successful run; native evaluation and
+  evidence finalization are required.
+
+## Phase 7: Native full-raster and center/periphery decision
+
+Use `scripts/drivers/pin_ab_radial_analysis.py --full-run-manifest ...` only
+after its focused tests pass and its exact source hash is frozen. Evaluate
+identical camera IDs, timestamps, poses, resolutions, and GT frames.
+
+Report, per camera and then macro/frame-weighted aggregate:
+
+- full-raster PSNR, SSIM, LPIPS;
+- center `r<0.5` and periphery `r>=0.9` PSNR/SSIM/LPIPS;
+- gradient correlation and edge sharpness;
+- center-minus-periphery quality gap;
+- invalid inverse rays, excluded-by-FTheta-domain pixels, invalid forward
+  projections, and non-finite prediction pixels as separate counts;
+- raw full-raster primary results and P∩F common-valid diagnostic results.
+
+### Pre-registered adoption decision
+
+The primary decision uses raw full-raster/periphery output so FTheta cannot win
+by masking corners. Common-valid metrics are diagnostic only.
+
+| Result | Decision |
+|---|---|
+| Macro peripheral PSNR improves by at least `+0.10 dB`, center PSNR is non-inferior within `-0.10 dB`, center/periphery gap shrinks, LPIPS/SSIM do not contradict the direction, and no camera has peripheral PSNR regression worse than `-0.50 dB` | FTheta retraining is supported; continue to Viser parity |
+| Direction is mixed or improvements are below the frozen margin | Inconclusive; report camera-level trade-offs without claiming a fix |
+| Both arms retain the same blurred outer ring | Camera representation is not the primary cause; investigate data/pose/Gaussian capacity |
+| FTheta is systematically worse or violates a hard domain invariant | Do not adopt the v4 conversion for this training set |
+
+Calibration warning thresholds do not veto a successful downstream result, but
+the final report must correlate each warned camera with its regional KPI so the
+cost of the accepted approximation is visible.
+
+**Anti-pattern guards:**
+
+- Do not average cameras before showing per-camera failures.
+- Do not compare new results to invalid v3 checkpoints as if they were a valid
+  A/B arm.
+- Do not select only common-domain or masked metrics to hide full-raster loss.
+
+## Phase 8: Deterministic Viser/native parity, then visual inspection
+
+Native success is a prerequisite. Checkpoint metadata—not the manifest's camera
+model—must be authoritative for projection, resolution, and active camera state.
+
+**Files:**
+
+- Modify: `threedgrut_playground/viser_gui_4d.py` and/or its render-state helper
+  to add a deterministic UI-free camera/frame dump path
+- Modify: `scripts/validate_viser_render_parity.py`
+- Test: viewer camera-state, transition, resolution, and dump determinism tests
+- Output: fixed-camera/frame native and viewer PNG trees plus heatmaps/report
+
+**Implementation checklist:**
+
+- [ ] Add a deterministic dump using the exact `CameraRenderState`; the current
+  comparator consumes pre-existing images but does not generate them.
+- [ ] Dump the same seven cameras, timestamps, poses, and native resolutions as
+  the native comparison.
+- [ ] Reject v3 artifact SHA, stale per-camera fingerprints, model fallback,
+  resolution mismatch, or manifest/checkpoint state mixing.
+- [ ] Assert `linear_cde=[1,0,0]` for this run unless viewer helpers are upgraded
+  to implement non-identity CDE exactly.
+- [ ] Compare viewer/native full/center/periphery MAE and PSNR, and save
+  difference heatmaps.
+- [ ] Only after numerical parity, launch the interactive viewer with the newly
+  trained v4 Arm F checkpoint and save fixed center/periphery screenshots.
+
+**Decision:**
+
+- Native clear + deterministic viewer dump clear + interactive blur means the
+  remaining defect is browser/background presentation state.
+- Native clear + deterministic viewer dump blurred means the viewer render
+  contract is still wrong.
+- Native blurred means Viser is not the place to claim or repair training
+  quality.
+
+**Anti-pattern guards:**
+
+- Do not use the manual last-frame `B2_DUMP_DIR` behavior as a reproducible
+  multi-camera parity harness.
+- Do not interpret perspective-plane browser screenshots as numerical parity.
+- Do not change camera metadata in an old checkpoint to simulate v4 training.
+
+## Phase 9: Documentation, provenance, and closeout
+
+**Files:**
+
+- Create: `docs/T8_artifacts/PIN_FTHETA_7CAM_V4_RETRAIN_VALIDATION.md`
+- Modify: `docs/T8_artifacts/PIN_FTHETA_9CAM_EXPERIMENT_SPEC.md`
+- Modify: `docs/T8_artifacts/PIN_FTHETA_9CAM_PARAMETER_SURVEY.md`
+- Modify: `docs/pinhole_camera_kanban.md`
+- Modify: `AGENTS.md` with the proven `inceptio_2` runbook
+
+**Final evidence checklist:**
+
+- [ ] Final source commit and selective file list.
+- [ ] Source calibration, v4 survey, runtime artifact, config, checkpoint,
+  metrics, and render-tree SHA-256 values.
+- [ ] `inceptio_2` Python/Torch/NCore/CUDA/GPU identity and run commands.
+- [ ] Dataset manifest/component/aux readiness evidence.
+- [ ] Full Mac pytest result and focused remote preflight result.
+- [ ] Seven-camera calibration warnings and accepted coverage/exclusion counts.
+- [ ] 5k smoke evidence for both arms.
+- [ ] 30k full evidence for both arms.
+- [ ] Per-camera and aggregate full/center/periphery native metrics.
+- [ ] Deterministic viewer/native parity metrics and secondary screenshots.
+- [ ] Explicit invalidation references for every v3 checkpoint/run used during
+  the earlier investigation.
+
+The final report must answer separately:
+
+1. **Does v4 preserve the intended large-FOV FTheta domain without copying the
+   Pinhole `icD` restriction?**
+2. **What is the measurable training/rendering cost of the accepted
+   non-radial/degree-5 approximation on each camera?**
+3. **Does matched v4 FTheta retraining improve native peripheral quality over
+   matched Pinhole training?**
+4. **Does deterministic and interactive Viser reproduce the native v4 result?**
+
+Only if Questions 1, 3, and 4 are positive may the outer-ring defect be called
+fixed by this FTheta path. Question 2 remains a mandatory limitation report
+even when the downstream result is positive.
