@@ -680,6 +680,42 @@ def test_v4_training_log_requires_exact_split_camera_telemetry(tmp_path: Path, a
     assert counts == {camera_id: 4 for camera_id in v4_validation.EXPECTED_CAMERA_IDS}
 
 
+def test_v4_training_log_accepts_exact_rich_wrapped_fingerprint(tmp_path: Path) -> None:
+    camera_id = v4_validation.EXPECTED_CAMERA_IDS[0]
+    fingerprint = v4_validation.EXPECTED_PARAMETER_FINGERPRINTS[camera_id]
+    wrapped = _v4_training_log("F").replace(
+        f"artifact_fingerprint={fingerprint}",
+        f"artifact_fingerprint={fingerprint[:37]} \n           {fingerprint[37:]}",
+        1,
+    )
+    log = tmp_path / "rich-wrapped.log"
+    log.write_text(wrapped, encoding="utf-8")
+    counts = smoke_validation.validate_training_log(log, "F", V4_ARTIFACT)
+    assert counts == {camera: 4 for camera in v4_validation.EXPECTED_CAMERA_IDS}
+
+
+@pytest.mark.parametrize("mutation", ["missing_hex", "wrong_hex"])
+def test_v4_training_log_rejects_invalid_rich_wrapped_fingerprint(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    camera_id = v4_validation.EXPECTED_CAMERA_IDS[0]
+    fingerprint = v4_validation.EXPECTED_PARAMETER_FINGERPRINTS[camera_id]
+    if mutation == "missing_hex":
+        fingerprint = fingerprint[:37] + fingerprint[38:]
+    else:
+        fingerprint = fingerprint[:37] + "g" + fingerprint[38:]
+    wrapped = _v4_training_log("F").replace(
+        f"artifact_fingerprint={v4_validation.EXPECTED_PARAMETER_FINGERPRINTS[camera_id]}",
+        f"artifact_fingerprint={fingerprint[:37]} \n           {fingerprint[37:]}",
+        1,
+    )
+    log = tmp_path / f"rich-wrapped-{mutation}.log"
+    log.write_text(wrapped, encoding="utf-8")
+    with pytest.raises(ValueError, match="missing or malformed extended fields"):
+        smoke_validation.validate_training_log(log, "F", V4_ARTIFACT)
+
+
 @pytest.mark.parametrize(
     ("mutation", "error"),
     [

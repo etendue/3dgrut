@@ -76,6 +76,9 @@ _V4_CAMERA_RAY_DOMAIN = re.compile(
     r"raw_nonfinite=(\d+)\s+cached_nonfinite=(\d+)\s+"
     r"supervised_nonfinite=(\d+)"
 )
+_V4_RICH_WRAPPED_FINGERPRINT = re.compile(
+    r"artifact_fingerprint=(?P<fingerprint>(?:[0-9a-fA-F]\s*){64})(?=total=)"
+)
 _V4_NONFINITE_PRED_OR_RENDER_DROP = re.compile(
     r"(?:non[- ]finite|nonfinite).{0,120}(?:pred(?:_rgb)?|render|drop(?:ped|ping)?)|"
     r"(?:drop(?:ped|ping)?).{0,120}(?:batch|render).{0,120}(?:non[- ]finite|nonfinite)",
@@ -128,6 +131,16 @@ def _normalize_rich_log(text: str) -> str:
 
     without_source_columns = "\n".join(_RICH_SOURCE_COLUMN.sub("", line).rstrip() for line in text.splitlines())
     return re.sub(r"\s+", " ", without_source_columns).strip()
+
+
+def _compact_v4_rich_wrapped_fingerprints(text: str) -> str:
+    """Rejoin only exact 64-hex fingerprints split by Rich wrapping."""
+
+    def compact(match: re.Match[str]) -> str:
+        fingerprint = re.sub(r"\s+", "", match.group("fingerprint"))
+        return f"artifact_fingerprint={fingerprint} "
+
+    return _V4_RICH_WRAPPED_FINGERPRINT.sub(compact, text)
 
 
 def _rich_logical_messages(text: str) -> list[str]:
@@ -188,7 +201,9 @@ def _validate_v4_camera_ray_domain_telemetry(
     camera_ids, _, fingerprints = _artifact_contract(artifact_path)
     if tuple(camera_ids) != tuple(_V4_EXCLUDED_BY_MAX_ANGLE):
         raise ValueError("v4 telemetry oracle camera order does not match the runtime artifact")
-    normalized = _normalize_rich_log(text)
+    normalized = _compact_v4_rich_wrapped_fingerprints(
+        _normalize_rich_log(text)
+    )
     records: dict[tuple[str, str], tuple[str, str, int, int, int, int, int, int]] = {}
     telemetry_matches = list(_V4_CAMERA_RAY_DOMAIN.finditer(normalized))
     marker_count = normalized.count("[CAMERA-RAY-DOMAIN]")
