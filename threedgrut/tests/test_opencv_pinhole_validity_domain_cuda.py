@@ -174,6 +174,14 @@ class TestDatasetConfig:
             "utils.py missing compute_max_valid_r2 function"
         )
 
+    def test_dataset_masks_inverse_rays_outside_certified_prefix(self):
+        """Pixels outside maxValidR2 must not supervise a clipped renderer."""
+        src = (ROOT / "threedgrut/datasets/datasetNcore.py").read_text()
+        assert "apply_opencv_validity_domain_mask" in src
+        assert "applying the matching " in src
+        assert "legacy forward-valid mask because the renderer will " in src
+        assert "maybe_apply_forward_valid_mask" in src
+
     def test_real_b6a9_margin_domain_uses_distorted_inverse(self):
         """The certified radius must come from rational inverse, not ideal corners."""
         import numpy as np
@@ -284,6 +292,94 @@ class TestMaxValidR2Certificate:
                 image_size=(100, 50),
                 margin=margin,
             )
+
+    @pytest.mark.parametrize(
+        ("radial_coeffs", "principal_point", "focal_length", "first_unsafe_r2"),
+        [
+            pytest.param(
+                [-4.317150115966797, -77.83409881591797, 128.95899963378906,
+                 -4.087619781494141, -77.7771987915039, 102.40799713134766],
+                [967.3250122070312, 542.3599853515625],
+                [3668.405029296875, 3668.679931640625],
+                0.0948469991790577,
+                id="b6a9-front-tele-denominator-pole",
+            ),
+            pytest.param(
+                [0.519336998462677, -0.11088299751281738, -0.011619700118899345,
+                 0.9131590127944946, -0.006205160170793533, -0.053741201758384705],
+                [959.9320068359375, 541.343017578125],
+                [1017.0, 1017.1699829101562],
+                4.078577762693063,
+                id="b6a9-left-wide-first-fold",
+            ),
+            pytest.param(
+                [0.45941001176834106, -0.128370001912117, -0.012101300060749054,
+                 0.8537179827690125, -0.04631530120968819, -0.05690310150384903],
+                [959.7670288085938, 538.9010009765625],
+                [1015.0499877929688, 1015.3099975585938],
+                3.640745463641005,
+                id="b6a9-right-wide-first-fold",
+            ),
+        ],
+    )
+    def test_real_calibration_clips_certificate_before_first_radial_singularity(
+        self,
+        radial_coeffs,
+        principal_point,
+        focal_length,
+        first_unsafe_r2,
+    ):
+        """A pole/fold outside almost all image rays should yield a safe prefix.
+
+        The certificate is itself a radial-domain gate.  Rejecting the whole
+        camera restores the much narrower legacy icD gate, while accepting the
+        expanded boundary unchecked is unsafe.  The correct contract is the
+        largest prefix from the optical axis that ends just before the first
+        rational pole or fold.
+        """
+        from threedgrut.datasets.utils import (
+            _validate_opencv_radial_domain,
+            compute_max_valid_r2,
+        )
+
+        radial = np.asarray(radial_coeffs, dtype=np.float64)
+        result = compute_max_valid_r2(
+            principal_point=np.asarray(principal_point, dtype=np.float64),
+            focal_length=np.asarray(focal_length, dtype=np.float64),
+            radial_coeffs=radial,
+            tangential_coeffs=np.zeros(2),
+            thin_prism_coeffs=np.zeros(4),
+            image_size=(1920, 1080),
+            margin=0.1,
+        )
+
+        assert 0.0 < result < first_unsafe_r2
+        assert result == pytest.approx(first_unsafe_r2, rel=2e-4)
+        _validate_opencv_radial_domain(radial, result)
+
+
+def test_validity_domain_mask_culls_outside_and_preserves_existing_invalid():
+    from threedgrut.datasets.utils import apply_opencv_validity_domain_mask
+
+    rays = np.array(
+        [[
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 1.0],
+            [np.nan, 0.0, 1.0],
+        ]],
+        dtype=np.float32,
+    )
+    valid_mask = np.array([[True, False, True, True]])
+
+    removed = apply_opencv_validity_domain_mask(
+        rays,
+        valid_mask,
+        max_valid_r2=1.1,
+    )
+
+    assert removed == 2
+    np.testing.assert_array_equal(valid_mask, [[True, False, False, False]])
 
 
 def test_legacy_forward_mask_and_calibrated_domain_are_mutually_exclusive():

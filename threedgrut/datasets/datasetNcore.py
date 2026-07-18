@@ -63,6 +63,7 @@ from threedgrut.datasets.tracks_loader import (
 )
 from threedgrut.datasets.utils import (
     PointCloud,
+    apply_opencv_validity_domain_mask,
     compute_max_valid_r2,
     compute_opencv_pinhole_rays,
     create_camera_visualization,
@@ -628,6 +629,48 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                     f"pixel(s) invalid — rational-distortion pole, see "
                     f"repair_nonfinite_rays"
                 )
+
+            # PIN-CAM-1d: the renderer clips forward projection at
+            # maxValidR2, so inverse pixels outside the same certified prefix
+            # must not participate in the RGB loss.  Real side-wide
+            # calibrations have a remote second inverse branch: the prefix
+            # retains ~98-99% of pixels while explicitly masking that branch.
+            if _ncore_pinhole and self.opencv_pinhole_use_validity_domain:
+                try:
+                    _max_valid_r2 = compute_max_valid_r2(
+                        principal_point=_as_numpy(camera_model.principal_point),
+                        focal_length=_as_numpy(camera_model.focal_length),
+                        radial_coeffs=_as_numpy(camera_model.radial_coeffs),
+                        tangential_coeffs=_as_numpy(camera_model.tangential_coeffs),
+                        thin_prism_coeffs=_as_numpy(camera_model.thin_prism_coeffs),
+                        image_size=(w, h),
+                        margin=self.opencv_pinhole_validity_margin,
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        f"[PIN-CAM-1d] {camera_id}: could not mask the certified "
+                        f"inverse-ray domain ({exc}); applying the matching "
+                        "legacy forward-valid mask because the renderer will "
+                        "retain the 0.8 < icD < 1.2 gate"
+                    )
+                    maybe_apply_forward_valid_mask(
+                        camera_model,
+                        self.sequence_cameras_all_rays[sequence_id][camera_id],
+                        camera_valid_pixels_ego_mask,
+                        camera_id,
+                        enabled=True,
+                    )
+                else:
+                    _n_outside_domain = apply_opencv_validity_domain_mask(
+                        self.sequence_cameras_all_rays[sequence_id][camera_id],
+                        camera_valid_pixels_ego_mask,
+                        _max_valid_r2,
+                    )
+                    logger.info(
+                        f"[PIN-CAM-1d] {camera_id}: max_valid_r2={_max_valid_r2:.9f}; "
+                        f"masked {_n_outside_domain} previously-valid pixel(s) "
+                        "outside the certified prefix"
+                    )
 
             # PIN-MASK-1: forward-valid supervision mask.  AND the
             # camera_rays_to_pixels().valid_flag into the ego mask for

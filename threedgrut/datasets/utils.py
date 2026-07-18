@@ -675,6 +675,48 @@ def repair_nonfinite_rays(rays: np.ndarray, valid_mask: np.ndarray | None) -> in
     return n_bad
 
 
+def apply_opencv_validity_domain_mask(
+    rays: np.ndarray,
+    valid_mask: np.ndarray,
+    max_valid_r2: float,
+) -> int:
+    """Remove inverse rays that lie outside a certified radial prefix.
+
+    ``maxValidR2`` clips forward Gaussian projection in the renderer.  The
+    matching inverse pixels must therefore be removed from the RGB loss; if
+    they remained valid, training would be asked to reconstruct pixels that
+    the certified renderer is intentionally forbidden to reach.
+
+    Args:
+        rays: camera-space ray directions ``[H, W, 3]``.
+        valid_mask: mutable supervision mask ``[H, W]`` (True = valid).
+        max_valid_r2: certified bound on ``(ray_x/ray_z)^2 + (ray_y/ray_z)^2``.
+
+    Returns:
+        Number of previously-valid pixels removed from ``valid_mask``.
+    """
+    rays = np.asarray(rays)
+    valid_mask_array = np.asarray(valid_mask)
+    if rays.ndim != 3 or rays.shape[-1] != 3:
+        raise ValueError(f"rays must have shape [H, W, 3], got {rays.shape}")
+    if valid_mask_array.shape != rays.shape[:2] or valid_mask_array.dtype != np.bool_:
+        raise ValueError(
+            "valid_mask must be a bool array matching the rays' [H, W] dimensions"
+        )
+    if not np.isfinite(max_valid_r2) or max_valid_r2 < 0.0:
+        raise ValueError("max_valid_r2 must be finite and non-negative")
+
+    finite = np.isfinite(rays).all(axis=-1) & (np.abs(rays[..., 2]) >= 1e-12)
+    inside = np.zeros(rays.shape[:2], dtype=bool)
+    finite_rays = rays[finite].astype(np.float64, copy=False)
+    if finite_rays.size:
+        xy = finite_rays[:, :2] / finite_rays[:, 2:3]
+        inside[finite] = np.sum(xy * xy, axis=1) <= max_valid_r2
+    removed = int(np.count_nonzero(valid_mask_array & ~inside))
+    valid_mask_array &= inside
+    return removed
+
+
 def compute_forward_valid_pixel_mask(camera_model, rays: np.ndarray) -> np.ndarray:
     """Return a bool mask from ``camera_rays_to_pixels().valid_flag``.
 
@@ -975,6 +1017,65 @@ def _validate_opencv_radial_domain(
         raise ValueError("unsafe OpenCV rational domain: radial mapping is non-monotonic or folded")
 
 
+def _compute_opencv_radial_prefix_limit(
+    radial_coeffs: np.ndarray,
+    *,
+    epsilon: float = 1e-6,
+    safety_fraction: float = 1e-6,
+) -> float:
+    """Return the first pole/fold boundary reachable from the optical axis.
+
+    A validity certificate is a radial *prefix* ``0 <= r^2 <= maxValidR2``.
+    Some real calibrations have a rational pole or a second inverse branch far
+    outside almost every image ray.  Rejecting the whole camera in that case
+    restores the much narrower legacy ``icD`` gate.  Instead, solve the exact
+    radial polynomials and cap the certificate immediately before the first
+    unsafe point.
+
+    The two safety conditions match :func:`_validate_opencv_radial_domain`:
+    denominator ``D > epsilon`` and radial derivative ``Q / D^2 > epsilon``.
+    ``Q`` is the numerator of ``d(r * N/D) / dr`` expressed in ``s = r^2``.
+    """
+    radial = np.asarray(radial_coeffs, dtype=np.float64)
+    if radial.shape != (6,) or not np.isfinite(radial).all():
+        raise ValueError("radial_coeffs must be a finite (6,) array")
+    if not np.isfinite(epsilon) or epsilon <= 0.0:
+        raise ValueError("epsilon must be finite and positive")
+    if not np.isfinite(safety_fraction) or not 0.0 < safety_fraction < 1.0:
+        raise ValueError("safety_fraction must be finite and in (0, 1)")
+
+    polynomial = np.polynomial.Polynomial
+    numerator = polynomial([1.0, radial[0], radial[1], radial[2]])
+    denominator = polynomial([1.0, radial[3], radial[4], radial[5]])
+    s = polynomial([0.0, 1.0])
+    derivative_numerator = numerator * denominator + 2.0 * s * (
+        numerator.deriv() * denominator - numerator * denominator.deriv()
+    )
+
+    # Solve the exact epsilon boundaries used by the CUDA/runtime contract,
+    # not merely D=0 and Q=0.  At s=0 both inequalities are strictly safe, so
+    # the smallest positive real root is the end of the certified prefix.
+    boundary_polynomials = (
+        denominator - epsilon,
+        derivative_numerator - epsilon * denominator * denominator,
+    )
+    positive_roots: list[float] = []
+    for boundary in boundary_polynomials:
+        for root in boundary.roots():
+            if not np.isfinite(root):
+                continue
+            if abs(float(np.imag(root))) > 1e-9:
+                continue
+            value = float(np.real(root))
+            if value > 0.0:
+                positive_roots.append(value)
+
+    if not positive_roots:
+        return float("inf")
+    first_unsafe = min(positive_roots)
+    return float(np.nextafter(first_unsafe * (1.0 - safety_fraction), 0.0))
+
+
 def validate_opencv_pinhole_domain_options(
     mask_forward_invalid_pixels: bool,
     use_validity_domain: bool,
@@ -998,14 +1099,20 @@ def compute_max_valid_r2(
     boundary_samples_per_edge: int = 4096,
     inverse_iterations: int = 80,
 ) -> float:
-    """Certify the largest ideal normalized radius in an expanded image domain.
+    """Certify a safe ideal-radius prefix for an expanded image domain.
 
     The renderer's validity gate operates on the *undistorted* normalized ray
     radius, so dividing distorted image corners by focal length is incorrect for
     a rational wide-angle calibration.  This function densely samples the
-    continuous boundary of the image plus its UT margin, applies the same
-    high-precision OpenCV rational inverse used for dataset rays, then returns
-    ``max((ray_x/ray_z)^2 + (ray_y/ray_z)^2)``.
+    continuous boundary of the image plus its UT margin and applies the same
+    high-precision OpenCV rational inverse used for dataset rays.
+
+    When the requested boundary crosses a distant rational pole/fold, the
+    returned radius is capped immediately before the first unsafe radial point.
+    This keeps the certificate mathematically safe while avoiding a whole-camera
+    fallback to the legacy ``0.8 < icD < 1.2`` ellipse.  Isolated inverse rays
+    on the unsafe branch remain outside the returned prefix and are rejected by
+    the renderer.
 
     RGB is never read or remapped; this is calibration-only geometry.
     """
@@ -1051,9 +1158,12 @@ def compute_max_valid_r2(
             max_iterations=inverse_iterations,
             stop_mse_px2=0.0,
         ).astype(np.float64)
-    if not np.isfinite(rays).all() or np.any(np.abs(rays[:, 2]) < 1e-12):
-        raise ValueError("unsafe OpenCV rational domain: inverse diverged, indicating a pole or fold")
-    xy_ideal = rays[:, :2] / rays[:, 2:3]
-    max_r2 = float(np.max(np.sum(xy_ideal * xy_ideal, axis=1)))
+    finite = np.isfinite(rays).all(axis=1) & (np.abs(rays[:, 2]) >= 1e-12)
+    if not np.any(finite):
+        raise ValueError("unsafe OpenCV rational domain: inverse diverged for the full boundary")
+    xy_ideal = rays[finite, :2] / rays[finite, 2:3]
+    requested_max_r2 = float(np.max(np.sum(xy_ideal * xy_ideal, axis=1)))
+    radial_prefix_limit = _compute_opencv_radial_prefix_limit(radial)
+    max_r2 = min(requested_max_r2, radial_prefix_limit)
     _validate_opencv_radial_domain(radial, max_r2)
     return max_r2
