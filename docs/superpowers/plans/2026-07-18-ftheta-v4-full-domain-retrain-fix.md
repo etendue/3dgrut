@@ -1,9 +1,11 @@
 # FTheta v4 Full-Domain 7-Camera Retraining Fix Plan
 
-> **Status:** Phase 1 verified. Phase 2 implementation is complete on Mac and
-> focused tests pass, but NCore integration verification on `inceptio_2` is
-> still pending. Keep every Phase 2 verification checkbox open until that
-> integration evidence is recorded.
+> **Status:** Phases 1-2 are verified. The real `inceptio_2` train/val/test
+> NCore integration probe passed without CUDA/JIT. Phase 3 now has a verified
+> isolated worktree, restored submodule contents, complete canonical dataset,
+> and reusable smoke/full v4 data-readiness gates committed and pushed as
+> `59bb0ae506e10f4d74eaab27703071f611ee950f`. The launch-time GPU-idle gate
+> plus new output-root launch remain open, so Phase 3 is not complete.
 >
 > **Supersedes:** The hard-STOP calibration policy and GPU execution sections of
 > [`2026-07-17-ftheta-9cam-retrain.md`](2026-07-17-ftheta-9cam-retrain.md).
@@ -22,8 +24,8 @@
 > **Training host:** `inceptio_2`. Read-only discovery confirmed an RTX 4090
 > 24 GB, 62 GiB RAM, 3.4 TiB free disk, and the `3dgrut2` Python environment.
 > Use depth-off and `num_workers=10`, matching the established `inceptio`
-> recipe. The host's current b6a9 dataset copies are not yet suitable for the
-> seven-camera run; Phase 3 must prepare the complete canonical dataset first.
+> recipe. The complete canonical b6a9 dataset was copied and verified on
+> 2026-07-18. Historical incomplete copies were left untouched.
 
 ## Goal
 
@@ -115,9 +117,10 @@ flowchart LR
 - Environment policy: depth supervision off, `num_workers=10`, seed `42`
 - Mechanism smoke: 5-second window, 5k iterations
 - Full comparison: full 20-second window, 30k iterations
-- Proposed branch: `codex/ftheta-full-domain-v4`
-- Proposed remote worktree:
-  `/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam`
+- Branch: `codex/ftheta-full-domain-v4`
+- Verified remote worktree:
+  `/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam` at
+  `59bb0ae506e10f4d74eaab27703071f611ee950f`
 - Proposed output roots:
   - smoke: `/home/inceptio/work/output/pin_ftheta_v4_smoke_runs`
   - full: `/home/inceptio/work/output/pin_ftheta_v4_full_ab_runs`
@@ -349,12 +352,12 @@ documented float32 boundary tolerance; unexplained differences are a hard stop.
 
 ## Phase 2: Add the FTheta-own-domain supervision mask
 
-> **Implementation status (2026-07-18):** Mac implementation complete;
-> integration verification pending. The focused dataset/camera-domain suites
-> currently report `100 passed`, including the pure-contract seven-camera
-> native-resolution exclusion oracle and unchanged Pinhole regression suites.
-> Do not mark the checklist below complete before the `inceptio_2` NCore
-> integration check confirms the same counts and telemetry.
+> **Implementation status (2026-07-18):** Complete and verified. The focused
+> dataset/camera-domain suites report `100 passed`, including the pure-contract
+> seven-camera native-resolution exclusion oracle and unchanged Pinhole
+> regression suites. A real canonical-data `inceptio_2` probe subsequently
+> constructed train, val, and test `NCoreDataset` instances, read one full
+> sample from each, and reproduced every exclusion oracle without CUDA/JIT.
 
 **Files:**
 
@@ -388,18 +391,59 @@ not allow silent clipping.
 
 **Verification checklist:**
 
-- [ ] RED test proves finite NCore rays outside `max_angle` were previously
+- [x] RED test proves finite NCore rays outside `max_angle` were previously
   supervised.
-- [ ] GREEN test proves every `theta >= max_angle` FTheta pixel is excluded.
-- [ ] Exact native-resolution excluded counts match the seven v4 oracle values.
-- [ ] A boundary test distinguishes `< max_angle` from `<= max_angle`.
-- [ ] FTheta mask logic contains no `icD`, rational denominator, or Pinhole
+- [x] GREEN test proves every `theta >= max_angle` FTheta pixel is excluded.
+- [x] Exact native-resolution excluded counts match the seven v4 oracle values.
+- [x] A boundary test distinguishes `< max_angle` from `<= max_angle`.
+- [x] FTheta mask logic contains no `icD`, rational denominator, or Pinhole
   trust-domain condition.
-- [ ] Pinhole behavior is unchanged.
-- [ ] Train, val, test, and render dataset construction use the same model and
+- [x] Pinhole behavior is unchanged.
+- [x] Train, val, test, and render dataset construction use the same model and
   domain contract.
-- [ ] Telemetry logs per-camera model type, artifact fingerprint, total pixels,
+- [x] Telemetry logs per-camera model type, artifact fingerprint, total pixels,
   excluded-by-max-angle pixels, and non-finite pixels.
+
+**Verified Phase 2 canonical-data probe (`inceptio_2`, 2026-07-18):**
+
+- Worktree/commit:
+  `/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam` at
+  `b1afacb4f7fb323d8db59c70bf49c600f1685fef`.
+- Config: `apps/ncore_3dgut_mcmc_multilayer_inceptio_7cam_v4`, five-second
+  train/val windows, native `1920x1080`, `camera_max_fov_deg=190.0`,
+  `n_val_image_subsample=1`, aux masks on, both depth inputs off.
+- Runtime artifact SHA-256:
+  `e637b5845302edaa940b10671b31d4b7d29a727eeb358f98249ac5334d459fbd`.
+- Machine-readable result:
+  `/tmp/ftheta_v4_dataset_probe.json`, SHA-256
+  `16098116db576954ab4d112e724c1d2c90c9c6c5c13be066a76861af6ab05e3f`.
+- Full log: `/tmp/ftheta_v4_dataset_probe.log`, SHA-256
+  `8db35ffd05be453b51e623284de8c0b651182145de861bded11868847f780348`.
+- Dataset lengths were train `284`, val `44`, and test `44`. One real
+  full-resolution sample was decoded from each split; every RGB value was
+  finite, every valid mask was `1080x1920`, and semantic/road/sky/dynamic masks
+  were present.
+- The log contains exactly 21 stable telemetry records (three splits x seven
+  cameras). Every record reports `model_type=FThetaCameraModel`,
+  `total=2,073,600`, and `nonfinite=0`.
+
+| Camera | Artifact fingerprint | Excluded by `max_angle` | Train frames | Val/test frames | Forbidden supervised pixels |
+|---|---|---:|---:|---:|---:|
+| `camera_front_wide_120fov` | `0785f301bb8ee9bc3084d1882b2459d60055afe47633a800ff9be18997c7aa55` | 148 | 38 | 6 / 6 | 0 |
+| `camera_cross_left_120fov` | `8a4bbf97ccef47c95645f63450b08612a9f383b657ebec6cbb6e2580398e2ac2` | 138 | 42 | 6 / 6 | 0 |
+| `camera_cross_right_120fov` | `49fd193cbebf9db682ce4f7f8fa41b9a7bc56c5d79d83d72ef2003a0bc662f5c` | 133 | 37 | 6 / 6 | 0 |
+| `camera_left_wide_90fov` | `683441e06e127ec7dbbedf672fcec176760323e19e03141838609aac2a5d381c` | 26,355 | 39 | 6 / 6 | 0 |
+| `camera_right_wide_90fov` | `e5410c753599762326b049e6dfb407d75ea6754ba99b0968717410a8eb9886a5` | 44,292 | 43 | 7 / 7 | 0 |
+| `camera_back_rear_wide_90fov` | `7e7a327a84a8f55ef4a246824f1e26eb9956c85d84194a206e5bca04736e87b3` | 120 | 42 | 6 / 6 | 0 |
+| `camera_rear_left_70fov` | `d92d0cf162a5abe75c572b3211d487f9b368542e6198680b5d89996290046a4a` | 101 | 43 | 7 / 7 | 0 |
+
+For every split/camera, the static supervision mask and its first/last
+per-frame copies contained zero valid pixels outside the strict FTheta domain;
+the sampled batch also contained zero. Runtime construction preserved every
+artifact `max_angle` exactly (`max delta=0`), as did an explicit `960x540`
+parameter transform (`max delta=0`). The probe ran with
+`CUDA_VISIBLE_DEVICES=''`; `torch.cuda.is_initialized()` remained false and no
+trainer or JIT path was entered.
 
 **Anti-pattern guards:**
 
@@ -423,40 +467,130 @@ not allow silent clipping.
 `/home/inceptio/miniforge3/envs/3dgrut2/bin` into PATH rather than assuming
 `conda activate` works.
 
-**Data blocker:**
+**Resolved canonical-data blocker:**
 
-- The normal driver path is absent.
-- One local copy has the correct manifest but only 1/14 raw component stores.
-- Another copy has all 14 raw stores but aux metadata covers only six cameras
-  and omits `camera_rear_left_70fov`.
-- The original `inceptio` canonical dataset has all 14 raw stores and 11-camera
-  aux coverage, including all seven selected cameras.
+- Before transfer, the normal driver path was absent. One local copy had the
+  correct manifest but only 1/14 raw component stores; another had all 14 raw
+  stores but only six-camera aux coverage and omitted
+  `camera_rear_left_70fov`.
+- The original `inceptio` canonical dataset had all 14 raw stores and 11-camera
+  aux coverage. It was copied through an isolated staging path, fully hashed
+  and opened, then atomically promoted to the exact canonical target. The two
+  incomplete historical copies were not deleted or overwritten.
 
 **Implementation checklist:**
 
-- [ ] Commit the relevant v4 implementation/artifacts/tests on the proposed
+- [x] Commit the relevant v4 implementation/artifacts/tests on the proposed
   branch without including unrelated dirty files.
-- [ ] Push that exact commit to `inceptio_2` and create the isolated worktree;
+- [x] Push that exact commit to `inceptio_2` and create the isolated worktree;
   never train from its dirty main checkout.
-- [ ] Copy/restore all submodules into the worktree and verify the commit hash.
-- [ ] Sync or materialize the complete canonical dataset from `inceptio` into
+- [x] Copy/restore all submodules into the worktree and verify the commit hash.
+- [x] Sync or materialize the complete canonical dataset from `inceptio` into
   the exact target path on `inceptio_2`. Select a transfer route only after a
   read-only source/destination size and disk check.
-- [ ] Verify the frozen manifest SHA and sequence ID.
-- [ ] Verify all 14 referenced raw component stores exist and can be opened.
-- [ ] Verify aux metadata covers all seven selected cameras and required LiDAR
+- [x] Verify the frozen manifest SHA and sequence ID.
+- [x] Verify all 14 referenced raw component stores exist and can be opened.
+- [x] Verify aux metadata covers all seven selected cameras and required LiDAR
   components; open representative keys rather than checking filenames only.
-- [ ] Verify camera frame counts/resolutions and available disk after transfer.
+- [x] Verify camera frame counts/resolutions and available disk after transfer.
 - [ ] Verify GPU is idle immediately before launch.
-- [ ] Use a new worktree/output name; stale prunable worktree metadata may be
-  pruned, but historical run directories must not be removed.
+- [x] Use the new isolated worktree name; stale prunable worktree metadata and
+  historical run directories were not removed.
+- [x] Selectively commit/push the verified readiness patch and fast-forward the
+  isolated worktree without including unrelated dirty files.
+- [ ] Launch only into the new smoke/full output roots after reusable preflight
+  passes.
+
+**Verified Phase 3 worktree/data evidence (`inceptio_2`, 2026-07-18):**
+
+- Isolated worktree:
+  `/home/inceptio/repo/3dgrut2-wt/ftheta-v4-7cam`, commit
+  `59bb0ae506e10f4d74eaab27703071f611ee950f` after the selective readiness
+  commit was pushed directly to the `inceptio_2` repository and the checked-out
+  branch was fast-forwarded by `receive.denyCurrentBranch=updateInstead`.
+- Canonical target:
+  `/home/inceptio/work/data/inc_b6a9ed61_20s/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9/`.
+- Source and target both contain `5,163,009,372` bytes in 49 files. The complete
+  relative-name/size/per-file-SHA streams matched byte-for-byte; their
+  aggregate SHA-256 is
+  `6968a7711b78b7367b8e790676708f3965236d2636677a2ef16a4ddc5cc0feba`.
+- Transfer used a Mac-relayed tar stream into a non-conflicting staging
+  directory and completed in `45.68 s`; promotion to the target was atomic and
+  guarded by a target-absent check.
+- Manifest SHA-256 is
+  `df2021203cfe318cfa8da3462e38c5b7fbf6bf3963d3a8149d145f98f6036e31`;
+  sequence ID is `inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9`.
+- All 14/14 manifest component stores opened successfully and yielded a
+  representative array plus expected root metadata. Final
+  `SequenceLoaderV4` discovery found all 12 cameras and
+  `lidar_top_360fov`; none of the active seven was missing.
+- All four required aux stores opened successfully: semantic segmentation has
+  2,063 leaves across 11 cameras; ego mask has 10 camera entries; LiDAR
+  segmentation and LiDAR camera visibility each have 200 entries. The active
+  seven are present in sseg, egomask, and the 11-camera aux metadata.
+- Active-seven raw/sseg frame counts match at `186, 190, 177, 177, 193, 191,
+  194` in config camera order. Representative raw/sseg/egomask images are all
+  `1920x1080`. After transfer the filesystem retained about 3.67 TB free.
+- The isolated worktree resolves to
+  `59bb0ae506e10f4d74eaab27703071f611ee950f`; tracked status is clean.
+  Restored dependency contents include
+  `thirdparty/tiny-cuda-nn/include/tiny-cuda-nn/common.h` and
+  `threedgrt_tracer/dependencies/optix-dev/include/optix.h`.
+- No training output directory was created and no trainer, CUDA, or JIT path
+  ran during data preparation or the dataset probe.
 
 **Required validator improvement:**
 
-Extend the full preflight beside
-`scripts/pin_ftheta_full_ab_validation.py::run_preflight()` so a correct
-manifest hash with missing component stores cannot pass. The same data-readiness
-check must run before smoke and full training.
+> **Status:** Implemented, independently verified, selectively committed as
+> `59bb0ae506e10f4d74eaab27703071f611ee950f`, pushed to `inceptio_2`, and
+> present in the tracked-clean isolated worktree. No unrelated dirty file was
+> included.
+
+The reusable `scripts/ncore_data_readiness.py` gate now:
+
+- requires an explicit `v4-multilayer` aux profile at v4 call sites, preserving
+  the old smoke/full CLI behavior when the profile flag is absent;
+- opens every manifest component store and all four required aux stores through
+  the production IndexedTarStore path;
+- requires all seven raw cameras, exact raw-to-sseg END-timestamp key equality,
+  decoded `1920x1080` sseg/egomask payloads, and nonempty representative raw
+  frames;
+- requires exact raw point-cloud/lidar-sseg/lidar-camvis sensor and timestamp
+  equality, then reads every raw point cloud and every matching aux frame;
+  for all 200 timestamps the raw `xyz.shape[0]`, decoded lidar-sseg count, and
+  fully read lidar-camvis first dimension must be exactly equal;
+- binds `v4-multilayer` to the frozen v4-only config, full-domain runtime
+  artifact, survey, provenance sidecar, fitter/source hashes, camera order,
+  canonical manifest SHA/clip ID, and exactly 14 manifest component stores;
+  the legacy `73965c6d...` artifact and legacy config cannot claim this profile;
+- keeps the no-profile public APIs backward compatible, while the public
+  smoke/full create APIs cannot write a v4-profile manifest without running
+  canonical-manifest validation and the complete readiness scan themselves;
+- runs after cheap source/provenance checks and immediately before the exclusive
+  smoke/full run-manifest write; v4 manifests hash the readiness source,
+  provenance sidecar, and survey artifact.
+
+Local verification on 2026-07-18 passed `py_compile`, `git diff --check`, and
+`162` focused tests covering readiness, FTheta override, and both validator
+drivers. Independent quality/anti-pattern review findings for timestamp sets,
+PNG decoding, native resolution, LiDAR payload alignment, legacy isolation,
+provenance order, readiness-source hashing, all-frame point-count alignment,
+and v4 profile identity were closed before the final run.
+
+Final real no-GPU verification used the canonical dataset and the exact
+validator code later committed as `59bb0ae`; before the selective commit it was
+copied only to `/tmp/ftheta_v4_readiness_overlay_20260718`, so the verification
+did not modify the remote worktree or dataset:
+
+- direct readiness: `DIRECT_FINAL_ALL_LIDAR_OK`, 14 component stores, raw/sseg
+  counts `186,190,177,177,193,191,194`, and all 200 raw/lidar-sseg/lidar-camvis
+  frames and point counts matched;
+- full `manifest-create`: schema `3`, status `running`, profile
+  `v4-multilayer`, readiness/sidecar/survey sources hashed;
+- smoke `manifest-create`: schema `2`, status `started`, profile
+  `v4-multilayer`, readiness/sidecar/survey sources hashed;
+- all three reported `torch.cuda.is_initialized() == False`; no GPU, JIT,
+  trainer, or training-output path was entered.
 
 **Anti-pattern guards:**
 
