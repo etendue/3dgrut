@@ -447,7 +447,8 @@ def test_camera_domain_telemetry_has_stable_required_fields() -> None:
     assert message == (
         "[CAMERA-RAY-DOMAIN] split=val camera=camera_front_wide_120fov "
         "model_type=FThetaCameraModel artifact_fingerprint=abc123 "
-        "total=2073600 excluded_by_max_angle=148 nonfinite=0"
+        "total=2073600 excluded_by_max_angle=148 nonfinite=0 "
+        "raw_nonfinite=0 cached_nonfinite=0 supervised_nonfinite=0"
     )
 
 
@@ -505,6 +506,24 @@ def test_dataset_source_rejects_runtime_injection_and_keeps_native_mask_guards()
         "format_camera_ray_domain_telemetry"
     ) == 1
     assert "format_camera_ray_domain_telemetry" not in method_calls["__getitem__"]
+
+    init_worker = next(
+        method
+        for method in dataset_class.body
+        if isinstance(method, ast.FunctionDef) and method.name == "_init_worker"
+    )
+    worker_source = ast.get_source_segment(source, init_worker)
+    assert worker_source is not None
+    ordered_markers = (
+        "_raw_nonfinite_mask =",
+        "_domain_stats = apply_ftheta_own_domain_mask(",
+        "_n_bad = repair_nonfinite_rays(",
+        "if self.mask_forward_invalid_pixels and isinstance(",
+        "_domain_stats = finalize_camera_ray_domain_stats(",
+        "format_camera_ray_domain_telemetry(",
+    )
+    positions = [worker_source.index(marker) for marker in ordered_markers]
+    assert positions == sorted(positions)
 
 
 def test_v4_shared_config_freezes_seven_cameras_and_fov_cap() -> None:

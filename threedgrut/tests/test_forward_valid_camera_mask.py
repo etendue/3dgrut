@@ -21,7 +21,13 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from threedgrut.datasets.utils import compute_forward_valid_pixel_mask, maybe_apply_forward_valid_mask, repair_nonfinite_rays
+from threedgrut.datasets.utils import (
+    CameraRayDomainStats,
+    compute_forward_valid_pixel_mask,
+    finalize_camera_ray_domain_stats,
+    maybe_apply_forward_valid_mask,
+    repair_nonfinite_rays,
+)
 
 
 # Use torch for the mock return type to match the real NCore SDK.
@@ -253,6 +259,7 @@ class TestMaybeApplyForwardValidMask:
 
         # Inject a NaN ray at (0, 0) — simulates the real rational-distortion pole
         rays[0, 0, 0] = np.nan
+        raw_nonfinite_mask = ~np.isfinite(rays).all(axis=-1)
 
         ego = np.ones((h, w), dtype=bool)
         n_repaired = repair_nonfinite_rays(rays, ego)
@@ -270,3 +277,17 @@ class TestMaybeApplyForwardValidMask:
         assert not ego[0, 0], "repaired pixel must still be False after forward-valid AND"
         # All other pixels remain True (forward-valid didn't remove any)
         assert ego.sum() == n - 1  # only the repaired pixel is False
+
+        stats = finalize_camera_ray_domain_stats(
+            stats=CameraRayDomainStats(
+                total_pixels=n,
+                excluded_by_max_angle=0,
+                nonfinite=999,  # finalizer must use the captured raw mask
+            ),
+            raw_nonfinite_mask=raw_nonfinite_mask,
+            cached_rays=rays,
+            final_valid_mask=ego,
+        )
+        assert stats.raw_nonfinite == 1
+        assert stats.cached_nonfinite == 0
+        assert stats.supervised_nonfinite == 0

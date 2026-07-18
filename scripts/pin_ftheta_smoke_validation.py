@@ -68,6 +68,14 @@ _CAMERA_RAY_DOMAIN = re.compile(
     r"artifact_fingerprint=([A-Za-z0-9]+)\s+total=(\d+)\s+"
     r"excluded_by_max_angle=(\d+)\s+nonfinite=(\d+)"
 )
+_V4_CAMERA_RAY_DOMAIN = re.compile(
+    r"\[CAMERA-RAY-DOMAIN\]\s+split=(train|val|test)\s+"
+    r"camera=(camera_[A-Za-z0-9_]+)\s+model_type=([A-Za-z0-9_]+)\s+"
+    r"artifact_fingerprint=([A-Za-z0-9]+)\s+total=(\d+)\s+"
+    r"excluded_by_max_angle=(\d+)\s+nonfinite=(\d+)\s+"
+    r"raw_nonfinite=(\d+)\s+cached_nonfinite=(\d+)\s+"
+    r"supervised_nonfinite=(\d+)"
+)
 _V4_NONFINITE_PRED_OR_RENDER_DROP = re.compile(
     r"(?:non[- ]finite|nonfinite).{0,120}(?:pred(?:_rgb)?|render|drop(?:ped|ping)?)|"
     r"(?:drop(?:ped|ping)?).{0,120}(?:batch|render).{0,120}(?:non[- ]finite|nonfinite)",
@@ -103,6 +111,15 @@ _V4_EXCLUDED_BY_MAX_ANGLE = {
     "camera_right_wide_90fov": 44_292,
     "camera_back_rear_wide_90fov": 120,
     "camera_rear_left_70fov": 101,
+}
+_V4_PINHOLE_RAW_NONFINITE = {
+    "camera_front_wide_120fov": 0,
+    "camera_cross_left_120fov": 0,
+    "camera_cross_right_120fov": 0,
+    "camera_left_wide_90fov": 6,
+    "camera_right_wide_90fov": 7,
+    "camera_back_rear_wide_90fov": 0,
+    "camera_rear_left_70fov": 0,
 }
 
 
@@ -172,13 +189,40 @@ def _validate_v4_camera_ray_domain_telemetry(
     if tuple(camera_ids) != tuple(_V4_EXCLUDED_BY_MAX_ANGLE):
         raise ValueError("v4 telemetry oracle camera order does not match the runtime artifact")
     normalized = _normalize_rich_log(text)
-    records: dict[tuple[str, str], tuple[str, str, int, int, int]] = {}
-    for match in _CAMERA_RAY_DOMAIN.finditer(normalized):
-        split, camera_id, model_type, fingerprint, total, excluded, nonfinite = match.groups()
+    records: dict[tuple[str, str], tuple[str, str, int, int, int, int, int, int]] = {}
+    telemetry_matches = list(_V4_CAMERA_RAY_DOMAIN.finditer(normalized))
+    marker_count = normalized.count("[CAMERA-RAY-DOMAIN]")
+    if marker_count != len(telemetry_matches):
+        raise ValueError(
+            "v4 camera-ray-domain telemetry has missing or malformed extended fields: "
+            f"markers={marker_count} complete_records={len(telemetry_matches)}"
+        )
+    for match in telemetry_matches:
+        (
+            split,
+            camera_id,
+            model_type,
+            fingerprint,
+            total,
+            excluded,
+            nonfinite,
+            raw_nonfinite,
+            cached_nonfinite,
+            supervised_nonfinite,
+        ) = match.groups()
         key = (split, camera_id)
         if key in records:
             raise ValueError(f"duplicate v4 camera-ray-domain telemetry record: split={split} camera={camera_id}")
-        records[key] = (model_type, fingerprint, int(total), int(excluded), int(nonfinite))
+        records[key] = (
+            model_type,
+            fingerprint,
+            int(total),
+            int(excluded),
+            int(nonfinite),
+            int(raw_nonfinite),
+            int(cached_nonfinite),
+            int(supervised_nonfinite),
+        )
 
     expected_keys = {(split, camera_id) for split in ("train", "val", "test") for camera_id in camera_ids}
     if set(records) != expected_keys:
@@ -189,9 +233,22 @@ def _validate_v4_camera_ray_domain_telemetry(
             f"missing={missing} unexpected={unexpected}"
         )
     expected_model = "FThetaCameraModel" if arm == "F" else "OpenCVPinholeCameraModel"
-    for (split, camera_id), (model_type, fingerprint, total, excluded, nonfinite) in records.items():
+    for (
+        split,
+        camera_id,
+    ), (
+        model_type,
+        fingerprint,
+        total,
+        excluded,
+        nonfinite,
+        raw_nonfinite,
+        cached_nonfinite,
+        supervised_nonfinite,
+    ) in records.items():
         expected_fingerprint = fingerprints[camera_id] if arm == "F" else "none"
         expected_excluded = _V4_EXCLUDED_BY_MAX_ANGLE[camera_id] if arm == "F" else 0
+        expected_raw_nonfinite = 0 if arm == "F" else _V4_PINHOLE_RAW_NONFINITE[camera_id]
         if model_type != expected_model:
             raise ValueError(
                 f"v4 {arm} telemetry model mismatch for {split}/{camera_id}: "
@@ -202,10 +259,23 @@ def _validate_v4_camera_ray_domain_telemetry(
                 f"v4 {arm} telemetry fingerprint mismatch for {split}/{camera_id}: "
                 f"expected={expected_fingerprint} actual={fingerprint}"
             )
-        if total != _V4_TOTAL_PIXELS or excluded != expected_excluded or nonfinite != 0:
+        if nonfinite != raw_nonfinite:
+            raise ValueError(
+                f"v4 {arm} telemetry raw alias mismatch for {split}/{camera_id}: "
+                f"nonfinite={nonfinite} raw_nonfinite={raw_nonfinite}"
+            )
+        if (
+            total != _V4_TOTAL_PIXELS
+            or excluded != expected_excluded
+            or raw_nonfinite != expected_raw_nonfinite
+            or cached_nonfinite != 0
+            or supervised_nonfinite != 0
+        ):
             raise ValueError(
                 f"v4 {arm} telemetry oracle mismatch for {split}/{camera_id}: "
-                f"total={total} excluded_by_max_angle={excluded} nonfinite={nonfinite}"
+                f"total={total} excluded_by_max_angle={excluded} "
+                f"raw_nonfinite={raw_nonfinite} cached_nonfinite={cached_nonfinite} "
+                f"supervised_nonfinite={supervised_nonfinite}"
             )
 
 

@@ -650,10 +650,17 @@ def _v4_training_log(arm: str) -> str:
             excluded = (
                 smoke_validation._V4_EXCLUDED_BY_MAX_ANGLE[camera_id] if arm == "F" else 0
             )
+            raw_nonfinite = (
+                0
+                if arm == "F"
+                else smoke_validation._V4_PINHOLE_RAW_NONFINITE[camera_id]
+            )
             lines.append(
                 f"[CAMERA-RAY-DOMAIN] split={split} camera={camera_id} "
                 f"model_type={model} artifact_fingerprint={fingerprint} "
-                f"total=2073600 excluded_by_max_angle={excluded} nonfinite=0"
+                f"total=2073600 excluded_by_max_angle={excluded} "
+                f"nonfinite={raw_nonfinite} raw_nonfinite={raw_nonfinite} "
+                "cached_nonfinite=0 supervised_nonfinite=0"
             )
     lines.extend(
         [
@@ -697,7 +704,11 @@ def test_v4_training_log_rejects_telemetry_and_render_failures(
     elif mutation == "excluded":
         text = text.replace("excluded_by_max_angle=148", "excluded_by_max_angle=149", 1)
     elif mutation == "nonfinite":
-        text = text.replace("nonfinite=0", "nonfinite=1", 1)
+        text = text.replace(
+            "nonfinite=0 raw_nonfinite=0",
+            "nonfinite=1 raw_nonfinite=1",
+            1,
+        )
     elif mutation == "missing_split":
         text = "\n".join(
             line
@@ -714,9 +725,87 @@ def test_v4_training_log_rejects_telemetry_and_render_failures(
         smoke_validation.validate_training_log(log, "F", V4_ARTIFACT)
 
 
+def test_v4_p_rejects_old_uniform_zero_and_split_raw_drift(tmp_path: Path) -> None:
+    text = _v4_training_log("P")
+    left = "camera=camera_left_wide_90fov"
+    left_line = next(line for line in text.splitlines() if "split=train" in line and left in line)
+    assert "nonfinite=6 raw_nonfinite=6" in left_line
+    right_line = next(
+        line
+        for line in text.splitlines()
+        if "split=train" in line and "camera=camera_right_wide_90fov" in line
+    )
+    assert "nonfinite=7 raw_nonfinite=7" in right_line
+
+    old_uniform_zero = text.replace(
+        "nonfinite=6 raw_nonfinite=6",
+        "nonfinite=0 raw_nonfinite=0",
+    ).replace(
+        "nonfinite=7 raw_nonfinite=7",
+        "nonfinite=0 raw_nonfinite=0",
+    )
+    log = tmp_path / "old-uniform-zero.log"
+    log.write_text(old_uniform_zero, encoding="utf-8")
+    with pytest.raises(ValueError, match="telemetry oracle mismatch"):
+        smoke_validation.validate_training_log(log, "P", V4_ARTIFACT)
+
+    split_drift = text.replace(
+        left_line,
+        left_line.replace(
+            "nonfinite=6 raw_nonfinite=6",
+            "nonfinite=5 raw_nonfinite=5",
+        ),
+    )
+    log.write_text(split_drift, encoding="utf-8")
+    with pytest.raises(ValueError, match="telemetry oracle mismatch"):
+        smoke_validation.validate_training_log(log, "P", V4_ARTIFACT)
+
+
+@pytest.mark.parametrize("field", ["cached_nonfinite", "supervised_nonfinite"])
+def test_v4_rejects_post_repair_or_supervised_nonfinite(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    log = tmp_path / f"{field}.log"
+    log.write_text(_v4_training_log("P").replace(f"{field}=0", f"{field}=1", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="telemetry oracle mismatch"):
+        smoke_validation.validate_training_log(log, "P", V4_ARTIFACT)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["nonfinite", "raw_nonfinite", "cached_nonfinite", "supervised_nonfinite"],
+)
+def test_v4_rejects_missing_extended_telemetry_field(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    text = _v4_training_log("F").replace(f" {field}=0", "", 1)
+    log = tmp_path / f"missing-{field}.log"
+    log.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match="missing or malformed extended fields"):
+        smoke_validation.validate_training_log(log, "F", V4_ARTIFACT)
+
+
+def test_v4_rejects_duplicate_extended_telemetry_record(tmp_path: Path) -> None:
+    text = _v4_training_log("F")
+    record = next(line for line in text.splitlines() if line.startswith("[CAMERA-RAY-DOMAIN]"))
+    log = tmp_path / "duplicate.log"
+    log.write_text(text + record + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate v4 camera-ray-domain"):
+        smoke_validation.validate_training_log(log, "F", V4_ARTIFACT)
+
+
 def test_full_validator_reuses_v4_log_and_metrics_quality_gates(tmp_path: Path) -> None:
     log = tmp_path / "full.log"
-    log.write_text(_v4_training_log("F").replace("nonfinite=0", "nonfinite=1", 1), encoding="utf-8")
+    log.write_text(
+        _v4_training_log("F").replace(
+            "nonfinite=0 raw_nonfinite=0",
+            "nonfinite=1 raw_nonfinite=1",
+            1,
+        ),
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="telemetry oracle mismatch"):
         full_validation.validate_training_log(log, "F", V4_ARTIFACT)
     metrics = _complete_v4_metrics()

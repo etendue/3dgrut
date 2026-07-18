@@ -732,6 +732,37 @@ driver nests train and evaluation processes.
 The smoke validates mechanism only. Its 5-second metrics must not be compared
 to historical 20-second KPI anchors.
 
+**Phase 5 first-launch invalidation and CPU gate probe (2026-07-18):**
+
+- The first v4 smoke launch used commit
+  `c3311f4f36d3d21328b95f3d2f2d528218fee53b` and run root
+  `/home/inceptio/work/output/pin_ftheta_v4_smoke_runs/20260718T075631Z_1784361391334783786_pid19134_r14398`.
+  The original gate interpreted the backward-compatible `nonfinite` telemetry
+  as a post-repair count. It saw Pinhole raw inverse counts 6/7 on the left/right
+  wide cameras, so the whole process group was manually terminated before the
+  first training iteration. Its manifest remains `status="started"` with
+  `arms={}` and no recorded failure stage/exit code. This run is invalid and
+  must never be resumed or reused as Phase 5 evidence.
+- A subsequent CPU-only probe (`CUDA_VISIBLE_DEVICES=''`) constructed the real
+  P-arm train, val, and test `NCoreDataset` objects with the exact v4 seven-camera
+  contract. Valid log:
+  `/tmp/ftheta_p_nonfinite_diag_c3311f4_v2.log`; SHA-256
+  `b16b2e11164ea08d65779464b255183145f294db3583f8b215bb36824c85ab68`.
+- The exact 21 split/camera raw inverse counts are split-invariant:
+  - train: front=0, cross-left=0, cross-right=0, left-wide=6,
+    right-wide=7, back-rear=0, rear-left=0;
+  - val: front=0, cross-left=0, cross-right=0, left-wide=6,
+    right-wide=7, back-rear=0, rear-left=0;
+  - test: front=0, cross-left=0, cross-right=0, left-wide=6,
+    right-wide=7, back-rear=0, rear-left=0.
+- Repair counts exactly equal those raw counts. All repair-after cached rays are
+  finite, and zero original-or-cached non-finite locations remain enabled by
+  the final static supervision masks in all 21 records. The Phase 5 v4 gate
+  therefore freezes P raw `{0,0,0,6,7,0,0}`, F raw all-zero, and requires both
+  `cached_nonfinite=0` and `supervised_nonfinite=0` for every split/camera.
+  Missing extended fields, duplicate records, split drift, or any oracle drift
+  remain hard failures; legacy validator behavior is unchanged.
+
 ## Phase 6: Matched full-window / 30k Pinhole-FTheta training
 
 Start only after Phase 5 passes. Use new full-run directories and preserve the

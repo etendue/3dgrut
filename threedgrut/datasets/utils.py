@@ -681,7 +681,58 @@ class CameraRayDomainStats:
 
     total_pixels: int
     excluded_by_max_angle: int
+    # Backward-compatible field: this has always counted raw inverse rays
+    # before repair, not non-finite values remaining in the cached rays.
     nonfinite: int
+    cached_nonfinite: int = 0
+    supervised_nonfinite: int = 0
+
+    @property
+    def raw_nonfinite(self) -> int:
+        """Explicit alias for the historical ``nonfinite`` counter."""
+
+        return self.nonfinite
+
+
+def finalize_camera_ray_domain_stats(
+    *,
+    stats: CameraRayDomainStats,
+    raw_nonfinite_mask: np.ndarray,
+    cached_rays: np.ndarray,
+    final_valid_mask: np.ndarray,
+) -> CameraRayDomainStats:
+    """Bind raw, repaired-cache, and final-supervision non-finite counters.
+
+    ``raw_nonfinite_mask`` must be captured immediately after inverse ray
+    generation. ``cached_rays`` and ``final_valid_mask`` must be passed only
+    after ray repair and every static supervision-mask AND. The supervised
+    counter therefore detects either an original bad ray or a still-bad cached
+    ray whose pixel incorrectly remains enabled for RGB supervision.
+    """
+
+    raw_bad = np.asarray(raw_nonfinite_mask)
+    rays_array = np.asarray(cached_rays)
+    valid_mask = np.asarray(final_valid_mask)
+    if rays_array.ndim < 2 or rays_array.shape[-1] != 3:
+        raise ValueError("cached_rays must have shape [..., 3]")
+    expected_shape = rays_array.shape[:-1]
+    if raw_bad.shape != expected_shape or raw_bad.dtype != np.bool_:
+        raise ValueError("raw_nonfinite_mask must be bool and match cached_rays")
+    if valid_mask.shape != expected_shape or valid_mask.dtype != np.bool_:
+        raise ValueError("final_valid_mask must be bool and match cached_rays")
+    if stats.total_pixels != int(raw_bad.size):
+        raise ValueError("camera ray-domain total does not match the ray grid")
+
+    cached_bad = ~np.isfinite(rays_array).all(axis=-1)
+    return CameraRayDomainStats(
+        total_pixels=stats.total_pixels,
+        excluded_by_max_angle=stats.excluded_by_max_angle,
+        nonfinite=int(np.count_nonzero(raw_bad)),
+        cached_nonfinite=int(np.count_nonzero(cached_bad)),
+        supervised_nonfinite=int(
+            np.count_nonzero((raw_bad | cached_bad) & valid_mask)
+        ),
+    )
 
 
 def compute_ftheta_own_domain_mask(
@@ -763,7 +814,10 @@ def format_camera_ray_domain_telemetry(
         f"model_type={model_type} artifact_fingerprint={fingerprint} "
         f"total={stats.total_pixels} "
         f"excluded_by_max_angle={stats.excluded_by_max_angle} "
-        f"nonfinite={stats.nonfinite}"
+        f"nonfinite={stats.nonfinite} "
+        f"raw_nonfinite={stats.raw_nonfinite} "
+        f"cached_nonfinite={stats.cached_nonfinite} "
+        f"supervised_nonfinite={stats.supervised_nonfinite}"
     )
 
 
