@@ -421,6 +421,7 @@ z_{m,l}(t) = Σ_{i=0}^{k-1} f_i · cos(i · π · t / N_t)
 - **asset-harvester-verify**：真实 NCore 端到端跑通，3 车+3 人各 ~99k 高斯，可运行性闸门已解。
 
 **新条目（本 plan 启动后填充）**：
+- **2026-07-17 PIN-CAM-1 OpenCV rational camera contract ✅**：完整 inverse=30、calibrated validity prefix、mixed-valid UT、Viser/CPU projector 对齐和 2×2/9-camera A/B 已闭环。九相机 masked PSNR **+0.882 dB**、CC masked PSNR **+0.883 dB**、LPIPS **-0.0175**，front-wide `r>=0.9` **+2.719 dB**；生产提交 `57d4cd7`、`3649f74`、`0994f21`、`47aeb4b`，driver `9322bab`；持久化证据见 [`PIN-CAM-1 final validation`](docs/T8_artifacts/pinhole_camera_contract/PIN-CAM-1_final_validation_2026-07-17.md)。
 - **2026-06-04 Phase 0 per-class evaluator 落地 + baseline 实测**（A.1 / C / D）：
   - 新建 [`per_class_eval.py`](threedgrut/model/per_class_eval.py)（`compute_per_class_metrics` / `compute_lpips_in_mask`(GT-fill) / `class_mask_from_sseg`，纯张量、LPIPS 依赖注入、cv2/NCore-free）+ [`tests/test_per_class_eval.py`](threedgrut/tests/test_per_class_eval.py)（11 测试，Mac `.venv`/py3.12 全绿，跑法 `pytest ... --noconftest`）。
   - [`datasetNcore.py`](threedgrut/datasets/datasetNcore.py)：**根因修复**——sseg 原只在 **train 分支**（L935）加载，**val/test 分支（eval 真路径）从未加载**（与 lidar/depth 同款双路径坑，L1077-1084 注释已记载同类修复）；在 val 分支补 sseg 加载 + raw `semantic_sseg` 透传到 `image_infos`（render-res NEAREST resize）。

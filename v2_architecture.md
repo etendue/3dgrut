@@ -564,6 +564,7 @@ flowchart TB
 
 | 不变量 | 任务挂点 | 验证手段 |
 |---|---|---|
+| **PIN-CAM-1 OpenCV rational contract**：inverse 默认 30 轮；CUDA/CPU/Viser 在存在 `max_valid_r2` 时共享 certified prefix，缺失时回退 legacy icD gate；mixed-valid UT 只聚合有效 sigma points | PIN-CAM-1 ✅ | 2×2 + 9-camera A/B；masked PSNR +0.882 dB、CC +0.883 dB、LPIPS -0.0175；front-wide `r>=0.9` +2.719 dB；[`final validation`](docs/T8_artifacts/pinhole_camera_contract/PIN-CAM-1_final_validation_2026-07-17.md) |
 | 单 bg 层时 LayeredGaussians 行为 ≡ v1 MoG（byte-identical resume） | T1.1 ✅ | 已在 commit 5a6a5f9 验证（PSNR 24.123 dB ≡ v1 24.123 dB） |
 | LayerSpec 是 frozen 不可变 | T1.2 ✅ | `test_layer_spec_frozen_immutable`（commit 60e1154） |
 | `STANDARD_LAYERS` 5 层 + layer_id 唯一 | T1.2 ✅ | `test_registry_*`（commit 569819b，4 测试） |
