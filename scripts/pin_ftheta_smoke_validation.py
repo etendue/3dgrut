@@ -86,7 +86,7 @@ _V4_NONFINITE_PRED_OR_RENDER_DROP = re.compile(
 )
 # Rich may hard-wrap the basename or move the closing quote to its own line.
 _FINAL_CHECKPOINT_LINE = re.compile(
-    r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_\s*last\.pt\s*"'
+    r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_\s*last\s*\.pt\s*"'
 )
 _FTHETA_OVERRIDE_ENABLED = re.compile(
     r"\[PIN-FTHETA\]\s+NCoreDataset\s+(?:\[train\]\s+)?"

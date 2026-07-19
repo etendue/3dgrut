@@ -468,6 +468,24 @@ def test_log_validation_allows_rich_wrapped_final_checkpoint_closing_quote(
     validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
 
 
+def test_log_validation_allows_rich_wrap_between_checkpoint_stem_and_suffix(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "train.log"
+    wrapped_checkpoint = (
+        "[04:34:59] [INFO] 💾 Saved checkpoint to:                logger.py:68\n"
+        '           "/home/inceptio/work/output/full_run/ckpt_last\n'
+        '           .pt"'
+    )
+    wrapped = _successful_log().replace(
+        '💾 Saved checkpoint to: "/run/ckpt_last.pt"',
+        wrapped_checkpoint,
+    )
+    log.write_text(wrapped, encoding="utf-8")
+
+    validate_training_log(log, "P", FTHETA_ARTIFACT_PATH)
+
+
 @pytest.mark.parametrize("arm", ["P", "F"])
 def test_log_validation_allows_real_rich_wrap_inside_final_checkpoint_basename(tmp_path: Path, arm: str) -> None:
     log = tmp_path / f"arm{arm}.log"
