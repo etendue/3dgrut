@@ -84,8 +84,10 @@ _V4_NONFINITE_PRED_OR_RENDER_DROP = re.compile(
     r"(?:drop(?:ped|ping)?).{0,120}(?:batch|render).{0,120}(?:non[- ]finite|nonfinite)",
     flags=re.IGNORECASE,
 )
-# Rich may hard-wrap the quoted basename after ``ckpt_`` in redirected logs.
-_FINAL_CHECKPOINT_LINE = re.compile(r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_\s*last\.pt"')
+# Rich may hard-wrap the basename or move the closing quote to its own line.
+_FINAL_CHECKPOINT_LINE = re.compile(
+    r'Saved checkpoint to:\s*"(?:[^"]*/)?ckpt_\s*last\.pt\s*"'
+)
 _FTHETA_OVERRIDE_ENABLED = re.compile(
     r"\[PIN-FTHETA\]\s+NCoreDataset\s+(?:\[train\]\s+)?"
     r"explicit\s+override\s+enabled:\s+.{0,300}?cameras=7(?=\s|$|[;,])",
