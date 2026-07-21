@@ -1,0 +1,36 @@
+{
+  "camera_id": "camera_front_wide_120fov",
+  "resolution": [1920, 1080],
+  "frozen_frames": {
+    "train_timestamps_us": [160660, 10060651, 19960640],
+    "held_out_timestamps_us": [60658, 10360657, 19860638]
+  },
+  "frame_splits": {
+    "0": "held_out",
+    "12": "held_out",
+    "23": "held_out"
+  },
+  "crops": [
+    {
+      "name": "road_text",
+      "frame_index": 0,
+      "timestamp_us": 60658,
+      "split": "held_out",
+      "box": [850, 650, 1550, 1060]
+    },
+    {
+      "name": "foliage_right",
+      "frame_index": 12,
+      "timestamp_us": 10360657,
+      "split": "held_out",
+      "box": [1360, 170, 1880, 630]
+    },
+    {
+      "name": "parked_vehicles_right",
+      "frame_index": 23,
+      "timestamp_us": 19860638,
+      "split": "held_out",
+      "box": [1390, 660, 1880, 940]
+    }
+  ]
+}
