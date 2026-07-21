@@ -1009,6 +1009,8 @@ class LayeredGaussians(nn.Module):
         out["rgb_gaussians"] = rgb_gauss
         out["rgb_sky"] = rgb_sky
         out["sky_visibility"] = sky_visibility
+        if bool(getattr(self.conf.model, "debug_sky_contrib", False)):
+            out["sky_contrib"] = rgb_sky_for_blend * sky_visibility * (1.0 - alpha)
         out["pred_rgb"] = rgb_final
         return out
 

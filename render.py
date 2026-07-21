@@ -44,6 +44,7 @@ if __name__ == "__main__":
             "iterates the full test split."
         ),
     )
+    parser.add_argument("--enabled-layers", type=str, default="", help="Comma-separated layer names for inference-only render filtering")
     parser.add_argument(
         "--novel-view",
         action="store_true",
@@ -156,5 +157,7 @@ if __name__ == "__main__":
         render_only=args.render_only,
         novel_only=args.novel_only,
     )
+    if args.enabled_layers:
+        renderer.conf.render.enabled_layers = [name.strip() for name in args.enabled_layers.split(",") if name.strip()]
 
     renderer.render_all()

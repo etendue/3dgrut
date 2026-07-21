@@ -518,7 +518,11 @@ class Renderer:
         # measure the ROAD layer's own reconstruction instead of bg over-
         # rendering filling the road region. Set once here → both the on-track
         # and novel-view forwards in the loop below observe it.
-        if getattr(self, "road_only", False):
+        _enabled_layers = self.conf.render.get("enabled_layers", None)
+        if _enabled_layers:
+            self.model.enabled_layer_names = set(_enabled_layers)
+            logger.info(f"[enabled-layers eval] enabled_layer_names={self.model.enabled_layer_names}")
+        elif getattr(self, "road_only", False):
             _road_layers = getattr(self.model, "layers", None)
             if _road_layers is not None and "road" in _road_layers:
                 self.model.enabled_layer_names = {"road"}
