@@ -1246,8 +1246,11 @@ class Renderer:
                 pc["cc_ssim_masked"].append(cc_ssim_masked[-1])
                 pc["cc_lpips_masked"].append(cc_lpips_masked[-1])
 
-            # Record the time
-            inference_time.append(outputs["frame_time_ms"])
+            # Pure sky/debug forwards have no Gaussian tracer and therefore
+            # intentionally omit frame_time_ms.  Preserve their render
+            # artifacts and expose timing as unavailable instead of failing
+            # the entire ownership evaluation.
+            inference_time.append(outputs.get("frame_time_ms", float("nan")))
 
             logger.log_progress(task_name="Rendering", advance=1, iteration=f"{str(iteration)}", psnr=psnr[-1])
 
