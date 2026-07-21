@@ -119,7 +119,7 @@ class MCMCStrategy(BaseStrategy):
             self.conf.strategy.relocate.end_iteration,
             self.conf.strategy.relocate.frequency,
         ):
-            self.relocate_gaussians()
+            self.last_relocation_count = self.relocate_gaussians()
 
         # Add new Gaussians if the maximum number has not been reached
         if check_step_condition(
@@ -142,7 +142,7 @@ class MCMCStrategy(BaseStrategy):
         return True
 
     @torch.no_grad()
-    def relocate_gaussians(self) -> None:
+    def relocate_gaussians(self) -> int:
         # Get the per Gaussian densities and scales (after sigmoid)
         densities = self.model.get_density()
         # Find the dead indices
@@ -178,7 +178,7 @@ class MCMCStrategy(BaseStrategy):
                 f"no alive donors to sample from; layer will not recover via "
                 f"MCMC this step"
             )
-            return
+            return 0
 
         if n_dead_gaussians:
             sampled_idxs, new_densities, new_scales = self.sample_new_gaussians(n_dead_gaussians, alive_idxs)
@@ -209,6 +209,7 @@ class MCMCStrategy(BaseStrategy):
             n_total = len(densities)
             pct = (n_dead_gaussians / n_total * 100) if n_total else 0.0
             logger.info(f"Relocated {n_dead_gaussians} ({pct:.2f}%) gaussians")
+        return int(n_dead_gaussians)
 
     def _get_add_cap(self) -> int:
         """Maximum total particle count for add_new_gaussians. Override in subclasses

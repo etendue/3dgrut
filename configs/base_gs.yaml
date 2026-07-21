@@ -46,6 +46,9 @@ layers:
 # T6.1 / T6.2 exposure: per-camera affine exp(a)*x + b applied after sky
 # blend, before the loss. Independent Adam at exposure_lr.
 trainer:
+  # MCRO: default-off structured per-camera sampling/loss/gradient telemetry.
+  # Enabled only for diagnostic A/B runs; false preserves the baseline path.
+  per_camera_telemetry: false
   layered_loss: false
   use_sky_envmap: false
   # null = pick the registry spec default (cubemap, 128). Set to "mlp" /

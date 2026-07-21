@@ -187,6 +187,7 @@ class Trainer3DGRUT:
         self.init_metrics()
         self.setup_training(conf, self.model, self.train_dataset)
         self.init_experiments_tracking(conf)
+        self.init_per_camera_telemetry(conf)
         self.init_post_processing(conf)
         self.init_exposure_model(conf)
         self.init_depth_losses(conf)  # T11.A2
@@ -623,6 +624,29 @@ class Trainer3DGRUT:
             object_name=object_name,
             output_dir=out_dir,
         )
+
+    def init_per_camera_telemetry(self, conf: DictConfig) -> None:
+        enabled = bool(conf.trainer.get("per_camera_telemetry", False))
+        self.per_camera_telemetry = None
+        if enabled:
+            from threedgrut.telemetry.per_camera_stats import PerCameraTelemetry
+
+            self.per_camera_telemetry = PerCameraTelemetry()
+            logger.info("[mcro] per-camera telemetry enabled")
+
+    def _record_per_camera_telemetry(self, gpu_batch, batch_losses: dict) -> None:
+        if self.per_camera_telemetry is None:
+            return
+        squared_norm = 0.0
+        for parameter in self.model.parameters():
+            if parameter.grad is not None:
+                squared_norm += float(parameter.grad.detach().pow(2).sum())
+        losses = {
+            name: float(value.detach())
+            for name, value in batch_losses.items()
+            if torch.is_tensor(value) and value.numel() == 1
+        }
+        self.per_camera_telemetry.record_step(str(gpu_batch.camera_id), losses, squared_norm**0.5)
 
     def init_post_processing(self, conf: DictConfig):
         """Initialize post-processing module based on config."""
@@ -2400,6 +2424,7 @@ class Trainer3DGRUT:
                 batch=gpu_batch,
                 writer=self.tracking.writer,
             )
+        self._record_per_camera_telemetry(gpu_batch, batch_losses)
 
         # V3-L8/L9: per-track albedo/scale warmup gate. Flips requires_grad
         # on the per-track Parameter tables exactly once when
@@ -2473,6 +2498,13 @@ class Trainer3DGRUT:
                 batch=gpu_batch,
                 writer=self.tracking.writer,
             )
+        if self.per_camera_telemetry is not None:
+            sub_strategies = getattr(self.strategy, "sub_strategies", {})
+            if sub_strategies:
+                for layer, sub in sub_strategies.items():
+                    self.per_camera_telemetry.record_relocation(layer, getattr(sub, "last_relocation_count", 0))
+            else:
+                self.per_camera_telemetry.record_relocation("background", getattr(self.strategy, "last_relocation_count", 0))
 
         # Update the SH if required
         if self.model.progressive_training and check_step_condition(
@@ -2492,6 +2524,10 @@ class Trainer3DGRUT:
         # Increment the global step
         global_step += 1
         self.global_step = global_step
+        if self.per_camera_telemetry is not None and (
+            global_step % self.val_frequency == 0 or global_step == self.n_iterations
+        ):
+            self.per_camera_telemetry.dump(Path(self.tracking.output_dir) / "per_camera_telemetry.json")
 
         # Compute metrics
         batch_metrics = self.get_metrics(
