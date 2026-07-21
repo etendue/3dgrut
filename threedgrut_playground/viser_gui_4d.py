@@ -160,6 +160,22 @@ class Viser4DViewer:
         # "timestamps_us": (F,) int64}}. None when launched without
         # --dataset_path → dropdown contains only the primary camera.
         self._multi_cam_poses: dict = multi_cam_poses or {}
+        # GT-image-on-frustum: per-cam_id closures (t_us → HxWx3 uint8 RGB
+        # or None) populated by _load_multi_cam_poses from NCoreDataset
+        # sensors. Empty when launched without --dataset_path → checkbox is
+        # disabled. Default OFF; only invoked when the user opts in.
+        self._cam_gt_image_sources: dict = {}
+        for _cid, _entry in self._multi_cam_poses.items():
+            _src = _entry.get("image_source") if isinstance(_entry, dict) else None
+            if callable(_src):
+                self._cam_gt_image_sources[_cid] = _src
+        # Drives remove + re-add of the frustum on camera / aspect change
+        # (multi-camera dropdown). None forces a rebuild on first update.
+        self._frustum_last_aspect: Optional[float] = None
+        self._frustum_last_cam_id: Optional[str] = None
+        # GUI handle + cached toggle state for the GT image feature.
+        self.show_gt_image = None  # populated in _build_visibility_gui
+        self._gt_image_enabled: bool = False
         # E2.7 (H1 fix): lock initial viser client camera to this NCore camera
         # id when present in multi_cam_poses. Without this, viser's default
         # camera lands in far-field background gaussian noise on outdoor
@@ -745,6 +761,23 @@ class Viser4DViewer:
             self.show_road = self.server.gui.add_checkbox("Road LiDAR", self.meta.road_xyz is not None)
             self.show_dyn_pts = self.server.gui.add_checkbox("Dynamic LiDAR", False)
             self.show_axes = self.server.gui.add_checkbox("World axes", False)
+            # GT-image-on-frustum overlay (added 2026-07-21). Optional,
+            # default OFF — paints the current dropdown camera's RGB frame
+            # onto the ego frustum so the user can visually compare the
+            # reconstruction against ground truth in-world. Disabled when
+            # no --dataset_path was given (no image_source closures).
+            gt_available = bool(self._cam_gt_image_sources)
+            self.show_gt_image = self.server.gui.add_checkbox(
+                "GT image on frustum",
+                False,
+                disabled=not gt_available,
+                hint=(
+                    "Paint the current camera's RGB GT frame onto the frustum. "
+                    "Requires --dataset_path."
+                ) if gt_available else (
+                    "Disabled: launch with --dataset_path to enable."
+                ),
+            )
             # Bug 1 fix: Follow Ego — Play 时把 viser client camera 自动 snap
             # 到 ego_pose_at(t_us). 默认 OFF 保留 free-orbit, 勾选立刻同步一次
             # (避免要等下一次 slider/play tick).
@@ -795,6 +828,18 @@ class Viser4DViewer:
         def _(_):
             if self.h_ego_frustum is not None:
                 self.h_ego_frustum.visible = bool(self.show_ego_frust.value)
+
+        @self.show_gt_image.on_update
+        def _(_):
+            # Cache the toggle and force a frustum rebuild so the image
+            # attaches (ON) or detaches (OFF) immediately instead of waiting
+            # for the next timeline tick.
+            self._gt_image_enabled = bool(self.show_gt_image.value)
+            self._frustum_last_aspect = None  # force remove + re-add
+            try:
+                self._update_ego_frustum(self._t_us_current)
+            except Exception as e:
+                print(f"[viz_4d] GT image toggle update failed: {e}", flush=True)
 
         @self.show_tracks.on_update
         def _(_):
@@ -905,7 +950,10 @@ class Viser4DViewer:
                 colors=cols,
                 line_width=2.0,
             )
-        # Ego frustum at frame 0.
+        # Ego frustum at frame 0. GT image (if enabled via the Visibility
+        # checkbox) is injected lazily by _update_ego_frustum on the first
+        # timeline tick; at startup we render the plain green wireframe so
+        # the viewer lands in the same state as before this feature.
         pose0 = self.meta.ego_poses_c2w[0]
         self.h_ego_frustum = self.server.scene.add_camera_frustum(
             "/ego/cur_frustum",
@@ -916,6 +964,14 @@ class Viser4DViewer:
             wxyz=mat_to_wxyz(pose0),
             position=pose0[:3, 3],
         )
+        # Seed the rebuild guard so the first _update_ego_frustum call can
+        # detect aspect/cam changes against the primary-camera geometry
+        # that was just baked in above. None would force an unnecessary
+        # remove + re-add on the very first frame.
+        # getattr fallback: in some unit tests _add_ego_trajectory is called
+        # before _build_visibility_gui has populated _current_dropdown_cam.
+        self._frustum_last_aspect = float(self.meta.ego_primary_aspect)
+        self._frustum_last_cam_id = getattr(self, "_current_dropdown_cam", None)
 
     def _add_lidar_clouds(self) -> None:
         assert self.meta is not None
@@ -1115,22 +1171,98 @@ class Viser4DViewer:
         # Re-resolve at the current timestamp so it shares the same interpolated
         # pose as Follow Camera and the Gaussian backdrop.
         pose = None
-        if (
-            self._current_dropdown_cam is not None
-            and self._current_dropdown_cam in self._multi_cam_poses
-        ):
+        cam_id = self._current_dropdown_cam
+        # Default frustum geometry comes from the primary camera baked in at
+        # startup. When a dropdown camera is selected we replace it with that
+        # camera's native aspect (and fov when available) so the frustum
+        # matches what the backdrop is rendering — multi-camera clips have
+        # very different FOVs (e.g. 120fov vs cross-tele) and a single static
+        # aspect would visibly stretch the GT image.
+        cur_aspect = float(self.meta.ego_primary_aspect)
+        cur_fov = float(self.meta.ego_primary_fov_y_rad)
+        if cam_id is not None and cam_id in self._multi_cam_poses:
+            entry = self._multi_cam_poses[cam_id]
             state = resolve_camera_render_state(
-                self._current_dropdown_cam,
-                self._multi_cam_poses[self._current_dropdown_cam],
+                cam_id,
+                entry,
                 int(t_us),
             )
             pose = state.pose_sample.c2w
+            # Prefer the camera-model resolution recorded at load time
+            # (matches the trained / rendered backdrop exactly).
+            res = entry.get("resolution") if isinstance(entry, dict) else None
+            if res is not None and len(res) == 2 and res[1] > 0:
+                cur_aspect = float(res[0]) / float(res[1])
+            fovy = entry.get("fov_y_rad") if isinstance(entry, dict) else None
+            if fovy is not None and fovy > 0:
+                cur_fov = float(fovy)
         elif self._active_camera_state is not None:
             pose = self._active_camera_state.pose_sample.c2w
         if pose is None:
             pose = self.meta.ego_pose_at(t_us)
-        self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
-        self.h_ego_frustum.position = pose[:3, 3]
+
+        # === GT image injection (2026-07-21) ===
+        # Only fetch + paint the image when (a) the user opted in via the
+        # Visibility checkbox and (b) we actually have an image_source for
+        # the current dropdown camera. The closure decodes the matching
+        # NCore frame on demand; default-OFF → zero IO cost.
+        want_gt = (
+            self._gt_image_enabled
+            and cam_id is not None
+            and cam_id in self._cam_gt_image_sources
+        )
+        # Force a frustum rebuild when geometry (aspect) or camera changed,
+        # OR when the toggle was just flipped (signalled by clearing
+        # _frustum_last_aspect in the on_update callback). viser's frustum
+        # geometry is immutable after creation, so we remove + re-add.
+        need_rebuild = (
+            self._frustum_last_aspect is None
+            or abs((self._frustum_last_aspect or 0.0) - cur_aspect) > 1e-3
+            or self._frustum_last_cam_id != cam_id
+        )
+        if need_rebuild:
+            try:
+                self.h_ego_frustum.remove()
+            except Exception:
+                pass
+            gt_arr = None
+            if want_gt:
+                gt_arr = self._cam_gt_image_sources[cam_id](int(t_us))
+            frustum_kwargs = dict(
+                fov=cur_fov,
+                aspect=cur_aspect,
+                scale=0.6,
+                color=(0.2, 1.0, 0.2),
+                wxyz=mat_to_wxyz(pose),
+                position=pose[:3, 3],
+            )
+            if gt_arr is not None:
+                frustum_kwargs["image"] = gt_arr
+                frustum_kwargs["format"] = "jpeg"
+            self.h_ego_frustum = self.server.scene.add_camera_frustum(
+                "/ego/cur_frustum", **frustum_kwargs,
+            )
+            # Preserve the user's visibility choice across the rebuild.
+            if self.show_ego_frust is not None:
+                self.h_ego_frustum.visible = bool(self.show_ego_frust.value)
+            self._frustum_last_aspect = cur_aspect
+            self._frustum_last_cam_id = cam_id
+        else:
+            # Same camera + aspect: pose-only update, plus an in-place
+            # image refresh when GT is on (cheap viser property setter).
+            self.h_ego_frustum.wxyz = mat_to_wxyz(pose)
+            self.h_ego_frustum.position = pose[:3, 3]
+            if want_gt:
+                gt_arr = self._cam_gt_image_sources[cam_id](int(t_us))
+                if gt_arr is not None:
+                    try:
+                        self.h_ego_frustum.image = gt_arr
+                    except Exception as e:
+                        print(
+                            f"[viz_4d] GT image in-place refresh failed "
+                            f"cam={cam_id} t={t_us}: {e}",
+                            flush=True,
+                        )
 
     @staticmethod
     def _choose_initial_camera_id(
@@ -2104,6 +2236,36 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
                         fov_y_rad = 2.0 * float(np.arctan(0.5 * H / fy))
             except Exception as e:
                 print(f"[viz_4d] cam {cam_id}: intrinsics extract failed ({e})", flush=True)
+            # GT-image source for the "GT image on frustum" toggle
+            # (added 2026-07-21). Captures the NCore camera sensor so the
+            # viewer can decode the matching RGB frame on demand when the
+            # user opts in. Default-OFF toggle means this closure is never
+            # called unless show_gt_image is checked in the GUI.
+            # Default-argument binding is mandatory: without it the closure
+            # would capture loop variables by reference and every cam_id
+            # would resolve to the LAST iteration's sensor/timestamps.
+            _frame_indices_arr = np.asarray(frame_indices)
+
+            def _fetch_gt_image(
+                t_us: int,
+                _sensor=sensor,
+                _ts=ts,
+                _fidx_arr=_frame_indices_arr,
+                _cam_id=cam_id,
+            ) -> Optional[np.ndarray]:
+                """Return HxWx3 uint8 RGB for the frame nearest t_us, or None."""
+                try:
+                    i = int(np.argmin(np.abs(_ts.astype(np.int64) - int(t_us))))
+                    fidx = int(_fidx_arr[i])
+                    return _sensor.get_frame_image_array(fidx)
+                except Exception as e:
+                    print(
+                        f"[viz_4d] GT image fetch failed cam={_cam_id} "
+                        f"t={t_us}: {e}",
+                        flush=True,
+                    )
+                    return None
+
             out[cam_id] = {
                 "c2w": c2w_wg,
                 "rig_poses_c2w": rig_c2w_wg,
@@ -2113,6 +2275,7 @@ def _load_multi_cam_poses(dataset_path: Optional[str], default_config: str) -> d
                 "fov_y_rad": fov_y_rad,
                 "opencv_pinhole_dict": opencv_pinhole_dict,
                 "opencv_pinhole_rays": opencv_pinhole_rays,
+                "image_source": _fetch_gt_image,
             }
             print(
                 f"[viz_4d] cam {cam_id}: {c2w_wg.shape[0]} frames, "

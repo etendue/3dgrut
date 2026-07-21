@@ -268,8 +268,39 @@ def test_status_text_warns_on_large_pose_gap(viewer_module):
 
 def test_ego_frustum_uses_current_camera_state(viewer_module):
     viewer = _bypass_viewer(viewer_module)
-    viewer.meta = SimpleNamespace(ego_pose_at=lambda _: np.eye(4, dtype=np.float32))
-    viewer.h_ego_frustum = SimpleNamespace(wxyz=None, position=None)
+    viewer.meta = SimpleNamespace(
+        ego_pose_at=lambda _: np.eye(4, dtype=np.float32),
+        # GT-image-on-frustum fields (2026-07-21): _update_ego_frustum now
+        # resolves aspect/fov from meta as the default before overriding
+        # with the dropdown camera's native resolution.
+        ego_primary_aspect=1.5,
+        ego_primary_fov_y_rad=1.0,
+    )
+    # Pre-existing frustum handle with remove() so the rebuild path can
+    # tear it down cleanly. The rebuilt handle is what we assert against.
+    viewer.h_ego_frustum = SimpleNamespace(
+        wxyz=None, position=None, remove=lambda: None,
+    )
+    # Mock scene so the rebuild can re-create the frustum primitive.
+    captured = {}
+
+    def _add(name, **kwargs):
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            wxyz=kwargs.get("wxyz"),
+            position=kwargs.get("position"),
+            remove=lambda: None,
+        )
+
+    viewer.server = SimpleNamespace(
+        scene=SimpleNamespace(add_camera_frustum=_add),
+        get_clients=lambda: {},
+    )
+    viewer._frustum_last_aspect = None  # force rebuild path
+    viewer._frustum_last_cam_id = None
+    viewer._cam_gt_image_sources = {}
+    viewer._gt_image_enabled = False
+    viewer.show_ego_frust = None
     viewer._set_active_camera("fish_rear", 500_000, snap_clients=False)
     viewer._update_ego_frustum(500_000)
     np.testing.assert_allclose(viewer.h_ego_frustum.position, [65.0, 0.0, 0.0])
