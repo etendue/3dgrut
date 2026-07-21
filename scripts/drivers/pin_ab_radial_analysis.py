@@ -444,6 +444,26 @@ def analyze_arm(
             for _ in _RADIAL_BINS
         ]
 
+    # The common-valid diagnostics use the same per-pixel MSE and gradient
+    # maps as the full-raster result.  Accumulate them in the primary pass so
+    # they remain strictly diagnostic without replaying every 1080p frame once
+    # per camera/bin (the old implementation did 31 extra gradient passes).
+    per_cam_common: dict[str, dict[str, float]] = {}
+    per_cam_common_bins: dict[str, list[dict[str, float]]] = {}
+    if common_masks:
+        for cid in cam_ids_list:
+            if cid not in common_masks:
+                continue
+            per_cam_common[cid] = {
+                "mse_sum": 0.0, "n_pixels": 0,
+                "grad_mag_render_sum": 0.0, "grad_mag_gt_sum": 0.0,
+            }
+            per_cam_common_bins[cid] = [
+                {"mse_sum": 0.0, "n_pixels": 0,
+                 "grad_mag_render_sum": 0.0, "grad_mag_gt_sum": 0.0}
+                for _ in _RADIAL_BINS
+            ]
+
     # Precompute radius maps per camera
     print("  Precomputing corner-normalized radius maps...", flush=True)
     radius_maps: dict[str, np.ndarray] = {}
@@ -513,6 +533,35 @@ def analyze_arm(
                 mag_g[bin_mask].sum()
             )
 
+        # P∩F common-valid is diagnostic only.  Reuse the just-computed image
+        # maps rather than recomputing their gradients in separate loops.
+        if cid in per_cam_common:
+            cm_f = common_masks[cid]
+            if cm_f.shape != (h, w):
+                from skimage.transform import resize
+                cm_f = resize(cm_f.astype(np.float64), (h, w), order=0,
+                              preserve_range=True).astype(bool)
+            common_masks_for_bins = []
+            for bin_idx, (r_min, r_max) in enumerate(_RADIAL_BINS):
+                if r_max == float("inf"):
+                    bin_mask = rmap >= r_min
+                else:
+                    bin_mask = (rmap >= r_min) & (rmap < r_max)
+                common_masks_for_bins.append(bin_mask & cm_f)
+
+            def _add_common(dst: dict[str, float], mask: np.ndarray) -> None:
+                npx = int(mask.sum())
+                if npx == 0:
+                    return
+                dst["mse_sum"] += float(mse_map[mask].sum())
+                dst["n_pixels"] += npx
+                dst["grad_mag_render_sum"] += float(mag_r[mask].sum())
+                dst["grad_mag_gt_sum"] += float(mag_g[mask].sum())
+
+            _add_common(per_cam_common[cid], cm_f)
+            for bin_idx, mask in enumerate(common_masks_for_bins):
+                _add_common(per_cam_common_bins[cid][bin_idx], mask)
+
         if (frame_idx + 1) % 50 == 0 or frame_idx == 0:
             print(f"    processed frame {frame_idx + 1}/{len(renders)}",
                   flush=True)
@@ -574,89 +623,34 @@ def analyze_arm(
         else:
             cam_res["full_frame"]["gradient_ratio"] = None
 
-        # Common-domain metrics (shared forward-valid mask)
-        if common_masks and cid in common_masks:
-            cm = common_masks[cid]
-            if int(cm.sum()) > 0:
-                # Accumulate over frames for this camera
-                cm_mse_sum = 0.0
-                cm_npx_sum = 0
-                cm_grad_r_sum = 0.0
-                cm_grad_g_sum = 0.0
-                for fi in range(len(renders)):
-                    if fi >= len(frame_to_camera):
-                        break
-                    fcid, _ = frame_to_camera[fi]
-                    if fcid != cid:
-                        continue
-                    h_f, w_f = renders[fi].shape[:2]
-                    # Resize common mask if needed
-                    cm_f = cm
-                    if h_f != cm.shape[0] or w_f != cm.shape[1]:
-                        from skimage.transform import resize
-                        cm_f = resize(cm.astype(np.float64),
-                                      (h_f, w_f), order=0,
-                                      preserve_range=True).astype(bool)
-
-                    mse_s, n_s, grad_r_s, grad_g_s = _masked_frame_sums(
-                        renders[fi], gts[fi], cm_f
-                    )
-                    cm_mse_sum += mse_s
-                    cm_npx_sum += n_s
-                    cm_grad_r_sum += grad_r_s
-                    cm_grad_g_sum += grad_g_s
-
-                cm_mse = cm_mse_sum / max(cm_npx_sum, 1)
+        # Common-domain metrics (shared forward-valid mask; diagnostic only).
+        if cid in per_cam_common:
+            common = per_cam_common[cid]
+            if int(common["n_pixels"]) > 0:
+                cm_mse = common["mse_sum"] / common["n_pixels"]
                 cam_res["common_domain"] = {
-                    "n_pixels": cm_npx_sum,
+                    "n_pixels": int(common["n_pixels"]),
                     "psnr": round(_psnr(cm_mse), 4),
                 }
-                if cm_grad_g_sum > 1e-12:
+                if common["grad_mag_gt_sum"] > 1e-12:
                     cam_res["common_domain"]["gradient_ratio"] = round(
-                        cm_grad_r_sum / cm_grad_g_sum, 6
+                        common["grad_mag_render_sum"] / common["grad_mag_gt_sum"], 6
                     )
                 else:
                     cam_res["common_domain"]["gradient_ratio"] = None
 
                 # Optional: bin ∩ common metrics
                 for bin_idx, label in enumerate(_BIN_LABELS):
-                    r_min, r_max = _RADIAL_BINS[bin_idx]
-                    if r_max == float("inf"):
-                        bin_mask_common = (radius_maps[cid] >= r_min) & cm
-                    else:
-                        bin_mask_common = (
-                            (radius_maps[cid] >= r_min)
-                            & (radius_maps[cid] < r_max)
-                            & cm
-                        )
-                    bmc = bin_mask_common
-                    if int(bmc.sum()) > 0:
-                        bc_mse_sum = 0.0
-                        bc_npx_sum = 0
-                        bc_grad_r = 0.0
-                        bc_grad_g = 0.0
-                        for fi in range(len(renders)):
-                            if fi >= len(frame_to_camera):
-                                break
-                            fcid, _ = frame_to_camera[fi]
-                            if fcid != cid:
-                                continue
-                            mse_s, n_s, grad_r_s, grad_g_s = _masked_frame_sums(
-                                renders[fi], gts[fi], bmc
-                            )
-                            bc_mse_sum += mse_s
-                            bc_npx_sum += n_s
-                            bc_grad_r += grad_r_s
-                            bc_grad_g += grad_g_s
-
-                        bc_mse = bc_mse_sum / max(bc_npx_sum, 1)
+                    common_bin = per_cam_common_bins[cid][bin_idx]
+                    if int(common_bin["n_pixels"]) > 0:
+                        bc_mse = common_bin["mse_sum"] / common_bin["n_pixels"]
                         cam_res[f"common_{label}"] = {
-                            "n_pixels": bc_npx_sum,
+                            "n_pixels": int(common_bin["n_pixels"]),
                             "psnr": round(_psnr(bc_mse), 4),
                         }
-                        if bc_grad_g > 1e-12:
+                        if common_bin["grad_mag_gt_sum"] > 1e-12:
                             cam_res[f"common_{label}"]["gradient_ratio"] = round(
-                                bc_grad_r / bc_grad_g, 6
+                                common_bin["grad_mag_render_sum"] / common_bin["grad_mag_gt_sum"], 6
                             )
 
         # Diagnostic: self-masked metrics from metrics.json (NOT common domain)
@@ -694,36 +688,12 @@ def analyze_arm(
     else:
         results["global"]["full_frame_gradient_ratio"] = None
 
-    # Global common-domain metrics
-    if common_masks:
-        gc_mse_sum = 0.0
-        gc_npx = 0
-        gc_grad_r = 0.0
-        gc_grad_g = 0.0
-        for cid in cam_ids_list:
-            cm = common_masks.get(cid)
-            if cm is None:
-                continue
-            for fi in range(len(renders)):
-                if fi >= len(frame_to_camera):
-                    break
-                fcid, _ = frame_to_camera[fi]
-                if fcid != cid:
-                    continue
-                cm_f = cm
-                h_f, w_f = renders[fi].shape[:2]
-                if h_f != cm.shape[0] or w_f != cm.shape[1]:
-                    from skimage.transform import resize
-                    cm_f = resize(cm.astype(np.float64), (h_f, w_f),
-                                  order=0, preserve_range=True).astype(bool)
-                mse_s, n_s, grad_r_s, grad_g_s = _masked_frame_sums(
-                    renders[fi], gts[fi], cm_f
-                )
-                gc_mse_sum += mse_s
-                gc_npx += n_s
-                gc_grad_r += grad_r_s
-                gc_grad_g += grad_g_s
-
+    # Global common-domain diagnostic, aggregated from the primary pass.
+    if per_cam_common:
+        gc_mse_sum = sum(d["mse_sum"] for d in per_cam_common.values())
+        gc_npx = sum(d["n_pixels"] for d in per_cam_common.values())
+        gc_grad_r = sum(d["grad_mag_render_sum"] for d in per_cam_common.values())
+        gc_grad_g = sum(d["grad_mag_gt_sum"] for d in per_cam_common.values())
         if gc_npx > 0:
             gc_mse = gc_mse_sum / gc_npx
             results["global"]["common_domain_psnr"] = round(_psnr(gc_mse), 4)
