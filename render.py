@@ -46,6 +46,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--enabled-layers", type=str, default="", help="Comma-separated layer names for inference-only render filtering")
     parser.add_argument(
+        "--ownership-dump",
+        action="store_true",
+        help="Write alpha, road-mask, and sky-contribution debug images during evaluation",
+    )
+    parser.add_argument(
         "--novel-view",
         action="store_true",
         help=(
@@ -159,5 +164,8 @@ if __name__ == "__main__":
     )
     if args.enabled_layers:
         renderer.conf.render.enabled_layers = [name.strip() for name in args.enabled_layers.split(",") if name.strip()]
+    if args.ownership_dump:
+        renderer.conf.model.debug_sky_contrib = True
+        renderer.conf.render.ownership_dump = True
 
     renderer.render_all()

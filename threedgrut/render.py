@@ -563,6 +563,16 @@ class Renderer:
             output_path_gt = os.path.join(self.out_dir, f"ours_{int(self.global_step)}", "gt")
             os.makedirs(output_path_gt, exist_ok=True)
 
+        # Explicit debug mode only: ownership analysis needs the individual
+        # layer opacity, semantic road support, and sky contribution.  Keep
+        # the ordinary render path byte-for-byte unchanged by default.
+        ownership_dump = bool(self.conf.render.get("ownership_dump", False))
+        if ownership_dump:
+            output_path_ownership = os.path.join(
+                self.out_dir, f"ours_{int(self.global_step)}", "ownership"
+            )
+            os.makedirs(output_path_ownership, exist_ok=True)
+
         psnr = []
         ssim = []
         lpips = []
@@ -820,6 +830,30 @@ class Renderer:
                     rgb_gt_full.squeeze(0).permute(2, 0, 1),
                     os.path.join(output_path_gt, "{0:05d}".format(iteration) + ".png"),
                 )
+
+            if ownership_dump:
+                frame_stem = "{0:05d}".format(iteration)
+                opacity = outputs.get("pred_opacity")
+                if opacity is not None:
+                    torchvision.utils.save_image(
+                        opacity.squeeze(0).permute(2, 0, 1).clip(0, 1),
+                        os.path.join(output_path_ownership, frame_stem + "_alpha.png"),
+                    )
+                sky_contrib = outputs.get("sky_contrib")
+                if sky_contrib is not None:
+                    torchvision.utils.save_image(
+                        sky_contrib.squeeze(0).permute(2, 0, 1).clip(0, 1),
+                        os.path.join(output_path_ownership, frame_stem + "_sky.png"),
+                    )
+                semantic_sseg = gpu_batch.image_infos.get("semantic_sseg")
+                if semantic_sseg is not None:
+                    road_mask = ((semantic_sseg == 0) | (semantic_sseg == 1)).float()
+                    if road_mask.ndim == 3:
+                        road_mask = road_mask.unsqueeze(-1)
+                    torchvision.utils.save_image(
+                        road_mask.squeeze(0).permute(2, 0, 1),
+                        os.path.join(output_path_ownership, frame_stem + "_roadmask.png"),
+                    )
 
             # Compute the loss
             psnr_single_img = criterions["psnr"](outputs["pred_rgb"], gpu_batch.rgb_gt).item()
