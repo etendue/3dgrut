@@ -202,7 +202,7 @@ class _FakeCameraModelFactory:
         return cls.result
 
 
-def test_builds_runtime_ftheta_model_on_cpu_and_rejects_any_fallback() -> None:
+def test_conversion_builds_ftheta_model_on_cpu_and_rejects_any_fallback() -> None:
     fake_ncore_data = SimpleNamespace(
         FThetaCameraModelParameters=_FakeFThetaParameters,
         ShutterType=_FakeShutterType,
@@ -317,10 +317,10 @@ def test_train_val_test_all_forward_ftheta_override() -> None:
     assert all("ftheta_params_path" in keywords for keywords in make_calls + test_calls)
 
 
-def test_dataset_source_retains_helper_wiring_and_native_mask_guards() -> None:
+def test_dataset_source_rejects_runtime_injection_and_keeps_native_mask_guards() -> None:
     source = DATASET_SOURCE.read_text(encoding="utf-8")
-    # Behavioral contracts live above; these narrow checks only pin dataset wiring.
-    assert "camera_model = build_ftheta_camera_model(" in source
+    assert "ftheta_params_path is deprecated and unsupported at runtime" in source
+    assert "camera_model = build_ftheta_camera_model(" not in source
     assert "result = extract_ftheta_camera_model_parameters(" in source
     assert "add_intrinsics_to_batch_dict(batch_dict, intrinsics_result)" in source
     assert "maybe_apply_forward_valid_mask" in source  # native path remains available

@@ -43,9 +43,7 @@ from threedgrut.datasets.aux_readers import (
 )
 from threedgrut.datasets.ftheta_override import (
     add_intrinsics_to_batch_dict,
-    build_ftheta_camera_model,
     extract_ftheta_camera_model_parameters,
-    load_ftheta_override_parameters,
     transform_camera_model_parameters,
 )
 from threedgrut.datasets.ncore_semantic import (
@@ -89,8 +87,9 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # Sensors
         camera_ids: list[str] | None = None,
         lidar_ids: list[str] | None = None,
-        # Optional explicit camera-ID -> strict eight-field FTheta parameter
-        # artifact. None preserves the native manifest camera models exactly.
+        # Deprecated compatibility input.  FTheta camera models now belong to
+        # a separately derived native NCore manifest and are never injected
+        # into the training dataset at runtime.
         ftheta_params_path: Optional[str] = None,
         # Misc
         device: str = "cuda",
@@ -156,6 +155,13 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
     ):
         super().__init__()
 
+        if ftheta_params_path is not None:
+            raise ValueError(
+                "dataset.ftheta_params_path is deprecated and unsupported at runtime; "
+                "generate a native-FTheta NCore manifest with "
+                "scripts/derive_inceptio_ftheta_ncore.py and set path to that manifest"
+            )
+
         self.device = device
 
         # Cache for camera intrinsics (populated on first worker init)
@@ -194,7 +200,9 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
 
         self.n_camera_mask_dilation_iterations: int = n_camera_mask_dilation_iterations
 
-        self.camera_max_fov_deg: float = camera_max_fov_deg
+        if not np.isfinite(camera_max_fov_deg) or camera_max_fov_deg <= 0.0:
+            raise ValueError("camera_max_fov_deg must be finite and positive")
+        self.camera_max_fov_deg: float = float(camera_max_fov_deg)
 
         # V4 component group names
         self.poses_component_group: str = poses_component_group
@@ -203,12 +211,6 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
 
         self.init_camera_ids: list[str] | None = camera_ids
         self.init_lidar_ids: list[str] | None = lidar_ids
-        self.ftheta_params_path: Optional[Path] = (
-            None if ftheta_params_path is None else Path(ftheta_params_path).expanduser()
-        )
-        self.ftheta_override_enabled: bool = self.ftheta_params_path is not None
-        self.ftheta_override_parameters: dict[str, dict[str, Any]] = {}
-        self.ftheta_parameter_fingerprints: dict[str, str] = {}
 
         self.open_consolidated: bool = open_consolidated
         # Phase 3: lane 加载复用 aux reader 基建 → 开 lane 必然开 aux_masks。
@@ -390,17 +392,6 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
             ), f"NCoreDataset: camera_ids should be a list of strings, got {self.camera_ids}"
             logger.info(f"Using cameras: {self.camera_ids}")
 
-        if self.ftheta_override_enabled:
-            assert self.ftheta_params_path is not None
-            (
-                self.ftheta_override_parameters,
-                self.ftheta_parameter_fingerprints,
-            ) = load_ftheta_override_parameters(self.ftheta_params_path, self.camera_ids)
-            logger.info(
-                f"[PIN-FTHETA] NCoreDataset [{self.split}] explicit override enabled: "
-                f"path={self.ftheta_params_path} cameras={len(self.camera_ids)}"
-            )
-
         self.lidar_ids: list[str]
         if self.init_lidar_ids is None:
             self.lidar_ids = sequence_loader.lidar_ids
@@ -425,48 +416,25 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # Load camera models
         camera_models = self.sequence_camera_models[sequence_id] = {}
         for camera_id in self.camera_ids:
-            if self.ftheta_override_enabled:
-                target_resolution = None
-                if self.downsample < 1.0:
-                    source_w, source_h = self.ftheta_override_parameters[camera_id]["resolution"]
-                    target_resolution = (
-                        int(round(source_w * self.downsample)),
-                        int(round(source_h * self.downsample)),
-                    )
-                camera_model = build_ftheta_camera_model(
-                    self.ftheta_override_parameters[camera_id],
-                    camera_id=camera_id,
-                    ncore_data=ncore.data,
-                    ncore_sensors=ncore.sensors,
-                    target_resolution=target_resolution,
+            model_params = camera_sensors[camera_id].model_parameters
+            # Camera representation is owned by the NCore manifest. Inceptio
+            # FTheta experiments consume a separately derived NCore dataset;
+            # training never replaces a camera model at runtime.
+            if self.downsample < 1.0:
+                source_w = int(model_params.resolution[0])
+                source_h = int(model_params.resolution[1])
+                target_resolution = (
+                    int(round(source_w * self.downsample)),
+                    int(round(source_h * self.downsample)),
                 )
-            else:
-                model_params = camera_sensors[camera_id].model_parameters
-                # Scale native camera parameters for downsampled images.
-                if self.downsample < 1.0:
-                    source_w = int(model_params.resolution[0])
-                    source_h = int(model_params.resolution[1])
-                    target_resolution = (
-                        int(round(source_w * self.downsample)),
-                        int(round(source_h * self.downsample)),
-                    )
-                    model_params = transform_camera_model_parameters(model_params, target_resolution)
-                camera_model = ncore.sensors.CameraModel.from_parameters(
-                    model_params,
-                    device="cpu",
-                    dtype=torch.float32,
-                )
+                model_params = transform_camera_model_parameters(model_params, target_resolution)
+            camera_model = ncore.sensors.CameraModel.from_parameters(
+                model_params,
+                device="cpu",
+                dtype=torch.float32,
+            )
 
             camera_models[camera_id] = camera_model
-
-            if self.ftheta_override_enabled:
-                width = int(camera_model.resolution[0].item())
-                height = int(camera_model.resolution[1].item())
-                logger.info(
-                    f"[PIN-FTHETA] camera={camera_id} model={type(camera_model).__name__} "
-                    f"resolution={width}x{height} "
-                    f"fingerprint={self.ftheta_parameter_fingerprints[camera_id]}"
-                )
 
         # Log per-camera image resolutions
         logger.info(f"NCoreDataset [{self.split}] sequence '{sequence_id}' per-camera image resolutions:")

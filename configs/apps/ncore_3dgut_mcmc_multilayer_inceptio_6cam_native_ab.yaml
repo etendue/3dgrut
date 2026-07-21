@@ -1,0 +1,27 @@
+# @package _global_
+# Matched six-camera Pinhole/native-FTheta configuration.
+#
+# Both arms compose this exact file. Arm P points ``path`` at the source NCore
+# manifest; Arm F points it at the offline-derived native-FTheta manifest.
+# Camera models are never replaced at training time.
+
+defaults:
+  - /apps/ncore_3dgut_mcmc_multilayer_inceptio
+  - _self_
+
+dataset:
+  camera_ids:
+    - camera_front_wide_120fov
+    - camera_cross_left_120fov
+    - camera_cross_right_120fov
+    - camera_rear_left_70fov
+    - camera_rear_right_70fov
+    - camera_back_rear_wide_90fov
+  camera_max_fov_deg: 190.0
+  ftheta_params_path: null
+  # Matched P/F contract: retain the P baseline's native OpenCV validity path.
+  mask_forward_invalid_pixels: false
+  opencv_pinhole_use_validity_domain: true
+
+loss:
+  camera_loss_weights: {}

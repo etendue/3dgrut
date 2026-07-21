@@ -211,7 +211,7 @@ def make_test(name: str, config):
         case "nerf":
             dataset = NeRFDataset(
                 config.path,
-                split="test",
+                split="val",
                 bg_color=config.model.background.color,
             )
         case "colmap":
@@ -256,7 +256,7 @@ def make_test(name: str, config):
             dataset = NCoreDataset(
                 datapath=config.path,
                 device="cuda",
-                split="val",
+                split="test",
                 camera_ids=config.dataset.get("camera_ids", None),  # Null = auto-select single camera sensor
                 lidar_ids=config.dataset.get("lidar_ids", None),  # Null = auto-select single lidar sensor
                 ftheta_params_path=config.dataset.get("ftheta_params_path", None),  # PIN-FTHETA explicit override

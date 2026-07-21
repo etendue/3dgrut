@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Strict loading and construction helpers for explicit NCore FTheta overrides."""
+"""FTheta parameter serialization helpers.
+
+Runtime NCore camera replacement is intentionally unsupported by
+``NCoreDataset``.  The loading/building helpers in this module are used by the
+offline native-NCore derivation tool and by checkpoint intrinsics extraction.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +30,6 @@ FTHETA_PARAMETER_KEYS = frozenset(
         "linear_cde",
     }
 )
-
 _SHUTTER_TYPES = frozenset(
     {
         "ROLLING_TOP_TO_BOTTOM",
@@ -36,15 +40,6 @@ _SHUTTER_TYPES = frozenset(
     }
 )
 _REFERENCE_POLYNOMIAL_TYPES = frozenset({"PIXELDIST_TO_ANGLE", "ANGLE_TO_PIXELDIST"})
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key '{key}'")
-        result[key] = value
-    return result
 
 
 def _finite_number(value: Any, field: str) -> float:
@@ -59,39 +54,34 @@ def _finite_number(value: Any, field: str) -> float:
 def _finite_vector(value: Any, field: str, length: int) -> list[float]:
     if not isinstance(value, list) or len(value) != length:
         raise TypeError(f"{field} must be a JSON array with exactly {length} entries")
-    return [_finite_number(element, f"{field}[{index}]") for index, element in enumerate(value)]
+    return [_finite_number(item, f"{field}[{index}]") for index, item in enumerate(value)]
 
 
 def _validate_ftheta_parameters(camera_id: str, value: Any) -> dict[str, Any]:
+    """Normalize the exact offline native-FTheta JSON representation."""
+
     if not isinstance(value, dict):
         raise TypeError(f"camera '{camera_id}' parameters must be a JSON object")
-
-    actual_keys = set(value)
-    missing = sorted(FTHETA_PARAMETER_KEYS - actual_keys)
-    unexpected = sorted(actual_keys - FTHETA_PARAMETER_KEYS)
+    missing = sorted(FTHETA_PARAMETER_KEYS - set(value))
+    unexpected = sorted(set(value) - FTHETA_PARAMETER_KEYS)
     if missing or unexpected:
         raise ValueError(f"camera '{camera_id}' FTheta keys invalid: missing={missing}, unexpected={unexpected}")
-
     resolution = value["resolution"]
     if (
         not isinstance(resolution, list)
         or len(resolution) != 2
-        or any(isinstance(element, bool) or not isinstance(element, int) or element <= 0 for element in resolution)
+        or any(isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in resolution)
     ):
         raise TypeError("resolution must be a JSON array of two positive integers")
-
     shutter_type = value["shutter_type"]
     if not isinstance(shutter_type, str) or shutter_type not in _SHUTTER_TYPES:
         raise ValueError(f"shutter_type must be one of {sorted(_SHUTTER_TYPES)}")
-
     reference_poly = value["reference_poly"]
     if not isinstance(reference_poly, str) or reference_poly not in _REFERENCE_POLYNOMIAL_TYPES:
-        raise ValueError(f"reference_poly must be one of {sorted(_REFERENCE_POLYNOMIAL_TYPES)}")
-
+        raise ValueError("reference_poly must be one of " f"{sorted(_REFERENCE_POLYNOMIAL_TYPES)}")
     max_angle = _finite_number(value["max_angle"], "max_angle")
     if max_angle <= 0.0:
         raise ValueError("max_angle must be positive")
-
     return {
         "resolution": [int(resolution[0]), int(resolution[1])],
         "shutter_type": shutter_type,
@@ -104,16 +94,25 @@ def _validate_ftheta_parameters(camera_id: str, value: Any) -> dict[str, Any]:
     }
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key '{key}'")
+        result[key] = value
+    return result
+
+
 def _fingerprint(parameters: Mapping[str, Any]) -> str:
     canonical = json.dumps(parameters, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def load_ftheta_override_parameters(
+def load_ftheta_conversion_parameters(
     path: str | Path,
     camera_ids: Iterable[str],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-    """Load an exact camera-id-to-eight-field mapping with no fallback semantics."""
+    """Load an exact camera-id mapping for offline NCore data conversion."""
 
     selected = list(camera_ids)
     if len(selected) != len(set(selected)):
@@ -144,6 +143,11 @@ def load_ftheta_override_parameters(
     normalized = {camera_id: _validate_ftheta_parameters(camera_id, payload[camera_id]) for camera_id in selected}
     fingerprints = {camera_id: _fingerprint(normalized[camera_id]) for camera_id in selected}
     return normalized, fingerprints
+
+
+# Compatibility for old analysis/export callers. NCoreDataset deliberately
+# does not import or call this alias.
+load_ftheta_override_parameters = load_ftheta_conversion_parameters
 
 
 def build_ftheta_camera_model_parameters(parameters: Mapping[str, Any], *, ncore_data):
@@ -177,7 +181,7 @@ def build_ftheta_camera_model(
     ncore_sensors,
     target_resolution: tuple[int, int] | None = None,
 ):
-    """Construct a runtime FTheta model and reject every implicit fallback.
+    """Construct a FTheta model for offline validation and reject fallbacks.
 
     The injectable NCore surfaces keep this glue unit-testable on CPU-only
     hosts while production passes ``ncore.data`` and ``ncore.sensors``.
@@ -186,6 +190,12 @@ def build_ftheta_camera_model(
     model_parameters = build_ftheta_camera_model_parameters(parameters, ncore_data=ncore_data)
     if target_resolution is not None:
         model_parameters = transform_camera_model_parameters(model_parameters, target_resolution)
+        assert_ftheta_max_angle_preserved(
+            parameters["max_angle"],
+            model_parameters.max_angle,
+            camera_id=camera_id,
+            context="resolution transform",
+        )
     camera_model = ncore_sensors.CameraModel.from_parameters(
         model_parameters,
         device="cpu",
@@ -193,10 +203,66 @@ def build_ftheta_camera_model(
     )
     if not isinstance(camera_model, ncore_sensors.FThetaCameraModel):
         raise TypeError(
-            f"FTheta override for camera '{camera_id}' constructed unexpected model "
+            f"FTheta conversion for camera '{camera_id}' constructed unexpected model "
             f"{type(camera_model).__name__}; refusing native/ideal-pinhole fallback"
         )
     return camera_model
+
+
+def _scalar_float(value: Any, field: str) -> float:
+    if hasattr(value, "detach"):
+        value = value.detach()
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "item"):
+        value = value.item()
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a finite scalar") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{field} must be a finite scalar")
+    return result
+
+
+def assert_ftheta_max_angle_preserved(
+    expected_max_angle: Any,
+    actual_max_angle: Any,
+    *,
+    camera_id: str,
+    context: str,
+) -> None:
+    """Reject a transformed/constructed FTheta model whose domain changed."""
+    expected = _scalar_float(expected_max_angle, "expected max_angle")
+    actual = _scalar_float(actual_max_angle, "actual max_angle")
+    tolerance = 4.0 * float(np.finfo(np.float32).eps) * max(1.0, abs(expected))
+    if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=tolerance):
+        raise ValueError(
+            f"FTheta camera '{camera_id}' {context} changed max_angle: "
+            f"artifact={expected:.17g}, actual={actual:.17g}, "
+            f"float32_tolerance={tolerance:.3e}"
+        )
+
+
+def validate_ftheta_fov_cap(
+    artifact_max_angle: Any,
+    camera_max_fov_deg: Any,
+    *,
+    camera_id: str,
+) -> None:
+    """Hard-fail if the configured symmetric FOV cap would clip an override."""
+    max_angle = _scalar_float(artifact_max_angle, "artifact max_angle")
+    max_fov_deg = _scalar_float(camera_max_fov_deg, "camera_max_fov_deg")
+    if max_fov_deg <= 0.0:
+        raise ValueError("camera_max_fov_deg must be positive")
+    cap_half_angle = math.radians(max_fov_deg) / 2.0
+    tolerance = 4.0 * float(np.finfo(np.float32).eps) * max(1.0, abs(max_angle))
+    if cap_half_angle + tolerance < max_angle:
+        raise ValueError(
+            f"FTheta camera '{camera_id}' artifact max_angle={max_angle:.17g} "
+            f"would be silently clipped by camera_max_fov_deg={max_fov_deg:.17g} "
+            f"(half-angle cap={cap_half_angle:.17g})"
+        )
 
 
 def transform_camera_model_parameters(model_parameters, target_resolution: tuple[int, int]):
@@ -234,9 +300,16 @@ def extract_ftheta_camera_model_parameters(
         raise TypeError(
             f"expected FThetaCameraModel, got {type(camera_model).__name__}; refusing pinhole/fisheye fallback"
         )
+    source_parameters = camera_model.get_parameters()
     scaled_parameters = transform_camera_model_parameters(
-        camera_model.get_parameters(),
+        source_parameters,
         target_resolution,
+    )
+    assert_ftheta_max_angle_preserved(
+        source_parameters.max_angle,
+        scaled_parameters.max_angle,
+        camera_id="<runtime>",
+        context="render-resolution transform",
     )
     parameters_dict = {
         "resolution": scaled_parameters.resolution,

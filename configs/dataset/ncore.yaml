@@ -6,9 +6,8 @@ type: ncore
 #   camera_ids: [camera_front_wide_120fov, camera_cross_left_120fov, camera_cross_right_120fov]
 camera_ids: null  # Null = auto-select single camera sensor
 
-# PIN-FTHETA: optional strict camera-ID -> eight-field FTheta parameter JSON.
-# null preserves native manifest camera models. When set, the artifact camera
-# set must exactly match camera_ids; missing/extra entries fail initialization.
+# Deprecated compatibility field. FTheta cameras must be generated into a
+# native NCore manifest; any non-null value is rejected before dataset setup.
 ftheta_params_path: null
 
 # A2 — cuboid pose ↔ camera frame time matching for dynamic_rigids tracks:
