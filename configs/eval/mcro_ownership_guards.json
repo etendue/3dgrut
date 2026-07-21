@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "frozen_from": "MCRO R0, 2026-07-21, inceptio front-wide held-out 24 frames",
+  "comparison": {
+    "background_on_road_alpha_reduction_fraction_min": 0.5,
+    "road_interior_alpha_p10_min": 0.37,
+    "sky_on_road_energy_max": 0.001,
+    "full_cc_psnr_masked_drop_db_max": 0.3,
+    "road_crop_psnr_drop_db_max": 0.0,
+    "road_crop_lpips_increase_max": 0.0
+  },
+  "r0_reference": {
+    "one_cam": {
+      "bg_on_road_alpha_mean": 0.26936301092306775,
+      "road_coverage_p10": 0.22712418778489032,
+      "road_coverage_p50": 0.5553921709458033,
+      "road_coverage_mean": 0.5724653713405132,
+      "sky_on_road_energy": 0.0
+    },
+    "six_cam": {
+      "bg_on_road_alpha_mean": 0.9905452057719231,
+      "road_coverage_p10": 0.37173203378915787,
+      "road_coverage_p50": 0.8897058889269829,
+      "road_coverage_mean": 0.7799700026710829,
+      "sky_on_road_energy": 0.0
+    }
+  }
+}
