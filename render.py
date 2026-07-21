@@ -15,6 +15,8 @@
 
 import argparse
 
+from omegaconf import OmegaConf
+
 from threedgrut.render import Renderer
 
 if __name__ == "__main__":
@@ -162,6 +164,11 @@ if __name__ == "__main__":
         render_only=args.render_only,
         novel_only=args.novel_only,
     )
+    if args.enabled_layers or args.ownership_dump:
+        # Frozen checkpoints commonly predate these eval-only keys and carry a
+        # struct-locked config.  Unlock only this in-memory render config; the
+        # checkpoint remains read-only.
+        OmegaConf.set_struct(renderer.conf, False)
     if args.enabled_layers:
         renderer.conf.render.enabled_layers = [name.strip() for name in args.enabled_layers.split(",") if name.strip()]
     if args.ownership_dump:
