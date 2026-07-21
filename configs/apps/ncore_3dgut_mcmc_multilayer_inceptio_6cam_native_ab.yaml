@@ -17,7 +17,6 @@ dataset:
     - camera_rear_left_70fov
     - camera_rear_right_70fov
     - camera_back_rear_wide_90fov
-  camera_max_fov_deg: 190.0
   ftheta_params_path: null
   # Matched P/F contract: retain the P baseline's native OpenCV validity path.
   mask_forward_invalid_pixels: false
