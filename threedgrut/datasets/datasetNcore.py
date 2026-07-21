@@ -87,7 +87,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         # Sensors
         camera_ids: list[str] | None = None,
         lidar_ids: list[str] | None = None,
-        # Deprecated compatibility input.  FTheta camera models now belong to
+        # Fail-closed legacy configuration key. FTheta camera models belong to
         # a separately derived native NCore manifest and are never injected
         # into the training dataset at runtime.
         ftheta_params_path: Optional[str] = None,

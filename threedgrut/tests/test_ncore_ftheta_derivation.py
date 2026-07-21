@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Native-NCore FTheta derivation and PAI compatibility regressions."""
+"""Native-NCore FTheta derivation and manifest-training contracts."""
 
 from __future__ import annotations
 
@@ -124,13 +124,15 @@ def test_shared_intrinsics_store_preserves_nonintrinsics_components() -> None:
     ]
 
 
-def test_factory_and_configs_keep_only_a_fail_closed_ftheta_compatibility_field() -> None:
+def test_factory_keeps_only_a_fail_closed_legacy_field_and_native_config_omits_it() -> None:
     assert "ftheta_params_path" in FACTORY_SOURCE.read_text(encoding="utf-8")
     assert "ftheta_params_path: null" in BASE_CONFIG.read_text(encoding="utf-8")
-    assert "ftheta_params_path: null" in NATIVE_6CAM_CONFIG.read_text(encoding="utf-8")
+    assert "ftheta_params_path" not in NATIVE_6CAM_CONFIG.read_text(encoding="utf-8")
 
     config = _compose("apps/ncore_3dgut_mcmc_multilayer_inceptio_6cam_native_ab")
     assert list(config.dataset.camera_ids) == SIX_CAMERAS
+    # The base config retains a fail-closed migration key for historical
+    # configurations. The native config does not declare or populate it.
     assert config.dataset.ftheta_params_path is None
 
 

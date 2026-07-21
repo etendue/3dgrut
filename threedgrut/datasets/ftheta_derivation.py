@@ -5,7 +5,8 @@
 This module deliberately has no dependency on :class:`NCoreDataset`.  FTheta
 parameters are validated and, when necessary, their ``max_angle`` is expanded
 to cover the complete target raster before they are serialized as native NCore
-intrinsics.  Training subsequently follows the ordinary NCore/PAI path.
+intrinsics. Training subsequently follows the ordinary manifest-native NCore
+path; it does not inject FTheta parameters into a PAI dataset at runtime.
 """
 
 from __future__ import annotations

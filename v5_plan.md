@@ -273,6 +273,14 @@ flowchart TD
 
 **新条目**（任务完成后按 CLAUDE.md 纪律追加：日期 + commit + 实测数字）：
 
+- **2026-07-21 ★ 原生 NCore FTheta 六相机验证完成，结论为“可运行、不可替代 Pinhole”**（代码 `a5c4871`，基于 P baseline runtime anchor `9744025`；此项是几何模型验证，不改变 v5 默认 Pinhole 路线）：
+  - **目标与边界**：验证从现有 Pinhole NCore 派生的原生 FTheta 数据能否完成匹配训练与独立评测；**不以 FTheta 取代 Pinhole**，不重跑 Pinhole baseline，也不因本项结果修改默认相机集、ray、renderer、loss 或通用 supervision mask。
+  - **保留的工具与训练合同**：保留 `threedgrut/datasets/ftheta_derivation.py` 与 `scripts/derive_inceptio_ftheta_ncore.py`，供后续将 Pinhole 标定离线派生为原生 NCore FTheta。训练只读取 manifest 内的原生相机模型；native 6-cam config 不含 `ftheta_params_path`，该全局遗留键仅 fail-closed 地提示离线派生，**不保留 PAI 数据的 FTheta runtime injection / compatibility 路径**。
+  - **数据证据**：源 `/home/inceptio/work/data/inc_b6a9ed61_20s_6cam_directional/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9`（manifest `df202120…e31`）→ 派生 `/home/inceptio/work/data/inc_b6a9ed61_20s_6cam_ftheta_native_v1`（manifest `4f318ca…e19`，derivation report `82da96…808`）。严格六相机顺序为 front-wide / cross-left / cross-right / rear-left / rear-right / back-rear-wide；每台均为 native FTheta，完整 raster 覆盖 **100%**，非 intrinsics store 逐文件 SHA-256 一致；拟合非径向误差只记 warning，不阻断。
+  - **训练与可复现性**：depth-off、`num_workers=10`、seed=42、20 秒窗口与既有 P 30k 完全对齐。F 5s/5k sanity 通过（finite、六相机均有 eval）；F 20s/30k 在 inceptio_2 完成，`ckpt_30000.pt` SHA-256 `0f54de4…7a8`，训练 **2,958.92 s / 10.14 it/s**；P checkpoint SHA-256 `f801a8e…057`。独立 P/F eval 各 143 帧，GT render tree 哈希相同。
+  - **主结果（完整 raster，非裁边）**：macro PSNR P **20.6437**、F **20.6842**（+0.040 dB）；center +0.057 dB；periphery P **17.7373**、F **17.6023**（**−0.135 dB**），center/periphery gap **3.167→3.359 dB**（恶化）。per-camera peripheral 最差为 rear-left **−1.602 dB**，违反不低于 −0.50 dB 守护；故未满足预注册的 peripheral +0.10 dB / gap 收窄条件。
+  - **辅助质量指标与决策**：F 的 frame-weighted gradient correlation **+0.0062**、edge sharpness **+0.000063**、SSIM **+0.00038**、LPIPS **−0.00161**，但不足以覆盖外围退化。完整 raster 为主结果，P∩F common-valid 仅诊断（约 63%），未通过裁外圈取得优势。结论：**验证成功（原生 FTheta 可训、可评），但不采用为 Pinhole 替代方案，也不自动进入 pose / capacity / road / sky 调参**。证据绑定于 matched-eval 的 `run_manifest.json`（SHA-256 `681926…3ae`）、`radial_analysis_report.json`（`560796…8df`）、`full_raster_quality.json`（`96e92c…df8`）及六相机固定中心/外围 crop。
+
 - **2026-07-14 ★ Task 11 C4 9→11 cam FTheta 鱼眼评估完成、不晋级**（driver `dbc5f5d`，最终随 viewer/文档分支合入；inceptio `c4_11cam_tw2p0_30k`，同 R6t depth-off/nw10/telew=2.0，唯一变量＝加入 `camera_front_fisheye` + `camera_back_rear_fisheye`）：
   - **标准配置决定**：Inceptio 默认训练配置固定为 **R6t 9-cam**；11-cam ckpt、aux 与 driver 保留为 research/optional extension，不改默认 YAML camera list。
   - **30k 主指标**：mean_cc_psnr_masked **18.27** vs 9-cam **19.11（−0.83 dB）**；road_crop_psnr **25.26** vs **26.22（−0.96）**；automobile/class psnr **17.68** vs **18.60（−0.92）**。front/rear fisheye cc_psnr_masked **17.54 / 12.00**，rear fisheye 是明显弱项。

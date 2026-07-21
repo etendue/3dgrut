@@ -61,7 +61,7 @@ def test_runtime_override_is_fail_closed_in_active_dataset_sources() -> None:
     )
     for path in paths:
         source = path.read_text(encoding="utf-8")
-        if path in (SMOKE, FULL):
+        if path in (CONFIG, SMOKE, FULL):
             assert "ftheta_params_path" not in source
         else:
             assert "ftheta_params_path" in source
