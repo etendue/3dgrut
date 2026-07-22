@@ -22,7 +22,10 @@
       "road_coverage_p10": 0.37173203378915787,
       "road_coverage_p50": 0.8897058889269829,
       "road_coverage_mean": 0.7799700026710829,
-      "sky_on_road_energy": 0.0
+      "sky_on_road_energy": 0.0,
+      "front_cc_psnr_masked": 22.7074,
+      "front_road_crop_psnr": 27.1640,
+      "front_road_crop_lpips": 0.26451
     }
   }
 }
