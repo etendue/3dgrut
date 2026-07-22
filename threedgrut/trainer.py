@@ -304,6 +304,11 @@ class Trainer3DGRUT:
         if conf.resume:  # Load a checkpoint
             logger.info(f"🤸 Loading a pretrained checkpoint from {conf.resume}!")
             checkpoint = torch.load(conf.resume, weights_only=False)
+            from threedgrut.layers.resume_tracks import (
+                populate_dynamic_tracks_for_checkpoint_resume,
+            )
+
+            populate_dynamic_tracks_for_checkpoint_resume(model, train_dataset, conf)
             model.init_from_checkpoint(checkpoint)
             self.strategy.init_densification_buffer(checkpoint)
             global_step = checkpoint["global_step"]
