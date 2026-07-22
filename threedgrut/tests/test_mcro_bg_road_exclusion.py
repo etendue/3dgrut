@@ -52,6 +52,7 @@ def _cfg(chunk_size=2):
         "footprint_sigma": 2.0,
         "max_footprint_px": 4.0,
         "footprint_shrink_factor": 0.5,
+        "min_footprint_scale": 1e-4,
     }
 
 
@@ -91,6 +92,26 @@ def test_b2_footprint_only_shrinks_without_recycling():
     assert stats["n_footprint_shrunk"] == 1
     assert torch.all(bg.scale[0, :2] < before[0, :2])
     assert bg.density.item() == 2.0
+
+
+def test_b2_repeated_footprint_shrink_saturates_above_zero():
+    """Pin the R2 step-2707 failure: repeated hits must not reach log(0)."""
+    road_positions = torch.tensor([[0.0, 0.0, 2.0]])
+    height_field = build_road_height_field(road_positions, cell_size=1.0)
+    bg = FakeBackground(
+        torch.tensor([[0.5, 0.0, 2.5]]),
+        torch.tensor([[0.0, 0.0, -2.0]]),
+        torch.tensor([[2.0]]),
+    )
+    road_mask = torch.zeros(9, 9)
+    road_mask[4, 4] = 1
+
+    for _ in range(300):
+        apply_bg_road_exclusion(bg, height_field, _batch(road_mask), _cfg(chunk_size=1))
+
+    assert torch.isfinite(bg.scale).all()
+    assert torch.all(bg.get_scale()[0, :2] > 0.0)
+    assert torch.allclose(bg.get_scale()[0, :2], torch.full((2,), 1e-4), rtol=1e-5, atol=0.0)
 
 
 def test_b2_chunking_is_result_equivalent():

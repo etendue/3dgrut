@@ -48,6 +48,9 @@ layers:
     footprint_sigma: 2.0
     max_footprint_px: 48.0
     footprint_shrink_factor: 0.5
+    # Repeated footprint-only hits must not underflow exp(log_scale) to zero;
+    # zero activated scales poison the MCMC relocation inverse (log(0)).
+    min_footprint_scale: 0.0001
 
 # T3.4: region-weighted L1 loss for layered training. When true AND the
 # dataloader populates batch.image_infos (sky/road/dyn masks), L1 loss is

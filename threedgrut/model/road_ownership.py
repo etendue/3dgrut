@@ -179,10 +179,21 @@ def apply_bg_road_exclusion(bg_layer, height_field: dict, batch, cfg) -> dict[st
     shrink_factor = float(_cfg(cfg, "footprint_shrink_factor", 0.5))
     if not 0.0 < shrink_factor < 1.0:
         raise ValueError("footprint_shrink_factor must be in (0,1)")
+    min_footprint_scale = float(_cfg(cfg, "min_footprint_scale", 1e-4))
+    if not math.isfinite(min_footprint_scale) or min_footprint_scale <= 0.0:
+        raise ValueError("min_footprint_scale must be finite and positive")
+    min_footprint_scale_log = math.log(min_footprint_scale)
+    # A footprint-only Gaussian may hit the same road boundary hundreds of
+    # times.  Repeatedly adding log(shrink_factor) eventually underflows the
+    # activated scale to zero; MCMC relocation then takes log(0) and can
+    # poison the full scale tensor.  Make shrinking saturate at a physical
+    # floor and stop counting already-saturated rows as actions.
+    shrink_mask &= (bg_layer.scale[:, :2].detach() > min_footprint_scale_log).any(dim=-1)
     if hard_mask.any():
         bg_layer.density[hard_mask] = float(_cfg(cfg, "dead_density_raw", -50.0))
     if shrink_mask.any():
-        bg_layer.scale[shrink_mask, :2] += math.log(shrink_factor)
+        shrunk_xy = bg_layer.scale[shrink_mask, :2] + math.log(shrink_factor)
+        bg_layer.scale[shrink_mask, :2] = shrunk_xy.clamp_min(min_footprint_scale_log)
     stats["n_footprint_shrunk"] = int(shrink_mask.sum().item())
     stats["n_recycled"] = int(hard_mask.sum().item())
     return stats
