@@ -2538,6 +2538,11 @@ class Trainer3DGRUT:
                     self.per_camera_telemetry.record_relocation(layer, getattr(sub, "last_relocation_count", 0))
             else:
                 self.per_camera_telemetry.record_relocation("background", getattr(self.strategy, "last_relocation_count", 0))
+            ownership_stats = getattr(self.strategy, "last_bg_road_exclusion_stats", None)
+            if ownership_stats is not None:
+                self.per_camera_telemetry.record_ownership_actions(
+                    str(gpu_batch.camera_id), ownership_stats
+                )
 
         # Update the SH if required
         if self.model.progressive_training and check_step_condition(

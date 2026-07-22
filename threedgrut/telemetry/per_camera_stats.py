@@ -14,6 +14,7 @@ class PerCameraTelemetry:
     def __init__(self) -> None:
         self._camera: dict[str, dict[str, object]] = {}
         self._relocations: dict[str, int] = defaultdict(int)
+        self._ownership_actions: dict[str, dict[str, int]] = {}
 
     def record_step(self, camera_id: str, losses: Mapping[str, float], grad_norm: float) -> None:
         entry = self._camera.setdefault(
@@ -31,6 +32,11 @@ class PerCameraTelemetry:
 
     def record_relocation(self, layer: str, n_relocated: int) -> None:
         self._relocations[str(layer)] += int(n_relocated)
+
+    def record_ownership_actions(self, camera_id: str, stats: Mapping[str, int]) -> None:
+        entry = self._ownership_actions.setdefault(str(camera_id), defaultdict(int))
+        for name, value in stats.items():
+            entry[str(name)] += int(value)
 
     @staticmethod
     def _grad_bin(grad_norm: float) -> str:
@@ -54,7 +60,14 @@ class PerCameraTelemetry:
                 "mean_grad_norm": float(entry["grad_norm_sum"]) / n_steps,
                 "grad_norm_bins": dict(sorted(entry["grad_norm_bins"].items())),
             }
-        return {"cameras": cameras, "relocations_by_layer": dict(sorted(self._relocations.items()))}
+        return {
+            "cameras": cameras,
+            "relocations_by_layer": dict(sorted(self._relocations.items())),
+            "ownership_actions_by_camera": {
+                camera_id: dict(sorted(values.items()))
+                for camera_id, values in sorted(self._ownership_actions.items())
+            },
+        }
 
     def dump(self, path: str | Path) -> None:
         target = Path(path)

@@ -21,6 +21,7 @@ def test_per_camera_telemetry_tracks_uneven_sampling_and_relocations(tmp_path):
     telemetry.record_step("rear", {"total_loss": 9.0}, grad_norm=0.0)
     telemetry.record_relocation("background", 7)
     telemetry.record_relocation("background", 2)
+    telemetry.record_ownership_actions("front", {"n_recycled": 3, "n_footprint_shrunk": 4})
     path = tmp_path / "per_camera_telemetry.json"
 
     telemetry.dump(path)
@@ -31,3 +32,7 @@ def test_per_camera_telemetry_tracks_uneven_sampling_and_relocations(tmp_path):
     assert payload["cameras"]["rear"]["mean_grad_norm"] == 0.0
     assert payload["cameras"]["front"]["grad_norm_bins"]["[1e-3,1)"] == 1
     assert payload["relocations_by_layer"] == {"background": 9}
+    assert payload["ownership_actions_by_camera"]["front"] == {
+        "n_footprint_shrunk": 4,
+        "n_recycled": 3,
+    }

@@ -34,6 +34,20 @@ layers:
   # MCRO B1: exclude road/sidewalk semantic LiDAR points from background
   # initialization. Default off preserves historical initialization.
   semantic_disjoint_init: false
+  # MCRO B2: training-time hard background ownership exclusion. Pinhole GPU
+  # path only; default off preserves all historical strategy behavior.
+  bg_road_exclusion:
+    enabled: false
+    every_k_steps: 10
+    cell_size: 1.0
+    z_band: 0.4
+    projection_max_height: 1.0
+    chunk_size: 200000
+    opacity_threshold: 0.005
+    dead_density_raw: -50.0
+    footprint_sigma: 2.0
+    max_footprint_px: 48.0
+    footprint_shrink_factor: 0.5
 
 # T3.4: region-weighted L1 loss for layered training. When true AND the
 # dataloader populates batch.image_infos (sky/road/dyn masks), L1 loss is

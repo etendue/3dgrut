@@ -28,6 +28,8 @@ from threedgrut.model.road_reg import (
     clamp_layer_scales,
     project_bg_road_hits,
 )
+from threedgrut.model.road_ownership import apply_bg_road_exclusion
+from threedgrut.model.road_region import build_road_height_field
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.strategy.mcmc import MCMCStrategy
 from threedgrut.utils.logger import logger
@@ -47,9 +49,10 @@ class LayeredMCMCStrategy(BaseStrategy):
             sub = MCMCStrategy(sub_conf, model.layers[spec.name])
             self._install_perturb_mask(sub, spec)
             self.sub_strategies[spec.name] = sub
-        # A1: cached BEV road-height field for background-slab exclusion (built
-        # lazily on first use; road layer is ~frozen so it stays valid).
+        # Cached BEV fields for legacy A1 and MCRO B2 ownership exclusion.
         self._road_bev = None
+        self._mcro_road_height_field = None
+        self.last_bg_road_exclusion_stats = None
         logger.info(
             f"LayeredMCMC: {len(self.sub_strategies)} sub-strategies for " f"layers {list(self.sub_strategies.keys())}"
         )
@@ -132,14 +135,51 @@ class LayeredMCMCStrategy(BaseStrategy):
         # V3-R1.2 — road-layer scale clamp (XY/Z upper bound + anisotropy ratio).
         # No-op for layers whose LayerSpec leaves all 3 clamp fields None.
         self._maybe_clamp_road_scales()
-        # A1 — hard-exclude background gaussians from the thin road slab so the
-        # frozen road layer owns the road surface. No-op unless enabled.
-        self._maybe_exclude_bg_from_road_slab()
-        # A2 — image-space variant: project bg centers into this training camera
-        # and clamp those landing on road-mask pixels (catches floating bg the
-        # 3D slab misses). No-op unless projection_enabled.
-        self._maybe_project_clamp_bg_density(batch)
+        formal_enabled = self._maybe_apply_bg_road_exclusion(step, batch, writer)
+        ownership_stats = self.last_bg_road_exclusion_stats
+        if ownership_stats is not None and (
+            ownership_stats["n_recycled"] > 0 or ownership_stats["n_footprint_shrunk"] > 0
+        ):
+            # Scale changes alter bounds; force acceleration-structure rebuild.
+            any_updated = True
+        # Preserve the historical experimental gates when formal B2 is off.
+        if not formal_enabled:
+            self._maybe_exclude_bg_from_road_slab()
+            self._maybe_project_clamp_bg_density(batch)
         return any_updated
+
+    def _maybe_apply_bg_road_exclusion(self, step: int, batch, writer=None) -> bool:
+        """MCRO B2 formal GPU path; returns whether its config gate is enabled."""
+        self.last_bg_road_exclusion_stats = None
+        layers_conf = getattr(self.conf, "layers", None)
+        cfg = getattr(layers_conf, "bg_road_exclusion", None) if layers_conf is not None else None
+        if cfg is None or not bool(getattr(cfg, "enabled", False)):
+            return False
+        every_k = int(getattr(cfg, "every_k_steps", 10))
+        if every_k <= 0:
+            raise ValueError("layers.bg_road_exclusion.every_k_steps must be positive")
+        if step % every_k:
+            return True
+        layers = getattr(self.model, "layers", None)
+        if layers is None or "background" not in layers or "road" not in layers:
+            return True
+        road = layers["road"]
+        if self._mcro_road_height_field is None:
+            self._mcro_road_height_field = build_road_height_field(
+                road.positions.detach(), cell_size=float(getattr(cfg, "cell_size", 1.0))
+            )
+        stats = apply_bg_road_exclusion(
+            layers["background"], self._mcro_road_height_field, batch, cfg
+        )
+        self.last_bg_road_exclusion_stats = stats
+        calls = getattr(self, "_mcro_bg_road_calls", 0) + 1
+        self._mcro_bg_road_calls = calls
+        if calls == 1 or calls % 50 == 0:
+            logger.info(f"[MCRO B2] bg-road exclusion call={calls}: {stats}")
+        if writer is not None:
+            for name, value in stats.items():
+                writer.add_scalar(f"mcro/bg_road_exclusion/{name}", value, step)
+        return True
 
     def _maybe_clamp_dynamic_rigids(self) -> None:
         """In-place clamp dynamic_rigids positions to ``|local| ≤ size/2``.
