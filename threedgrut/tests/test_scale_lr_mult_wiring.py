@@ -139,3 +139,45 @@ def test_registry_road_default_mult_is_identity():
     from threedgrut.layers.registry import STANDARD_LAYERS
 
     assert STANDARD_LAYERS["road"].scale_lr_mult == 1.0
+
+
+def _resume_specs(*, road_scale_lr: float | None) -> list[LayerSpec]:
+    return [
+        LayerSpec(name="background", layer_id=0, max_n_particles=600_000),
+        LayerSpec(
+            name="road",
+            layer_id=1,
+            max_n_particles=200_000,
+            scale_prior=(0.1, 0.1, 0.001),
+            scale_lr=road_scale_lr,
+            mask_field="road_mask",
+        ),
+    ]
+
+
+def _checkpoint_with_custom_saved_road_lr(real_conf, saved_lr: float) -> dict:
+    source = _init_model(real_conf, _resume_specs(road_scale_lr=None))
+    _group(source.layers["road"].optimizer, "scale")["lr"] = saved_lr
+    return {"gaussians_nodes": source.get_model_parameters()["gaussians_nodes"]}
+
+
+def test_absolute_scale_lr_override_wins_after_optimizer_resume(real_conf):
+    checkpoint = _checkpoint_with_custom_saved_road_lr(real_conf, saved_lr=0.005)
+    target = LayeredGaussians(
+        real_conf,
+        specs=_resume_specs(road_scale_lr=1.0e-4),
+        scene_extent=_SCENE_EXTENT,
+    )
+    target.init_from_checkpoint(checkpoint, setup_optimizer=True)
+    assert _group(target.layers["road"].optimizer, "scale")["lr"] == pytest.approx(1.0e-4)
+
+
+def test_resume_without_absolute_override_preserves_saved_lr(real_conf):
+    checkpoint = _checkpoint_with_custom_saved_road_lr(real_conf, saved_lr=0.0042)
+    target = LayeredGaussians(
+        real_conf,
+        specs=_resume_specs(road_scale_lr=None),
+        scene_extent=_SCENE_EXTENT,
+    )
+    target.init_from_checkpoint(checkpoint, setup_optimizer=True)
+    assert _group(target.layers["road"].optimizer, "scale")["lr"] == pytest.approx(0.0042)

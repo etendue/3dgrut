@@ -679,6 +679,17 @@ class LayeredGaussians(nn.Module):
                     )
                     continue
                 layer.init_from_checkpoint(nodes_dict[name], setup_optimizer=setup_optimizer)
+                if setup_optimizer:
+                    # ``Adam.load_state_dict`` restores the saved param-group
+                    # LR and therefore overwrites any absolute per-layer LR
+                    # requested by the *current* resume config.  Re-apply only
+                    # absolute overrides after optimizer restore so staged
+                    # schedules such as road warmup (5e-3) -> lock (1e-4)
+                    # actually take effect.  None remains a strict no-op and
+                    # preserves the checkpoint LR.  Do not re-apply the
+                    # multiplicative legacy knob here: multiplying a saved LR
+                    # would compound it on every resume.
+                    self._apply_layer_lr_overrides(layer, spec)
                 # T8/B3 Phase E.4: restore per-layer ``track_ids`` buffer if it
                 # was saved by ``get_model_parameters``. MoG.init_from_checkpoint
                 # reads only its 6 standard params (positions/density/etc) and
