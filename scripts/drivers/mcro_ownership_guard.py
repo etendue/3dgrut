@@ -46,10 +46,25 @@ def evaluate_guards(
             {"name": name, "actual": actual, "operator": op, "limit": limit, "passed": passed}
         )
 
-    bg_limit = _finite_number(reference, "bg_on_road_alpha_mean") * (
-        1.0 - _finite_number(thresholds, "background_on_road_alpha_reduction_fraction_min")
+    # Raw background-only alpha is not an ownership measurement: in a
+    # multi-camera reconstruction it legitimately approaches one because the
+    # ray continues through the road surface to distant scene geometry.  Gate
+    # only the opacity whose background-only expected depth is in front of the
+    # road-only depth.  Keep raw alpha in the report as a diagnostic, but do
+    # not incentivize deleting valid buildings/terrain behind the road.
+    bg_limit = _finite_number(reference, "bg_in_front_of_road_alpha_mean") * (
+        1.0
+        - _finite_number(
+            thresholds,
+            "background_in_front_of_road_alpha_reduction_fraction_min",
+        )
     )
-    add("background_on_road_alpha", _finite_number(own, "bg_on_road_alpha_mean"), bg_limit, "<=")
+    add(
+        "background_in_front_of_road_alpha",
+        _finite_number(own, "bg_in_front_of_road_alpha_mean"),
+        bg_limit,
+        "<=",
+    )
     add(
         "road_interior_alpha_p10",
         _finite_number(own, "road_coverage_p10"),
