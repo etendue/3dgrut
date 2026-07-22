@@ -31,6 +31,9 @@ enable_frame_timings: false
 use_layered_model: false
 layers:
   enabled: [background]   # only consulted when use_layered_model=true
+  # MCRO B1: exclude road/sidewalk semantic LiDAR points from background
+  # initialization. Default off preserves historical initialization.
+  semantic_disjoint_init: false
 
 # T3.4: region-weighted L1 loss for layered training. When true AND the
 # dataloader populates batch.image_infos (sky/road/dyn masks), L1 loss is

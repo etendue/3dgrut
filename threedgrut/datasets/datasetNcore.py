@@ -50,6 +50,7 @@ from threedgrut.datasets.ncore_semantic import (
     DYNAMIC_CLASS_IDS,
     ROAD_CLASS_IDS,
     SKY_CLASS_ID,
+    filter_init_points_by_semantics,
 )
 from threedgrut.datasets.protocols import (
     Batch,
@@ -1375,6 +1376,7 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
         point_clouds_source_ids: Optional[list[str]] = None,
         non_dynamic_points_only: bool = True,
         step_frame: int = 1,
+        exclude_semantic_class_ids: Optional[frozenset[int]] = None,
     ) -> Generator[PointCloud, None, None]:
         """Returns a generator for all point-clouds available from point-cloud sources, transformed into world-global frame.
 
@@ -1391,6 +1393,26 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
 
         # make sure we are initialized
         self._init_worker()
+        semantic_disjoint_stats = {
+            "n_input_points": 0,
+            "n_dynamic_removed": 0,
+            "n_bg_points": 0,
+            "n_road_points": 0,
+            "n_excluded_road_class": 0,
+            "n_unknown_kept": 0,
+            "n_intersection": 0,
+        }
+        self.last_point_cloud_filter_stats = None
+        if exclude_semantic_class_ids is not None:
+            if not self.load_aux_masks:
+                raise RuntimeError(
+                    "semantic-disjoint initialization requires dataset.load_aux_masks=true"
+                )
+            self._ensure_aux_readers()
+            if self._lidar_sseg_reader is None:
+                raise RuntimeError(
+                    "semantic-disjoint initialization requires aux.lidar-sseg"
+                )
 
         # default to first source instance if not provided explicitly
         sequence_point_clouds_source_ids = self.sequence_point_clouds_source_ids[self.sequence_id]
@@ -1426,8 +1448,36 @@ class NCoreDataset(torch.utils.data.Dataset, BoundedMultiViewDataset, DatasetVis
                 elif source.has_pc_generic_data(pc_idx, self.lidar_color_generic_data_name):
                     color = source.get_pc_generic_data(pc_idx, self.lidar_color_generic_data_name)
 
-                # Dynamic flag filtering
-                if non_dynamic_points_only and source.has_pc_generic_data(pc_idx, "dynamic_flag"):
+                if exclude_semantic_class_ids is not None:
+                    ts_us = int(source.pc_timestamps_us[pc_idx])
+                    labels = None
+                    if self._lidar_sseg_reader.has_frame(source_id, ts_us):
+                        candidate = self._lidar_sseg_reader.read(source_id, ts_us)
+                        if candidate.shape[0] == xyz_world_global.shape[0]:
+                            labels = candidate
+                        else:
+                            logger.warning(
+                                "semantic-disjoint init: pc/lidar-sseg shape mismatch "
+                                f"at source={source_id} ts={ts_us}; retaining frame as unknown"
+                            )
+                    dynamic_flags = (
+                        source.get_pc_generic_data(pc_idx, "dynamic_flag")
+                        if source.has_pc_generic_data(pc_idx, "dynamic_flag")
+                        else None
+                    )
+                    xyz_world_global, color, frame_stats = filter_init_points_by_semantics(
+                        xyz_world_global,
+                        color,
+                        labels=labels,
+                        dynamic_flags=dynamic_flags,
+                        non_dynamic_points_only=non_dynamic_points_only,
+                        exclude_semantic_class_ids=exclude_semantic_class_ids,
+                    )
+                    for key, value in frame_stats.items():
+                        semantic_disjoint_stats[key] += value
+                    self.last_point_cloud_filter_stats = dict(semantic_disjoint_stats)
+                # Preserve the historical path exactly when the feature is off.
+                elif non_dynamic_points_only and source.has_pc_generic_data(pc_idx, "dynamic_flag"):
                     dynamic_flags = source.get_pc_generic_data(pc_idx, "dynamic_flag")
                     non_dynamic_mask = dynamic_flags != 1  # 1 ~ DYNAMIC
                     xyz_world_global = xyz_world_global[non_dynamic_mask]

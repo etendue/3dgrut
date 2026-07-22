@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import time
 from collections import defaultdict
@@ -371,10 +372,37 @@ class Trainer3DGRUT:
                     assert isinstance(
                         train_dataset, datasets.NCoreDataset
                     ), "can only initialize from lidar with NCoreDataset"
+                    semantic_disjoint_init = bool(conf.layers.get("semantic_disjoint_init", False))
+                    exclude_semantic_ids = None
+                    if semantic_disjoint_init:
+                        from threedgrut.datasets.ncore_semantic import ROAD_CLASS_IDS
+
+                        exclude_semantic_ids = ROAD_CLASS_IDS
                     pc = PointCloud.from_sequence(
-                        list(train_dataset.get_point_clouds(step_frame=1, non_dynamic_points_only=True)),
+                        list(
+                            train_dataset.get_point_clouds(
+                                step_frame=1,
+                                non_dynamic_points_only=True,
+                                exclude_semantic_class_ids=exclude_semantic_ids,
+                            )
+                        ),
                         device="cpu",
                     )
+                    self.semantic_disjoint_init_stats = (
+                        dict(train_dataset.last_point_cloud_filter_stats)
+                        if semantic_disjoint_init and train_dataset.last_point_cloud_filter_stats is not None
+                        else None
+                    )
+                    if self.semantic_disjoint_init_stats is not None:
+                        logger.info(
+                            "[MCRO B1] semantic-disjoint init stats: "
+                            f"{self.semantic_disjoint_init_stats}"
+                        )
+                        if self.semantic_disjoint_init_stats["n_intersection"] != 0:
+                            raise RuntimeError(
+                                "semantic-disjoint initialization invariant failed: "
+                                "road/background intersection is nonzero"
+                            )
                     if conf.initialization.num_points < len(pc.xyz_end):
                         # Deterministically random subsample points if there are more points than the specified number of gaussians
                         rng = torch.Generator().manual_seed(conf.seed_initialization)
@@ -624,6 +652,11 @@ class Trainer3DGRUT:
             object_name=object_name,
             output_dir=out_dir,
         )
+        semantic_stats = getattr(self, "semantic_disjoint_init_stats", None)
+        if semantic_stats is not None:
+            stats_path = Path(out_dir) / "semantic_disjoint_init_stats.json"
+            stats_path.write_text(json.dumps(semantic_stats, indent=2) + "\n")
+            logger.info(f"[MCRO B1] initialization audit saved: {stats_path}")
 
     def init_per_camera_telemetry(self, conf: DictConfig) -> None:
         enabled = bool(conf.trainer.get("per_camera_telemetry", False))
