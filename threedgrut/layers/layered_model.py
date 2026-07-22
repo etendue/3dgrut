@@ -667,6 +667,7 @@ class LayeredGaussians(nn.Module):
 
         if nodes_dict is not None:
             # v2 path: dispatch per layer.
+            specs_by_name = {spec.name: spec for spec in self.specs}
             for name, layer in self.layers.items():
                 # T5.4: sky envmap (non-particle) restored separately below,
                 # not from gaussians_nodes — skip the warn+miss path for it.
@@ -689,7 +690,7 @@ class LayeredGaussians(nn.Module):
                     # preserves the checkpoint LR.  Do not re-apply the
                     # multiplicative legacy knob here: multiplying a saved LR
                     # would compound it on every resume.
-                    self._apply_layer_lr_overrides(layer, spec)
+                    self._apply_layer_lr_overrides(layer, specs_by_name[name])
                 # T8/B3 Phase E.4: restore per-layer ``track_ids`` buffer if it
                 # was saved by ``get_model_parameters``. MoG.init_from_checkpoint
                 # reads only its 6 standard params (positions/density/etc) and
