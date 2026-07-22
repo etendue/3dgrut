@@ -121,13 +121,19 @@ def summarize_ownership_dirs(
             bg_depth=_load_depth(bg_depth_path) if have_depth else None,
             road_depth=_load_depth(road_depth_path) if have_depth else None,
         ))
-    scalar_keys = [key for key in records[0] if key != "n_valid_px"]
+    count_keys = {"n_valid_px", "n_depth_valid_px"}
+    scalar_keys = [key for key in records[0] if key not in count_keys]
     def nanmean(values: list[float]) -> float:
         finite = [value for value in values if not np.isnan(value)]
         return float(np.mean(finite)) if finite else float("nan")
 
     summary = {key: nanmean([record[key] for record in records]) for key in scalar_keys}
-    summary.update(n_frames=len(records), n_valid_px_total=sum(record["n_valid_px"] for record in records), erosion_px=erosion_px)
+    summary.update(
+        n_frames=len(records),
+        n_valid_px_total=sum(record["n_valid_px"] for record in records),
+        n_depth_valid_px_total=sum(record.get("n_depth_valid_px", 0) for record in records),
+        erosion_px=erosion_px,
+    )
     return {"summary": summary, "per_frame": records}
 
 

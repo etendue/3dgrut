@@ -44,4 +44,5 @@ def test_ownership_dir_summary(tmp_path):
  np.save(tmp_path/"road"/"00000_depth.npy",np.full((5,5,1),10,dtype=np.float32))
  report=f(tmp_path/"bg",tmp_path/"road",tmp_path/"sky")
  assert report["summary"]["n_frames"]==1 and report["summary"]["n_valid_px_total"]==9
+ assert report["summary"]["n_depth_valid_px_total"]==9
  assert report["summary"]["bg_in_front_of_road_fraction"]==pytest.approx(1.0)
