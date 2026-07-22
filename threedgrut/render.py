@@ -839,6 +839,18 @@ class Renderer:
                         opacity.squeeze(0).permute(2, 0, 1).clip(0, 1),
                         os.path.join(output_path_ownership, frame_stem + "_alpha.png"),
                     )
+                # Keep ray depth lossless for ownership diagnostics.  A
+                # background-only alpha image cannot distinguish a Gaussian
+                # in front of the road from valid scene geometry behind it;
+                # the latter is especially common with a multi-camera ring.
+                # ``.npy`` avoids quantization and arbitrary visualization
+                # ranges while remaining opt-in under ``ownership_dump``.
+                pred_dist = outputs.get("pred_dist")
+                if pred_dist is not None:
+                    np.save(
+                        os.path.join(output_path_ownership, frame_stem + "_depth.npy"),
+                        pred_dist.squeeze(0).detach().float().cpu().numpy(),
+                    )
                 sky_contrib = outputs.get("sky_contrib")
                 if sky_contrib is not None:
                     torchvision.utils.save_image(
