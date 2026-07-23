@@ -40,6 +40,10 @@ from threedgrut.model.per_class_eval import (
     compute_lane_metrics,
     compute_per_class_metrics,
 )
+from threedgrut.model.road_projection_candidates import (
+    accumulate_projection_counts,
+    make_projection_counts,
+)
 from threedgrut.utils.color_correct import color_correct_affine
 from threedgrut.utils.eval_metrics import (  # T11.F1 / E1.4
     compute_lidar_psnr,
@@ -573,6 +577,20 @@ class Renderer:
             )
             os.makedirs(output_path_ownership, exist_ok=True)
 
+        bg_road_candidate_dump = self.conf.render.get("bg_road_candidate_dump", None)
+        bg_projection_counts = None
+        bg_candidate_layer = None
+        if bg_road_candidate_dump:
+            layers = getattr(self.model, "layers", None)
+            if layers is None or "background" not in layers:
+                raise ValueError("bg_road_candidate_dump requires a layered model with background")
+            if set(self.model.enabled_layer_names) != {"background"}:
+                raise ValueError("bg_road_candidate_dump requires --enabled-layers background")
+            bg_candidate_layer = layers["background"]
+            bg_projection_counts = make_projection_counts(
+                bg_candidate_layer.positions.shape[0], bg_candidate_layer.positions.device
+            )
+
         psnr = []
         ssim = []
         lpips = []
@@ -784,6 +802,34 @@ class Renderer:
 
             # Compute the outputs of a single batch
             outputs = self.model(gpu_batch)
+
+            if bg_projection_counts is not None:
+                semantic_sseg = gpu_batch.image_infos.get("semantic_sseg")
+                if semantic_sseg is None:
+                    raise ValueError("bg_road_candidate_dump requires semantic_sseg road masks")
+                road_mask = (semantic_sseg == 0) | (semantic_sseg == 1)
+                accumulate_projection_counts(
+                    bg_projection_counts,
+                    positions_world=bg_candidate_layer.positions.detach(),
+                    scales_linear=bg_candidate_layer.get_scale().detach(),
+                    T_camera_to_world=gpu_batch.T_to_world,
+                    intrinsics=gpu_batch.intrinsics_OpenCVPinholeCameraModelParameters,
+                    road_mask=road_mask,
+                    mog_visibility=outputs.get("mog_visibility"),
+                    erosion_px=int(self.conf.render.get("bg_road_candidate_erosion_px", 8)),
+                    protection_margin_px=int(
+                        self.conf.render.get("bg_road_candidate_protection_margin_px", 16)
+                    ),
+                    footprint_sigma=float(
+                        self.conf.render.get("bg_road_candidate_footprint_sigma", 2.0)
+                    ),
+                    max_footprint_px=float(
+                        self.conf.render.get("bg_road_candidate_max_footprint_px", 48.0)
+                    ),
+                    chunk_size=int(
+                        self.conf.render.get("bg_road_candidate_chunk_size", 100000)
+                    ),
+                )
 
             # Apply post-processing
             if self.post_processing is not None:
@@ -1281,6 +1327,15 @@ class Renderer:
             logger.log_progress(task_name="Rendering", advance=1, iteration=f"{str(iteration)}", psnr=psnr[-1])
 
         logger.end_progress(task_name="Rendering")
+
+        if bg_projection_counts is not None:
+            dump_path = Path(bg_road_candidate_dump)
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                dump_path,
+                **{name: values.detach().cpu().numpy() for name, values in bg_projection_counts.items()},
+            )
+            logger.info(f"[MCRO B12] background projection counts saved to {dump_path}")
 
         # T8.5.7: sanity-check the eval_cameras filter — if the user passes a
         # subset and 0 frames matched, fail loudly instead of writing an

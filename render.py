@@ -53,6 +53,12 @@ if __name__ == "__main__":
         help="Write alpha, road-mask, and sky-contribution debug images during evaluation",
     )
     parser.add_argument(
+        "--bg-road-candidate-dump",
+        type=str,
+        default="",
+        help="Write per-background multi-view road/protection projection hit counts (.npz)",
+    )
+    parser.add_argument(
         "--novel-view",
         action="store_true",
         help=(
@@ -164,7 +170,7 @@ if __name__ == "__main__":
         render_only=args.render_only,
         novel_only=args.novel_only,
     )
-    if args.enabled_layers or args.ownership_dump:
+    if args.enabled_layers or args.ownership_dump or args.bg_road_candidate_dump:
         # Frozen checkpoints commonly predate these eval-only keys and carry a
         # struct-locked config.  Unlock only this in-memory render config; the
         # checkpoint remains read-only.
@@ -174,5 +180,7 @@ if __name__ == "__main__":
     if args.ownership_dump:
         renderer.conf.model.debug_sky_contrib = True
         renderer.conf.render.ownership_dump = True
+    if args.bg_road_candidate_dump:
+        renderer.conf.render.bg_road_candidate_dump = args.bg_road_candidate_dump
 
     renderer.render_all()
