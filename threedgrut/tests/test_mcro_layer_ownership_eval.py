@@ -103,3 +103,9 @@ def test_duplicate_summary_is_pixel_weighted(tmp_path):
           duplicate_rgb_temperature=.01,duplicate_score_threshold=.5)
  # One matching pixel and nine mismatching pixels -> 1/10, not mean([1,0])=1/2.
  assert report["summary"]["bg_road_duplicate_pixel_fraction"]==pytest.approx(.1)
+
+def test_histogram_quantile_is_pixel_weighted():
+ f=m()._histogram_quantile
+ hist=torch.tensor([9.0,0.0,0.0,1.0])
+ assert f(hist,.5,0.0,1.0)==pytest.approx(.125)
+ assert f(hist,.95,0.0,1.0)==pytest.approx(.875)

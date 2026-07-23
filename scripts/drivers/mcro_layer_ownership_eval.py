@@ -93,6 +93,17 @@ def _duplicate_samples(
     score = bg_alpha * road_alpha * appearance_weight
     return score[valid], appearance_error[valid]
 
+
+def _histogram_quantile(histogram: torch.Tensor, q: float, low: float, high: float) -> float:
+    """Approximate a global quantile from a pixel-weighted histogram."""
+    total = float(histogram.sum())
+    if total == 0:
+        return float("nan")
+    target = q * total
+    index = int(torch.searchsorted(histogram.cumsum(0), torch.tensor(target)).item())
+    index = min(index, histogram.numel() - 1)
+    return low + (index + 0.5) * (high - low) / histogram.numel()
+
 def compute_ownership_metrics(
     bg_alpha,
     road_alpha,
@@ -232,8 +243,12 @@ def summarize_ownership_dirs(
     if not frame_stems:
         raise ValueError("No matching ownership PNGs found across bg/road/sky directories")
     records = []
-    duplicate_values_all = []
-    duplicate_errors_all = []
+    histogram_bins = 4096
+    duplicate_histogram = torch.zeros(histogram_bins, dtype=torch.float64)
+    duplicate_error_histogram = torch.zeros(histogram_bins, dtype=torch.float64)
+    duplicate_sum = 0.0
+    duplicate_count = 0
+    duplicate_above_threshold = 0
     for stem in frame_stems:
         bg_depth_path = bg_ownership / f"{stem}_depth.npy"
         road_depth_path = road_ownership / f"{stem}_depth.npy"
@@ -277,8 +292,20 @@ def summarize_ownership_dirs(
                 rgb_temperature=duplicate_rgb_temperature,
                 alpha_min=0.005,
             )
-            duplicate_values_all.append(duplicate_values)
-            duplicate_errors_all.append(duplicate_errors)
+            duplicate_sum += float(duplicate_values.double().sum())
+            duplicate_count += int(duplicate_values.numel())
+            duplicate_above_threshold += int(
+                (duplicate_values >= float(duplicate_score_threshold)).sum()
+            )
+            duplicate_histogram += torch.histc(
+                duplicate_values.float(), bins=histogram_bins, min=0.0, max=1.0
+            ).double()
+            duplicate_error_histogram += torch.histc(
+                duplicate_errors.float().clamp(0.0, 1.0),
+                bins=histogram_bins,
+                min=0.0,
+                max=1.0,
+            ).double()
     count_keys = {"n_valid_px", "n_depth_valid_px", "n_duplicate_valid_px"}
     scalar_keys = [key for key in records[0] if key not in count_keys]
     def nanmean(values: list[float]) -> float:
@@ -292,17 +319,17 @@ def summarize_ownership_dirs(
         n_depth_valid_px_total=sum(record.get("n_depth_valid_px", 0) for record in records),
         erosion_px=erosion_px,
     )
-    if duplicate_values_all:
-        duplicate_values = torch.cat(duplicate_values_all)
-        duplicate_errors = torch.cat(duplicate_errors_all)
+    if duplicate_count:
         summary.update(
-            n_duplicate_valid_px_total=int(duplicate_values.numel()),
-            bg_road_duplicate_alpha_mean=float(duplicate_values.mean()),
-            bg_road_duplicate_alpha_p90=float(torch.quantile(duplicate_values, 0.9)),
-            bg_road_duplicate_pixel_fraction=float(
-                (duplicate_values >= float(duplicate_score_threshold)).float().mean()
+            n_duplicate_valid_px_total=duplicate_count,
+            bg_road_duplicate_alpha_mean=duplicate_sum / duplicate_count,
+            bg_road_duplicate_alpha_p90=_histogram_quantile(
+                duplicate_histogram, 0.9, 0.0, 1.0
             ),
-            bg_road_duplicate_rgb_mae_p50=float(torch.quantile(duplicate_errors, 0.5)),
+            bg_road_duplicate_pixel_fraction=duplicate_above_threshold / duplicate_count,
+            bg_road_duplicate_rgb_mae_p50=_histogram_quantile(
+                duplicate_error_histogram, 0.5, 0.0, 1.0
+            ),
             duplicate_rgb_temperature=float(duplicate_rgb_temperature),
             duplicate_score_threshold=float(duplicate_score_threshold),
         )
