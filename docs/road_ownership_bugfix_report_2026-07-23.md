@@ -3,10 +3,12 @@
 **日期：** 2026-07-23
 **结论：** 第一阶段修复解决了 background 位于 road 前方时的显式侵蚀，
 并修复了续训状态与分层学习率的两个真实 bug。B12 随后补齐 duplicate
-测量、road-relative surface 和多视角 attribution，并证明可以把重复道路
-贡献降低 92.2%；但该 arm 会破坏其它视角的有效 background。保护其它视角
-后，质量接近基线，但 duplicate 只能降低 58.6%。因此只合入通用诊断和
-默认关闭的实验基础设施，不晋级任何训练 recipe，不标记 Full-Fix 完成。
+测量、road-relative surface 和多视角 attribution。5s E arm 可把 duplicate
+mean 降低 92.2%，用户在 Viser 中接受其“近中距 road、远距 background”
+视觉分工并授权补跑 20s/30k。正式训练将 duplicate mean 降低 85.0%，但
+duplicate pixel fraction 仅降低 36.0%，foreground alpha 与完整 KPI 严重
+回退。因此只合入通用诊断和默认关闭的实验基础设施，不晋级训练 recipe，
+不标记 Full-Fix 完成。
 
 ## 1. 问题拆分
 
@@ -198,16 +200,86 @@ C2 的六相机平均只下降 0.049 dB，说明 multi-view protection 的方向
 80%。E 则从反方向证明：只要全局压低这些粒子，duplicate 可以消失，但有效
 跨视角内容必然一起丢失。
 
-## 10. 最终判定
+## 10. 5s 阶段判定
 
 - Task 1–5 完成；
 - 本地 B12 相关测试：57 passed；
 - C2 GPU smoke/5s：5000 steps，10.43 it/s，无 OOM/nonfinite；
 - 没有 arm 同时通过 duplicate、六相机 KPI、foreground 和 road coverage 门；
-- 按计划不启动 Task 6 的 20s/30k 正式训练，不做最终 Viser 通过声明；
+- 按自动晋级规则不启动 Task 6；后续仅在用户视觉授权后补跑；
 - Road ownership 状态仍是“部分修复”，不是 Full-Fix。
 
 后续不能继续只调 density decay/recycle 强度。需要先为冲突粒子建立
 per-particle/per-view contribution ledger，并尝试 representation split/clone：
 把“front-wide 的 road duplicate”与“其它视角的有效 background”拆给不同
 Gaussian。新机制仍须先通过同一套 5s 三门，再允许消耗正式训练资源。
+
+## 11. 用户视觉授权后的 20s/30k 正式复测
+
+用户在 5s E arm 的 Viser 中观察到：
+
+- road-only 在远处截断；
+- 远处道路由 background 接管；
+- 近处 background-only duplicate 明显受到抑制；
+- 该视觉分工主观上可以接受。
+
+因此按用户明确要求，使用同一 E 配方运行六相机 20s/30k：
+
+- background-only screen loss，`lambda=1.0`；
+- warmup 1000、every 4 steps；
+- road RGB/alpha 辅助项均为 0；
+- depth-off、`num_workers=10`；
+- checkpoint 7k/15k/30k。
+
+训练完成，commit `bfcb881`，30,000 steps，31 epochs，3903.53 秒，
+7.69 it/s，无 OOM/nonfinite。显存最高约 23,240 MiB，最低剩余约
+844 MiB。正式目录：
+
+`/home/inceptio/work/output/mcro_b12_task6_screen_20s/mcro_b12_e_bgonly_screen_20s_30000/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9-2307_163233/`
+
+### 11.1 正式 KPI
+
+| 指标 | E 20s/30k | R6 30k | 变化 |
+|---|---:|---:|---:|
+| front-wide CC-PSNR | 19.3627 dB | 22.8242 dB | −3.4615 dB |
+| road PSNR | 23.2836 dB | 28.3206 dB | −5.0370 dB |
+| road LPIPS | 0.30563 | 0.24697 | +0.05866 |
+| road coverage P10 | 0.46956 | 0.51569 | −0.04613 |
+| foreground bg alpha mean | 0.04822 | 0.000156 | 显著回退 |
+| sky-on-road | 0 | 0 | 持平 |
+
+六相机 mean CC-PSNR 为 15.7369 dB，per-camera CC-PSNR：
+
+- front-wide 19.3627；
+- cross-left 14.9172；
+- cross-right 13.9033；
+- rear-left 16.5176；
+- rear-right 14.9987；
+- back-wide 14.5822。
+
+### 11.2 正式 ownership
+
+| 指标 | E 20s/30k | R6 | 降幅/变化 |
+|---|---:|---:|---:|
+| duplicate alpha mean | 0.06467 | 0.43020 | −85.0% |
+| duplicate pixel fraction | 0.59380 | 0.92780 | −36.0% |
+| raw bg-on-road alpha mean | 0.86009 | — | 仍很高 |
+| bg-in-front-of-road alpha mean | 0.04822 | 0.000156 | 约 309× |
+
+这组数字解释了视觉现象：screen loss 主要改变 background 在 road 像素上的
+颜色相似性，使 duplicate score 变小；它没有让 background 的 alpha 从 road
+像素退出。远处合入 background 并非无成本的责任交接，而伴随大量
+background-on-road alpha 和显著的多相机质量损失。
+
+### 11.3 最终结论
+
+正式 20s/30k 证明 E arm 的 duplicate mean 改善可以扩展到长训练，但整体
+工程门失败：
+
+- duplicate pixel fraction 未达到 80% 降幅；
+- foreground ownership 严重回退；
+- front-wide、road 和其它相机 KPI 明显下降；
+- 显存余量过低，不适合作为常规正式 recipe。
+
+因此 E arm checkpoint 保留用于视觉与根因研究，不晋级默认配置。最终 Viser
+人工观察可以决定这种分层外观是否有研究价值，但不能覆盖上述工程失败。

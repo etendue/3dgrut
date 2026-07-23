@@ -10,9 +10,12 @@
 
 先做 checkpoint 上的 render-only 候选扫描，证明哪些粒子真正承担重复道路成像；只有阈值和保护门有证据后，才接入默认关闭的训练机制。
 
-**2026-07-23 执行结论：** Task 1–5 已完成，Task 6 未启动。没有任何
-5s arm 同时通过 duplicate、六相机质量和 foreground 三类门，因此按计划
-停止在正式 20s/30k 训练之前，Road ownership 仍不能标记为 Full-Fix。
+**2026-07-23 执行结论：** Task 1–5 已完成。最初因没有 5s arm 同时通过
+duplicate、六相机质量和 foreground 三类门，Task 6 按计划未晋级；用户随后
+基于 Viser 观察接受了 E arm 的“近中距 road、远距 background”视觉分工，
+明确授权补跑 20s/30k。正式训练已完成，但仅 duplicate mean 达标，质量、
+foreground 和 duplicate pixel fraction 均失败，因此 Road ownership 仍不能
+标记为 Full-Fix。
 
 ## 冻结输入与验收口径
 
@@ -241,10 +244,41 @@ C2 相对 A2 的 per-camera CC-PSNR 变化：
 
 完整测试：57 passed。C2 训练 5000 steps，10.43 it/s，无 OOM/nonfinite。
 
-### Task 6：未执行
+### Task 6：经用户视觉授权后执行，未通过工程门
 
-Task 5 没有晋级 arm，继续跑 20s/30k 只会放大已知失败机制并浪费 GPU。
-因此不启动正式训练、不启动最终 Viser 验收，也不改变默认配置。
+Task 5 没有自动晋级 arm，因此最初不启动正式训练。用户在 Viser 检查 E arm
+后认为 road 截断、远处合入 background 的视觉分工可以接受，明确要求按同一
+screen-loss 配方补跑 20s/30k。正式配置保持：
+
+- 六相机、20s、30k、depth-off、`num_workers=10`；
+- background-only appearance-gated screen loss；
+- `lambda_bg_duplicate=1.0`，warmup 1000，every 4 steps；
+- `lambda_road_rgb=0`、`lambda_road_alpha=0`；
+- 保存 7k/15k/30k。
+
+训练结果：
+
+| 指标 | E 20s/30k | R6 参考 | 结论 |
+|---|---:|---:|---|
+| duplicate alpha mean | 0.06467 | 0.43020 | −85.0%，通过 mean 门 |
+| duplicate pixel fraction | 0.59380 | 0.92780 | 仅 −36.0%，失败 |
+| foreground bg alpha mean | 0.04822 | 0.000156 | 严重回退 |
+| road coverage P10 | 0.46956 | 0.51569 | 高于 0.37 硬门，但下降 |
+| front-wide CC-PSNR | 19.3627 dB | 22.8242 dB | −3.46 dB，失败 |
+| road PSNR | 23.2836 dB | 28.3206 dB | −5.04 dB，失败 |
+| road LPIPS | 0.30563 | 0.24697 | +0.05866，失败 |
+
+训练完成 30,000 steps，平均 7.69 it/s；checkpoint 7k/15k/30k 和
+`ckpt_last.pt` 均完整写出。显存峰值约 23,240 MiB、最低剩余约 844 MiB，
+超过保守内存门但未 OOM。最终 Viser 已启动供人工检查。
+
+正式产物：
+
+`/home/inceptio/work/output/mcro_b12_task6_screen_20s/mcro_b12_e_bgonly_screen_20s_30000/inceptio_b6a9ed61-8952-4b0c-90d8-fd2893e849e9-2307_163233/`
+
+最终判定：screen loss 确实降低了重复道路的颜色相似贡献，但没有让 background
+退出 road 像素的 alpha/depth 责任；大量 road 像素仍有 background 贡献，
+同时完整场景质量显著下降。该 recipe 不晋级、不改变默认配置。
 
 ## 后续技术方向
 
