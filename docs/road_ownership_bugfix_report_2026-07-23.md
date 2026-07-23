@@ -1,7 +1,12 @@
 # Road ownership bugfix 报告
 
 **日期：** 2026-07-23
-**结论：** 本轮修复解决了 background 位于 road 前方时的显式侵蚀，并修复了续训状态与分层学习率的两个真实 bug；但没有消除 `background-only` 中与 road 共面或稍后方的重复道路成像。因此本轮按“部分修复”合入 `main`，不标记 Full-Fix 完成。
+**结论：** 第一阶段修复解决了 background 位于 road 前方时的显式侵蚀，
+并修复了续训状态与分层学习率的两个真实 bug。B12 随后补齐 duplicate
+测量、road-relative surface 和多视角 attribution，并证明可以把重复道路
+贡献降低 92.2%；但该 arm 会破坏其它视角的有效 background。保护其它视角
+后，质量接近基线，但 duplicate 只能降低 58.6%。因此只合入通用诊断和
+默认关闭的实验基础设施，不晋级任何训练 recipe，不标记 Full-Fix 完成。
 
 ## 1. 问题拆分
 
@@ -102,3 +107,107 @@ B2 的粒子判定以 background Gaussian 的**中心**为主：
 ## 6. 后续工作
 
 后续任务不再优化“前景 background alpha”，而是直接建立并降低 **background 对 road 像素的重复道路贡献**。实施依据见 [后续计划](superpowers/plans/2026-07-23-road-relative-background-exclusion.md)。
+
+## 7. B12 根因调查结果
+
+### 7.1 新指标确认原 guard 的盲区
+
+旧指标 `bg_in_front_of_road_alpha_mean` 只回答“background 是否挡在 road
+前面”，不能回答“background-only 是否在复制 road 纹理”。B12 新增的
+`bg_road_duplicate_alpha_mean/p90/pixel_fraction` 在 eroded road domain
+直接比较 background-only 与 road/GT 的颜色贡献，不要求 background depth
+必须更近。
+
+R6 原始 front-wide held-out：
+
+| 指标 | R6 |
+|---|---:|
+| duplicate alpha mean | 0.430204 |
+| duplicate pixel fraction | 0.927802 |
+| valid road pixels | 18,365,105 |
+
+`drop z<0` 可消除约 98.9% duplicate，而 `drop z>0` 只消除约 0.1%。
+这解释了 Viser 中的观察，但不改变“禁止用绝对 Z 作为生产规则”的结论：
+同一段 road 的 world-Z 实测横跨 `−2.89m～+0.89m`。
+
+### 7.2 中心相对高度不是主要充分条件
+
+局部 road surface 有 73,525 个有效 cells，grid validity 为 99.76%。
+然而 background 中心落入窄 relative-Z slab 的粒子很少，extent 扫描也只
+减少 8.7%～13.0% duplicate。问题主要来自投影 footprint 和跨视角成像责任，
+不是简单的“粒子中心位于 road 平面附近”。
+
+### 7.3 硬删除能去道路，也会删除有效场景
+
+screen-space attribution 找到 1,320 个严格候选，其中 1,318 个 alive。
+过滤后 duplicate `0.430204→0.054017`（−87.44%），证明候选确实承担重复
+道路成像；但完整六相机评测同时出现：
+
+- front-wide CC-PSNR −2.63 dB；
+- 六相机平均 CC-PSNR −0.93 dB；
+- road PSNR −3.49 dB。
+
+所以这些不是“纯垃圾粒子”。它们在 front-wide 的 road 像素上是 duplicate，
+同时在其它像素或视角承担建筑、植被、路缘等有效纹理。Gaussian 的 density
+是跨视角共享参数，硬删会同时取消两种责任。
+
+## 8. B12 技术修改：成功、失败与集成边界
+
+| 技术修改 | 原理 | 结果 | 是否进入 `main` |
+|---|---|---|---|
+| lossless layer RGB/GT/alpha/depth dump | 避免 8-bit 图像和 depth gate 隐藏弱 duplicate | 新指标稳定复现 R6 视觉问题 | 是 |
+| duplicate evaluator 与正确像素分母 | 对所有 eroded-road 有效像素统计，包括零 background 贡献 | R6、Z A/B 和各训练 arm 可统一比较 | 是 |
+| confident local road surface | 用局部支持、距离和高度离散度约束有效域 | 证明绝对 Z 不可用，并排除 center-slab 主因 | 是 |
+| footprint / multi-view projection attribution | 统计粒子在 road 与 protected pixels 的真实屏幕贡献 | 成功找到因果候选，并揭示跨视角责任冲突 | 是，诊断用途 |
+| checkpoint projection filter | 保持 tensor shape，只降低候选 density | duplicate −87.44%，但 KPI 严重回退 | 是，仅 render-only 诊断；不得作为修复 |
+| 多视角 projection recycle/decay/shrink | 只 mutation 未被其它视角保护的 road 候选 | C2 质量接近基线，但 duplicate 仅 −58.6% | 保留默认关闭；不晋级 recipe |
+| appearance-gated screen transfer | 在 road 像素抑制与道路颜色相似的 bg，并可推动 road 接管 | E duplicate −92.2%，但多相机/foreground 回退 | 不作为默认或正式 recipe |
+| isolated-render exposure detach | layer loss 训练 Gaussian 时不误更新共享 BilateralGrid | 修复一个实验路径中的真实梯度泄漏 | 若保留 screen-transfer 基础设施则必须同时保留 |
+| 5s A/B driver | 统一 seed、相机、depth-off、workers、评测 | 发现第一版 A/B/C 错把 road LR 从 step 0 锁低 | 只保留修正后的 warm 对照；旧结果不得用于晋级 |
+
+所有新增训练行为均默认关闭。`main` 不应自动启用 projection mutation 或
+screen transfer，也不应收录任何把 world `z<0` 当正式规则的配置。
+
+## 9. B12 5s 实验结果
+
+第一版 A/B/C 与 R6 语义不一致：它从 step 0 把 road scale/density LR 锁到
+`1e-4`，而 R6 是先 warm 7k 再锁。5s 实验本应让 road 全程正常学习。
+修正后的 A2 比错误 A 的 front-wide CC-PSNR 高 0.746 dB、road PSNR 高
+0.654 dB，因此最终只以 A2 为基线。
+
+| arm | 机制 | duplicate | 降幅 | mean CC-PSNR | road PSNR | road LPIPS | 结论 |
+|---|---|---:|---:|---:|---:|---:|---|
+| A2 | 正确 warm baseline | 0.291202 | — | 20.3838 | 25.8312 | 0.26350 | 基线 |
+| D | bg + road screen transfer | 0.085828 | 70.5% | 18.7218 | 23.9643 | 0.27498 | 全部门失败 |
+| E | bg-only screen loss | 0.022859 | 92.2% | 19.2785 | 24.9359 | 0.26855 | duplicate 通过，质量/foreground 失败 |
+| C2 | warm + protected projection recycle | 0.120437 | 58.6% | 20.3347 | 25.5669 | 0.26662 | 质量接近，duplicate 失败 |
+
+C2 相对 A2：
+
+| 相机 | CC-PSNR 变化 |
+|---|---:|
+| front-wide | −0.644 dB |
+| cross-left | +0.155 dB |
+| cross-right | +0.250 dB |
+| rear-left | +0.183 dB |
+| rear-right | −0.326 dB |
+| back-wide | +0.047 dB |
+
+C2 的六相机平均只下降 0.049 dB，说明 multi-view protection 的方向正确；
+但 rear-right 略超 `−0.3 dB` 门，front-wide 明显回退，duplicate 降幅也低于
+80%。E 则从反方向证明：只要全局压低这些粒子，duplicate 可以消失，但有效
+跨视角内容必然一起丢失。
+
+## 10. 最终判定
+
+- Task 1–5 完成；
+- 本地 B12 相关测试：57 passed；
+- C2 GPU smoke/5s：5000 steps，10.43 it/s，无 OOM/nonfinite；
+- 没有 arm 同时通过 duplicate、六相机 KPI、foreground 和 road coverage 门；
+- 按计划不启动 Task 6 的 20s/30k 正式训练，不做最终 Viser 通过声明；
+- Road ownership 状态仍是“部分修复”，不是 Full-Fix。
+
+后续不能继续只调 density decay/recycle 强度。需要先为冲突粒子建立
+per-particle/per-view contribution ledger，并尝试 representation split/clone：
+把“front-wide 的 road duplicate”与“其它视角的有效 background”拆给不同
+Gaussian。新机制仍须先通过同一套 5s 三门，再允许消耗正式训练资源。

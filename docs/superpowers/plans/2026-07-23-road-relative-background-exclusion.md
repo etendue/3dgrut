@@ -10,6 +10,10 @@
 
 先做 checkpoint 上的 render-only 候选扫描，证明哪些粒子真正承担重复道路成像；只有阈值和保护门有证据后，才接入默认关闭的训练机制。
 
+**2026-07-23 执行结论：** Task 1–5 已完成，Task 6 未启动。没有任何
+5s arm 同时通过 duplicate、六相机质量和 foreground 三类门，因此按计划
+停止在正式 20s/30k 训练之前，Road ownership 仍不能标记为 Full-Fix。
+
 ## 冻结输入与验收口径
 
 冻结参考：
@@ -160,3 +164,97 @@ layers:
 - 5s 有效、20s 后复发：检查 post-MCMC enforcement 和多视角候选一致性。
 - ownership 达标但 road coverage 下降：先稳定 road density/scale，不把责任还给 background。
 - 全部门通过但 Viser 仍见重复道路：任务仍未完成，增加失败帧到冻结集合后继续判因。
+
+## 执行记录
+
+### Task 1：完成
+
+- 新增 lossless background/road RGB、alpha、depth 与 GT dump。
+- `bg_road_duplicate_alpha_mean/p90/pixel_fraction` 使用所有 eroded-road
+  有效像素作分母，包含 background 贡献为零的像素。
+- R6 原始 front-wide held-out 结果：
+  `mean=0.430204`、`pixel_fraction=0.927802`。
+- `drop z<0` 可消除约 98.9% duplicate，`drop z>0` 只消除约 0.1%。
+  这证明负 world-Z 与问题相关，但不把 world-Z 当作生产规则。
+- 产物：`/home/inceptio/work/output/mcro_b12_task1_duplicate_metric/`。
+
+### Task 2：完成
+
+- 构建带 validity、邻域支持数和离散度的局部 road surface。
+- 冻结 checkpoint 得到 73,525 个有效 cell，grid validity 为 99.76%，
+  road world-Z 范围为 `−2.89m～+0.89m`。
+- center-relative slab 只命中很少粒子，证明“中心靠近 road surface”不是
+  duplicate 的主要充分条件。
+- 产物：`/home/inceptio/work/output/mcro_b12_task2_surface/`。
+
+### Task 3：完成，但没有可晋级的硬过滤 arm
+
+- relative extent 扫描仅减少 8.7%～13.0% duplicate。
+- 多视角 screen-space attribution 找到 1,320 个严格候选，其中 1,318 个
+  alive；过滤后 duplicate `0.430204→0.054017`（−87.44%）。
+- 同一 filtered checkpoint 的完整六相机评测严重回退：front-wide
+  CC-PSNR −2.63 dB、六相机平均 CC-PSNR −0.93 dB、road PSNR −3.49 dB。
+- 结论：这些粒子在 front-wide 复制道路，但也在其它像素/视角承担有效纹理；
+  直接全局降低其 density 不是安全修复。
+- 产物：`/home/inceptio/work/output/mcro_b12_task3_projection/`。
+
+### Task 4：实现完成，默认关闭
+
+- 实现多视角 road-footprint / protected-region 累积、recycle/decay/shrink、
+  visibility OR、nonfinite 原子跳过和 MCMC row-evidence reset。
+- `enabled=false` 保持历史路径；100-step GPU smoke 无 OOM/nonfinite。
+- 额外试验了 appearance-gated screen transfer，并修复 isolated render
+  意外更新共享 exposure 参数的问题。该 screen transfer 最终未通过质量门，
+  不得作为默认或正式 recipe。
+
+### Task 5：完成，所有候选均未晋级
+
+早期 A/B/C 使用了“从 step 0 锁低 road scale/density LR”的错误 5s 对照，
+与 R6 的 7k warmup 语义不一致，只能作为 locked-road 失败证据。修正后的
+A2 保持 road 正常学习，作为最终 5s 基线。
+
+| arm | 机制 | duplicate mean | 相对 A2 | mean CC-PSNR | road PSNR | 判定 |
+|---|---|---:|---:|---:|---:|---|
+| A2 | 正确 warm baseline | 0.291202 | — | 20.3838 | 25.8312 | 基线 |
+| D | bg + road screen transfer | 0.085828 | −70.5% | 18.7218 | 23.9643 | duplicate、质量均失败 |
+| E | bg-only screen loss | 0.022859 | −92.2% | 19.2785 | 24.9359 | duplicate 通过；多相机与 foreground 失败 |
+| C2 | warm + multi-view projection recycle | 0.120437 | −58.6% | 20.3347 | 25.5669 | 质量接近；duplicate 失败 |
+
+C2 相对 A2 的 per-camera CC-PSNR 变化：
+
+- front-wide −0.644 dB；
+- cross-left +0.155 dB；
+- cross-right +0.250 dB；
+- rear-left +0.183 dB；
+- rear-right −0.326 dB；
+- back-wide +0.047 dB。
+
+最终判断：
+
+1. 全局 screen loss 能去掉 front-wide duplicate，但会同时削弱 background
+   在其它视角承担的有效内容；
+2. 多视角保护能显著缓和质量回退，但剩余 protected 粒子仍会在 front-wide
+   复制 road，duplicate 只能下降 58.6%；
+3. 当前 Gaussian 的 opacity/density 是跨视角共享参数。只要同一粒子在一个
+   视角是 duplicate、在另一个视角是有效背景，任何粒子级全局 mutation 都
+   无法同时满足两类门。
+
+完整测试：57 passed。C2 训练 5000 steps，10.43 it/s，无 OOM/nonfinite。
+
+### Task 6：未执行
+
+Task 5 没有晋级 arm，继续跑 20s/30k 只会放大已知失败机制并浪费 GPU。
+因此不启动正式训练、不启动最终 Viser 验收，也不改变默认配置。
+
+## 后续技术方向
+
+下一阶段不应继续调单一 density-decay/recycle 强度，而应先解决
+**view-conditioned ownership conflict**：
+
+1. 建立“该粒子在 road 视角是 duplicate、在保护视角是有效内容”的
+   per-particle/per-view contribution ledger；
+2. 对冲突粒子优先做 representation split/clone，把 road-duplicate 与
+   protected-view 外观责任拆到不同 Gaussian，而不是全局删除；
+3. 或在 renderer/compositor 中引入只对有高置信 road ownership 的像素生效的
+   layer competition，但必须证明不会形成训练/推理不一致；
+4. 新机制仍先过 5s duplicate + 六相机 + foreground 三门，再考虑 20s/30k。
