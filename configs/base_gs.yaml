@@ -51,6 +51,32 @@ layers:
     # Repeated footprint-only hits must not underflow exp(log_scale) to zero;
     # zero activated scales poison the MCMC relocation inverse (log(0)).
     min_footprint_scale: 0.0001
+  # MCRO B12: multi-view projection ownership exclusion.  The offline B12
+  # scan showed that road-relative center/ellipsoid tests miss the actual
+  # failure: a background Gaussian outside the road volume can still paint
+  # road pixels through its projected footprint.  This gate accumulates the
+  # same road-footprint/protected-center evidence used by the successful
+  # render-only arm, then returns candidates to MCMC's dead pool.
+  # Default off preserves historical training behavior and cost.
+  bg_road_duplicate_exclusion:
+    enabled: false
+    sample_every_steps: 10
+    window_samples: 8
+    warmup_steps: 500
+    road_mask_erosion_px: 8
+    protection_margin_px: 16
+    footprint_sigma: 2.0
+    max_footprint_px: 48.0
+    chunk_size: 100000
+    min_road_hits: 1
+    max_protected_hits: 0
+    min_visible_hits: 1
+    opacity_threshold: 0.005
+    action: recycle  # recycle | density_decay | footprint_shrink
+    dead_density_raw: -50.0
+    density_decay: 5.0
+    footprint_shrink_factor: 0.5
+    min_footprint_scale: 0.0001
 
 # T3.4: region-weighted L1 loss for layered training. When true AND the
 # dataloader populates batch.image_infos (sky/road/dyn masks), L1 loss is

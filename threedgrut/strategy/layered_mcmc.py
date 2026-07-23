@@ -16,6 +16,8 @@ they have no MoG particles to densify.
 
 from __future__ import annotations
 
+import math
+
 import torch
 from omegaconf import OmegaConf
 
@@ -29,6 +31,10 @@ from threedgrut.model.road_reg import (
     project_bg_road_hits,
 )
 from threedgrut.model.road_ownership import apply_bg_road_exclusion
+from threedgrut.model.road_projection_candidates import (
+    accumulate_projection_counts,
+    make_projection_counts,
+)
 from threedgrut.model.road_region import build_road_height_field
 from threedgrut.strategy.base import BaseStrategy
 from threedgrut.strategy.mcmc import MCMCStrategy
@@ -53,6 +59,10 @@ class LayeredMCMCStrategy(BaseStrategy):
         self._road_bev = None
         self._mcro_road_height_field = None
         self.last_bg_road_exclusion_stats = None
+        self.last_bg_road_duplicate_stats = None
+        self._bg_road_duplicate_visibility = None
+        self._bg_road_duplicate_counts = None
+        self._bg_road_duplicate_n_samples = 0
         logger.info(
             f"LayeredMCMC: {len(self.sub_strategies)} sub-strategies for " f"layers {list(self.sub_strategies.keys())}"
         )
@@ -86,8 +96,35 @@ class LayeredMCMCStrategy(BaseStrategy):
         return sub
 
     def init_densification_buffer(self, checkpoint: dict | None = None) -> None:
+        # Projection evidence is tied to live particle row indices.  It is
+        # intentionally not checkpointed; resume rebuilds it from new views.
+        self._reset_bg_road_duplicate_evidence()
         for sub in self.sub_strategies.values():
             sub.init_densification_buffer(checkpoint)
+
+    def set_step_outputs(self, outputs: dict | None) -> None:
+        """Retain only B12's background visibility mask for the current step."""
+        self._bg_road_duplicate_visibility = None
+        cfg = self._bg_road_duplicate_cfg()
+        if cfg is None or not bool(getattr(cfg, "enabled", False)):
+            return
+        visibility = outputs.get("mog_visibility") if isinstance(outputs, dict) else None
+        if not torch.is_tensor(visibility):
+            return
+        visibility = visibility.detach().reshape(-1).bool()
+        layers = getattr(self.model, "layers", None)
+        if layers is None or "background" not in layers:
+            return
+        n_background = int(layers["background"].positions.shape[0])
+        if visibility.numel() == n_background:
+            self._bg_road_duplicate_visibility = visibility
+            return
+        try:
+            layer_mask = self.model.get_layer_mask("background")
+        except (AttributeError, ValueError):
+            return
+        if layer_mask.numel() == visibility.numel():
+            self._bg_road_duplicate_visibility = visibility[layer_mask]
 
     def _post_backward(self, step: int, scene_extent: float, train_dataset, batch=None, writer=None) -> bool:
         """E3.2.5③b: zero rotation grads for layers with freeze_rotation_grad.
@@ -122,12 +159,22 @@ class LayeredMCMCStrategy(BaseStrategy):
         # particle set stays exactly as initialized. Default empty → baseline
         # byte-identical. CLI: ++strategy.exclude_layer_ids=[road].
         exclude = set(getattr(getattr(self.conf, "strategy", None), "exclude_layer_ids", None) or [])
+        # B12 must consume visibility before a relocation changes the meaning
+        # of fused particle row indices.  A recycle action deliberately feeds
+        # candidates into the MCMC dead pool below, so relocation can replace
+        # them from legitimate live donors in the same step.
+        duplicate_updated = self._maybe_apply_bg_road_duplicate_exclusion(step, batch, writer)
         any_updated = False
         for name, sub in self.sub_strategies.items():
             if name in exclude:
                 continue
             updated = sub._post_optimizer_step(step, scene_extent, train_dataset, batch, writer)
             any_updated = any_updated or updated
+            if name == "background" and getattr(sub, "last_relocation_count", 0) > 0:
+                # Relocation reuses dead row indices for new particles; any
+                # incomplete evidence window referred to the old row owners.
+                self._reset_bg_road_duplicate_evidence()
+        any_updated = any_updated or duplicate_updated
         # T8/B3 — dynamic_rigids hard constraint: clamp positions back into
         # owner cuboid after MCMC perturb/add. Pure no-op when conf gate off
         # or when the layer / metadata are missing.
@@ -147,6 +194,141 @@ class LayeredMCMCStrategy(BaseStrategy):
             self._maybe_exclude_bg_from_road_slab()
             self._maybe_project_clamp_bg_density(batch)
         return any_updated
+
+    def _bg_road_duplicate_cfg(self):
+        layers_conf = getattr(self.conf, "layers", None)
+        return getattr(layers_conf, "bg_road_duplicate_exclusion", None) if layers_conf is not None else None
+
+    def _reset_bg_road_duplicate_evidence(self) -> None:
+        self._bg_road_duplicate_counts = None
+        self._bg_road_duplicate_n_samples = 0
+        self._bg_road_duplicate_visibility = None
+
+    @staticmethod
+    def _resolve_training_road_mask(batch):
+        image_infos = getattr(batch, "image_infos", None)
+        if not isinstance(image_infos, dict):
+            return None
+        road_mask = image_infos.get("road_mask")
+        if road_mask is not None:
+            return road_mask
+        semantic_sseg = image_infos.get("semantic_sseg")
+        if semantic_sseg is None:
+            return None
+        return (semantic_sseg == 0) | (semantic_sseg == 1)
+
+    @torch.no_grad()
+    def _maybe_apply_bg_road_duplicate_exclusion(self, step: int, batch, writer=None) -> bool:
+        """Accumulate B12 projection evidence and mutate at window boundaries."""
+        self.last_bg_road_duplicate_stats = None
+        cfg = self._bg_road_duplicate_cfg()
+        if cfg is None or not bool(getattr(cfg, "enabled", False)):
+            self._bg_road_duplicate_visibility = None
+            return False
+
+        every = int(getattr(cfg, "sample_every_steps", 10))
+        window_samples = int(getattr(cfg, "window_samples", 8))
+        warmup = int(getattr(cfg, "warmup_steps", 500))
+        if every <= 0 or window_samples <= 0:
+            raise ValueError(
+                "layers.bg_road_duplicate_exclusion sample_every_steps and " "window_samples must be positive"
+            )
+        if step < warmup or (step - warmup) % every:
+            self._bg_road_duplicate_visibility = None
+            return False
+
+        layers = getattr(self.model, "layers", None)
+        if layers is None or "background" not in layers:
+            self._reset_bg_road_duplicate_evidence()
+            return False
+        bg = layers["background"]
+        road_mask = self._resolve_training_road_mask(batch)
+        intrinsics = getattr(batch, "intrinsics_OpenCVPinholeCameraModelParameters", None)
+        pose = getattr(batch, "T_to_world", None)
+        visibility = self._bg_road_duplicate_visibility
+        self._bg_road_duplicate_visibility = None
+        required = (
+            bg.positions.detach(),
+            bg.get_scale().detach(),
+            road_mask,
+            intrinsics,
+            pose,
+            visibility,
+        )
+        if any(value is None for value in required):
+            return False
+        tensor_values = (required[0], required[1], road_mask, pose)
+        if any(torch.is_tensor(value) and not bool(torch.isfinite(value).all()) for value in tensor_values):
+            logger.warning(f"[MCRO B12] non-finite projection input at step={step}; evidence sample skipped")
+            return False
+
+        n_background = int(bg.positions.shape[0])
+        if (
+            self._bg_road_duplicate_counts is None
+            or self._bg_road_duplicate_counts["visible_hits"].numel() != n_background
+        ):
+            self._bg_road_duplicate_counts = make_projection_counts(n_background, bg.positions.device)
+            self._bg_road_duplicate_n_samples = 0
+        accumulate_projection_counts(
+            self._bg_road_duplicate_counts,
+            positions_world=bg.positions.detach(),
+            scales_linear=bg.get_scale().detach(),
+            T_camera_to_world=pose,
+            intrinsics=intrinsics,
+            road_mask=road_mask,
+            mog_visibility=visibility,
+            erosion_px=int(getattr(cfg, "road_mask_erosion_px", 8)),
+            protection_margin_px=int(getattr(cfg, "protection_margin_px", 16)),
+            footprint_sigma=float(getattr(cfg, "footprint_sigma", 2.0)),
+            max_footprint_px=float(getattr(cfg, "max_footprint_px", 48.0)),
+            chunk_size=int(getattr(cfg, "chunk_size", 100_000)),
+        )
+        self._bg_road_duplicate_n_samples += 1
+        if self._bg_road_duplicate_n_samples < window_samples:
+            return False
+
+        counts = self._bg_road_duplicate_counts
+        alive = bg.get_density().detach().reshape(-1) > float(getattr(cfg, "opacity_threshold", 0.005))
+        visible = counts["visible_hits"] >= int(getattr(cfg, "min_visible_hits", 1))
+        road = counts["road_footprint_hits"] >= int(getattr(cfg, "min_road_hits", 1))
+        protected = counts["protected_center_hits"] > int(getattr(cfg, "max_protected_hits", 0))
+        candidate = alive & visible & road & ~protected
+        stats = {
+            "n_window_samples": int(self._bg_road_duplicate_n_samples),
+            "n_visible": int((alive & visible).sum().item()),
+            "n_road_candidates": int((alive & visible & road).sum().item()),
+            "n_protected": int((alive & visible & road & protected).sum().item()),
+            "n_recycled": 0,
+            "n_decayed": 0,
+            "n_footprint_shrunk": 0,
+        }
+        action = str(getattr(cfg, "action", "recycle"))
+        if action == "recycle":
+            bg.density[candidate] = float(getattr(cfg, "dead_density_raw", -50.0))
+            stats["n_recycled"] = int(candidate.sum().item())
+        elif action == "density_decay":
+            bg.density[candidate] -= float(getattr(cfg, "density_decay", 5.0))
+            stats["n_decayed"] = int(candidate.sum().item())
+        elif action == "footprint_shrink":
+            factor = float(getattr(cfg, "footprint_shrink_factor", 0.5))
+            minimum = float(getattr(cfg, "min_footprint_scale", 1e-4))
+            if not 0.0 < factor < 1.0 or minimum <= 0.0:
+                raise ValueError("B12 footprint shrink requires factor in (0,1) and positive minimum")
+            floor = torch.full_like(bg.scale[candidate], math.log(minimum))
+            shrunk = torch.maximum(bg.scale[candidate] + math.log(factor), floor)
+            bg.scale[candidate] = shrunk
+            stats["n_footprint_shrunk"] = int(candidate.sum().item())
+        else:
+            raise ValueError(
+                "layers.bg_road_duplicate_exclusion.action must be " "recycle, density_decay, or footprint_shrink"
+            )
+        self.last_bg_road_duplicate_stats = stats
+        logger.info(f"[MCRO B12] projection ownership window step={step}: {stats}")
+        if writer is not None:
+            for name, value in stats.items():
+                writer.add_scalar(f"mcro/bg_road_duplicate_exclusion/{name}", value, step)
+        self._reset_bg_road_duplicate_evidence()
+        return bool(candidate.any())
 
     def _maybe_apply_bg_road_exclusion(self, step: int, batch, writer=None) -> bool:
         """MCRO B2 formal GPU path; returns whether its config gate is enabled."""
@@ -168,9 +350,7 @@ class LayeredMCMCStrategy(BaseStrategy):
             self._mcro_road_height_field = build_road_height_field(
                 road.positions.detach(), cell_size=float(getattr(cfg, "cell_size", 1.0))
             )
-        stats = apply_bg_road_exclusion(
-            layers["background"], self._mcro_road_height_field, batch, cfg
-        )
+        stats = apply_bg_road_exclusion(layers["background"], self._mcro_road_height_field, batch, cfg)
         self.last_bg_road_exclusion_stats = stats
         calls = getattr(self, "_mcro_bg_road_calls", 0) + 1
         self._mcro_bg_road_calls = calls

@@ -399,10 +399,7 @@ class Trainer3DGRUT:
                         else None
                     )
                     if self.semantic_disjoint_init_stats is not None:
-                        logger.info(
-                            "[MCRO B1] semantic-disjoint init stats: "
-                            f"{self.semantic_disjoint_init_stats}"
-                        )
+                        logger.info("[MCRO B1] semantic-disjoint init stats: " f"{self.semantic_disjoint_init_stats}")
                         if self.semantic_disjoint_init_stats["n_intersection"] != 0:
                             raise RuntimeError(
                                 "semantic-disjoint initialization invariant failed: "
@@ -2529,6 +2526,11 @@ class Trainer3DGRUT:
 
         # Post backward strategy step
         with torch.cuda.nvtx.range(f"train_{global_step}_post_opt_step"):
+            # MCRO B12 consumes the current tracer visibility before MCMC can
+            # relocate particle rows.  Default strategies implement this as a
+            # no-op; the layered strategy retains only a detached bool mask
+            # when its default-off B12 gate is enabled.
+            self.strategy.set_step_outputs(outputs)
             scene_updated = self.strategy.post_optimizer_step(
                 step=global_step,
                 scene_extent=self.scene_extent,
@@ -2542,12 +2544,15 @@ class Trainer3DGRUT:
                 for layer, sub in sub_strategies.items():
                     self.per_camera_telemetry.record_relocation(layer, getattr(sub, "last_relocation_count", 0))
             else:
-                self.per_camera_telemetry.record_relocation("background", getattr(self.strategy, "last_relocation_count", 0))
-            ownership_stats = getattr(self.strategy, "last_bg_road_exclusion_stats", None)
-            if ownership_stats is not None:
-                self.per_camera_telemetry.record_ownership_actions(
-                    str(gpu_batch.camera_id), ownership_stats
+                self.per_camera_telemetry.record_relocation(
+                    "background", getattr(self.strategy, "last_relocation_count", 0)
                 )
+            ownership_stats = getattr(self.strategy, "last_bg_road_exclusion_stats", None)
+            duplicate_stats = getattr(self.strategy, "last_bg_road_duplicate_stats", None)
+            if duplicate_stats is not None:
+                ownership_stats = duplicate_stats
+            if ownership_stats is not None:
+                self.per_camera_telemetry.record_ownership_actions(str(gpu_batch.camera_id), ownership_stats)
 
         # Update the SH if required
         if self.model.progressive_training and check_step_condition(

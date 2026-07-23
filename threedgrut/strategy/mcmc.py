@@ -112,6 +112,8 @@ class MCMCStrategy(BaseStrategy):
         )
 
     def _post_optimizer_step(self, step: int, scene_extent: float, train_dataset, batch=None, writer=None) -> bool:
+        # Per-step telemetry must not retain the previous relocation count.
+        self.last_relocation_count = 0
         # Relocate dead gaussians to the alive areas
         if check_step_condition(
             step,

@@ -62,6 +62,13 @@ class BaseStrategy:
             return False
         return self._post_optimizer_step(step, scene_extent, train_dataset, batch, writer)
 
+    def set_step_outputs(self, outputs: dict | None) -> None:
+        """Provide detached renderer evidence to strategies that need it.
+
+        The base implementation is deliberately a no-op so existing
+        strategies retain their historical behavior and memory use.
+        """
+
     def _post_optimizer_step(self, step: int, scene_extent: float, train_dataset, batch=None, writer=None) -> bool:
         return False
 
