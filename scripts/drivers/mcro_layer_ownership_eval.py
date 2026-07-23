@@ -86,7 +86,6 @@ def _duplicate_samples(
     valid = (
         interior
         & finite
-        & (bg_alpha > float(alpha_min))
         & (road_alpha > float(alpha_min))
     )
     appearance_weight = torch.exp(-appearance_error / float(rgb_temperature))

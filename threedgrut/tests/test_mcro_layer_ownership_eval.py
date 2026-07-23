@@ -56,6 +56,16 @@ def test_duplicate_metric_rejects_background_with_nonroad_appearance():
      bg_rgb=bg_rgb,gt_rgb=road_rgb,duplicate_rgb_temperature=.1)
  assert r["bg_road_duplicate_alpha_mean"] < 1e-4
 
+def test_duplicate_metric_keeps_zero_background_pixels_in_denominator():
+ f=m().compute_ownership_metrics
+ bg=torch.tensor([[[[.8],[0.0]]]])
+ road=torch.ones_like(bg)*.9
+ rgb=torch.zeros(1,1,2,3)
+ mask=torch.ones_like(bg,dtype=torch.bool)
+ r=f(bg,road,rgb,rgb,mask,erosion_px=0,bg_rgb=rgb,gt_rgb=rgb)
+ assert r["n_duplicate_valid_px"]==2
+ assert r["bg_road_duplicate_alpha_mean"]==pytest.approx(.36)
+
 def test_duplicate_metric_respects_eroded_road_boundary():
  f=m().compute_ownership_metrics
  alpha=torch.ones(1,3,3,1)*.9
