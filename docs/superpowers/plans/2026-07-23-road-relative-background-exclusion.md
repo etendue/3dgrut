@@ -280,6 +280,10 @@ screen-loss 配方补跑 20s/30k。正式配置保持：
 退出 road 像素的 alpha/depth 责任；大量 road 像素仍有 background 贡献，
 同时完整场景质量显著下降。该 recipe 不晋级、不改变默认配置。
 
+最终 Viser 人工验收：用户确认 road 的几何覆盖体现出完整性，但 background
+和 road 两层的外观都已回退到不可辨认。视觉门明确失败；不能用“远处道路由
+background 接管”的结构合理性覆盖纹理已经损坏的事实。
+
 ## 后续技术方向
 
 下一阶段不应继续调单一 density-decay/recycle 强度，而应先解决

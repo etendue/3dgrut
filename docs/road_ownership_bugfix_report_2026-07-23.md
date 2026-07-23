@@ -283,3 +283,17 @@ background-on-road alpha 和显著的多相机质量损失。
 
 因此 E arm checkpoint 保留用于视觉与根因研究，不晋级默认配置。最终 Viser
 人工观察可以决定这种分层外观是否有研究价值，但不能覆盖上述工程失败。
+
+### 11.4 最终 Viser 验收
+
+用户最终确认：
+
+- road 的几何覆盖体现出完整性；
+- background 和 road 两层均已回退到不可辨认的视觉效果。
+
+视觉门因此明确失败。代码检查表明 `appearance_weight` 已经 detach，screen
+loss 不能通过直接修改颜色来规避指标；失败机制是它沿 background opacity
+对共享 Gaussian 做跨视角全局抑制，而 E arm 又把 road RGB/alpha 正向接管项
+设为 0。结果是 background 的有效外观被破坏，road 只有覆盖而没有获得足够的
+替代纹理责任。该结果进一步证明：后续必须做受保护的 view-conditioned
+responsibility split/clone，不能继续使用单一全局 opacity loss。
