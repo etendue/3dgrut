@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 from threedgrut.model.road_region import (
+    build_confident_road_surface,
     build_road_height_field,
     compute_bg_road_opacity_penalty,
+    query_confident_road_surface,
     query_ground_z,
+    summarize_confident_road_surface,
 )
 
 
@@ -105,3 +109,80 @@ def test_penalty_shape_mismatch_raises():
     bgd = torch.zeros(3, requires_grad=True)  # mismatch 5 vs 3
     with _pt.raises(Exception):
         compute_bg_road_opacity_penalty(bgp, bgd, hf, z_band=0.4, lambda_val=1.0)
+
+
+def test_confident_surface_flat_and_small_hole_fill():
+    # Occupied cells at x=0 and x=2 support the empty x=1 cell.
+    road = torch.tensor(
+        [[0.1, 0.1, 0.0], [0.2, 0.1, 0.0], [2.3, 0.1, 0.0], [2.4, 0.1, 0.0]]
+    )
+    surface = build_confident_road_surface(
+        road,
+        cell_size=1.0,
+        min_support=2,
+        max_xy_distance=1.1,
+        max_z_dispersion=0.01,
+    )
+    z, valid, support, dispersion = query_confident_road_surface(
+        torch.tensor([[1.2, 0.1], [3.2, 0.1]]), surface
+    )
+    assert valid.tolist() == [True, False]
+    assert z[0].item() == pytest.approx(0.0)
+    assert support[0].item() == 4
+    assert dispersion[0].item() == pytest.approx(0.0)
+    summary = summarize_confident_road_surface(surface)
+    assert summary["n_filled_hole_cells"] >= 1
+
+
+def test_confident_surface_tracks_slope():
+    road = torch.tensor(
+        [[x + dx, 0.1, 0.2 * x] for x in range(5) for dx in (0.1, 0.2, 0.3)]
+    )
+    surface = build_confident_road_surface(
+        road,
+        cell_size=1.0,
+        min_support=3,
+        max_xy_distance=0.1,
+        max_z_dispersion=0.01,
+    )
+    z, valid, _, _ = query_confident_road_surface(torch.tensor([[3.2, 0.1]]), surface)
+    assert valid.item()
+    assert z.item() == pytest.approx(0.6)
+
+
+def test_confident_surface_rejects_height_discontinuity():
+    road = torch.tensor(
+        [[0.1, 0.1, 0.0], [0.2, 0.1, 0.0], [0.3, 0.1, 1.0], [0.4, 0.1, 1.0]]
+    )
+    surface = build_confident_road_surface(
+        road,
+        cell_size=1.0,
+        min_support=3,
+        max_xy_distance=0.1,
+        max_z_dispersion=0.2,
+    )
+    _, valid, support, _ = query_confident_road_surface(torch.tensor([[0.2, 0.1]]), surface)
+    assert not valid.item()
+    assert support.item() == 0
+
+
+def test_confident_surface_empty_and_parameter_validation():
+    empty = build_confident_road_surface(torch.empty(0, 3))
+    z, valid, support, dispersion = query_confident_road_surface(torch.zeros(2, 2), empty)
+    assert not valid.any()
+    assert not z.any() and not support.any() and not dispersion.any()
+    with pytest.raises(ValueError, match="cell_size"):
+        build_confident_road_surface(torch.zeros(1, 3), cell_size=0)
+
+
+def test_confident_surface_is_permutation_stable():
+    road = torch.tensor(
+        [[0.1, 0.1, 0.0], [0.2, 0.1, 0.1], [1.1, 0.1, 0.2], [1.2, 0.1, 0.3]]
+    )
+    a = build_confident_road_surface(road, cell_size=1.0, min_support=1)
+    b = build_confident_road_surface(
+        road[torch.tensor([2, 0, 3, 1])], cell_size=1.0, min_support=1
+    )
+    assert torch.equal(a["support"], b["support"])
+    assert torch.allclose(a["grid_z"], b["grid_z"])
+    assert torch.allclose(a["dispersion"], b["dispersion"])

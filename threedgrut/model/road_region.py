@@ -16,9 +16,11 @@ A bg particle is "on road" iff its XY lands in an occupied cell and
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Tuple
 
 import torch
+import torch.nn.functional as F
 
 
 def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0) -> Dict:
@@ -47,6 +49,7 @@ def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0
             empty_grid = torch.zeros(0, 0, dtype=dtype, device=device)
             return {
                 "xy_min": torch.zeros(2, dtype=dtype, device=device),
+                "xy_max": torch.zeros(2, dtype=dtype, device=device),
                 "cell_size": cell_size,
                 "grid_z": empty_grid,
                 "occupied": torch.zeros(0, 0, dtype=torch.bool, device=device),
@@ -86,6 +89,7 @@ def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0
 
         return {
             "xy_min": xy_min,
+            "xy_max": xy_max,
             "cell_size": cell_size,
             "grid_z": grid_z,
             "occupied": occupied,
@@ -149,6 +153,180 @@ def query_ground_z(
             valid = valid_full
 
         return ground_z, valid
+
+
+def build_confident_road_surface(
+    road_positions: torch.Tensor,
+    *,
+    cell_size: float = 0.5,
+    min_support: int = 3,
+    max_xy_distance: float = 1.0,
+    max_z_dispersion: float = 0.25,
+) -> Dict:
+    """Build a locally interpolated road surface with confidence grids.
+
+    Small holes may be filled from road points within ``max_xy_distance``.
+    The grid never extends beyond the observed road XY bounding box, and a
+    cell is valid only when its support and Z dispersion pass their gates.
+    """
+    if not cell_size > 0:
+        raise ValueError("cell_size must be positive")
+    if min_support <= 0:
+        raise ValueError("min_support must be positive")
+    if max_xy_distance < 0:
+        raise ValueError("max_xy_distance must be non-negative")
+    if max_z_dispersion < 0:
+        raise ValueError("max_z_dispersion must be non-negative")
+
+    with torch.no_grad():
+        device = road_positions.device
+        dtype = road_positions.dtype
+        if road_positions.shape[0] == 0:
+            empty_f = torch.zeros(0, 0, dtype=dtype, device=device)
+            empty_i = torch.zeros(0, 0, dtype=torch.int64, device=device)
+            empty_b = torch.zeros(0, 0, dtype=torch.bool, device=device)
+            return {
+                "xy_min": torch.zeros(2, dtype=dtype, device=device),
+                "xy_max": torch.zeros(2, dtype=dtype, device=device),
+                "cell_size": float(cell_size),
+                "grid_z": empty_f,
+                "support": empty_i,
+                "dispersion": empty_f,
+                "occupied": empty_b,
+                "valid": empty_b,
+                "min_support": int(min_support),
+                "max_xy_distance": float(max_xy_distance),
+                "max_z_dispersion": float(max_z_dispersion),
+            }
+
+        xy = road_positions[:, :2]
+        z = road_positions[:, 2]
+        xy_min = xy.min(dim=0).values
+        xy_max = xy.max(dim=0).values
+        span = xy_max - xy_min
+        height = max(1, int(torch.ceil(span[0] / cell_size).item()) + 1)
+        width = max(1, int(torch.ceil(span[1] / cell_size).item()) + 1)
+        ix = torch.floor((xy[:, 0] - xy_min[0]) / cell_size).long().clamp(0, height - 1)
+        iy = torch.floor((xy[:, 1] - xy_min[1]) / cell_size).long().clamp(0, width - 1)
+        flat = ix * width + iy
+
+        count = torch.zeros(height * width, dtype=dtype, device=device)
+        sum_z = torch.zeros_like(count)
+        sum_z2 = torch.zeros_like(count)
+        count.scatter_add_(0, flat, torch.ones_like(z, dtype=dtype))
+        sum_z.scatter_add_(0, flat, z)
+        sum_z2.scatter_add_(0, flat, z.square())
+        count = count.view(height, width)
+        sum_z = sum_z.view(height, width)
+        sum_z2 = sum_z2.view(height, width)
+        occupied = count > 0
+
+        radius_cells = int(math.ceil(max_xy_distance / cell_size))
+        coords = torch.arange(-radius_cells, radius_cells + 1, device=device, dtype=dtype)
+        gx, gy = torch.meshgrid(coords, coords, indexing="ij")
+        circle = (gx.square() + gy.square()).sqrt() * cell_size <= max_xy_distance + 1e-9
+        kernel = circle.to(dtype=dtype)[None, None]
+
+        def aggregate(values: torch.Tensor) -> torch.Tensor:
+            return F.conv2d(values[None, None], kernel, padding=radius_cells)[0, 0]
+
+        local_count = aggregate(count)
+        local_sum_z = aggregate(sum_z)
+        local_sum_z2 = aggregate(sum_z2)
+        safe_count = local_count.clamp_min(1.0)
+        grid_z = local_sum_z / safe_count
+        variance = (local_sum_z2 / safe_count - grid_z.square()).clamp_min(0.0)
+        dispersion = variance.sqrt()
+        valid = (local_count >= int(min_support)) & (dispersion <= float(max_z_dispersion))
+        return {
+            "xy_min": xy_min,
+            "xy_max": xy_max,
+            "cell_size": float(cell_size),
+            "grid_z": grid_z,
+            "support": local_count.round().to(torch.int64),
+            "dispersion": dispersion,
+            "occupied": occupied,
+            "valid": valid,
+            "min_support": int(min_support),
+            "max_xy_distance": float(max_xy_distance),
+            "max_z_dispersion": float(max_z_dispersion),
+        }
+
+
+def query_confident_road_surface(
+    positions_xy: torch.Tensor,
+    surface: Dict,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Query local road Z, validity, support count and Z dispersion."""
+    with torch.no_grad():
+        grid_z = surface["grid_z"]
+        support_grid = surface["support"]
+        dispersion_grid = surface["dispersion"]
+        valid_grid = surface["valid"]
+        n_queries = positions_xy.shape[0]
+        device = positions_xy.device
+        dtype = positions_xy.dtype
+        z = torch.zeros(n_queries, dtype=dtype, device=device)
+        valid = torch.zeros(n_queries, dtype=torch.bool, device=device)
+        support = torch.zeros(n_queries, dtype=torch.int64, device=device)
+        dispersion = torch.zeros(n_queries, dtype=dtype, device=device)
+        if grid_z.numel() == 0:
+            return z, valid, support, dispersion
+
+        height, width = grid_z.shape
+        xy_min = surface["xy_min"].to(device=device, dtype=dtype)
+        xy_max = surface["xy_max"].to(device=device, dtype=dtype)
+        cell_size = float(surface["cell_size"])
+        ix = torch.floor((positions_xy[:, 0] - xy_min[0]) / cell_size).long()
+        iy = torch.floor((positions_xy[:, 1] - xy_min[1]) / cell_size).long()
+        in_bounds = (
+            (positions_xy[:, 0] >= xy_min[0])
+            & (positions_xy[:, 0] <= xy_max[0])
+            & (positions_xy[:, 1] >= xy_min[1])
+            & (positions_xy[:, 1] <= xy_max[1])
+            & (ix >= 0)
+            & (ix < height)
+            & (iy >= 0)
+            & (iy < width)
+        )
+        if in_bounds.any():
+            query_indices = in_bounds.nonzero(as_tuple=True)[0]
+            qx = ix[in_bounds]
+            qy = iy[in_bounds]
+            cell_valid = valid_grid[qx, qy]
+            accepted = query_indices[cell_valid]
+            z[accepted] = grid_z[qx[cell_valid], qy[cell_valid]].to(dtype=dtype)
+            support[accepted] = support_grid[qx[cell_valid], qy[cell_valid]]
+            dispersion[accepted] = dispersion_grid[qx[cell_valid], qy[cell_valid]].to(dtype=dtype)
+            valid[accepted] = True
+        return z, valid, support, dispersion
+
+
+def summarize_confident_road_surface(surface: Dict) -> Dict[str, float | int]:
+    """Return serializable coverage and geometry diagnostics."""
+    valid = surface["valid"]
+    occupied = surface["occupied"]
+    grid_z = surface["grid_z"]
+    if grid_z.numel() == 0:
+        return {
+            "n_cells": 0,
+            "n_occupied_cells": 0,
+            "n_valid_cells": 0,
+            "n_filled_hole_cells": 0,
+            "valid_fraction": 0.0,
+            "z_min": float("nan"),
+            "z_max": float("nan"),
+        }
+    valid_z = grid_z[valid]
+    return {
+        "n_cells": int(grid_z.numel()),
+        "n_occupied_cells": int(occupied.sum()),
+        "n_valid_cells": int(valid.sum()),
+        "n_filled_hole_cells": int((valid & ~occupied).sum()),
+        "valid_fraction": float(valid.float().mean()),
+        "z_min": float(valid_z.min()) if valid_z.numel() else float("nan"),
+        "z_max": float(valid_z.max()) if valid_z.numel() else float("nan"),
+    }
 
 
 def compute_bg_road_opacity_penalty(
