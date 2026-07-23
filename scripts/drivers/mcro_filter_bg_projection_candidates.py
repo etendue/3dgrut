@@ -19,6 +19,8 @@ def projection_candidate_mask(
     protect_field: str,
     max_protected_hits: int,
     min_road_visible_ratio: float,
+    strict_max_protected_hits: int | None = None,
+    relaxed_min_road_visible_ratio: float | None = None,
 ) -> np.ndarray:
     if road_field not in {"road_center_hits", "road_footprint_hits"}:
         raise ValueError("invalid road_field")
@@ -30,10 +32,15 @@ def projection_candidate_mask(
     if not (road_hits.shape == protected_hits.shape == visible_hits.shape):
         raise ValueError("projection count arrays must have the same shape")
     ratio = road_hits / np.maximum(visible_hits, 1)
-    return (
-        (road_hits >= int(min_road_hits))
-        & (protected_hits <= int(max_protected_hits))
-        & (ratio >= float(min_road_visible_ratio))
+    protection_ok = protected_hits <= int(max_protected_hits)
+    if strict_max_protected_hits is not None:
+        if relaxed_min_road_visible_ratio is None:
+            raise ValueError("relaxed_min_road_visible_ratio is required with strict protection")
+        protection_ok = (protected_hits <= int(strict_max_protected_hits)) | (
+            protection_ok & (ratio >= float(relaxed_min_road_visible_ratio))
+        )
+    return (road_hits >= int(min_road_hits)) & protection_ok & (
+        ratio >= float(min_road_visible_ratio)
     )
 
 
@@ -82,6 +89,8 @@ def main() -> None:
     )
     parser.add_argument("--max-protected-hits", type=int, default=0)
     parser.add_argument("--min-road-visible-ratio", type=float, default=0.0)
+    parser.add_argument("--strict-max-protected-hits", type=int)
+    parser.add_argument("--relaxed-min-road-visible-ratio", type=float)
     parser.add_argument("--density-logit", type=float, default=-100.0)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -95,6 +104,8 @@ def main() -> None:
         protect_field=args.protect_field,
         max_protected_hits=args.max_protected_hits,
         min_road_visible_ratio=args.min_road_visible_ratio,
+        strict_max_protected_hits=args.strict_max_protected_hits,
+        relaxed_min_road_visible_ratio=args.relaxed_min_road_visible_ratio,
     )
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     metadata = {
@@ -104,6 +115,8 @@ def main() -> None:
         "protect_field": args.protect_field,
         "max_protected_hits": args.max_protected_hits,
         "min_road_visible_ratio": args.min_road_visible_ratio,
+        "strict_max_protected_hits": args.strict_max_protected_hits,
+        "relaxed_min_road_visible_ratio": args.relaxed_min_road_visible_ratio,
     }
     filter_checkpoint(checkpoint, mask, metadata, density_logit=args.density_logit)
     report = checkpoint["mcro_bg_projection_filter"]

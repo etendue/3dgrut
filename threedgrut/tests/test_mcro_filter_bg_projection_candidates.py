@@ -50,6 +50,20 @@ def test_projection_mask_rejects_invalid_fields():
         )
 
 
+def test_projection_mask_relaxes_protection_only_for_road_dominant_particles():
+    mask = module().projection_candidate_mask(
+        counts(),
+        road_field="road_footprint_hits",
+        min_road_hits=1,
+        protect_field="protected_center_hits",
+        max_protected_hits=2,
+        min_road_visible_ratio=0.0,
+        strict_max_protected_hits=0,
+        relaxed_min_road_visible_ratio=0.7,
+    )
+    assert mask.tolist() == [True, True, False, False]
+
+
 def test_projection_filter_preserves_shapes():
     background = {
         "positions": torch.zeros(2, 3),
