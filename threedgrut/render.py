@@ -833,6 +833,20 @@ class Renderer:
 
             if ownership_dump:
                 frame_stem = "{0:05d}".format(iteration)
+                # Keep the rendered layer RGB and its GT target lossless.  A
+                # depth ordering test alone misses background Gaussians that
+                # are coplanar with (or just behind) road but reproduce the
+                # same road appearance.  The opt-in ownership evaluator uses
+                # these arrays together with alpha/road support to measure
+                # that duplicate contribution.
+                np.save(
+                    os.path.join(output_path_ownership, frame_stem + "_rgb.npy"),
+                    pred_rgb_full.squeeze(0).detach().float().cpu().numpy(),
+                )
+                np.save(
+                    os.path.join(output_path_ownership, frame_stem + "_gt.npy"),
+                    rgb_gt_full.squeeze(0).detach().float().cpu().numpy(),
+                )
                 opacity = outputs.get("pred_opacity")
                 if opacity is not None:
                     torchvision.utils.save_image(
