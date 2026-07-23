@@ -14,6 +14,7 @@ from threedgrut.model.road_region import (
     compute_bg_road_opacity_penalty,
     query_confident_road_surface,
     query_ground_z,
+    road_surface_gaussian_candidates,
     summarize_confident_road_surface,
 )
 
@@ -186,3 +187,46 @@ def test_confident_surface_is_permutation_stable():
     assert torch.equal(a["support"], b["support"])
     assert torch.allclose(a["grid_z"], b["grid_z"])
     assert torch.allclose(a["dispersion"], b["dispersion"])
+
+
+def test_gaussian_extent_reaches_road_when_center_does_not():
+    road = torch.tensor([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]])
+    surface = build_confident_road_surface(
+        road, cell_size=1.0, min_support=3, max_xy_distance=0.1
+    )
+    positions = torch.tensor([[0.1, 0.0, -2.0], [0.1, 0.0, -2.0]])
+    scales = torch.tensor([[0.1, 0.1, 1.1], [0.1, 0.1, 0.2]])
+    rotations = torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+    candidate, details = road_surface_gaussian_candidates(
+        positions,
+        scales,
+        rotations,
+        surface,
+        relative_height_min=-0.1,
+        relative_height_max=0.1,
+        sigma_multiplier=2.0,
+    )
+    assert candidate.tolist() == [True, False]
+    assert details["relative_height"].tolist() == pytest.approx([-2.0, -2.0])
+
+
+def test_rotated_gaussian_uses_world_vertical_extent():
+    road = torch.tensor([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]])
+    surface = build_confident_road_surface(
+        road, cell_size=1.0, min_support=3, max_xy_distance=0.1
+    )
+    positions = torch.tensor([[0.1, 0.0, -1.0]])
+    scales = torch.tensor([[1.0, 0.1, 0.1]])
+    # 90 degrees around Y maps the long local X axis onto world Z.
+    rotations = torch.tensor([[2**-0.5, 0.0, 2**-0.5, 0.0]])
+    candidate, details = road_surface_gaussian_candidates(
+        positions,
+        scales,
+        rotations,
+        surface,
+        relative_height_min=-0.1,
+        relative_height_max=0.1,
+        sigma_multiplier=1.0,
+    )
+    assert candidate.item()
+    assert details["sigma_z"].item() == pytest.approx(1.0, abs=1e-5)

@@ -22,6 +22,8 @@ from typing import Dict, Tuple
 import torch
 import torch.nn.functional as F
 
+from threedgrut.utils.misc import quaternion_to_so3
+
 
 def build_road_height_field(road_positions: torch.Tensor, cell_size: float = 1.0) -> Dict:
     """Build a BEV ground-height field from road particle positions.
@@ -326,6 +328,59 @@ def summarize_confident_road_surface(surface: Dict) -> Dict[str, float | int]:
         "valid_fraction": float(valid.float().mean()),
         "z_min": float(valid_z.min()) if valid_z.numel() else float("nan"),
         "z_max": float(valid_z.max()) if valid_z.numel() else float("nan"),
+    }
+
+
+def road_surface_gaussian_candidates(
+    positions: torch.Tensor,
+    scales_linear: torch.Tensor,
+    rotations_wxyz: torch.Tensor,
+    surface: Dict,
+    *,
+    relative_height_min: float,
+    relative_height_max: float,
+    sigma_multiplier: float = 2.0,
+) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Select Gaussians whose oriented vertical extent intersects a road slab.
+
+    The center remains road-relative, while ``sigma_z`` accounts for large or
+    rotated Gaussians whose center is away from the road but whose ellipsoid
+    reaches it.  This is a geometric prefilter; projected multi-view
+    contribution/protection checks remain necessary before any hard action.
+    """
+    if relative_height_min > relative_height_max:
+        raise ValueError("relative_height_min must be <= relative_height_max")
+    if sigma_multiplier < 0:
+        raise ValueError("sigma_multiplier must be non-negative")
+    if positions.shape != scales_linear.shape or positions.shape[-1] != 3:
+        raise ValueError("positions and scales_linear must both be [N,3]")
+    if rotations_wxyz.shape != (positions.shape[0], 4):
+        raise ValueError("rotations_wxyz must be [N,4]")
+
+    road_z, valid, support, dispersion = query_confident_road_surface(
+        positions[:, :2], surface
+    )
+    height = positions[:, 2] - road_z
+    rotation = quaternion_to_so3(rotations_wxyz)
+    sigma_z = torch.sqrt(
+        ((rotation[:, 2, :] * scales_linear).square()).sum(dim=-1).clamp_min(0.0)
+    )
+    extent = float(sigma_multiplier) * sigma_z
+    extent_min = height - extent
+    extent_max = height + extent
+    candidate = (
+        valid
+        & torch.isfinite(height)
+        & torch.isfinite(sigma_z)
+        & (extent_max >= float(relative_height_min))
+        & (extent_min <= float(relative_height_max))
+    )
+    return candidate, {
+        "relative_height": height,
+        "sigma_z": sigma_z,
+        "surface_support": support,
+        "surface_dispersion": dispersion,
+        "surface_valid": valid,
     }
 
 

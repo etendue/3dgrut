@@ -65,8 +65,12 @@ def analyze_surface(
             if background_positions.shape[0]
             else 0.0
         ),
-        road_particle_z_min=(float(road_positions[:, 2].min()) if road_positions.numel() else float("nan")),
-        road_particle_z_max=(float(road_positions[:, 2].max()) if road_positions.numel() else float("nan")),
+        road_particle_z_min=(
+            float(road_positions[:, 2].detach().min()) if road_positions.numel() else float("nan")
+        ),
+        road_particle_z_max=(
+            float(road_positions[:, 2].detach().max()) if road_positions.numel() else float("nan")
+        ),
     )
     if relative.numel():
         report.update(
